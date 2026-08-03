@@ -8,6 +8,8 @@ private enum LibrarySection: String, CaseIterable, Identifiable, Hashable {
     case today = "Today"
     case reader = "Reader"
     case plans = "Reading Plans"
+    case devotionals = "Devotionals"
+    case quizzes = "Quizzes"
     case search = "Search"
     case modules = "Modules"
 
@@ -18,6 +20,8 @@ private enum LibrarySection: String, CaseIterable, Identifiable, Hashable {
         case .today: "calendar"
         case .reader: "book"
         case .plans: "checklist"
+        case .devotionals: "sun.max"
+        case .quizzes: "questionmark.bubble"
         case .search: "magnifyingglass"
         case .modules: "square.stack.3d.up"
         }
@@ -188,6 +192,22 @@ struct LibraryRootView: View {
                     selection = .section(.reader)
                 }
             )
+        case .section(.devotionals):
+            DevotionalsView(
+                showImporter: { showingImporter = true },
+                openReference: { reference in
+                    model.openReference(reference)
+                    selection = .section(.reader)
+                }
+            )
+        case .section(.quizzes):
+            QuizzesView(
+                showImporter: { showingImporter = true },
+                openReference: { reference in
+                    model.openReference(reference)
+                    selection = .section(.reader)
+                }
+            )
         case .section(.search):
             TranslationSearchView(
                 showImporter: { showingImporter = true },
@@ -198,12 +218,6 @@ struct LibraryRootView: View {
             )
         case .section(.modules):
             InstalledModulesView(showImporter: { showingImporter = true })
-        case .section(let section):
-            ContentUnavailableView(
-                section.rawValue,
-                systemImage: section.systemImage,
-                description: Text("This feature will use the shared LampCore data services.")
-            )
         case nil:
             ContentUnavailableView("Choose a Section", systemImage: "sidebar.left")
         }
@@ -651,7 +665,7 @@ private struct InstalledModulesView: View {
                 ContentUnavailableView {
                     Label("No Modules Installed", systemImage: "square.stack.3d.up")
                 } description: {
-                    Text("Install .lamp translations, dictionaries, commentaries, reading plans, notes, and highlights.")
+                    Text("Install .lamp translations, dictionaries, commentaries, reading plans, devotionals, quizzes, notes, and highlights.")
                 } actions: {
                     Button("Install Module…", action: showImporter)
                         .buttonStyle(.borderedProminent)
@@ -662,6 +676,8 @@ private struct InstalledModulesView: View {
                     moduleSection("Dictionaries", modules: model.dictionaries)
                     moduleSection("Commentaries", modules: model.commentaries)
                     moduleSection("Reading Plans", modules: model.planModules)
+                    moduleSection("Devotionals", modules: model.devotionalModules)
+                    moduleSection("Quizzes", modules: model.quizModuleInstallations)
                     moduleSection("Notes", modules: model.noteModules)
                     moduleSection("Highlights", modules: model.highlightModules)
                 }
@@ -709,25 +725,33 @@ private struct InstalledModulesView: View {
                                 if let abbreviation = module.abbreviation {
                                     Text(abbreviation)
                                 }
-                                Text(ByteCountFormatter.string(
-                                    fromByteCount: Int64(module.compressedByteCount),
-                                    countStyle: .file
-                                ))
+                                if module.isBundled {
+                                    Label("Built In", systemImage: "shippingbox.fill")
+                                } else {
+                                    Text(ByteCountFormatter.string(
+                                        fromByteCount: Int64(module.compressedByteCount),
+                                        countStyle: .file
+                                    ))
+                                }
                             }
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         }
                         Spacer()
-                        Button("Remove", systemImage: "trash", role: .destructive) {
-                            moduleToRemove = module
+                        if !module.isBundled {
+                            Button("Remove", systemImage: "trash", role: .destructive) {
+                                moduleToRemove = module
+                            }
+                            .labelStyle(.iconOnly)
+                            .buttonStyle(.borderless)
                         }
-                        .labelStyle(.iconOnly)
-                        .buttonStyle(.borderless)
                     }
                     .padding(.vertical, 4)
                     .contextMenu {
-                        Button("Remove Module", role: .destructive) {
-                            moduleToRemove = module
+                        if !module.isBundled {
+                            Button("Remove Module", role: .destructive) {
+                                moduleToRemove = module
+                            }
                         }
                     }
                 }
@@ -741,9 +765,10 @@ private struct InstalledModulesView: View {
         case .dictionary: "character.book.closed"
         case .commentary: "text.book.closed"
         case .plan: "checklist"
+        case .devotional: "sun.max"
+        case .quiz: "questionmark.bubble"
         case .notes: "note.text"
         case .highlights: "highlighter"
-        default: "square.stack.3d.up"
         }
     }
 }

@@ -65,4 +65,41 @@ struct StudioDocumentLoaderTests {
         #expect(highlights.canBuild)
         #expect(highlights.inspection?.statistics == ["verses": 0, "highlights": 0])
     }
+
+    @Test func enablesBuildForDevotionalAndQuizModules() {
+        let devotional = StudioDocumentLoader.inspect(data: Data(#"""
+        {
+          "meta": {
+            "schemaVersion": "1.1", "id": "devotional", "type": "devotional",
+            "title": "A Devotional"
+          },
+          "content": [{"type": "paragraph", "content": {"text": "Be encouraged."}}]
+        }
+        """#.utf8), sourceURL: URL(fileURLWithPath: "/tmp/devotional.json"))
+        let quiz = StudioDocumentLoader.inspect(data: Data(#"""
+        {
+          "meta": {
+            "schemaVersion": "1.0", "id": "quiz", "type": "quiz",
+            "name": "A Quiz", "planId": "plan", "questionsPerReading": 1,
+            "ageGroups": [{"id": "adult", "label": "Adult", "ageRange": "18+"}]
+          },
+          "days": [{
+            "day": 1,
+            "readings": [{
+              "sv": 1001001, "ev": 1001001,
+              "quizzes": {"adult": [{
+                "question": "Who created?", "answer": "God",
+                "theme": "Creation", "christFocused": false,
+                "references": [1001001]
+              }]}
+            }]
+          }]
+        }
+        """#.utf8), sourceURL: URL(fileURLWithPath: "/tmp/quiz.json"))
+
+        #expect(devotional.canBuild)
+        #expect(devotional.inspection?.kind == .devotional)
+        #expect(quiz.canBuild)
+        #expect(quiz.inspection?.kind == .quiz)
+    }
 }

@@ -19,6 +19,8 @@ final class LibraryModel: ObservableObject {
     @Published private(set) var noteReferences: Set<Int> = []
     @Published private(set) var installedNotesByReference: [Int: [LampVerseNote]] = [:]
     @Published private(set) var plans: [LampReadingPlan] = []
+    @Published private(set) var devotionals: [LampDevotional] = []
+    @Published private(set) var quizModules: [LampQuizModule] = []
     @Published private(set) var selectedPlanIDs: Set<String> = []
     @Published private(set) var completedReadingIDs: Set<String> = []
     @Published private(set) var planProgressYear = Calendar.current.component(.year, from: Date())
@@ -59,6 +61,14 @@ final class LibraryModel: ObservableObject {
         modules.filter { $0.kind == .highlights }
     }
 
+    var devotionalModules: [LampInstalledModule] {
+        modules.filter { $0.kind == .devotional }
+    }
+
+    var quizModuleInstallations: [LampInstalledModule] {
+        modules.filter { $0.kind == .quiz }
+    }
+
     var selectedTranslation: LampInstalledModule? {
         translations.first { $0.id == selectedTranslationID }
     }
@@ -84,10 +94,15 @@ final class LibraryModel: ObservableObject {
     }
 
     init(
-        library: LampLibrary = LampLibrary(),
+        library: LampLibrary? = nil,
         defaults: UserDefaults = .standard
     ) {
-        self.library = library
+        self.library = library ?? LampLibrary(
+            bundledModulesArchiveURL: Bundle.main.url(
+                forResource: "bundled_modules.db",
+                withExtension: "zlib"
+            )
+        )
         self.defaults = defaults
         selectedTranslationID = defaults.string(forKey: "reader.translationID")
         let storedBook = defaults.integer(forKey: "reader.bookNumber")
@@ -408,6 +423,24 @@ final class LibraryModel: ObservableObject {
         }
     }
 
+    func quizQuestions(
+        moduleID: String,
+        day: Int,
+        ageGroup: String
+    ) async -> [LampQuizQuestion] {
+        do {
+            return try await library.quizQuestions(
+                moduleID: moduleID,
+                day: day,
+                ageGroup: ageGroup
+            )
+        } catch {
+            guard !Task.isCancelled else { return [] }
+            errorMessage = error.localizedDescription
+            return []
+        }
+    }
+
     func loadPlanProgress(year: Int) async {
         do {
             let completed = try await library.completedReadings(year: year)
@@ -455,6 +488,8 @@ final class LibraryModel: ObservableObject {
         do {
             modules = try await library.installedModules()
             plans = try await library.readingPlans()
+            devotionals = try await library.devotionals()
+            quizModules = try await library.quizModules()
             selectedPlanIDs = try await library.selectedPlanIDs()
             let completed = try await library.completedReadings(year: planProgressYear)
             completedReadingIDs = Set(completed.map(\.id))

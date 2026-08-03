@@ -11,7 +11,7 @@ This repository intentionally contains Mac-specific application lifecycle and UI
 - Dedicated Module Studio window and menu command
 - JSON file importer and drag-and-drop target
 - Module type detection, summary statistics, and validation provided by `LampModuleKit`
-- Native `.lamp` compilation for translations, dictionaries, commentaries, reading plans, notes, and highlights
+- Native `.lamp` compilation for translations, dictionaries, commentaries, reading plans, devotionals, quizzes, notes, and highlights
 - Save-panel export with integrity verification, checksums, and Finder reveal
 - Persistent module-native library with integrity-checked `.lamp` installation
 - Translation reader with native book/chapter menus and keyboard navigation
@@ -28,12 +28,15 @@ This repository intentionally contains Mac-specific application lifecycle and UI
 - One-click Strong's links from translation annotations into installed dictionaries
 - Translator-note badges on annotated verses with direct Verse-inspector routing
 - Native Today and Reading Plans screens with date navigation, plan selection, and reader deep links
+- Searchable devotional library with scripture deep links
+- Day- and age-specific quizzes with answer reveal and reader deep links
+- The same read-only bundled translations, lexicons, commentaries, plans, and quiz module as the iOS app
 - Year-scoped reading completion persisted outside portable modules
 - Restored reading location, selectable scripture text, and reader typography settings
 - Module management with Finder access and safe removal
 - One-click installation of a successful Module Studio build
 
-Personal edits are stored outside immutable modules and can be imported or exported as canonical JSON or `.lamp` modules, while canonical notes and highlight JSON can also be built and installed through Module Studio. Quizzes and devotionals will be added incrementally.
+Personal edits are stored outside immutable modules and can be imported or exported as canonical JSON or `.lamp` modules, while every canonical module type can also be built and installed through Module Studio.
 
 ## Development
 
@@ -55,5 +58,7 @@ swift test
 ```
 
 Open `Lamp Bible.xcodeproj` in Xcode, choose the **Lamp Bible** scheme and **My Mac**, then press `⌘R`. The Xcode target builds a real macOS application bundle using `com.neus.Lamp-Bible.macOS`; `Package.swift` remains available for library-focused command-line builds and tests.
+
+The Xcode target copies `../lamp-bible-modules/modules_db/bundled_modules.db.zlib` into the application bundle. Keep the sibling repositories in the layout above and rebuild that canonical archive from `lamp-bible-modules` when bundled content changes; both Apple apps consume the same artifact.
 
 Install a translation with File → Install Module… (`⌘O`), import editable study data with `⌥⌘O`, navigate chapters with `⌘[` and `⌘]`, and toggle study tools with `⇧⌘I`. Clicking a verse number focuses the inspector; right-clicking a verse exposes highlight and personal-note actions.

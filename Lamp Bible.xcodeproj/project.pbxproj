@@ -19,6 +19,8 @@
 		A1000000000000000000000A /* StudioDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000A /* StudioDocument.swift */; };
 		A1000000000000000000000B /* LampCore in Frameworks */ = {isa = PBXBuildFile; productRef = G10000000000000000000002 /* LampCore */; };
 		A1000000000000000000000C /* LampModuleKit in Frameworks */ = {isa = PBXBuildFile; productRef = G10000000000000000000003 /* LampModuleKit */; };
+		A1000000000000000000000D /* DevotionalsAndQuizzesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000C /* DevotionalsAndQuizzesView.swift */; };
+		A1000000000000000000000E /* bundled_modules.db.zlib in Resources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000D /* bundled_modules.db.zlib */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -33,6 +35,8 @@
 		B10000000000000000000009 /* ModuleStudioView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/ModuleStudio/ModuleStudioView.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000000A /* StudioDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/StudioDocument.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000000B /* Lamp Bible.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Lamp Bible.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		B1000000000000000000000C /* DevotionalsAndQuizzesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/DevotionalsAndQuizzesView.swift; sourceTree = SOURCE_ROOT; };
+		B1000000000000000000000D /* bundled_modules.db.zlib */ = {isa = PBXFileReference; lastKnownFileType = file; name = bundled_modules.db.zlib; path = ../lamp-bible-modules/modules_db/bundled_modules.db.zlib; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -52,6 +56,7 @@
 			isa = PBXGroup;
 			children = (
 				H10000000000000000000002 /* Sources */,
+				H10000000000000000000004 /* Resources */,
 				H10000000000000000000003 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -63,6 +68,7 @@
 				B10000000000000000000001 /* LampBibleCommands.swift */,
 				B10000000000000000000003 /* LibraryModel.swift */,
 				B10000000000000000000004 /* LibraryRootView.swift */,
+				B1000000000000000000000C /* DevotionalsAndQuizzesView.swift */,
 				B10000000000000000000005 /* ReadingPlansView.swift */,
 				B10000000000000000000006 /* StudyHighlightPalette.swift */,
 				B10000000000000000000007 /* StudyInspectorView.swift */,
@@ -79,6 +85,14 @@
 				B1000000000000000000000B /* Lamp Bible.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		H10000000000000000000004 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				B1000000000000000000000D /* bundled_modules.db.zlib */,
+			);
+			name = Resources;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -146,6 +160,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A1000000000000000000000E /* bundled_modules.db.zlib in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -166,6 +181,7 @@
 				A10000000000000000000008 /* ModuleStudioModel.swift in Sources */,
 				A10000000000000000000009 /* ModuleStudioView.swift in Sources */,
 				A1000000000000000000000A /* StudioDocument.swift in Sources */,
+				A1000000000000000000000D /* DevotionalsAndQuizzesView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
