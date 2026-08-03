@@ -1,3 +1,7 @@
+import AppKit
+#if canImport(LampBibleMacSupport)
+import LampBibleMacSupport
+#endif
 import LampCore
 import SwiftUI
 
@@ -285,6 +289,9 @@ private struct PlanDayCard: View {
 
 private struct PlanDayReadings: View {
     @EnvironmentObject private var model: LibraryModel
+    @AppStorage("plans.wordsPerMinute") private var wordsPerMinute = 225
+    @AppStorage("plans.externalBibleApp") private var externalBibleApp = ""
+    @State private var wordCounts: [Int: Int] = [:]
     let planID: String
     let day: LampReadingPlanDay
     let year: Int
@@ -333,10 +340,38 @@ private struct PlanDayReadings: View {
                     .labelStyle(.iconOnly)
                     .buttonStyle(.borderless)
                     .help("Open in Reader")
+
+                    if let wordCount = wordCounts[reading.id] {
+                        Text(ReadingTimeEstimator.description(
+                            wordCount: wordCount,
+                            wordsPerMinute: wordsPerMinute
+                        ))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .help("Estimated at \(wordsPerMinute) words per minute")
+                    }
+
+                    Menu("Open in External Bible", systemImage: "arrow.up.right.square") {
+                        if let preferredApplication {
+                            Button("Open in \(preferredApplication.rawValue)") {
+                                openExternally(reading, using: preferredApplication)
+                            }
+                            Divider()
+                        }
+                        ForEach(ExternalBibleApplication.allCases) { application in
+                            Button(application.rawValue) {
+                                openExternally(reading, using: application)
+                            }
+                        }
+                    }
+                    .labelStyle(.iconOnly)
+                    .menuStyle(.borderlessButton)
+                    .help("Open in another Bible app")
                 }
                 .padding(.vertical, 3)
             }
         }
+        .task(id: wordCountRequest) { await loadWordCounts() }
     }
 
     private var completedCount: Int {
@@ -347,5 +382,41 @@ private struct PlanDayReadings: View {
         model.completedReadingIDs.contains(
             reading.completionID(planID: planID, day: day.day, year: year)
         )
+    }
+
+    private var preferredApplication: ExternalBibleApplication? {
+        ExternalBibleApplication(rawValue: externalBibleApp)
+    }
+
+    private var wordCountRequest: String {
+        "\(model.selectedTranslationID ?? "none"):\(day.day):\(day.readings.map(\.id))"
+    }
+
+    private func loadWordCounts() async {
+        guard let translationID = model.selectedTranslationID else {
+            wordCounts = [:]
+            return
+        }
+        var loaded: [Int: Int] = [:]
+        for reading in day.readings {
+            loaded[reading.id] = try? await model.library.translationWordCount(
+                moduleID: translationID,
+                startReference: reading.startReference,
+                endReference: reading.endReference
+            )
+        }
+        guard !Task.isCancelled else { return }
+        wordCounts = loaded
+    }
+
+    private func openExternally(
+        _ reading: LampPlanReading,
+        using application: ExternalBibleApplication
+    ) {
+        guard let url = application.url(
+            startReference: reading.startReference,
+            endReference: reading.endReference
+        ) else { return }
+        NSWorkspace.shared.open(url)
     }
 }

@@ -46,20 +46,29 @@ private struct NotesInspectorView: View {
     @State private var content = ""
     @State private var savedTitle = ""
     @State private var savedContent = ""
-    @State private var personalFootnotes: [LampVerseFootnote] = []
+    @State private var rangeEndVerse = 0
+    @State private var savedRangeEndVerse = 0
+    @State private var personalFootnotes: [NoteFootnoteDraft] = []
+    @State private var savedFootnotes: [NoteFootnoteDraft] = []
     @State private var isLoading = false
     @State private var isSaving = false
     @State private var isExporting = false
     @State private var errorMessage: String?
     @State private var exportedURL: URL?
     @State private var transferStatus: String?
+    @State private var highlightVerse: LampVerse?
 
     private var reference: Int? { model.selectedVerseReference }
     private var verse: LampVerse? {
         guard let reference else { return nil }
         return model.chapter?.verses.first { $0.id == reference }
     }
-    private var isDirty: Bool { title != savedTitle || content != savedContent }
+    private var isDirty: Bool {
+        title != savedTitle
+            || content != savedContent
+            || rangeEndVerse != savedRangeEndVerse
+            || personalFootnotes != savedFootnotes
+    }
     private var selectedHighlightColor: String? {
         reference
             .flatMap { model.personalHighlights(for: $0).first?.color }
@@ -113,6 +122,11 @@ private struct NotesInspectorView: View {
                                         .help("Remove highlight")
                                     }
                                 }
+                                if let verse {
+                                    Button("Highlight Part of Verse…", systemImage: "selection.pin.in.out") {
+                                        highlightVerse = verse
+                                    }
+                                }
                             }
 
                             Divider()
@@ -122,6 +136,13 @@ private struct NotesInspectorView: View {
                                     .font(.subheadline.weight(.semibold))
                                 TextField("Title (optional)", text: $title)
                                     .textFieldStyle(.roundedBorder)
+                                HStack {
+                                    Button("Bold", systemImage: "bold") { insertMarkdown("**bold**") }
+                                    Button("Italic", systemImage: "italic") { insertMarkdown("_italic_") }
+                                    Button("List", systemImage: "list.bullet") { insertMarkdown("\n- item") }
+                                    Button("Quote", systemImage: "text.quote") { insertMarkdown("\n> quote") }
+                                }
+                                .buttonStyle(.borderless)
                                 TextEditor(text: $content)
                                     .font(.body)
                                     .frame(minHeight: 220)
@@ -133,17 +154,45 @@ private struct NotesInspectorView: View {
                                     }
                             }
 
-                            if !personalFootnotes.isEmpty {
+                            if let verse, let chapter = model.chapter {
                                 VStack(alignment: .leading, spacing: 8) {
+                                    Label("Verse Range", systemImage: "arrow.left.and.right.text.vertical")
+                                        .font(.subheadline.weight(.semibold))
+                                    Picker("Applies through", selection: $rangeEndVerse) {
+                                        ForEach(chapter.verses.filter { $0.number >= verse.number }) { candidate in
+                                            Text(candidate.number == verse.number
+                                                ? "Verse \(candidate.number) only"
+                                                : "Verses \(verse.number)–\(candidate.number)")
+                                                .tag(candidate.number)
+                                        }
+                                    }
+                                }
+                            }
+
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
                                     Label("Footnotes", systemImage: "text.append")
                                         .font(.subheadline.weight(.semibold))
-                                    ForEach(personalFootnotes) { footnote in
-                                        HStack(alignment: .top, spacing: 8) {
-                                            Text(footnote.id)
-                                                .font(.caption.monospaced().weight(.semibold))
-                                            Text(footnote.content)
-                                                .textSelection(.enabled)
+                                    Spacer()
+                                    Button("Add Footnote", systemImage: "plus") {
+                                        personalFootnotes.append(NoteFootnoteDraft(
+                                            id: nextFootnoteID,
+                                            kind: "study",
+                                            content: ""
+                                        ))
+                                    }
+                                }
+                                ForEach($personalFootnotes) { $footnote in
+                                    HStack(alignment: .top, spacing: 8) {
+                                        TextField("ID", text: $footnote.id)
+                                            .frame(width: 52)
+                                        TextField("Footnote", text: $footnote.content, axis: .vertical)
+                                            .lineLimit(2...5)
+                                        Button("Remove", systemImage: "minus.circle", role: .destructive) {
+                                            personalFootnotes.removeAll { $0.uuid == footnote.uuid }
                                         }
+                                        .labelStyle(.iconOnly)
+                                        .buttonStyle(.borderless)
                                     }
                                 }
                             }
@@ -224,6 +273,8 @@ private struct NotesInspectorView: View {
                         Button("Revert") {
                             title = savedTitle
                             content = savedContent
+                            rangeEndVerse = savedRangeEndVerse
+                            personalFootnotes = savedFootnotes
                             errorMessage = nil
                         }
                         .disabled(!isDirty || isSaving)
@@ -238,6 +289,10 @@ private struct NotesInspectorView: View {
                 }
                 .task(id: reference) {
                     await load(reference: reference)
+                }
+                .sheet(item: $highlightVerse) { verse in
+                    VerseHighlightEditorView(verse: verse)
+                        .environmentObject(model)
                 }
             } else {
                 ContentUnavailableView(
@@ -257,9 +312,15 @@ private struct NotesInspectorView: View {
             guard !Task.isCancelled, model.selectedVerseReference == reference else { return }
             title = note?.title ?? ""
             content = note?.content ?? ""
-            personalFootnotes = note?.footnotes ?? []
+            let currentVerse = LampBibleReferenceFormatter.components(of: reference).verse
+            rangeEndVerse = note?.verseReferences
+                .map { LampBibleReferenceFormatter.components(of: $0).verse }
+                .max() ?? currentVerse
+            personalFootnotes = note?.footnotes.map(NoteFootnoteDraft.init) ?? []
             savedTitle = title
             savedContent = content
+            savedRangeEndVerse = rangeEndVerse
+            savedFootnotes = personalFootnotes
         } catch {
             guard !Task.isCancelled else { return }
             errorMessage = error.localizedDescription
@@ -270,6 +331,11 @@ private struct NotesInspectorView: View {
     private func save(reference: Int) {
         let submittedTitle = title
         let submittedContent = content
+        let submittedRangeEndVerse = rangeEndVerse
+        let submittedFootnotes = personalFootnotes.compactMap(\.lampFootnote)
+        let submittedReferences = model.chapter?.verses
+            .filter { $0.id >= reference && $0.number <= submittedRangeEndVerse }
+            .map(\.id) ?? [reference]
         isSaving = true
         errorMessage = nil
         exportedURL = nil
@@ -279,11 +345,16 @@ private struct NotesInspectorView: View {
                 try await model.savePersonalNote(
                     reference: reference,
                     title: submittedTitle,
-                    content: submittedContent
+                    content: submittedContent,
+                    verseReferences: submittedReferences,
+                    footnotes: submittedFootnotes
                 )
                 if model.selectedVerseReference == reference {
                     savedTitle = submittedTitle
                     savedContent = submittedContent
+                    savedRangeEndVerse = submittedRangeEndVerse
+                    personalFootnotes = submittedFootnotes.map(NoteFootnoteDraft.init)
+                    savedFootnotes = personalFootnotes
                 }
             } catch {
                 errorMessage = error.localizedDescription
@@ -306,6 +377,17 @@ private struct NotesInspectorView: View {
                 errorMessage = error.localizedDescription
             }
         }
+    }
+
+    private var nextFootnoteID: String {
+        var candidate = personalFootnotes.count + 1
+        while personalFootnotes.contains(where: { $0.id == String(candidate) }) { candidate += 1 }
+        return String(candidate)
+    }
+
+    private func insertMarkdown(_ value: String) {
+        if !content.isEmpty, value.hasPrefix("\n") == false { content += " " }
+        content += value
     }
 
     private var currentBookName: String {
@@ -414,6 +496,31 @@ private struct NotesInspectorView: View {
     }
 }
 
+private struct NoteFootnoteDraft: Identifiable, Equatable {
+    let uuid: UUID
+    var id: String
+    var kind: String
+    var content: String
+
+    init(uuid: UUID = UUID(), id: String, kind: String = "study", content: String) {
+        self.uuid = uuid
+        self.id = id
+        self.kind = kind
+        self.content = content
+    }
+
+    init(_ footnote: LampVerseFootnote) {
+        self.init(id: footnote.id, kind: footnote.kind ?? "study", content: footnote.content)
+    }
+
+    var lampFootnote: LampVerseFootnote? {
+        let trimmedID = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedID.isEmpty, !trimmedContent.isEmpty else { return nil }
+        return LampVerseFootnote(id: trimmedID, kind: kind, content: content)
+    }
+}
+
 private enum PersonalStudyExportKind: Sendable {
     case notes
     case highlights
@@ -506,6 +613,7 @@ private struct DictionaryInspectorView: View {
             do {
                 try await Task.sleep(for: .milliseconds(200))
                 let dictionaryIDs = moduleID.map { Set([$0]) }
+                    ?? Set(model.dictionaries.map(\.id))
                 results = try await model.library.searchDictionaries(
                     query: trimmedQuery,
                     moduleIDs: dictionaryIDs,
@@ -529,6 +637,8 @@ private struct VerseStudyRequest: Hashable {
 
 private struct VerseInspectorView: View {
     @EnvironmentObject private var model: LibraryModel
+    @AppStorage("reader.showStrongsHints") private var showStrongsHints = true
+    @AppStorage("reader.crossReferences.canonicalOrder") private var canonicalCrossReferenceOrder = false
     @State private var studyData: LampVerseStudyData?
     @State private var isLoading = false
     @State private var errorMessage: String?
@@ -605,7 +715,7 @@ private struct VerseInspectorView: View {
                                             Text(annotation.text ?? annotation.lemma ?? "Word")
                                                 .font(.headline)
                                             Spacer()
-                                            if let strongs = annotation.strongs {
+                                            if showStrongsHints, let strongs = annotation.strongs {
                                                 Button(strongs) { openDictionary(strongs) }
                                                     .buttonStyle(.link)
                                             }
@@ -629,7 +739,7 @@ private struct VerseInspectorView: View {
 
                         if !studyData.scriptureAnnotations.isEmpty {
                             StudySection(title: "References", systemImage: "arrow.triangle.branch") {
-                                ForEach(studyData.scriptureAnnotations) { annotation in
+                                ForEach(sortedScriptureAnnotations(studyData.scriptureAnnotations)) { annotation in
                                     if let reference = annotation.startReference,
                                        let description = annotation.scriptureDescription {
                                         Button(description) {
@@ -672,6 +782,15 @@ private struct VerseInspectorView: View {
         guard let chapter = model.chapter,
               let reference = model.selectedVerseReference else { return "the selected verse" }
         return "\(chapter.book.name) \(chapter.number):\(reference % 1_000)"
+    }
+
+    private func sortedScriptureAnnotations(
+        _ annotations: [LampVerseAnnotation]
+    ) -> [LampVerseAnnotation] {
+        guard canonicalCrossReferenceOrder else { return annotations }
+        return annotations.sorted {
+            ($0.startReference ?? Int.max) < ($1.startReference ?? Int.max)
+        }
     }
 }
 

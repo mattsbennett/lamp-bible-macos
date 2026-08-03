@@ -1,5 +1,8 @@
 import AppKit
 import LampCore
+#if canImport(LampBibleMacSupport)
+import LampBibleMacSupport
+#endif
 import LampModuleKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -28,6 +31,20 @@ private enum LibrarySection: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
+private extension LampDeepLinkSection {
+    var displayName: String {
+        switch self {
+        case .today: "Today"
+        case .reader: "Reader"
+        case .plans: "Reading Plans"
+        case .devotionals: "Devotionals"
+        case .quizzes: "Quizzes"
+        case .search: "Search"
+        case .modules: "Modules"
+        }
+    }
+}
+
 private enum LibrarySelection: Hashable {
     case section(LibrarySection)
     case translation(String)
@@ -36,6 +53,7 @@ private enum LibrarySelection: Hashable {
 struct LibraryRootView: View {
     @Environment(\.openWindow) private var openWindow
     @EnvironmentObject private var model: LibraryModel
+    @EnvironmentObject private var syncController: LibrarySyncController
     @State private var selection: LibrarySelection? = .section(.reader)
     @State private var showingImporter = false
     @State private var showingStudyDataImporter = false
@@ -109,6 +127,8 @@ struct LibraryRootView: View {
         .focusedValue(\.installModuleAction, { showingImporter = true })
         .focusedValue(\.importStudyDataAction, { showingStudyDataImporter = true })
         .onAppear { model.start() }
+        .task { await syncController.syncAutomaticallyIfNeeded(library: model.library) }
+        .onOpenURL { handleOpenURL($0) }
         .onChange(of: selection) { _, newValue in
             if case .translation(let moduleID) = newValue {
                 model.selectTranslation(moduleID)
@@ -170,6 +190,22 @@ struct LibraryRootView: View {
         return "Refreshing Library…"
     }
 
+    private func handleOpenURL(_ url: URL) {
+        guard let deepLink = LampDeepLink(url: url) else { return }
+        switch deepLink {
+        case .reader(let reference, let translationID):
+            model.openReference(reference, translationID: translationID)
+            selection = .section(.reader)
+        case .section(let section):
+            selection = .section(LibrarySection(rawValue: section.displayName) ?? .reader)
+        case .moduleFile(let url):
+            model.install([url])
+            selection = .section(.modules)
+        case .dataFile(let url):
+            model.openDataFile(url)
+        }
+    }
+
     @ViewBuilder
     private var detail: some View {
         switch selection {
@@ -209,11 +245,23 @@ struct LibraryRootView: View {
                 }
             )
         case .section(.search):
-            TranslationSearchView(
+            UnifiedSearchView(
                 showImporter: { showingImporter = true },
-                openResult: { result in
-                    model.openSearchResult(result)
+                openReference: { reference in
+                    model.openReference(reference)
                     selection = .section(.reader)
+                },
+                openKind: { kind in
+                    switch kind {
+                    case .devotional:
+                        selection = .section(.devotionals)
+                    case .plan:
+                        selection = .section(.plans)
+                    case .quiz:
+                        selection = .section(.quizzes)
+                    default:
+                        break
+                    }
                 }
             )
         case .section(.modules):
@@ -228,8 +276,13 @@ private struct TranslationReaderView: View {
     @EnvironmentObject private var model: LibraryModel
     @AppStorage("reader.fontSize") private var fontSize = 20.0
     @AppStorage("reader.lineSpacing") private var lineSpacing = 7.0
+    @AppStorage("reader.readAloud.voice") private var readAloudVoice = ""
+    @AppStorage("reader.readAloud.rate") private var readAloudRate = 0.5
+    @AppStorage("reader.readAloud.followAlong") private var followReadAloud = true
     @AppStorage("studyInspector.tab") private var selectedStudyTab = "commentary"
+    @StateObject private var readAloud = ReadAloudController()
     @State private var showingStudyInspector = false
+    @State private var highlightVerse: LampVerse?
     let showImporter: () -> Void
 
     var body: some View {
@@ -261,6 +314,18 @@ private struct TranslationReaderView: View {
             StudyInspectorView()
                 .environmentObject(model)
         }
+        .sheet(item: $highlightVerse) { verse in
+            VerseHighlightEditorView(verse: verse)
+                .environmentObject(model)
+        }
+        .onChange(of: readAloud.currentReference) { _, reference in
+            guard followReadAloud, let reference else { return }
+            model.focusVerse(reference)
+        }
+        .onChange(of: model.selectedTranslationID) { _, _ in readAloud.stop() }
+        .onChange(of: model.selectedBookNumber) { _, _ in readAloud.stop() }
+        .onChange(of: model.selectedChapterNumber) { _, _ in readAloud.stop() }
+        .onDisappear { readAloud.stop() }
     }
 
     private var readerTitle: String {
@@ -341,6 +406,9 @@ private struct TranslationReaderView: View {
                             }
                         }
                         .contextMenu {
+                            Button("Highlight Selection…", systemImage: "selection.pin.in.out") {
+                                highlightVerse = verse
+                            }
                             Menu("Highlight") {
                                 ForEach(StudyHighlightPalette.colors) { item in
                                     Button(item.name) {
@@ -548,6 +616,68 @@ private struct TranslationReaderView: View {
             .keyboardShortcut("]", modifiers: .command)
         }
 
+        ToolbarItemGroup(placement: .navigation) {
+            Button("Back in Reading History", systemImage: "arrow.uturn.backward") {
+                model.goBackInHistory()
+            }
+            .disabled(!model.canGoBackInHistory)
+            .keyboardShortcut("[", modifiers: [.command, .option])
+
+            Button("Forward in Reading History", systemImage: "arrow.uturn.forward") {
+                model.goForwardInHistory()
+            }
+            .disabled(!model.canGoForwardInHistory)
+            .keyboardShortcut("]", modifiers: [.command, .option])
+
+            Menu("Reading History", systemImage: "clock.arrow.circlepath") {
+                if model.recentReaderLocations.isEmpty {
+                    Text("No Reading History")
+                } else {
+                    ForEach(model.recentReaderLocations, id: \.self) { location in
+                        Button(historyLabel(location)) {
+                            model.openHistoryLocation(location)
+                        }
+                    }
+                    Divider()
+                    Button("Clear History", role: .destructive) {
+                        model.clearNavigationHistory()
+                    }
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+        }
+
+        ToolbarItemGroup {
+            Button {
+                toggleReadAloud()
+            } label: {
+                Label(readAloudButtonTitle, systemImage: readAloudButtonImage)
+            }
+            .disabled(model.chapter?.verses.isEmpty != false)
+            .help(readAloudButtonTitle)
+
+            Menu("Read Aloud Options", systemImage: "speaker.wave.2") {
+                Button("Read Chapter from Beginning", systemImage: "text.book.closed") {
+                    startReadAloud(at: nil)
+                }
+                if model.selectedVerseReference != nil {
+                    Button("Read from Selected Verse", systemImage: "text.line.first.and.arrowtriangle.forward") {
+                        startReadAloud(at: model.selectedVerseReference)
+                    }
+                }
+                if readAloud.state == .playing {
+                    Button("Pause", systemImage: "pause") { readAloud.pause() }
+                } else if readAloud.state == .paused {
+                    Button("Resume", systemImage: "play") { readAloud.resume() }
+                }
+                Button("Stop", systemImage: "stop") { readAloud.stop() }
+                    .disabled(readAloud.state == .stopped)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+        }
+
         ToolbarItem(placement: .primaryAction) {
             Button {
                 showingStudyInspector.toggle()
@@ -557,6 +687,53 @@ private struct TranslationReaderView: View {
             .help(showingStudyInspector ? "Hide Study Tools" : "Show Study Tools")
             .keyboardShortcut("i", modifiers: [.command, .shift])
         }
+    }
+
+    private func historyLabel(_ location: ReaderLocation) -> String {
+        let book = LampBibleReferenceFormatter.bookName(location.bookNumber)
+        let translation = model.translations.first { $0.id == location.translationID }
+        let name = translation?.abbreviation ?? translation?.name ?? location.translationID
+        return "\(book) \(location.chapterNumber) (\(name))"
+    }
+
+    private var readAloudButtonTitle: String {
+        switch readAloud.state {
+        case .stopped: "Read Aloud"
+        case .playing: "Pause Read Aloud"
+        case .paused: "Resume Read Aloud"
+        }
+    }
+
+    private var readAloudButtonImage: String {
+        switch readAloud.state {
+        case .stopped: "play.fill"
+        case .playing: "pause.fill"
+        case .paused: "play.fill"
+        }
+    }
+
+    private func toggleReadAloud() {
+        guard let chapter = model.chapter else { return }
+        readAloud.toggle(
+            items: chapter.verses.map {
+                ReadAloudItem(reference: $0.id, verseNumber: $0.number, text: $0.text)
+            },
+            startingAt: model.selectedVerseReference,
+            voiceIdentifier: readAloudVoice,
+            rate: readAloudRate
+        )
+    }
+
+    private func startReadAloud(at reference: Int?) {
+        guard let chapter = model.chapter else { return }
+        readAloud.play(
+            items: chapter.verses.map {
+                ReadAloudItem(reference: $0.id, verseNumber: $0.number, text: $0.text)
+            },
+            startingAt: reference,
+            voiceIdentifier: readAloudVoice,
+            rate: readAloudRate
+        )
     }
 }
 
@@ -672,9 +849,9 @@ private struct InstalledModulesView: View {
                 }
             } else {
                 List {
-                    moduleSection("Translations", modules: model.translations)
-                    moduleSection("Dictionaries", modules: model.dictionaries)
-                    moduleSection("Commentaries", modules: model.commentaries)
+                    moduleSection("Translations", modules: model.modules.filter { $0.kind == .translation })
+                    moduleSection("Dictionaries", modules: model.modules.filter { $0.kind == .dictionary })
+                    moduleSection("Commentaries", modules: model.modules.filter { $0.kind == .commentary })
                     moduleSection("Reading Plans", modules: model.planModules)
                     moduleSection("Devotionals", modules: model.devotionalModules)
                     moduleSection("Quizzes", modules: model.quizModuleInstallations)

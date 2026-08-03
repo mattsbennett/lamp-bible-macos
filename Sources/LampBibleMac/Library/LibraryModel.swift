@@ -1,5 +1,8 @@
 import Foundation
 import LampCore
+#if canImport(LampBibleMacSupport)
+import LampBibleMacSupport
+#endif
 import LampModuleKit
 
 @MainActor
@@ -13,6 +16,8 @@ final class LibraryModel: ObservableObject {
     @Published private(set) var isLoadingChapter = false
     @Published private(set) var isSearching = false
     @Published private(set) var searchResults: [LampTranslationSearchResult] = []
+    @Published private(set) var moduleSearchResults: [LampModuleSearchResult] = []
+    @Published private(set) var isModuleSearching = false
     @Published private(set) var selectedVerseReference: Int?
     @Published private(set) var highlightsByReference: [Int: [LampVerseHighlight]] = [:]
     @Published private(set) var installedHighlightsByReference: [Int: [LampVerseHighlight]] = [:]
@@ -34,19 +39,27 @@ final class LibraryModel: ObservableObject {
     let library: LampLibrary
     private var chapterTask: Task<Void, Never>?
     private var searchTask: Task<Void, Never>?
+    private var moduleSearchTask: Task<Void, Never>?
     private var searchToken: UUID?
     private let defaults: UserDefaults
+    private var navigationHistory: ReaderNavigationHistory
+    @Published private(set) var hiddenModuleIDs: Set<String>
+    @Published private(set) var moduleOrder: [String]
 
-    var translations: [LampInstalledModule] {
+    var allTranslations: [LampInstalledModule] {
         modules.filter { $0.kind == .translation }
     }
 
+    var translations: [LampInstalledModule] {
+        visibleOrderedModules(kind: .translation)
+    }
+
     var dictionaries: [LampInstalledModule] {
-        modules.filter { $0.kind == .dictionary }
+        visibleOrderedModules(kind: .dictionary)
     }
 
     var commentaries: [LampInstalledModule] {
-        modules.filter { $0.kind == .commentary }
+        visibleOrderedModules(kind: .commentary)
     }
 
     var planModules: [LampInstalledModule] {
@@ -93,6 +106,12 @@ final class LibraryModel: ObservableObject {
         return selectedChapterNumber < selectedBook.chapterCount || bookIndex < books.index(before: books.endIndex)
     }
 
+    var canGoBackInHistory: Bool { navigationHistory.canGoBack }
+    var canGoForwardInHistory: Bool { navigationHistory.canGoForward }
+    var recentReaderLocations: [ReaderLocation] {
+        Array(navigationHistory.backStack.reversed().prefix(20))
+    }
+
     init(
         library: LampLibrary? = nil,
         defaults: UserDefaults = .standard
@@ -104,6 +123,14 @@ final class LibraryModel: ObservableObject {
             )
         )
         self.defaults = defaults
+        if let historyData = defaults.data(forKey: "reader.navigationHistory"),
+           let history = try? JSONDecoder().decode(ReaderNavigationHistory.self, from: historyData) {
+            navigationHistory = history
+        } else {
+            navigationHistory = ReaderNavigationHistory()
+        }
+        hiddenModuleIDs = Set(defaults.stringArray(forKey: "modules.hiddenIDs") ?? [])
+        moduleOrder = defaults.stringArray(forKey: "modules.order") ?? []
         selectedTranslationID = defaults.string(forKey: "reader.translationID")
         let storedBook = defaults.integer(forKey: "reader.bookNumber")
         selectedBookNumber = storedBook > 0 ? storedBook : nil
@@ -113,6 +140,7 @@ final class LibraryModel: ObservableObject {
     deinit {
         chapterTask?.cancel()
         searchTask?.cancel()
+        moduleSearchTask?.cancel()
     }
 
     func start() {
@@ -122,6 +150,34 @@ final class LibraryModel: ObservableObject {
 
     func refresh() {
         Task { await refreshLibrary() }
+    }
+
+    func setModuleHidden(_ moduleID: String, hidden: Bool) {
+        if hidden {
+            hiddenModuleIDs.insert(moduleID)
+        } else {
+            hiddenModuleIDs.remove(moduleID)
+        }
+        defaults.set(Array(hiddenModuleIDs).sorted(), forKey: "modules.hiddenIDs")
+        if hidden, selectedTranslationID == moduleID, let replacement = translations.first {
+            selectTranslation(replacement.id)
+        }
+    }
+
+    func moveModule(_ moduleID: String, direction: Int) {
+        var order = moduleOrder
+        for id in modules.map(\.id) where !order.contains(id) { order.append(id) }
+        guard let index = order.firstIndex(of: moduleID) else { return }
+        let destination = index + direction
+        guard order.indices.contains(destination) else { return }
+        order.swapAt(index, destination)
+        moduleOrder = order
+        defaults.set(order, forKey: "modules.order")
+    }
+
+    func setDefaultTranslation(_ moduleID: String?) {
+        defaults.set(moduleID, forKey: "reader.defaultTranslationID")
+        if let moduleID { selectTranslation(moduleID) }
     }
 
     func reloadCurrentChapterStudyData() {
@@ -159,6 +215,33 @@ final class LibraryModel: ObservableObject {
             }
             isImporting = false
         }
+    }
+
+    func openDataFile(_ url: URL) {
+        guard !isImportingStudyData else { return }
+        isImportingStudyData = true
+        Task {
+            do {
+                do {
+                    _ = try await library.importPersonalDevotional(from: url)
+                    await refreshLibrary()
+                } catch {
+                    _ = try await library.importPersonalStudyData(from: url)
+                    reloadCurrentChapterStudyData()
+                }
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isImportingStudyData = false
+        }
+    }
+
+    func openReference(_ encodedReference: Int, translationID: String?) {
+        if let translationID,
+           translations.contains(where: { $0.id == translationID }) {
+            selectedTranslationID = translationID
+        }
+        openReference(encodedReference)
     }
 
     func importPersonalStudyData(_ urls: [URL]) {
@@ -219,6 +302,7 @@ final class LibraryModel: ObservableObject {
         selectedBookNumber = bookNumber
         selectedChapterNumber = 1
         selectedVerseReference = nil
+        recordCurrentLocation()
         persistLocation()
         loadCurrentChapter()
     }
@@ -227,6 +311,7 @@ final class LibraryModel: ObservableObject {
         guard chapterNumber > 0 else { return }
         selectedChapterNumber = chapterNumber
         selectedVerseReference = nil
+        recordCurrentLocation()
         persistLocation()
         loadCurrentChapter()
     }
@@ -242,6 +327,7 @@ final class LibraryModel: ObservableObject {
             selectedChapterNumber = previousBook.chapterCount
         }
         selectedVerseReference = nil
+        recordCurrentLocation()
         persistLocation()
         loadCurrentChapter()
     }
@@ -258,6 +344,7 @@ final class LibraryModel: ObservableObject {
             selectedChapterNumber = 1
         }
         selectedVerseReference = nil
+        recordCurrentLocation()
         persistLocation()
         loadCurrentChapter()
     }
@@ -278,7 +365,7 @@ final class LibraryModel: ObservableObject {
         searchTask = Task {
             do {
                 try await Task.sleep(for: .milliseconds(250))
-                let moduleIDs = translationID.map { Set([$0]) }
+                let moduleIDs = translationID.map { Set([$0]) } ?? Set(translations.map(\.id))
                 let results = try await library.searchTranslations(
                     query: trimmedQuery,
                     moduleIDs: moduleIDs,
@@ -299,11 +386,48 @@ final class LibraryModel: ObservableObject {
         }
     }
 
+    func searchModules(
+        _ query: String,
+        kind: LampModuleKind? = nil,
+        moduleID: String? = nil
+    ) {
+        moduleSearchTask?.cancel()
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedQuery.isEmpty else {
+            moduleSearchResults = []
+            isModuleSearching = false
+            return
+        }
+        isModuleSearching = true
+        moduleSearchTask = Task {
+            do {
+                try await Task.sleep(for: .milliseconds(250))
+                let results = try await library.searchModules(
+                    query: trimmedQuery,
+                    kinds: kind.map { Set([$0]) },
+                    moduleIDs: moduleID.map { Set([$0]) }
+                        ?? Set(modules.filter { !hiddenModuleIDs.contains($0.id) }.map(\.id)),
+                    limit: 250
+                )
+                guard !Task.isCancelled else { return }
+                moduleSearchResults = results
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled else { return }
+                errorMessage = error.localizedDescription
+                moduleSearchResults = []
+            }
+            if !Task.isCancelled { isModuleSearching = false }
+        }
+    }
+
     func openSearchResult(_ result: LampTranslationSearchResult) {
         selectedTranslationID = result.translationID
         selectedBookNumber = result.bookNumber
         selectedChapterNumber = result.chapterNumber
         selectedVerseReference = result.reference
+        recordCurrentLocation()
         persistLocation()
         loadTranslation(result.translationID)
     }
@@ -318,9 +442,7 @@ final class LibraryModel: ObservableObject {
     }
 
     func personalHighlights(for reference: Int) -> [LampVerseHighlight] {
-        guard let selectedTranslationID else { return [] }
-        let setID = "personal-highlights:\(selectedTranslationID)"
-        return (highlightsByReference[reference] ?? []).filter { $0.setID == setID }
+        highlightsByReference[reference] ?? []
     }
 
     func hasPersonalNote(for reference: Int) -> Bool {
@@ -343,12 +465,16 @@ final class LibraryModel: ObservableObject {
     func savePersonalNote(
         reference: Int,
         title: String?,
-        content: String
+        content: String,
+        verseReferences: [Int],
+        footnotes: [LampVerseFootnote]
     ) async throws {
         let note = try await library.setPersonalVerseNote(
             reference: reference,
             title: title,
-            content: content
+            content: content,
+            verseReferences: verseReferences,
+            footnotes: footnotes
         )
         if note == nil {
             noteReferences.remove(reference)
@@ -390,6 +516,39 @@ final class LibraryModel: ObservableObject {
         }
     }
 
+    func saveVerseHighlight(
+        reference: Int,
+        startOffset: Int,
+        endOffset: Int,
+        style: LampHighlightStyle,
+        color: String,
+        setID: String
+    ) async throws {
+        guard let translationID = selectedTranslationID else { return }
+        let highlight = try await library.saveVerseHighlight(
+            translationID: translationID,
+            reference: reference,
+            startOffset: startOffset,
+            endOffset: endOffset,
+            style: style,
+            color: color,
+            setID: setID
+        )
+        guard selectedTranslationID == translationID else { return }
+        highlightsByReference[reference, default: []].append(highlight)
+        highlightsByReference[reference]?.sort {
+            ($0.startOffset, $0.endOffset, $0.id) < ($1.startOffset, $1.endOffset, $1.id)
+        }
+    }
+
+    func deleteVerseHighlight(id: Int64, reference: Int) async throws {
+        try await library.deleteVerseHighlight(id: id)
+        highlightsByReference[reference]?.removeAll { $0.id == id }
+        if highlightsByReference[reference]?.isEmpty == true {
+            highlightsByReference.removeValue(forKey: reference)
+        }
+    }
+
     func openReading(_ reading: LampPlanReading) {
         openReference(reading.startReference)
     }
@@ -404,8 +563,29 @@ final class LibraryModel: ObservableObject {
         selectedBookNumber = reference.book
         selectedChapterNumber = reference.chapter
         selectedVerseReference = encodedReference
+        recordCurrentLocation()
         persistLocation()
         loadTranslation(translationID)
+    }
+
+    func goBackInHistory() {
+        guard let location = navigationHistory.goBack() else { return }
+        applyHistoryLocation(location)
+    }
+
+    func goForwardInHistory() {
+        guard let location = navigationHistory.goForward() else { return }
+        applyHistoryLocation(location)
+    }
+
+    func openHistoryLocation(_ location: ReaderLocation) {
+        navigationHistory.visit(location)
+        applyHistoryLocation(location)
+    }
+
+    func clearNavigationHistory() {
+        navigationHistory.clear(keeping: currentReaderLocation)
+        persistNavigationHistory()
     }
 
     func setPlanSelected(_ planID: String, selected: Bool) {
@@ -439,6 +619,18 @@ final class LibraryModel: ObservableObject {
             errorMessage = error.localizedDescription
             return []
         }
+    }
+
+    @discardableResult
+    func savePersonalDevotional(_ devotional: LampDevotional) async throws -> LampDevotional {
+        let saved = try await library.savePersonalDevotional(devotional)
+        devotionals = try await library.devotionals()
+        return saved
+    }
+
+    func deletePersonalDevotional(id: String) async throws {
+        try await library.deletePersonalDevotional(id: id)
+        devotionals = try await library.devotionals()
     }
 
     func loadPlanProgress(year: Int) async {
@@ -497,6 +689,10 @@ final class LibraryModel: ObservableObject {
             if let selectedTranslationID,
                availableTranslations.contains(where: { $0.id == selectedTranslationID }) {
                 loadTranslation(selectedTranslationID)
+            } else if let preferred = defaults.string(forKey: "reader.defaultTranslationID"),
+                      availableTranslations.contains(where: { $0.id == preferred }) {
+                selectedTranslationID = preferred
+                loadTranslation(preferred)
             } else if let first = availableTranslations.first {
                 selectedTranslationID = first.id
                 loadTranslation(first.id)
@@ -528,6 +724,7 @@ final class LibraryModel: ObservableObject {
                 selectedBookNumber = selected?.id
                 if let selected {
                     selectedChapterNumber = min(max(selectedChapterNumber, 1), selected.chapterCount)
+                    recordCurrentLocation()
                     try await loadChapter(moduleID: moduleID, book: selected.id, chapter: selectedChapterNumber)
                 } else {
                     chapter = nil
@@ -614,5 +811,50 @@ final class LibraryModel: ObservableObject {
         defaults.set(selectedTranslationID, forKey: "reader.translationID")
         defaults.set(selectedBookNumber ?? 0, forKey: "reader.bookNumber")
         defaults.set(selectedChapterNumber, forKey: "reader.chapterNumber")
+    }
+
+    private var currentReaderLocation: ReaderLocation? {
+        guard let translationID = selectedTranslationID,
+              let bookNumber = selectedBookNumber else { return nil }
+        return ReaderLocation(
+            translationID: translationID,
+            bookNumber: bookNumber,
+            chapterNumber: selectedChapterNumber,
+            verseReference: selectedVerseReference
+        )
+    }
+
+    private func recordCurrentLocation() {
+        guard let location = currentReaderLocation else { return }
+        navigationHistory.visit(location)
+        persistNavigationHistory()
+    }
+
+    private func applyHistoryLocation(_ location: ReaderLocation) {
+        selectedTranslationID = location.translationID
+        selectedBookNumber = location.bookNumber
+        selectedChapterNumber = location.chapterNumber
+        selectedVerseReference = location.verseReference
+        persistNavigationHistory()
+        persistLocation()
+        loadTranslation(location.translationID)
+    }
+
+    private func persistNavigationHistory() {
+        if let data = try? JSONEncoder().encode(navigationHistory) {
+            defaults.set(data, forKey: "reader.navigationHistory")
+        }
+    }
+
+    private func visibleOrderedModules(kind: LampModuleKind) -> [LampInstalledModule] {
+        let positions = Dictionary(uniqueKeysWithValues: moduleOrder.enumerated().map { ($1, $0) })
+        return modules
+            .filter { $0.kind == kind && !hiddenModuleIDs.contains($0.id) }
+            .sorted {
+                let left = positions[$0.id] ?? Int.max
+                let right = positions[$1.id] ?? Int.max
+                if left != right { return left < right }
+                return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+            }
     }
 }

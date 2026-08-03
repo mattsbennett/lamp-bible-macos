@@ -21,6 +21,17 @@
 		A1000000000000000000000C /* LampModuleKit in Frameworks */ = {isa = PBXBuildFile; productRef = G10000000000000000000003 /* LampModuleKit */; };
 		A1000000000000000000000D /* DevotionalsAndQuizzesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000C /* DevotionalsAndQuizzesView.swift */; };
 		A1000000000000000000000E /* bundled_modules.db.zlib in Resources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000D /* bundled_modules.db.zlib */; };
+		A1000000000000000000000F /* UnifiedSearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000E /* UnifiedSearchView.swift */; };
+		A10000000000000000000010 /* ReaderSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000F /* ReaderSupport.swift */; };
+		A10000000000000000000011 /* DevotionalEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000010 /* DevotionalEditorView.swift */; };
+		A10000000000000000000012 /* ReadAloudController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000011 /* ReadAloudController.swift */; };
+		A10000000000000000000013 /* VerseHighlightEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000012 /* VerseHighlightEditorView.swift */; };
+		A10000000000000000000014 /* ReadingReminderScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000013 /* ReadingReminderScheduler.swift */; };
+		A10000000000000000000015 /* SyncSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000014 /* SyncSupport.swift */; };
+		A10000000000000000000016 /* LibrarySyncController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000015 /* LibrarySyncController.swift */; };
+		A10000000000000000000017 /* DevotionalContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000016 /* DevotionalContentView.swift */; };
+		A10000000000000000000018 /* LampMenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000017 /* LampMenuBarView.swift */; };
+		A10000000000000000000019 /* DevotionalAudioRecorderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000018 /* DevotionalAudioRecorderView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -37,6 +48,17 @@
 		B1000000000000000000000B /* Lamp Bible.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Lamp Bible.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		B1000000000000000000000C /* DevotionalsAndQuizzesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/DevotionalsAndQuizzesView.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000000D /* bundled_modules.db.zlib */ = {isa = PBXFileReference; lastKnownFileType = file; name = bundled_modules.db.zlib; path = ../lamp-bible-modules/modules_db/bundled_modules.db.zlib; sourceTree = SOURCE_ROOT; };
+		B1000000000000000000000E /* UnifiedSearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/UnifiedSearchView.swift; sourceTree = SOURCE_ROOT; };
+		B1000000000000000000000F /* ReaderSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/ReaderSupport.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000010 /* DevotionalEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/DevotionalEditorView.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000011 /* ReadAloudController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/ReadAloudController.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000012 /* VerseHighlightEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/VerseHighlightEditorView.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000013 /* ReadingReminderScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/App/ReadingReminderScheduler.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000014 /* SyncSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/SyncSupport.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000015 /* LibrarySyncController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/App/LibrarySyncController.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000016 /* DevotionalContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/DevotionalContentView.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000017 /* LampMenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/App/LampMenuBarView.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000018 /* DevotionalAudioRecorderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/DevotionalAudioRecorderView.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -66,15 +88,26 @@
 			children = (
 				B10000000000000000000002 /* LampBibleMacApp.swift */,
 				B10000000000000000000001 /* LampBibleCommands.swift */,
+				B10000000000000000000013 /* ReadingReminderScheduler.swift */,
+				B10000000000000000000017 /* LampMenuBarView.swift */,
+				B10000000000000000000015 /* LibrarySyncController.swift */,
 				B10000000000000000000003 /* LibraryModel.swift */,
 				B10000000000000000000004 /* LibraryRootView.swift */,
 				B1000000000000000000000C /* DevotionalsAndQuizzesView.swift */,
+				B10000000000000000000010 /* DevotionalEditorView.swift */,
+				B10000000000000000000016 /* DevotionalContentView.swift */,
+				B10000000000000000000018 /* DevotionalAudioRecorderView.swift */,
+				B10000000000000000000011 /* ReadAloudController.swift */,
+				B10000000000000000000012 /* VerseHighlightEditorView.swift */,
+				B1000000000000000000000E /* UnifiedSearchView.swift */,
 				B10000000000000000000005 /* ReadingPlansView.swift */,
 				B10000000000000000000006 /* StudyHighlightPalette.swift */,
 				B10000000000000000000007 /* StudyInspectorView.swift */,
 				B10000000000000000000008 /* ModuleStudioModel.swift */,
 				B10000000000000000000009 /* ModuleStudioView.swift */,
 				B1000000000000000000000A /* StudioDocument.swift */,
+				B1000000000000000000000F /* ReaderSupport.swift */,
+				B10000000000000000000014 /* SyncSupport.swift */,
 			);
 			name = Sources;
 			sourceTree = "<group>";
@@ -172,6 +205,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000001 /* LampBibleCommands.swift in Sources */,
+				A10000000000000000000014 /* ReadingReminderScheduler.swift in Sources */,
+				A10000000000000000000018 /* LampMenuBarView.swift in Sources */,
+				A10000000000000000000016 /* LibrarySyncController.swift in Sources */,
 				A10000000000000000000002 /* LampBibleMacApp.swift in Sources */,
 				A10000000000000000000003 /* LibraryModel.swift in Sources */,
 				A10000000000000000000004 /* LibraryRootView.swift in Sources */,
@@ -182,6 +218,14 @@
 				A10000000000000000000009 /* ModuleStudioView.swift in Sources */,
 				A1000000000000000000000A /* StudioDocument.swift in Sources */,
 				A1000000000000000000000D /* DevotionalsAndQuizzesView.swift in Sources */,
+				A1000000000000000000000F /* UnifiedSearchView.swift in Sources */,
+				A10000000000000000000010 /* ReaderSupport.swift in Sources */,
+				A10000000000000000000015 /* SyncSupport.swift in Sources */,
+				A10000000000000000000011 /* DevotionalEditorView.swift in Sources */,
+				A10000000000000000000017 /* DevotionalContentView.swift in Sources */,
+				A10000000000000000000019 /* DevotionalAudioRecorderView.swift in Sources */,
+				A10000000000000000000012 /* ReadAloudController.swift in Sources */,
+				A10000000000000000000013 /* VerseHighlightEditorView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -239,10 +283,8 @@
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "Lamp Bible";
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.reference";
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -266,10 +308,8 @@
 				DEVELOPMENT_TEAM = BM8474Q7J2;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "Lamp Bible";
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.reference";
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",

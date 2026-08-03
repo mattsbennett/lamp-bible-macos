@@ -4,7 +4,7 @@ A native macOS Bible study application and module-authoring environment.
 
 This repository intentionally contains Mac-specific application lifecycle and UI. Shared module formats, databases, search, sync, and domain behavior belong in the sibling [`lamp-bible-core`](../lamp-bible-core) Swift package.
 
-## Current slice
+## Feature-complete macOS application
 
 - Native multiwindow SwiftUI shell
 - Sidebar-based library navigation
@@ -35,8 +35,20 @@ This repository intentionally contains Mac-specific application lifecycle and UI
 - Restored reading location, selectable scripture text, and reader typography settings
 - Module management with Finder access and safe removal
 - One-click installation of a successful Module Studio build
+- Persistent reader navigation history and unified all-module search history
+- Read Aloud with system voices, adjustable rate, pause/resume, and verse follow-along
+- Exact text-range highlights with styles, named sets, and reusable themes
+- Verse-range Markdown notes with editable footnotes
+- Personal devotional authoring, images, audio attachment/recording/playback, presentation, import, export, and sharing
+- Actual-word-count reading estimates, daily notifications, and external Bible app links
+- Default, visibility, and ordering preferences for translations, dictionaries, and commentaries
+- Finder document opening and `lampbible://` deep links
+- Portable iCloud Drive/folder and WebDAV sync for modules, settings, notes, highlights/themes, devotionals, and media
+- A menu-bar Today surface as the native Mac equivalent of the iOS widget
 
 Personal edits are stored outside immutable modules and can be imported or exported as canonical JSON or `.lamp` modules, while every canonical module type can also be built and installed through Module Studio.
+
+The detailed iOS-to-macOS capability matrix is in [Documentation/FeatureParity.md](Documentation/FeatureParity.md).
 
 ## Development
 

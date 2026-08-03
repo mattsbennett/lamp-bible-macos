@@ -1,19 +1,32 @@
+import AppKit
 import LampCore
+import LampModuleKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct DevotionalsView: View {
     @EnvironmentObject private var model: LibraryModel
+    @AppStorage("devotional.fontSize") private var devotionalFontSize = 17.0
     @State private var selection: String?
     @State private var query = ""
+    @State private var categoryFilter: String?
+    @State private var moduleFilter: String?
+    @State private var editingDevotional: LampDevotional?
+    @State private var showingEditor = false
+    @State private var devotionalPendingDeletion: LampDevotional?
+    @State private var exportedURL: URL?
+    @State private var presentingDevotional: LampDevotional?
 
     let showImporter: () -> Void
     let openReference: (Int) -> Void
 
     private var filteredDevotionals: [LampDevotional] {
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedQuery.isEmpty else { return model.devotionals }
         return model.devotionals.filter { devotional in
-            [
+            guard categoryFilter == nil || devotional.category == categoryFilter,
+                  moduleFilter == nil || devotional.moduleID == moduleFilter else { return false }
+            guard !trimmedQuery.isEmpty else { return true }
+            return [
                 devotional.title,
                 devotional.subtitle,
                 devotional.author,
@@ -33,29 +46,35 @@ struct DevotionalsView: View {
 
     var body: some View {
         Group {
-            if model.devotionalModules.isEmpty {
+            if model.devotionals.isEmpty {
                 ContentUnavailableView {
                     Label("No Devotionals", systemImage: "sun.max")
                 } description: {
-                    Text("Install a devotional .lamp module, or build one in Module Studio.")
+                    Text("Write your own devotional, install a devotional .lamp module, or build one in Module Studio.")
                 } actions: {
-                    Button("Install Module…", action: showImporter)
-                        .buttonStyle(.borderedProminent)
+                    HStack {
+                        Button("New Devotional") { beginEditing(nil) }
+                            .buttonStyle(.borderedProminent)
+                        Button("Install Module…", action: showImporter)
+                    }
                 }
-            } else if model.devotionals.isEmpty {
-                ContentUnavailableView(
-                    "No Devotional Entries",
-                    systemImage: "sun.max",
-                    description: Text("The installed devotional modules do not contain any entries.")
-                )
+            } else if filteredDevotionals.isEmpty {
+                ContentUnavailableView.search(text: query)
             } else {
                 HSplitView {
                     List(selection: $selection) {
                         ForEach(filteredDevotionals) { devotional in
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(devotional.title)
-                                    .font(.headline)
-                                    .lineLimit(2)
+                                HStack(spacing: 5) {
+                                    Text(devotional.title)
+                                        .font(.headline)
+                                        .lineLimit(2)
+                                    if devotional.isEditable {
+                                        Image(systemName: "pencil.circle.fill")
+                                            .foregroundStyle(.tint)
+                                            .help("Editable personal devotional")
+                                    }
+                                }
                                 Text(devotional.seriesName ?? devotional.moduleName)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
@@ -63,6 +82,16 @@ struct DevotionalsView: View {
                             }
                             .padding(.vertical, 4)
                             .tag(Optional(devotional.id))
+                            .contextMenu {
+                                if devotional.isEditable {
+                                    Button("Edit") { beginEditing(devotional) }
+                                    Button("Export…") { export(devotional) }
+                                    Divider()
+                                    Button("Delete", role: .destructive) {
+                                        devotionalPendingDeletion = devotional
+                                    }
+                                }
+                            }
                         }
                     }
                     .frame(minWidth: 230, idealWidth: 280, maxWidth: 360)
@@ -77,6 +106,72 @@ struct DevotionalsView: View {
         }
         .navigationTitle("Devotionals")
         .searchable(text: $query, prompt: "Search devotionals")
+        .toolbar {
+            ToolbarItemGroup {
+                Picker("Category", selection: $categoryFilter) {
+                    Text("All Categories").tag(String?.none)
+                    ForEach(devotionalCategories, id: \.self) { category in
+                        Text(category.capitalized).tag(Optional(category))
+                    }
+                }
+                Picker("Collection", selection: $moduleFilter) {
+                    Text("All Collections").tag(String?.none)
+                    ForEach(devotionalCollections, id: \.id) { collection in
+                        Text(collection.name).tag(Optional(collection.id))
+                    }
+                }
+                Button("New Devotional", systemImage: "square.and.pencil") { beginEditing(nil) }
+                Button("Import Devotional", systemImage: "square.and.arrow.down") { importDevotional() }
+                if let devotional = selectedDevotional, devotional.isEditable {
+                    Button("Edit", systemImage: "pencil") { beginEditing(devotional) }
+                    Menu("More", systemImage: "ellipsis.circle") {
+                        Button("Export…", systemImage: "square.and.arrow.up") { export(devotional) }
+                        Divider()
+                        Button("Delete", systemImage: "trash", role: .destructive) {
+                            devotionalPendingDeletion = devotional
+                        }
+                    }
+                }
+                if let devotional = selectedDevotional {
+                    Button("Present", systemImage: "rectangle.inset.filled.and.person.filled") {
+                        presentingDevotional = devotional
+                    }
+                    ShareLink(
+                        item: devotional.content,
+                        subject: Text(devotional.title),
+                        message: Text(devotional.summary ?? devotional.title)
+                    ) {
+                        Label("Share Markdown", systemImage: "square.and.arrow.up")
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showingEditor) {
+            DevotionalEditorView(devotional: editingDevotional) { saved in
+                selection = saved.id
+            }
+            .environmentObject(model)
+        }
+        .sheet(item: $presentingDevotional) { devotional in
+            DevotionalPresentationView(devotional: devotional)
+                .environmentObject(model)
+        }
+        .confirmationDialog(
+            "Delete this devotional?",
+            isPresented: Binding(
+                get: { devotionalPendingDeletion != nil },
+                set: { if !$0 { devotionalPendingDeletion = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                guard let devotional = devotionalPendingDeletion else { return }
+                delete(devotional)
+            }
+            Button("Cancel", role: .cancel) { devotionalPendingDeletion = nil }
+        } message: {
+            Text("This removes the personal devotional from this Mac. Installed module entries are never modified.")
+        }
         .onAppear { selectFirstIfNeeded() }
         .onChange(of: model.devotionals) { _, _ in selectFirstIfNeeded() }
         .onChange(of: query) { _, _ in
@@ -90,8 +185,15 @@ struct DevotionalsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 7) {
-                    Text(devotional.title)
-                        .font(.largeTitle.bold())
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(devotional.title)
+                            .font(.largeTitle.bold())
+                        if devotional.isEditable {
+                            Button("Edit", systemImage: "pencil") { beginEditing(devotional) }
+                                .labelStyle(.iconOnly)
+                                .buttonStyle(.borderless)
+                        }
+                    }
                     if let subtitle = devotional.subtitle, !subtitle.isEmpty {
                         Text(subtitle)
                             .font(.title2)
@@ -135,19 +237,23 @@ struct DevotionalsView: View {
 
                 Divider()
 
-                Text(devotional.content)
-                    .font(.body)
-                    .lineSpacing(6)
-                    .textSelection(.enabled)
+                DevotionalContentView(
+                    markdown: devotional.content,
+                    libraryRootURL: model.library.rootURL,
+                    fontSize: devotionalFontSize
+                )
 
                 if let footnotes = devotional.footnotes, !footnotes.isEmpty {
                     Divider()
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Footnotes")
                             .font(.headline)
-                        Text(footnotes)
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
+                        DevotionalContentView(
+                            markdown: footnotes,
+                            libraryRootURL: model.library.rootURL,
+                            fontSize: max(devotionalFontSize - 1, 12)
+                        )
+                        .foregroundStyle(.secondary)
                     }
                 }
 
@@ -163,6 +269,75 @@ struct DevotionalsView: View {
         }
     }
 
+    private func beginEditing(_ devotional: LampDevotional?) {
+        editingDevotional = devotional
+        showingEditor = true
+    }
+
+    private var devotionalCategories: [String] {
+        Array(Set(model.devotionals.compactMap(\.category))).sorted()
+    }
+
+    private var devotionalCollections: [(id: String, name: String)] {
+        Dictionary(grouping: model.devotionals, by: \.moduleID)
+            .map { (id: $0.key, name: $0.value.first?.moduleName ?? $0.key) }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    private func importDevotional() {
+        let panel = NSOpenPanel()
+        panel.title = "Import Devotional"
+        panel.prompt = "Import"
+        panel.allowedContentTypes = [.json, UTType(exportedAs: "com.neus.lamp-bible.lamp", conformingTo: .data)]
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let sourceURL = panel.url else { return }
+        Task {
+            do {
+                let imported = try await model.library.importPersonalDevotional(from: sourceURL)
+                model.refresh()
+                selection = imported.first?.id
+            } catch {
+                model.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func export(_ devotional: LampDevotional) {
+        Task {
+            do {
+                let document = try await model.library.personalDevotionalDocument(id: devotional.id)
+                let panel = NSSavePanel()
+                panel.title = "Export Devotional Module"
+                panel.nameFieldStringValue = document.suggestedModuleFilename
+                panel.allowedContentTypes = [UTType(exportedAs: "com.neus.lamp-bible.lamp", conformingTo: .data)]
+                panel.canCreateDirectories = true
+                guard panel.runModal() == .OK, let destinationURL = panel.url else { return }
+                _ = try await Task.detached(priority: .userInitiated) {
+                    try LampModuleCompiler().compile(
+                        data: document.jsonData,
+                        sourceFilename: document.suggestedJSONFilename,
+                        destinationURL: destinationURL
+                    )
+                }.value
+                exportedURL = destinationURL
+            } catch {
+                model.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func delete(_ devotional: LampDevotional) {
+        devotionalPendingDeletion = nil
+        Task {
+            do {
+                try await model.deletePersonalDevotional(id: devotional.id)
+                selection = model.devotionals.first?.id
+            } catch {
+                model.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
     private func selectFirstIfNeeded() {
         if !model.devotionals.contains(where: { $0.id == selection }) {
             selection = model.devotionals.first?.id
@@ -170,8 +345,44 @@ struct DevotionalsView: View {
     }
 }
 
+private struct DevotionalPresentationView: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var model: LibraryModel
+    @AppStorage("devotional.fontSize") private var devotionalFontSize = 17.0
+    let devotional: LampDevotional
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(devotional.title).font(.title.bold())
+                    if let subtitle = devotional.subtitle { Text(subtitle).foregroundStyle(.secondary) }
+                }
+                Spacer()
+                Button("Close", systemImage: "xmark") { dismiss() }
+                    .labelStyle(.iconOnly)
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(24)
+            Divider()
+            ScrollView {
+                DevotionalContentView(
+                    markdown: devotional.content,
+                    libraryRootURL: model.library.rootURL,
+                    fontSize: devotionalFontSize + 5
+                )
+                .frame(maxWidth: 920, alignment: .leading)
+                .padding(48)
+                .frame(maxWidth: .infinity, alignment: .top)
+            }
+        }
+        .frame(minWidth: 1_020, minHeight: 720)
+    }
+}
+
 struct QuizzesView: View {
     @EnvironmentObject private var model: LibraryModel
+    @AppStorage("quiz.defaultAgeGroup") private var defaultQuizAgeGroup = ""
     @State private var selectedModuleID: String?
     @State private var selectedAgeGroupID: String?
     @State private var day = LampPlanCalendar.dayNumber(for: Date())
@@ -224,6 +435,9 @@ struct QuizzesView: View {
         .onAppear { configureSelection() }
         .onChange(of: model.quizModules) { _, _ in configureSelection() }
         .onChange(of: selectedModuleID) { _, _ in configureAgeGroup() }
+        .onChange(of: selectedAgeGroupID) { _, ageGroupID in
+            if let ageGroupID { defaultQuizAgeGroup = ageGroupID }
+        }
         .task(id: loadKey) { await loadQuestions() }
     }
 
@@ -367,7 +581,8 @@ struct QuizzesView: View {
             return
         }
         if !quiz.ageGroups.contains(where: { $0.id == selectedAgeGroupID }) {
-            selectedAgeGroupID = quiz.ageGroups.first?.id
+            selectedAgeGroupID = quiz.ageGroups.first { $0.id == defaultQuizAgeGroup }?.id
+                ?? quiz.ageGroups.first?.id
         }
         day = min(max(day, 1), maximumDay)
     }
