@@ -1,0 +1,314 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 60;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A10000000000000000000001 /* LampBibleCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000001 /* LampBibleCommands.swift */; };
+		A10000000000000000000002 /* LampBibleMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000002 /* LampBibleMacApp.swift */; };
+		A10000000000000000000003 /* LibraryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000003 /* LibraryModel.swift */; };
+		A10000000000000000000004 /* LibraryRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000004 /* LibraryRootView.swift */; };
+		A10000000000000000000005 /* ReadingPlansView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000005 /* ReadingPlansView.swift */; };
+		A10000000000000000000006 /* StudyHighlightPalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000006 /* StudyHighlightPalette.swift */; };
+		A10000000000000000000007 /* StudyInspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000007 /* StudyInspectorView.swift */; };
+		A10000000000000000000008 /* ModuleStudioModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000008 /* ModuleStudioModel.swift */; };
+		A10000000000000000000009 /* ModuleStudioView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000009 /* ModuleStudioView.swift */; };
+		A1000000000000000000000A /* StudioDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000A /* StudioDocument.swift */; };
+		A1000000000000000000000B /* LampCore in Frameworks */ = {isa = PBXBuildFile; productRef = G10000000000000000000002 /* LampCore */; };
+		A1000000000000000000000C /* LampModuleKit in Frameworks */ = {isa = PBXBuildFile; productRef = G10000000000000000000003 /* LampModuleKit */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		B10000000000000000000001 /* LampBibleCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/App/LampBibleCommands.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000002 /* LampBibleMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/App/LampBibleMacApp.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000003 /* LibraryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/LibraryModel.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000004 /* LibraryRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/LibraryRootView.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000005 /* ReadingPlansView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/ReadingPlansView.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000006 /* StudyHighlightPalette.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/StudyHighlightPalette.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000007 /* StudyInspectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/StudyInspectorView.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000008 /* ModuleStudioModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/ModuleStudio/ModuleStudioModel.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000009 /* ModuleStudioView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/ModuleStudio/ModuleStudioView.swift; sourceTree = SOURCE_ROOT; };
+		B1000000000000000000000A /* StudioDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/StudioDocument.swift; sourceTree = SOURCE_ROOT; };
+		B1000000000000000000000B /* Lamp Bible.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Lamp Bible.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		C10000000000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1000000000000000000000B /* LampCore in Frameworks */,
+				A1000000000000000000000C /* LampModuleKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		H10000000000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				H10000000000000000000002 /* Sources */,
+				H10000000000000000000003 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		H10000000000000000000002 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				B10000000000000000000002 /* LampBibleMacApp.swift */,
+				B10000000000000000000001 /* LampBibleCommands.swift */,
+				B10000000000000000000003 /* LibraryModel.swift */,
+				B10000000000000000000004 /* LibraryRootView.swift */,
+				B10000000000000000000005 /* ReadingPlansView.swift */,
+				B10000000000000000000006 /* StudyHighlightPalette.swift */,
+				B10000000000000000000007 /* StudyInspectorView.swift */,
+				B10000000000000000000008 /* ModuleStudioModel.swift */,
+				B10000000000000000000009 /* ModuleStudioView.swift */,
+				B1000000000000000000000A /* StudioDocument.swift */,
+			);
+			name = Sources;
+			sourceTree = "<group>";
+		};
+		H10000000000000000000003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				B1000000000000000000000B /* Lamp Bible.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		D10000000000000000000001 /* Lamp Bible */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F10000000000000000000006 /* Build configuration list for PBXNativeTarget "Lamp Bible" */;
+			buildPhases = (
+				C10000000000000000000003 /* Sources */,
+				C10000000000000000000001 /* Frameworks */,
+				C10000000000000000000002 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "Lamp Bible";
+			packageProductDependencies = (
+				G10000000000000000000002 /* LampCore */,
+				G10000000000000000000003 /* LampModuleKit */,
+			);
+			productName = "Lamp Bible";
+			productReference = B1000000000000000000000B /* Lamp Bible.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		E10000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2660;
+				LastUpgradeCheck = 2660;
+				TargetAttributes = {
+					D10000000000000000000001 = {
+						CreatedOnToolsVersion = 26.6;
+					};
+				};
+			};
+			buildConfigurationList = F10000000000000000000005 /* Build configuration list for PBXProject "Lamp Bible" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = H10000000000000000000001;
+			packageReferences = (
+				G10000000000000000000001 /* XCLocalSwiftPackageReference "lamp-bible-core" */,
+			);
+			productRefGroup = H10000000000000000000003 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				D10000000000000000000001 /* Lamp Bible */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		C10000000000000000000002 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		C10000000000000000000003 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000001 /* LampBibleCommands.swift in Sources */,
+				A10000000000000000000002 /* LampBibleMacApp.swift in Sources */,
+				A10000000000000000000003 /* LibraryModel.swift in Sources */,
+				A10000000000000000000004 /* LibraryRootView.swift in Sources */,
+				A10000000000000000000005 /* ReadingPlansView.swift in Sources */,
+				A10000000000000000000006 /* StudyHighlightPalette.swift in Sources */,
+				A10000000000000000000007 /* StudyInspectorView.swift in Sources */,
+				A10000000000000000000008 /* ModuleStudioModel.swift in Sources */,
+				A10000000000000000000009 /* ModuleStudioView.swift in Sources */,
+				A1000000000000000000000A /* StudioDocument.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		F10000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		F10000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		F10000000000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = BM8474Q7J2;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Lamp Bible";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.reference";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.neus.Lamp-Bible.macOS";
+				PRODUCT_NAME = "Lamp Bible";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		F10000000000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = BM8474Q7J2;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Lamp Bible";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.reference";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.neus.Lamp-Bible.macOS";
+				PRODUCT_NAME = "Lamp Bible";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		F10000000000000000000005 /* Build configuration list for PBXProject "Lamp Bible" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F10000000000000000000001 /* Debug */,
+				F10000000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F10000000000000000000006 /* Build configuration list for PBXNativeTarget "Lamp Bible" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F10000000000000000000003 /* Debug */,
+				F10000000000000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		G10000000000000000000001 /* XCLocalSwiftPackageReference "lamp-bible-core" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../lamp-bible-core";
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		G10000000000000000000002 /* LampCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = G10000000000000000000001 /* XCLocalSwiftPackageReference "lamp-bible-core" */;
+			productName = LampCore;
+		};
+		G10000000000000000000003 /* LampModuleKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = G10000000000000000000001 /* XCLocalSwiftPackageReference "lamp-bible-core" */;
+			productName = LampModuleKit;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = E10000000000000000000001 /* Project object */;
+}
