@@ -5,8 +5,10 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct StudyInspectorView: View {
+    @EnvironmentObject private var model: LibraryModel
     @AppStorage("studyInspector.tab") private var selectedTab = "commentary"
     @State private var dictionaryQuery = ""
+    @State private var relatedDictionaryKeys: [String] = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -24,10 +26,14 @@ struct StudyInspectorView: View {
 
             switch selectedTab {
             case "dictionary":
-                DictionaryInspectorView(query: $dictionaryQuery)
+                DictionaryInspectorView(
+                    query: $dictionaryQuery,
+                    relatedKeys: relatedDictionaryKeys
+                )
             case "verse":
                 VerseInspectorView { query in
                     dictionaryQuery = query
+                    relatedDictionaryKeys = [query]
                     selectedTab = "dictionary"
                 }
             case "notes":
@@ -37,6 +43,18 @@ struct StudyInspectorView: View {
             }
         }
         .inspectorColumnWidth(min: 330, ideal: 410, max: 580)
+        .onAppear { adoptDictionaryLookup(model.dictionaryLookupRequest) }
+        .onChange(of: model.dictionaryLookupRequest) { _, request in
+            adoptDictionaryLookup(request)
+        }
+    }
+
+    private func adoptDictionaryLookup(_ request: DictionaryLookupRequest?) {
+        guard let request, let primaryKey = request.keys.first else { return }
+        dictionaryQuery = primaryKey
+        relatedDictionaryKeys = request.keys
+        selectedTab = "dictionary"
+        model.consumeDictionaryLookupRequest(request)
     }
 }
 
@@ -539,6 +557,7 @@ private struct DictionarySearchRequest: Hashable {
 private struct DictionaryInspectorView: View {
     @EnvironmentObject private var model: LibraryModel
     @Binding var query: String
+    let relatedKeys: [String]
     @State private var moduleID: String?
     @State private var results: [LampDictionaryResult] = []
     @State private var isSearching = false
@@ -553,6 +572,18 @@ private struct DictionaryInspectorView: View {
             VStack(spacing: 10) {
                 TextField("Word, lemma, or Strong’s number", text: $query)
                     .textFieldStyle(.roundedBorder)
+                if relatedKeys.count > 1 {
+                    HStack(spacing: 6) {
+                        Text("This word:")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        ForEach(relatedKeys, id: \.self) { key in
+                            Button(key) { query = key }
+                                .buttonStyle(.borderless)
+                        }
+                        Spacer()
+                    }
+                }
                 if model.dictionaries.count > 1 {
                     Picker("Dictionary", selection: $moduleID) {
                         Text("All Dictionaries").tag(String?.none)

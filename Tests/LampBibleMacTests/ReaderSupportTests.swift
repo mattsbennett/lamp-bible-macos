@@ -4,6 +4,20 @@ import Testing
 @testable import LampBibleMacSupport
 
 struct ReaderSupportTests {
+    @Test func lexiconLinksPreserveAllKeysAndTheirVerse() throws {
+        let link = try #require(LexiconLookupLink(
+            keys: [" h7225 ", "H1254", "h7225"],
+            reference: 1_001_001
+        ))
+        let url = try #require(link.url)
+
+        #expect(link.keys == ["H7225", "H1254"])
+        #expect(LexiconLookupLink(url: url) == link)
+        #expect(LexiconLookupLink(url: try #require(URL(string: "https://example.com"))) == nil)
+        #expect(LexiconLookupLink(keys: [], reference: 1_001_001) == nil)
+        #expect(LexiconLookupLink(keys: ["G3056"], reference: 0) == nil)
+    }
+
     @Test func readAloudQueueStartsAtReferenceAndAdvances() {
         let items = [
             ReadAloudItem(reference: 1_001_001, verseNumber: 1, text: "In the beginning"),

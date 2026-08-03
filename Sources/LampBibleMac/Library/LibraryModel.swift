@@ -5,6 +5,11 @@ import LampBibleMacSupport
 #endif
 import LampModuleKit
 
+struct DictionaryLookupRequest: Equatable {
+    let id = UUID()
+    let keys: [String]
+}
+
 @MainActor
 final class LibraryModel: ObservableObject {
     @Published private(set) var modules: [LampInstalledModule] = []
@@ -19,6 +24,7 @@ final class LibraryModel: ObservableObject {
     @Published private(set) var moduleSearchResults: [LampModuleSearchResult] = []
     @Published private(set) var isModuleSearching = false
     @Published private(set) var selectedVerseReference: Int?
+    @Published private(set) var dictionaryLookupRequest: DictionaryLookupRequest?
     @Published private(set) var highlightsByReference: [Int: [LampVerseHighlight]] = [:]
     @Published private(set) var installedHighlightsByReference: [Int: [LampVerseHighlight]] = [:]
     @Published private(set) var noteReferences: Set<Int> = []
@@ -434,6 +440,19 @@ final class LibraryModel: ObservableObject {
 
     func focusVerse(_ reference: Int?) {
         selectedVerseReference = reference
+    }
+
+    func requestDictionaryLookup(keys: [String]) {
+        let normalizedKeys = keys
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() }
+            .filter { !$0.isEmpty }
+        guard !normalizedKeys.isEmpty else { return }
+        dictionaryLookupRequest = DictionaryLookupRequest(keys: normalizedKeys)
+    }
+
+    func consumeDictionaryLookupRequest(_ request: DictionaryLookupRequest) {
+        guard dictionaryLookupRequest?.id == request.id else { return }
+        dictionaryLookupRequest = nil
     }
 
     func highlights(for reference: Int) -> [LampVerseHighlight] {

@@ -276,6 +276,7 @@ private struct TranslationReaderView: View {
     @EnvironmentObject private var model: LibraryModel
     @AppStorage("reader.fontSize") private var fontSize = 20.0
     @AppStorage("reader.lineSpacing") private var lineSpacing = 7.0
+    @AppStorage("reader.showStrongsHints") private var showStrongsHints = true
     @AppStorage("reader.readAloud.voice") private var readAloudVoice = ""
     @AppStorage("reader.readAloud.rate") private var readAloudRate = 0.5
     @AppStorage("reader.readAloud.followAlong") private var followReadAloud = true
@@ -326,6 +327,11 @@ private struct TranslationReaderView: View {
         .onChange(of: model.selectedBookNumber) { _, _ in readAloud.stop() }
         .onChange(of: model.selectedChapterNumber) { _, _ in readAloud.stop() }
         .onDisappear { readAloud.stop() }
+        .environment(\.openURL, OpenURLAction { url in
+            guard let lookup = LexiconLookupLink(url: url) else { return .systemAction }
+            openLexicon(lookup)
+            return .handled
+        })
     }
 
     private var readerTitle: String {
@@ -490,6 +496,38 @@ private struct TranslationReaderView: View {
             }
         }
 
+        let lexicalAnnotations = verse.annotations.filter { annotation in
+            annotation.strongs?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        }
+        let groupedLexicalAnnotations = Dictionary(grouping: lexicalAnnotations) { annotation in
+            VerseAnnotationRange(start: annotation.startOffset, end: annotation.endOffset)
+        }
+        for (annotationRange, annotations) in groupedLexicalAnnotations {
+            guard annotationRange.start >= 0,
+                  annotationRange.end > annotationRange.start,
+                  annotationRange.end <= verse.text.count else { continue }
+            let keys = annotations.compactMap(\.strongs)
+            guard let lookup = LexiconLookupLink(keys: keys, reference: verse.id),
+                  let url = lookup.url else { continue }
+            let stringStart = verse.text.index(verse.text.startIndex, offsetBy: annotationRange.start)
+            let stringEnd = verse.text.index(verse.text.startIndex, offsetBy: annotationRange.end)
+            guard let start = AttributedString.Index(stringStart, within: result),
+                  let end = AttributedString.Index(stringEnd, within: result) else { continue }
+            let range = start..<end
+            result[range].link = url
+            let overlapsRedLetter = verse.annotations.contains { annotation in
+                annotation.kind == "red-letter"
+                    && annotation.startOffset < annotationRange.end
+                    && annotation.endOffset > annotationRange.start
+            }
+            if !overlapsRedLetter {
+                result[range].foregroundColor = .primary
+            }
+            if showStrongsHints {
+                result[range].underlineStyle = .single
+            }
+        }
+
         for highlight in model.highlights(for: verse.id) {
             let startOffset = min(max(highlight.startOffset, 0), verse.text.count)
             let endOffset = min(max(highlight.endOffset, startOffset), verse.text.count)
@@ -509,6 +547,13 @@ private struct TranslationReaderView: View {
             }
         }
         return result
+    }
+
+    private func openLexicon(_ lookup: LexiconLookupLink) {
+        model.focusVerse(lookup.reference)
+        model.requestDictionaryLookup(keys: lookup.keys)
+        selectedStudyTab = "dictionary"
+        showingStudyInspector = true
     }
 
     private func setHighlight(_ color: String?, for verse: LampVerse) {
@@ -735,6 +780,11 @@ private struct TranslationReaderView: View {
             rate: readAloudRate
         )
     }
+}
+
+private struct VerseAnnotationRange: Hashable {
+    let start: Int
+    let end: Int
 }
 
 private struct TranslationSearchView: View {

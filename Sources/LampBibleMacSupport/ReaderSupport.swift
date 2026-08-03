@@ -1,5 +1,43 @@
 import Foundation
 
+public struct LexiconLookupLink: Equatable, Sendable {
+    public let keys: [String]
+    public let reference: Int
+
+    public init?(keys: [String], reference: Int) {
+        var seen: Set<String> = []
+        let normalizedKeys = keys.compactMap { rawKey -> String? in
+            let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+            guard !key.isEmpty, seen.insert(key).inserted else { return nil }
+            return key
+        }
+        guard !normalizedKeys.isEmpty, reference > 0 else { return nil }
+        self.keys = normalizedKeys
+        self.reference = reference
+    }
+
+    public init?(url: URL) {
+        guard url.scheme?.lowercased() == "lamp-lexicon",
+              url.host?.lowercased() == "lookup",
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let rawReference = components.queryItems?.first(where: { $0.name == "reference" })?.value,
+              let reference = Int(rawReference) else { return nil }
+        let keys = components.queryItems?
+            .filter { $0.name == "key" }
+            .compactMap(\.value) ?? []
+        self.init(keys: keys, reference: reference)
+    }
+
+    public var url: URL? {
+        var components = URLComponents()
+        components.scheme = "lamp-lexicon"
+        components.host = "lookup"
+        components.queryItems = keys.map { URLQueryItem(name: "key", value: $0) }
+            + [URLQueryItem(name: "reference", value: String(reference))]
+        return components.url
+    }
+}
+
 public struct ReadAloudItem: Codable, Equatable, Identifiable, Sendable {
     public let reference: Int
     public let verseNumber: Int
