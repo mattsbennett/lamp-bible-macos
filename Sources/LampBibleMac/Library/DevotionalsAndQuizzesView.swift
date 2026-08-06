@@ -5,14 +5,13 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct DevotionalsView: View {
+    @Environment(\.openWindow) private var openWindow
     @EnvironmentObject private var model: LibraryModel
     @AppStorage("devotional.fontSize") private var devotionalFontSize = 17.0
     @State private var selection: String?
     @State private var query = ""
     @State private var categoryFilter: String?
     @State private var moduleFilter: String?
-    @State private var editingDevotional: LampDevotional?
-    @State private var showingEditor = false
     @State private var devotionalPendingDeletion: LampDevotional?
     @State private var exportedURL: URL?
     @State private var presentingDevotional: LampDevotional?
@@ -23,7 +22,7 @@ struct DevotionalsView: View {
     private var filteredDevotionals: [LampDevotional] {
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         return model.devotionals.filter { devotional in
-            guard categoryFilter == nil || devotional.category == categoryFilter,
+            guard categoryFilter == nil || normalizedCategory(devotional.category) == categoryFilter,
                   moduleFilter == nil || devotional.moduleID == moduleFilter else { return false }
             guard !trimmedQuery.isEmpty else { return true }
             return [
@@ -64,24 +63,61 @@ struct DevotionalsView: View {
                 HSplitView {
                     List(selection: $selection) {
                         ForEach(filteredDevotionals) { devotional in
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack(spacing: 5) {
-                                    Text(devotional.title)
-                                        .font(.headline)
-                                        .lineLimit(2)
-                                    if devotional.isEditable {
-                                        Image(systemName: "pencil.circle.fill")
-                                            .foregroundStyle(.tint)
-                                            .help("Editable personal devotional")
+                            HStack(spacing: 8) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack(spacing: 5) {
+                                        Text(devotional.title)
+                                            .font(.headline)
+                                            .lineLimit(2)
+                                        if devotional.isEditable {
+                                            Image(systemName: "pencil.circle.fill")
+                                                .foregroundStyle(.tint)
+                                                .help("Editable personal devotional")
+                                        }
                                     }
+                                    Text(devotional.seriesName ?? devotional.moduleName)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
                                 }
-                                Text(devotional.seriesName ?? devotional.moduleName)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
+                                Spacer(minLength: 4)
+                                if devotional.isEditable {
+                                    Menu("Devotional Actions", systemImage: "ellipsis.circle") {
+                                        Button("Edit", systemImage: "pencil") {
+                                            beginEditing(devotional)
+                                        }
+                                        Button("Export…", systemImage: "square.and.arrow.up") {
+                                            export(devotional)
+                                        }
+                                        Divider()
+                                        Button("Delete", systemImage: "trash", role: .destructive) {
+                                            devotionalPendingDeletion = devotional
+                                        }
+                                    }
+                                    .labelStyle(.iconOnly)
+                                    .menuStyle(.borderlessButton)
+                                    .fixedSize()
+                                    .help("Edit, export, or delete this devotional")
+                                }
                             }
                             .padding(.vertical, 4)
+                            .contentShape(Rectangle())
                             .tag(Optional(devotional.id))
+                            .simultaneousGesture(
+                                TapGesture(count: 2)
+                                    .onEnded {
+                                        selection = devotional.id
+                                        guard devotional.isEditable else { return }
+                                        beginEditing(devotional)
+                                    }
+                            )
+                            .help(devotional.isEditable
+                                ? "Double-click to edit"
+                                : "Installed devotionals are read-only")
+                            .accessibilityAction(named: "Edit") {
+                                guard devotional.isEditable else { return }
+                                beginEditing(devotional)
+                            }
                             .contextMenu {
                                 if devotional.isEditable {
                                     Button("Edit") { beginEditing(devotional) }
@@ -146,12 +182,6 @@ struct DevotionalsView: View {
                 }
             }
         }
-        .sheet(isPresented: $showingEditor) {
-            DevotionalEditorView(devotional: editingDevotional) { saved in
-                selection = saved.id
-            }
-            .environmentObject(model)
-        }
         .sheet(item: $presentingDevotional) { devotional in
             DevotionalPresentationView(devotional: devotional)
                 .environmentObject(model)
@@ -190,8 +220,8 @@ struct DevotionalsView: View {
                             .font(.largeTitle.bold())
                         if devotional.isEditable {
                             Button("Edit", systemImage: "pencil") { beginEditing(devotional) }
-                                .labelStyle(.iconOnly)
-                                .buttonStyle(.borderless)
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
                         }
                     }
                     if let subtitle = devotional.subtitle, !subtitle.isEmpty {
@@ -270,12 +300,15 @@ struct DevotionalsView: View {
     }
 
     private func beginEditing(_ devotional: LampDevotional?) {
-        editingDevotional = devotional
-        showingEditor = true
+        openWindow(id: "devotional-editor", value: DevotionalEditorRequest(devotionalID: devotional?.id))
     }
 
     private var devotionalCategories: [String] {
-        Array(Set(model.devotionals.compactMap(\.category))).sorted()
+        Array(Set(model.devotionals.compactMap { normalizedCategory($0.category) })).sorted()
+    }
+
+    private func normalizedCategory(_ category: String?) -> String? {
+        category == "sermon" ? "exhortation" : category
     }
 
     private var devotionalCollections: [(id: String, name: String)] {

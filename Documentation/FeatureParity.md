@@ -5,18 +5,19 @@ This matrix tracks user-facing capability rather than identical UI. Touch-only i
 | Area | iOS capability | macOS equivalent | Status |
 | --- | --- | --- | --- |
 | Bundled library | Built-in translations, lexicons, commentaries, plans, and quiz | Consumes the same `bundled_modules.db.zlib` artifact | Complete |
-| Portable modules | Install translations, dictionaries, commentaries, plans, devotionals, quizzes, notes, and highlights | Integrity-checked `.lamp` installation and management for all eight kinds | Complete |
+| Portable modules | Install translations, dictionaries, commentaries, plans, devotionals, quizzes, notes, highlights, and books | Integrity-checked `.lamp` installation and management for all nine kinds | Complete |
 | Reader | Formatted scripture, poetry, red letters, annotations, selectable text, font settings | Native SwiftUI reader with the same schema rendering and typography controls | Complete |
 | Navigation | Book/chapter/verse navigation and history | Menus, chapter shortcuts, precise verse links, persistent back/forward history | Complete |
 | Read aloud | Voice selection, rate, pause/resume, follow along | `AVSpeechSynthesizer` chapter queue with voice/rate settings and spoken-verse scrolling | Complete |
-| Study tools | Commentary, lexicons, Strong’s links, footnotes, cross-references | Resizable macOS inspector with module ordering/hiding and cross-reference sorting | Complete |
+| Study tools | Commentary, lexicons, Strong’s links, footnotes, cross-references | Resizable macOS inspector with module defaults/visibility and cross-reference sorting | Complete |
 | Notes | Editable verse/range notes with footnotes and import/export | Markdown note editor, verse ranges, editable footnotes, canonical JSON/`.lamp` transfer | Complete |
 | Highlights | Exact spans, colors, underline styles, sets, themes, import/export | AppKit text selection, four styles, named sets/themes, canonical JSON/`.lamp` transfer | Complete |
-| Search | Scripture and module search with filters/history | Unified search across all eight module kinds plus personal notes/highlights, filters, previews, and persistent history | Complete |
+| Search | Scripture and module search with filters/history | Unified search across all nine module kinds plus personal notes/highlights, filters, previews, and persistent history | Complete |
 | Plans | Selected plans, Today, completion, dates, estimates, reminders, external apps | Today and plan views, year-scoped completion, actual word-count estimates, notifications, five external Bible targets | Complete |
 | Devotionals | Browse, search, author/edit, scripture links, rich text, images, audio, recording, import/export/share | Search/filter, Markdown authoring, key scriptures, images, audio playback/recording, presentation, JSON/`.lamp` import/export and sharing | Complete |
+| Devotional agents | Not an iOS feature | Embedded Codex CLI, Claude Code, and OpenCode workspaces with live draft sync, context files, skills, revisions, provider accounts, and policy-scoped read-only access to every module kind | macOS addition |
 | Quizzes | Plan/day/age-group questions and answer reveal | Module/day/age-group picker, saved age preference, reveal and scripture links | Complete |
-| Module preferences | Default/hidden translations, lexicon ordering/hiding, Strong’s hints | Shared settings for default/visibility/order, hints, and canonical cross-reference order | Complete |
+| Module preferences | Default/hidden translations, lexicon ordering/hiding, Strong’s hints | Type-specific defaults, per-language dictionary defaults, visibility, hints, and canonical cross-reference order | Complete |
 | Sync | Local, iCloud Drive, WebDAV, settings and editable data | Versioned portable backup over a chosen iCloud Drive/folder or authenticated WebDAV; Keychain password, merge, manual and launch sync | Complete |
 | Links and files | App links and document import | `lampbible://` reader/section links plus Finder opening for `.lamp` and JSON | Complete |
 | Widget | Today-reading glance and launch | Menu-bar Today window with plan assignments and reader launch | Complete (native equivalent) |

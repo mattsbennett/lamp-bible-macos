@@ -16,6 +16,7 @@ struct UnifiedSearchView: View {
 
     let showImporter: () -> Void
     let openReference: (Int) -> Void
+    let openBook: (LampModuleSearchResult) -> Void
     let openKind: (LampModuleKind) -> Void
 
     private var history: [LampSearchHistoryEntry] {
@@ -97,7 +98,7 @@ struct UnifiedSearchView: View {
                 ContentUnavailableView {
                     Label("Search Your Library", systemImage: "text.magnifyingglass")
                 } description: {
-                    Text("Search scripture, dictionaries, commentaries, notes, devotionals, plans, quizzes, and highlighted verses.")
+                    Text("Search scripture, dictionaries, commentaries, books, notes, devotionals, plans, quizzes, and highlighted verses.")
                 } actions: {
                     if model.modules.isEmpty {
                         Button("Install Module…", action: showImporter)
@@ -222,7 +223,13 @@ struct UnifiedSearchView: View {
                         }
                         .buttonStyle(.borderedProminent)
                     }
-                    if [.devotional, .plan, .quiz].contains(result.kind) {
+                    if result.kind == .book {
+                        Button("Open Book") {
+                            saveSearch()
+                            openBook(result)
+                        }
+                        .buttonStyle(.bordered)
+                    } else if [.devotional, .plan, .quiz].contains(result.kind) {
                         Button("Open \(result.kind.displayName)") {
                             saveSearch()
                             openKind(result.kind)
@@ -298,6 +305,7 @@ struct UnifiedSearchView: View {
         case .translation: "books.vertical"
         case .dictionary: "character.book.closed"
         case .commentary: "text.book.closed"
+        case .book: "book.closed"
         case .devotional: "sun.max"
         case .notes: "note.text"
         case .plan: "checklist"
@@ -309,7 +317,7 @@ struct UnifiedSearchView: View {
 
 private extension LampModuleKind {
     static var allCases: [LampModuleKind] {
-        [.translation, .dictionary, .commentary, .devotional, .notes, .plan, .highlights, .quiz]
+        [.translation, .dictionary, .commentary, .book, .devotional, .notes, .plan, .highlights, .quiz]
     }
 
     var displayName: String {
@@ -317,6 +325,7 @@ private extension LampModuleKind {
         case .translation: "Scripture"
         case .dictionary: "Dictionaries"
         case .commentary: "Commentaries"
+        case .book: "Books"
         case .devotional: "Devotionals"
         case .notes: "Notes"
         case .plan: "Reading Plans"

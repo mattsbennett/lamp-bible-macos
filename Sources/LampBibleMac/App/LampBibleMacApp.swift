@@ -10,12 +10,14 @@ import SwiftUI
 struct LampBibleMacApp: App {
     @StateObject private var libraryModel = LibraryModel()
     @StateObject private var syncController = LibrarySyncController()
+    @StateObject private var scrollLink = ReaderScrollLink()
 
     var body: some Scene {
         WindowGroup("Lamp Bible", id: "reader") {
             LibraryRootView()
                 .environmentObject(libraryModel)
                 .environmentObject(syncController)
+                .environmentObject(scrollLink)
         }
         .defaultSize(width: 1_240, height: 820)
         .commands {
@@ -28,6 +30,16 @@ struct LampBibleMacApp: App {
                 .environmentObject(syncController)
         }
         .defaultSize(width: 1_080, height: 720)
+
+        // A window rather than a sheet so a devotional can be written with the
+        // reader open beside it — the scripture being written about is usually the
+        // reason for writing.
+        WindowGroup("Devotional", id: "devotional-editor", for: DevotionalEditorRequest.self) { $request in
+            DevotionalEditorView(request: request ?? DevotionalEditorRequest())
+                .environmentObject(libraryModel)
+                .environmentObject(syncController)
+        }
+        .defaultSize(width: 1_180, height: 780)
 
         Settings {
             ReaderSettingsView()
@@ -46,8 +58,12 @@ struct LampBibleMacApp: App {
 private struct ReaderSettingsView: View {
     @EnvironmentObject private var model: LibraryModel
     @EnvironmentObject private var syncController: LibrarySyncController
-    @AppStorage("reader.fontSize") private var fontSize = 20.0
-    @AppStorage("reader.lineSpacing") private var lineSpacing = 7.0
+    @AppStorage("reader.fontSize") private var fontSize = LampTextScale.readerText.defaultValue
+    @AppStorage("reader.lineSpacing") private var lineSpacing = LampTextScale.readerLineSpacing.defaultValue
+    @AppStorage("reader.typeface") private var typeface = ProseTypeface.readerDefault
+    @AppStorage("commentary.fontSize") private var commentaryFontSize = LampTextScale.commentaryText.defaultValue
+    @AppStorage("commentary.lineSpacing") private var commentaryLineSpacing = LampTextScale.commentaryLineSpacing.defaultValue
+    @AppStorage("commentary.typeface") private var commentaryTypeface = ProseTypeface.commentaryDefault
     @AppStorage("reader.readAloud.voice") private var readAloudVoice = ""
     @AppStorage("reader.readAloud.rate") private var readAloudRate = 0.5
     @AppStorage("reader.readAloud.followAlong") private var followReadAloud = true
@@ -59,8 +75,17 @@ private struct ReaderSettingsView: View {
     @State private var reminderError: String?
     @AppStorage("reader.showStrongsHints") private var showStrongsHints = true
     @AppStorage("reader.crossReferences.canonicalOrder") private var canonicalCrossReferenceOrder = false
+    @AppStorage("reader.defaultTranslationID") private var defaultTranslationID = ""
+    @AppStorage("studyInspector.greekDictionaryModuleID") private var defaultGreekDictionaryID = ""
+    @AppStorage("studyInspector.hebrewDictionaryModuleID") private var defaultHebrewDictionaryID = ""
+    @AppStorage("studyInspector.commentaryModuleID") private var defaultCommentaryID = ""
+    @State private var selectedModuleType = ConfigurableModuleType.translations
     @AppStorage("devotional.fontSize") private var devotionalFontSize = 17.0
     @AppStorage("quiz.defaultAgeGroup") private var defaultQuizAgeGroup = ""
+    @AppStorage("agent.moduleAccess.enabled") private var agentModuleAccessEnabled = true
+    @AppStorage("agent.moduleAccess.scope") private var agentModuleAccessScope = AgentModuleAccessScope.enabledModules.rawValue
+    @AppStorage("agent.moduleAccess.personal") private var agentPersonalContentEnabled = false
+    @State private var agentModuleAccessStatus: String?
     @AppStorage("sync.automatic") private var automaticSync = true
     @State private var webDAVEndpoint = ""
     @State private var webDAVUsername = ""
@@ -77,24 +102,13 @@ private struct ReaderSettingsView: View {
     var body: some View {
         Form {
             Section("Reader") {
-                LabeledContent("Text Size") {
-                    HStack {
-                        Slider(value: $fontSize, in: 15...32, step: 1)
-                            .frame(width: 220)
-                        Text(fontSize.formatted(.number.precision(.fractionLength(0))))
-                            .monospacedDigit()
-                            .frame(width: 28, alignment: .trailing)
+                Picker("Typeface", selection: $typeface) {
+                    ForEach(ProseTypeface.allCases) { option in
+                        Text(option.title).tag(option)
                     }
                 }
-                LabeledContent("Line Spacing") {
-                    HStack {
-                        Slider(value: $lineSpacing, in: 2...16, step: 1)
-                            .frame(width: 220)
-                        Text(lineSpacing.formatted(.number.precision(.fractionLength(0))))
-                            .monospacedDigit()
-                            .frame(width: 28, alignment: .trailing)
-                    }
-                }
+                metricSlider("Text Size", value: $fontSize, scale: .readerText)
+                metricSlider("Line Spacing", value: $lineSpacing, scale: .readerLineSpacing)
                 Picker("Read Aloud Voice", selection: $readAloudVoice) {
                     Text("System Default").tag("")
                     ForEach(voices, id: \.identifier) { voice in
@@ -114,8 +128,9 @@ private struct ReaderSettingsView: View {
                 Toggle("Show Strong’s number hints", isOn: $showStrongsHints)
                 Toggle("Sort cross-references canonically", isOn: $canonicalCrossReferenceOrder)
                 Button("Restore Reader Defaults") {
-                    fontSize = 20
-                    lineSpacing = 7
+                    fontSize = LampTextScale.readerText.defaultValue
+                    lineSpacing = LampTextScale.readerLineSpacing.defaultValue
+                    typeface = .readerDefault
                     readAloudVoice = ""
                     readAloudRate = 0.5
                     followReadAloud = true
@@ -124,31 +139,98 @@ private struct ReaderSettingsView: View {
                 }
             }
 
-            Section("Modules") {
-                Picker("Default Translation", selection: Binding(
-                    get: { UserDefaults.standard.string(forKey: "reader.defaultTranslationID") ?? "" },
-                    set: { model.setDefaultTranslation($0.isEmpty ? nil : $0) }
-                )) {
-                    Text("First Available").tag("")
-                    ForEach(model.allTranslations) { translation in
-                        Text(translation.name).tag(translation.id)
+            Section("Study Sidebar") {
+                Picker("Typeface", selection: $commentaryTypeface) {
+                    ForEach(ProseTypeface.allCases) { option in
+                        Text(option.title).tag(option)
                     }
                 }
-                ForEach(configurableModules) { module in
-                    HStack {
-                        Toggle(module.name, isOn: Binding(
-                            get: { !model.hiddenModuleIDs.contains(module.id) },
-                            set: { model.setModuleHidden(module.id, hidden: !$0) }
-                        ))
-                        Spacer()
-                        Button("Move Up", systemImage: "chevron.up") {
-                            model.moveModule(module.id, direction: -1)
+                metricSlider("Text Size", value: $commentaryFontSize, scale: .commentaryText)
+                metricSlider("Line Spacing", value: $commentaryLineSpacing, scale: .commentaryLineSpacing)
+                Button("Restore Sidebar Defaults") {
+                    commentaryFontSize = LampTextScale.commentaryText.defaultValue
+                    commentaryLineSpacing = LampTextScale.commentaryLineSpacing.defaultValue
+                    commentaryTypeface = .commentaryDefault
+                }
+            }
+
+            Section("Modules") {
+                Picker("Module Type", selection: $selectedModuleType) {
+                    ForEach(ConfigurableModuleType.allCases) { type in
+                        Text(type.title).tag(type)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                switch selectedModuleType {
+                case .translations:
+                    Picker("Default Translation", selection: Binding(
+                        get: { validDefault(defaultTranslationID, in: enabledTranslationModules) },
+                        set: {
+                            defaultTranslationID = $0
+                            model.setDefaultTranslation($0.isEmpty ? nil : $0)
                         }
-                        .labelStyle(.iconOnly)
-                        Button("Move Down", systemImage: "chevron.down") {
-                            model.moveModule(module.id, direction: 1)
+                    )) {
+                        Text("First Enabled").tag("")
+                        ForEach(enabledTranslationModules) { translation in
+                            Text(translation.name).tag(translation.id)
                         }
-                        .labelStyle(.iconOnly)
+                    }
+                    ForEach(translationModules) { module in
+                        moduleToggle(module) {
+                            if defaultTranslationID == module.id {
+                                defaultTranslationID = ""
+                                model.setDefaultTranslation(nil)
+                            }
+                        }
+                    }
+
+                case .dictionaries:
+                    Picker(
+                        "Default Greek Dictionary",
+                        selection: defaultModuleBinding(
+                            $defaultGreekDictionaryID,
+                            modules: enabledGreekDictionaryModules
+                        )
+                    ) {
+                        Text("First Enabled").tag("")
+                        ForEach(enabledGreekDictionaryModules) { dictionary in
+                            Text(dictionary.name).tag(dictionary.id)
+                        }
+                    }
+                    Picker(
+                        "Default Hebrew Dictionary",
+                        selection: defaultModuleBinding(
+                            $defaultHebrewDictionaryID,
+                            modules: enabledHebrewDictionaryModules
+                        )
+                    ) {
+                        Text("First Enabled").tag("")
+                        ForEach(enabledHebrewDictionaryModules) { dictionary in
+                            Text(dictionary.name).tag(dictionary.id)
+                        }
+                    }
+                    ForEach(dictionaryModules) { module in
+                        moduleToggle(module) {
+                            if defaultGreekDictionaryID == module.id { defaultGreekDictionaryID = "" }
+                            if defaultHebrewDictionaryID == module.id { defaultHebrewDictionaryID = "" }
+                        }
+                    }
+
+                case .commentaries:
+                    Picker(
+                        "Default Commentary",
+                        selection: defaultModuleBinding($defaultCommentaryID, modules: enabledCommentaryModules)
+                    ) {
+                        Text("First Enabled").tag("")
+                        ForEach(enabledCommentaryModules) { commentary in
+                            Text(commentary.name).tag(commentary.id)
+                        }
+                    }
+                    ForEach(commentaryModules) { module in
+                        moduleToggle(module) {
+                            if defaultCommentaryID == module.id { defaultCommentaryID = "" }
+                        }
                     }
                 }
             }
@@ -159,6 +241,36 @@ private struct ReaderSettingsView: View {
                         .frame(width: 220)
                 }
                 TextField("Preferred quiz age-group ID", text: $defaultQuizAgeGroup)
+            }
+
+            Section("AI Provider Accounts") {
+                AIProviderAccountsSettingsView()
+                Divider()
+                Toggle("Allow agents to query Lamp modules", isOn: $agentModuleAccessEnabled)
+                Picker("Module Access", selection: $agentModuleAccessScope) {
+                    ForEach(AgentModuleAccessScope.allCases) { scope in
+                        Text(scope.title).tag(scope.rawValue)
+                    }
+                }
+                .disabled(!agentModuleAccessEnabled)
+                Toggle("Include personal devotionals, notes, and highlights", isOn: $agentPersonalContentEnabled)
+                    .disabled(!agentModuleAccessEnabled)
+                HStack {
+                    Text("Module results are sent to the AI provider you launch. All Lamp tools are read-only.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Test Module Tools", systemImage: "stethoscope") {
+                        testAgentModuleAccess()
+                    }
+                    .controlSize(.small)
+                    .disabled(!agentModuleAccessEnabled)
+                }
+                if let agentModuleAccessStatus {
+                    Label(agentModuleAccessStatus, systemImage: "server.rack")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section("Reading Plans") {
@@ -178,6 +290,7 @@ private struct ReaderSettingsView: View {
                     ),
                     displayedComponents: .hourAndMinute
                 )
+                .datePickerStyle(.field)
                 .disabled(!reminderEnabled)
                 if let reminderError {
                     Label(reminderError, systemImage: "exclamationmark.triangle")
@@ -240,6 +353,24 @@ private struct ReaderSettingsView: View {
         }
     }
 
+    /// The same bounds the `aA` menus step through, so a size set in Settings and a
+    /// size set while reading are the same setting rather than two that disagree.
+    private func metricSlider(
+        _ title: String,
+        value: Binding<Double>,
+        scale: LampTextScale
+    ) -> some View {
+        LabeledContent(title) {
+            HStack {
+                Slider(value: value, in: scale.range, step: scale.step)
+                    .frame(width: 220)
+                Text(value.wrappedValue.formatted(.number.precision(.fractionLength(0))))
+                    .monospacedDigit()
+                    .frame(width: 28, alignment: .trailing)
+            }
+        }
+    }
+
     private var reminderDate: Date {
         Calendar.current.date(from: DateComponents(hour: reminderHour, minute: reminderMinute)) ?? Date()
     }
@@ -266,15 +397,97 @@ private struct ReaderSettingsView: View {
         }
     }
 
-    private var configurableModules: [LampInstalledModule] {
-        let kinds: Set<LampModuleKind> = [.translation, .dictionary, .commentary]
-        let positions = Dictionary(uniqueKeysWithValues: model.moduleOrder.enumerated().map { ($1, $0) })
-        return model.modules.filter { kinds.contains($0.kind) }.sorted {
-            let left = positions[$0.id] ?? Int.max
-            let right = positions[$1.id] ?? Int.max
-            if left != right { return left < right }
-            if $0.kind != $1.kind { return $0.kind.rawValue < $1.kind.rawValue }
-            return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+    private var translationModules: [LampInstalledModule] { modules(of: .translation) }
+    private var dictionaryModules: [LampInstalledModule] { modules(of: .dictionary) }
+    private var commentaryModules: [LampInstalledModule] { modules(of: .commentary) }
+
+    private var enabledTranslationModules: [LampInstalledModule] {
+        translationModules.filter(isEnabled)
+    }
+
+    private var enabledDictionaryModules: [LampInstalledModule] {
+        dictionaryModules.filter(isEnabled)
+    }
+
+    private var enabledGreekDictionaryModules: [LampInstalledModule] {
+        enabledDictionaryModules.filter { $0.biblicalOriginalLanguage == .greek }
+    }
+
+    private var enabledHebrewDictionaryModules: [LampInstalledModule] {
+        enabledDictionaryModules.filter { $0.biblicalOriginalLanguage == .hebrew }
+    }
+
+    private var enabledCommentaryModules: [LampInstalledModule] {
+        commentaryModules.filter(isEnabled)
+    }
+
+    private func modules(of kind: LampModuleKind) -> [LampInstalledModule] {
+        model.modules
+            .filter { $0.kind == kind }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    private func isEnabled(_ module: LampInstalledModule) -> Bool {
+        !model.hiddenModuleIDs.contains(module.id)
+    }
+
+    private func validDefault(_ moduleID: String, in modules: [LampInstalledModule]) -> String {
+        modules.contains(where: { $0.id == moduleID }) ? moduleID : ""
+    }
+
+    private func defaultModuleBinding(
+        _ selection: Binding<String>,
+        modules: [LampInstalledModule]
+    ) -> Binding<String> {
+        Binding(
+            get: { validDefault(selection.wrappedValue, in: modules) },
+            set: { selection.wrappedValue = $0 }
+        )
+    }
+
+    private func moduleToggle(
+        _ module: LampInstalledModule,
+        onDisable: @escaping () -> Void
+    ) -> some View {
+        Toggle(module.name, isOn: Binding(
+            get: { isEnabled(module) },
+            set: { enabled in
+                model.setModuleHidden(module.id, hidden: !enabled)
+                if !enabled { onDisable() }
+            }
+        ))
+    }
+
+    private var currentAgentAccessPolicy: LampAgentAccessPolicy {
+        AgentModuleAccessPreferences.policy(
+            isEnabled: agentModuleAccessEnabled,
+            scope: AgentModuleAccessScope(rawValue: agentModuleAccessScope) ?? .enabledModules,
+            includesPersonalContent: agentPersonalContentEnabled,
+            modules: model.modules,
+            hiddenModuleIDs: model.hiddenModuleIDs
+        )
+    }
+
+    private func testAgentModuleAccess() {
+        agentModuleAccessStatus = "Checking…"
+        Task {
+            agentModuleAccessStatus = await AgentModuleAccessPreferences.healthCheck(
+                policy: currentAgentAccessPolicy,
+                libraryRootURL: model.library.rootURL,
+                bundledModulesArchiveURL: Bundle.main.url(
+                    forResource: "bundled_modules.db",
+                    withExtension: "zlib"
+                )
+            )
         }
     }
+}
+
+private enum ConfigurableModuleType: String, CaseIterable, Identifiable {
+    case translations
+    case dictionaries
+    case commentaries
+
+    var id: Self { self }
+    var title: String { rawValue.capitalized }
 }

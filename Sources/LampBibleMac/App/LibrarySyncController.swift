@@ -202,12 +202,15 @@ final class LibrarySyncController: ObservableObject {
     }
 
     private static let syncedSettingKeys = [
-        "reader.fontSize", "reader.lineSpacing", "reader.defaultTranslationID",
+        "reader.fontSize", "reader.lineSpacing", "reader.typeface", "reader.defaultTranslationID",
         "reader.readAloud.voice", "reader.readAloud.rate", "reader.readAloud.followAlong",
         "reader.showStrongsHints", "reader.crossReferences.canonicalOrder",
+        "commentary.fontSize", "commentary.lineSpacing", "commentary.typeface",
+        "studyInspector.greekDictionaryModuleID", "studyInspector.hebrewDictionaryModuleID",
+        "studyInspector.commentaryModuleID",
         "plans.wordsPerMinute", "plans.externalBibleApp", "plans.reminder.enabled",
         "plans.reminder.hour", "plans.reminder.minute", "devotional.fontSize",
-        "quiz.defaultAgeGroup", "modules.hiddenIDs", "modules.order",
+        "quiz.defaultAgeGroup", "modules.hiddenIDs",
     ]
 }
 

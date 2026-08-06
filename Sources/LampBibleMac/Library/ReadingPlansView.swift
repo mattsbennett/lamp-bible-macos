@@ -11,6 +11,19 @@ private struct PlanDayRequest: Hashable {
     let planIDs: [String]
 }
 
+struct PlanReadingMode: Equatable {
+    let planID: String
+    let planName: String
+    let day: Int
+    let year: Int
+    let readings: [LampPlanReading]
+    var activeReadingID: Int
+
+    var activeReading: LampPlanReading? {
+        readings.first { $0.id == activeReadingID }
+    }
+}
+
 struct TodayPlansView: View {
     @EnvironmentObject private var model: LibraryModel
     @State private var date = Date()
@@ -19,7 +32,8 @@ struct TodayPlansView: View {
 
     let showImporter: () -> Void
     let showPlans: () -> Void
-    let openReading: (LampPlanReading) -> Void
+    let openReading: (PlanReadingMode) -> Void
+    let openAllReadings: (PlanReadingMode) -> Void
 
     private var dayNumber: Int {
         LampPlanCalendar.dayNumber(for: date)
@@ -80,7 +94,8 @@ struct TodayPlansView: View {
                                     plan: plan,
                                     day: day,
                                     year: year,
-                                    openReading: openReading
+                                    openReading: openReading,
+                                    openAllReadings: openAllReadings
                                 )
                             } else {
                                 GroupBox(plan.name) {
@@ -103,13 +118,7 @@ struct TodayPlansView: View {
         .navigationTitle("Today")
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
-                Button("Today", systemImage: "calendar.badge.clock") {
-                    date = Date()
-                }
-                .disabled(Calendar.current.isDateInToday(date))
-
-                DatePicker("Reading Date", selection: $date, displayedComponents: .date)
-                    .labelsHidden()
+                CalendarDateField(title: "Reading Date", selection: $date)
             }
         }
         .task(id: request) {
@@ -141,7 +150,8 @@ struct TodayPlansView: View {
 struct ReadingPlansView: View {
     @EnvironmentObject private var model: LibraryModel
     let showImporter: () -> Void
-    let openReading: (LampPlanReading) -> Void
+    let openReading: (PlanReadingMode) -> Void
+    let openAllReadings: (PlanReadingMode) -> Void
 
     private let date = Date()
 
@@ -168,7 +178,12 @@ struct ReadingPlansView: View {
                         .padding(.bottom, 8)
 
                         ForEach(model.plans) { plan in
-                            ReadingPlanCard(plan: plan, date: date, openReading: openReading)
+                            ReadingPlanCard(
+                                plan: plan,
+                                date: date,
+                                openReading: openReading,
+                                openAllReadings: openAllReadings
+                            )
                         }
                     }
                     .frame(maxWidth: 880, alignment: .leading)
@@ -189,7 +204,8 @@ private struct ReadingPlanCard: View {
     @State private var day: LampReadingPlanDay?
     let plan: LampReadingPlan
     let date: Date
-    let openReading: (LampPlanReading) -> Void
+    let openReading: (PlanReadingMode) -> Void
+    let openAllReadings: (PlanReadingMode) -> Void
 
     private var dayNumber: Int { LampPlanCalendar.dayNumber(for: date) }
     private var year: Int { Calendar.current.component(.year, from: date) }
@@ -231,10 +247,11 @@ private struct ReadingPlanCard: View {
                 if let day {
                     Divider()
                     PlanDayReadings(
-                        planID: plan.id,
+                        plan: plan,
                         day: day,
                         year: year,
-                        openReading: openReading
+                        openReading: openReading,
+                        openAllReadings: openAllReadings
                     )
                 }
 
@@ -263,7 +280,8 @@ private struct PlanDayCard: View {
     let plan: LampReadingPlan
     let day: LampReadingPlanDay
     let year: Int
-    let openReading: (LampPlanReading) -> Void
+    let openReading: (PlanReadingMode) -> Void
+    let openAllReadings: (PlanReadingMode) -> Void
 
     var body: some View {
         GroupBox {
@@ -273,10 +291,11 @@ private struct PlanDayCard: View {
                         .foregroundStyle(.secondary)
                 }
                 PlanDayReadings(
-                    planID: plan.id,
+                    plan: plan,
                     day: day,
                     year: year,
-                    openReading: openReading
+                    openReading: openReading,
+                    openAllReadings: openAllReadings
                 )
             }
             .padding(8)
@@ -292,10 +311,11 @@ private struct PlanDayReadings: View {
     @AppStorage("plans.wordsPerMinute") private var wordsPerMinute = 225
     @AppStorage("plans.externalBibleApp") private var externalBibleApp = ""
     @State private var wordCounts: [Int: Int] = [:]
-    let planID: String
+    let plan: LampReadingPlan
     let day: LampReadingPlanDay
     let year: Int
-    let openReading: (LampPlanReading) -> Void
+    let openReading: (PlanReadingMode) -> Void
+    let openAllReadings: (PlanReadingMode) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -306,13 +326,30 @@ private struct PlanDayReadings: View {
                 Text("\(completedCount) of \(day.readings.count) complete")
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                Button("Open", systemImage: "book") {
+                    guard let first = day.readings.first else { return }
+                    openReading(readingMode(activeReadingID: first.id))
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(day.readings.isEmpty)
+
+                Menu("More", systemImage: "ellipsis.circle") {
+                    Button("Open All in Tabs", systemImage: "rectangle.stack.badge.plus") {
+                        guard let first = day.readings.first else { return }
+                        openAllReadings(readingMode(activeReadingID: first.id))
+                    }
+                    .disabled(day.readings.isEmpty)
+                }
+                .labelStyle(.iconOnly)
+                .menuStyle(.borderlessButton)
+                .help("More plan actions")
             }
 
             ForEach(day.readings) { reading in
                 HStack(spacing: 10) {
                     Button {
                         model.toggleReading(
-                            planID: planID,
+                            planID: plan.id,
                             day: day.day,
                             readingIndex: reading.id,
                             year: year
@@ -326,7 +363,7 @@ private struct PlanDayReadings: View {
                     .help(isCompleted(reading) ? "Mark incomplete" : "Mark complete")
 
                     Button {
-                        openReading(reading)
+                        openReading(readingMode(activeReadingID: reading.id))
                     } label: {
                         Text(reading.displayDescription)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -335,7 +372,7 @@ private struct PlanDayReadings: View {
                     .buttonStyle(.plain)
 
                     Button("Open", systemImage: "arrow.right") {
-                        openReading(reading)
+                        openReading(readingMode(activeReadingID: reading.id))
                     }
                     .labelStyle(.iconOnly)
                     .buttonStyle(.borderless)
@@ -380,7 +417,18 @@ private struct PlanDayReadings: View {
 
     private func isCompleted(_ reading: LampPlanReading) -> Bool {
         model.completedReadingIDs.contains(
-            reading.completionID(planID: planID, day: day.day, year: year)
+            reading.completionID(planID: plan.id, day: day.day, year: year)
+        )
+    }
+
+    private func readingMode(activeReadingID: Int) -> PlanReadingMode {
+        PlanReadingMode(
+            planID: plan.id,
+            planName: plan.name,
+            day: day.day,
+            year: year,
+            readings: day.readings,
+            activeReadingID: activeReadingID
         )
     }
 

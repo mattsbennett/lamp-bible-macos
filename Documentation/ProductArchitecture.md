@@ -16,6 +16,20 @@ drop JSON → detect → validate → preview → compile SQLite → integrity c
 
 The UI never constructs a module database directly; all format work is delegated to `LampModuleKit`.
 
+### Devotional agents and module access
+
+The devotional editor can launch Codex CLI, Claude Code, or OpenCode in an embedded terminal. Each devotional gets an isolated workspace containing the synchronized draft, user-supplied context files, workspace skills, and provider-local MCP configuration.
+
+Module access follows a narrow read-only boundary:
+
+```text
+provider CLI → stdio MCP → lamp-mcp → LampAgentLibrary → LampLibrary
+```
+
+`LampAgentLibrary` is the transport-independent semantic API. It exposes bounded operations for scripture, dictionaries, commentary, long-form books, devotionals, plans, quizzes, notes, and highlights without exposing database tables or writable library methods. The bundled `lamp-mcp` helper adapts those operations to MCP and is embedded in `Contents/Helpers` by the Xcode app target. Codex, Claude Code, and OpenCode receive generated project-local configuration pointing to that exact helper.
+
+The settings policy controls whether agents may query modules, whether they see only enabled or all installed modules, and whether personal content is included. Personal content is off by default. The helper reloads the policy before every tool call so revoking access applies to provider processes that are already running.
+
 ## Repository boundaries
 
 - `lamp-bible-macos`: SwiftUI/AppKit views, commands, windows, drag and drop, file panels, and Mac lifecycle.

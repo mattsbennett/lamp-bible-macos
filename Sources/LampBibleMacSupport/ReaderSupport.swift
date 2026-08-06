@@ -3,8 +3,12 @@ import Foundation
 public struct LexiconLookupLink: Equatable, Sendable {
     public let keys: [String]
     public let reference: Int
+    /// The word as it appears in the verse. Carried along so the dictionary can say
+    /// which word it is answering about — a lookup can resolve to several Strong's
+    /// keys, and several entries per key, which is unreadable without it.
+    public let word: String?
 
-    public init?(keys: [String], reference: Int) {
+    public init?(keys: [String], reference: Int, word: String? = nil) {
         var seen: Set<String> = []
         let normalizedKeys = keys.compactMap { rawKey -> String? in
             let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
@@ -14,6 +18,8 @@ public struct LexiconLookupLink: Equatable, Sendable {
         guard !normalizedKeys.isEmpty, reference > 0 else { return nil }
         self.keys = normalizedKeys
         self.reference = reference
+        let trimmedWord = word?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.word = trimmedWord?.isEmpty == false ? trimmedWord : nil
     }
 
     public init?(url: URL) {
@@ -25,7 +31,8 @@ public struct LexiconLookupLink: Equatable, Sendable {
         let keys = components.queryItems?
             .filter { $0.name == "key" }
             .compactMap(\.value) ?? []
-        self.init(keys: keys, reference: reference)
+        let word = components.queryItems?.first { $0.name == "word" }?.value
+        self.init(keys: keys, reference: reference, word: word)
     }
 
     public var url: URL? {
@@ -34,7 +41,40 @@ public struct LexiconLookupLink: Equatable, Sendable {
         components.host = "lookup"
         components.queryItems = keys.map { URLQueryItem(name: "key", value: $0) }
             + [URLQueryItem(name: "reference", value: String(reference))]
+            + (word.map { [URLQueryItem(name: "word", value: $0)] } ?? [])
         return components.url
+    }
+}
+
+public enum StrongsKey {
+    /// Strong's keys are written `H7225`, `h07225` or bare `7225` depending on who
+    /// compiled the dictionary, and some carry a disambiguating letter (`G3588a`).
+    /// Normalizing puts case and zero-padding aside so two spellings of the same
+    /// key compare equal.
+    public static func normalized(_ key: String) -> String {
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard !trimmed.isEmpty else { return "" }
+        let prefix = trimmed.first.map { $0 == "H" || $0 == "G" ? String($0) : "" } ?? ""
+        let rest = trimmed.dropFirst(prefix.count)
+        let digits = rest.prefix { $0.isNumber }
+        guard !digits.isEmpty else { return trimmed }
+        let suffix = rest.dropFirst(digits.count)
+        let unpadded = String(digits.drop { $0 == "0" })
+        return prefix + (unpadded.isEmpty ? "0" : unpadded) + suffix
+    }
+
+    /// Whether two keys name the same lexicon entry. A dictionary that stores bare
+    /// numbers still matches a prefixed key, since the alternative is showing the
+    /// reader nothing at all.
+    public static func matches(_ lhs: String, _ rhs: String) -> Bool {
+        let left = normalized(lhs)
+        let right = normalized(rhs)
+        guard !left.isEmpty, !right.isEmpty else { return false }
+        if left == right { return true }
+        let leftPrefixed = left.first == "H" || left.first == "G"
+        let rightPrefixed = right.first == "H" || right.first == "G"
+        guard leftPrefixed != rightPrefixed else { return false }
+        return left.drop { $0 == "H" || $0 == "G" } == right.drop { $0 == "H" || $0 == "G" }
     }
 }
 
@@ -104,6 +144,41 @@ public struct ReaderTextRange: Codable, Equatable, Sendable {
     }
 }
 
+public struct ReaderParagraphSegment: Equatable, Sendable {
+    public let reference: Int
+    public let characterCount: Int
+
+    public init(reference: Int, characterCount: Int) {
+        self.reference = reference
+        self.characterCount = max(characterCount, 1)
+    }
+}
+
+public enum ReaderParagraphAnchorResolver {
+    /// Approximates the verse crossing the viewport edge inside one continuously
+    /// rendered paragraph. SwiftUI exposes the paragraph as a single scroll target,
+    /// so character-weighted segments preserve verse-level linking without changing
+    /// the reader's inline paragraph layout.
+    public static func reference(
+        at progress: Double,
+        in segments: [ReaderParagraphSegment]
+    ) -> Int? {
+        guard !segments.isEmpty else { return nil }
+        let progress = progress.isFinite ? min(max(progress, 0), 1) : 0
+        let total = segments.reduce(0) { $0 + $1.characterCount }
+        let target = progress * Double(total)
+        var cumulative = 0
+
+        for (index, segment) in segments.enumerated() {
+            cumulative += segment.characterCount
+            if target < Double(cumulative) || index == segments.indices.last {
+                return segment.reference
+            }
+        }
+        return segments.last?.reference
+    }
+}
+
 public enum ReaderTextRangeMapper {
     public static func characterRange(in text: String, utf16Range: NSRange) -> ReaderTextRange? {
         guard utf16Range.location != NSNotFound,
@@ -122,6 +197,237 @@ public enum ReaderTextRangeMapper {
         let start = text.index(text.startIndex, offsetBy: characterRange.startOffset)
         let end = text.index(text.startIndex, offsetBy: characterRange.endOffset)
         return NSRange(start..<end, in: text)
+    }
+}
+
+public struct ReaderCitationVerse: Equatable, Sendable {
+    public let number: Int
+    public let text: String
+    public let displayPrefix: String
+
+    public init(number: Int, text: String, displayPrefix: String? = nil) {
+        self.number = number
+        self.text = text
+        self.displayPrefix = displayPrefix ?? String(number)
+    }
+}
+
+public enum ReaderCitationFormatter {
+    /// Formats reader text for pasting into notes and documents. If the system can
+    /// provide a selection, its position is mapped back to verse text so display-only
+    /// verse numbers and note markers never reach the citation.
+    public static func citation(
+        bookName: String,
+        chapterNumber: Int,
+        verses: [ReaderCitationVerse],
+        translationName: String,
+        selectedDisplayText: String? = nil
+    ) -> String? {
+        guard !verses.isEmpty else { return nil }
+        let excerpts = selectedDisplayText
+            .flatMap { selectedExcerpts(from: $0, in: verses) }
+            ?? verses.compactMap { verse in
+                let text = normalizedWhitespace(verse.text)
+                return text.isEmpty ? nil : (verse.number, text)
+            }
+        guard let first = excerpts.first, let last = excerpts.last else { return nil }
+
+        let verseDescription = first.0 == last.0
+            ? String(first.0)
+            : "\(first.0)-\(last.0)"
+        let reference = "\(normalizedWhitespace(bookName)) \(chapterNumber):\(verseDescription)"
+        let translation = citationTranslationName(translationName)
+        let citationLabel = translation.isEmpty ? reference : "\(reference) \(translation)"
+        let passage = excerpts.map(\.1).joined(separator: " ")
+        return "(\(citationLabel))\n\"\(passage)\""
+    }
+
+    /// Strong's-enabled translation variants conventionally add a lowercase `s`
+    /// to an otherwise uppercase abbreviation (`ESVs`, `KJVs`). Citations name the
+    /// underlying translation instead of exposing that implementation suffix.
+    public static func citationTranslationName(_ name: String) -> String {
+        let name = normalizedWhitespace(name)
+        guard name.last == "s" else { return name }
+        let base = name.dropLast()
+        guard !base.isEmpty,
+              base.allSatisfy({ $0.isUppercase || $0.isNumber }) else { return name }
+        return String(base)
+    }
+
+    private struct MappedCharacter {
+        let character: Character
+        let verseIndex: Int?
+    }
+
+    private static func selectedExcerpts(
+        from selectedText: String,
+        in verses: [ReaderCitationVerse]
+    ) -> [(Int, String)]? {
+        let selection = Array(normalizedWhitespace(selectedText))
+        guard !selection.isEmpty else { return nil }
+
+        var displayed: [MappedCharacter] = []
+        for (index, verse) in verses.enumerated() {
+            if !displayed.isEmpty {
+                displayed.append(MappedCharacter(character: " ", verseIndex: nil))
+            }
+            displayed += verse.displayPrefix.map {
+                MappedCharacter(character: $0, verseIndex: nil)
+            }
+            displayed.append(MappedCharacter(character: " ", verseIndex: nil))
+            displayed += verse.text.map {
+                MappedCharacter(character: $0, verseIndex: index)
+            }
+        }
+        displayed = normalizedCharacters(displayed)
+
+        guard selection.count <= displayed.count else { return nil }
+        let finalStart = displayed.count - selection.count
+        for start in 0...finalStart {
+            let range = start..<(start + selection.count)
+            guard zip(displayed[range], selection).allSatisfy({ $0.character == $1 }) else {
+                continue
+            }
+
+            var excerpts: [(verseIndex: Int, text: String)] = []
+            for character in displayed[range] {
+                guard let verseIndex = character.verseIndex else { continue }
+                if excerpts.last?.verseIndex == verseIndex {
+                    excerpts[excerpts.count - 1].text.append(character.character)
+                } else {
+                    excerpts.append((verseIndex, String(character.character)))
+                }
+            }
+            let cleaned = excerpts.compactMap { excerpt -> (Int, String)? in
+                let text = normalizedWhitespace(excerpt.text)
+                guard !text.isEmpty else { return nil }
+                return (verses[excerpt.verseIndex].number, text)
+            }
+            if !cleaned.isEmpty { return cleaned }
+        }
+        return nil
+    }
+
+    private static func normalizedCharacters(_ characters: [MappedCharacter]) -> [MappedCharacter] {
+        var result: [MappedCharacter] = []
+        for character in characters {
+            if character.character.isWhitespace {
+                if !result.isEmpty, result.last?.character != " " {
+                    result.append(MappedCharacter(character: " ", verseIndex: character.verseIndex))
+                }
+            } else {
+                result.append(character)
+            }
+        }
+        if result.last?.character == " " { result.removeLast() }
+        return result
+    }
+
+    private static func normalizedWhitespace(_ text: String) -> String {
+        text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+    }
+}
+
+public struct ReaderBookStructure: Equatable, Sendable {
+    public let bookNumber: Int
+    public let chapterCount: Int
+
+    public init(bookNumber: Int, chapterCount: Int) {
+        self.bookNumber = bookNumber
+        self.chapterCount = chapterCount
+    }
+}
+
+public struct ReaderChapterLocation: Equatable, Hashable, Sendable {
+    public let bookNumber: Int
+    public let chapterNumber: Int
+
+    public init(bookNumber: Int, chapterNumber: Int) {
+        self.bookNumber = bookNumber
+        self.chapterNumber = chapterNumber
+    }
+}
+
+public enum ReaderPassageChapterPlanner {
+    /// Expands an encoded scripture range into each chapter it crosses, including
+    /// book boundaries. Verse clipping remains the renderer's responsibility.
+    public static func locations(
+        from startReference: Int,
+        to endReference: Int,
+        books: [ReaderBookStructure]
+    ) -> [ReaderChapterLocation] {
+        guard startReference > 0, endReference >= startReference else { return [] }
+        let start = components(of: startReference)
+        let end = components(of: endReference)
+        guard start.book > 0, start.chapter > 0,
+              end.book > 0, end.chapter > 0 else { return [] }
+
+        let orderedBooks = books.sorted { $0.bookNumber < $1.bookNumber }
+        guard let startBook = orderedBooks.first(where: { $0.bookNumber == start.book }),
+              let endBook = orderedBooks.first(where: { $0.bookNumber == end.book }),
+              start.chapter <= startBook.chapterCount,
+              end.chapter <= endBook.chapterCount else { return [] }
+
+        var result: [ReaderChapterLocation] = []
+        for book in orderedBooks where book.bookNumber >= start.book && book.bookNumber <= end.book {
+            let firstChapter = book.bookNumber == start.book ? start.chapter : 1
+            let lastChapter = book.bookNumber == end.book ? end.chapter : book.chapterCount
+            guard firstChapter <= lastChapter else { return [] }
+            for chapter in firstChapter...lastChapter {
+                result.append(ReaderChapterLocation(
+                    bookNumber: book.bookNumber,
+                    chapterNumber: chapter
+                ))
+            }
+        }
+        return result
+    }
+
+    private static func components(of reference: Int) -> (book: Int, chapter: Int) {
+        (reference / 1_000_000, (reference / 1_000) % 1_000)
+    }
+}
+
+public enum ReaderPoetryLayout {
+    /// Some source modules can only mark poetry at verse granularity even when a
+    /// prose introduction and a quoted poetic line share the same verse. Recover
+    /// the quoted range when the punctuation clearly introduces speech so the
+    /// reader does not indent the prose along with it.
+    public static func partialRange(in text: String, isPoetry: Bool) -> ReaderTextRange? {
+        guard isPoetry else { return nil }
+        let characters = Array(text)
+        guard characters.count > 2 else { return nil }
+
+        let quotePairs: [(opening: Character, closing: Character)] = [
+            ("\u{201C}", "\u{201D}"),
+            ("\"", "\""),
+        ]
+        for pair in quotePairs {
+            guard let start = characters.firstIndex(of: pair.opening), start > 0 else { continue }
+            let prefix = String(characters[..<start]).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard introducesQuotedPoetry(prefix) else { continue }
+
+            let searchStart = characters.index(after: start)
+            let closing = characters[searchStart...].lastIndex(of: pair.closing)
+            let end = closing.map { characters.index(after: $0) } ?? characters.endIndex
+            guard end > start else { continue }
+            return ReaderTextRange(startOffset: start, endOffset: end)
+        }
+        return nil
+    }
+
+    private static func introducesQuotedPoetry(_ prefix: String) -> Bool {
+        guard let finalCharacter = prefix.last else { return false }
+        if finalCharacter == ":" { return true }
+
+        let normalized = prefix.lowercased()
+        let speechVerbs = [
+            "answered", "called", "cried", "declared", "proclaimed",
+            "replied", "said", "sang", "shouted", "spoke",
+        ]
+        return speechVerbs.contains { verb in
+            normalized.hasSuffix("\(verb),") || normalized.hasSuffix("\(verb):")
+        }
     }
 }
 
@@ -268,6 +574,71 @@ public struct ReaderLocation: Codable, Equatable, Hashable, Sendable {
         self.bookNumber = bookNumber
         self.chapterNumber = chapterNumber
         self.verseReference = verseReference
+    }
+}
+
+public struct ReaderTab: Identifiable, Equatable, Sendable {
+    public let id: UUID
+    public var location: ReaderLocation?
+
+    public init(id: UUID = UUID(), location: ReaderLocation? = nil) {
+        self.id = id
+        self.location = location
+    }
+}
+
+/// Lightweight tab state independent from the loaded chapter. The active reader
+/// model can load one location at a time while each tab retains its own place.
+public struct ReaderTabCollection: Equatable, Sendable {
+    public private(set) var tabs: [ReaderTab]
+    public private(set) var selectedID: UUID
+
+    public init(initialLocation: ReaderLocation? = nil) {
+        let tab = ReaderTab(location: initialLocation)
+        tabs = [tab]
+        selectedID = tab.id
+    }
+
+    public var selectedTab: ReaderTab? {
+        tabs.first { $0.id == selectedID }
+    }
+
+    public mutating func updateSelected(location: ReaderLocation?) {
+        guard let index = tabs.firstIndex(where: { $0.id == selectedID }) else { return }
+        tabs[index].location = location
+    }
+
+    @discardableResult
+    public mutating func add(location: ReaderLocation?) -> UUID {
+        let tab = ReaderTab(location: location)
+        tabs.append(tab)
+        selectedID = tab.id
+        return tab.id
+    }
+
+    @discardableResult
+    public mutating func select(_ id: UUID) -> ReaderLocation? {
+        guard let tab = tabs.first(where: { $0.id == id }) else {
+            return selectedTab?.location
+        }
+        selectedID = tab.id
+        return tab.location
+    }
+
+    /// A reader always keeps one tab. Closing the selected tab chooses the tab to
+    /// its right, or the previous tab when the closed tab was last.
+    @discardableResult
+    public mutating func close(_ id: UUID) -> ReaderLocation? {
+        guard tabs.count > 1,
+              let index = tabs.firstIndex(where: { $0.id == id }) else {
+            return selectedTab?.location
+        }
+        let wasSelected = selectedID == id
+        tabs.remove(at: index)
+        if wasSelected {
+            selectedID = tabs[min(index, tabs.count - 1)].id
+        }
+        return selectedTab?.location
     }
 }
 

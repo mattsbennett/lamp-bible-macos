@@ -8,6 +8,47 @@ import LampModuleKit
 struct DictionaryLookupRequest: Equatable {
     let id = UUID()
     let keys: [String]
+    /// The word in the verse that was clicked, when the lookup came from the reader.
+    let word: String?
+}
+
+enum BiblicalOriginalLanguage: String, CaseIterable {
+    case greek
+    case hebrew
+
+    static func inferred(from key: String) -> Self? {
+        switch key.trimmingCharacters(in: .whitespacesAndNewlines).uppercased().first {
+        case "G": .greek
+        case "H": .hebrew
+        default: nil
+        }
+    }
+}
+
+extension LampInstalledModule {
+    var biblicalOriginalLanguage: BiblicalOriginalLanguage? {
+        let declaredLanguage = language?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+
+        switch declaredLanguage {
+        case "greek", "grc", "el", "ell", "ancient greek", "koine greek":
+            return .greek
+        case "hebrew", "heb", "he", "hbo", "aramaic":
+            return .hebrew
+        default:
+            break
+        }
+
+        // Some older SWORD imports describe the language of their definitions as
+        // English. Their stable ID/name still identifies the source lexicon.
+        let identity = [id, name, abbreviation]
+            .compactMap { $0?.lowercased() }
+            .joined(separator: " ")
+        if identity.contains("greek") { return .greek }
+        if identity.contains("hebrew") { return .hebrew }
+        return nil
+    }
 }
 
 @MainActor
@@ -16,6 +57,10 @@ final class LibraryModel: ObservableObject {
     @Published private(set) var books: [LampTranslationBook] = []
     @Published private(set) var chapter: LampChapter?
     @Published private(set) var isRefreshing = false
+    /// False until the library has been read and the opening chapter is on screen,
+    /// so the window can hold a splash rather than assemble itself around empty
+    /// states. One-way: later refreshes never send the interface away again.
+    @Published private(set) var hasLoadedInitialContent = false
     @Published private(set) var isImporting = false
     @Published private(set) var isImportingStudyData = false
     @Published private(set) var isLoadingChapter = false
@@ -50,22 +95,17 @@ final class LibraryModel: ObservableObject {
     private let defaults: UserDefaults
     private var navigationHistory: ReaderNavigationHistory
     @Published private(set) var hiddenModuleIDs: Set<String>
-    @Published private(set) var moduleOrder: [String]
-
-    var allTranslations: [LampInstalledModule] {
-        modules.filter { $0.kind == .translation }
-    }
 
     var translations: [LampInstalledModule] {
-        visibleOrderedModules(kind: .translation)
+        visibleModules(kind: .translation)
     }
 
     var dictionaries: [LampInstalledModule] {
-        visibleOrderedModules(kind: .dictionary)
+        visibleModules(kind: .dictionary)
     }
 
     var commentaries: [LampInstalledModule] {
-        visibleOrderedModules(kind: .commentary)
+        visibleModules(kind: .commentary)
     }
 
     var planModules: [LampInstalledModule] {
@@ -117,6 +157,7 @@ final class LibraryModel: ObservableObject {
     var recentReaderLocations: [ReaderLocation] {
         Array(navigationHistory.backStack.reversed().prefix(20))
     }
+    var readerLocation: ReaderLocation? { currentReaderLocation }
 
     init(
         library: LampLibrary? = nil,
@@ -136,7 +177,6 @@ final class LibraryModel: ObservableObject {
             navigationHistory = ReaderNavigationHistory()
         }
         hiddenModuleIDs = Set(defaults.stringArray(forKey: "modules.hiddenIDs") ?? [])
-        moduleOrder = defaults.stringArray(forKey: "modules.order") ?? []
         selectedTranslationID = defaults.string(forKey: "reader.translationID")
         let storedBook = defaults.integer(forKey: "reader.bookNumber")
         selectedBookNumber = storedBook > 0 ? storedBook : nil
@@ -168,17 +208,6 @@ final class LibraryModel: ObservableObject {
         if hidden, selectedTranslationID == moduleID, let replacement = translations.first {
             selectTranslation(replacement.id)
         }
-    }
-
-    func moveModule(_ moduleID: String, direction: Int) {
-        var order = moduleOrder
-        for id in modules.map(\.id) where !order.contains(id) { order.append(id) }
-        guard let index = order.firstIndex(of: moduleID) else { return }
-        let destination = index + direction
-        guard order.indices.contains(destination) else { return }
-        order.swapAt(index, destination)
-        moduleOrder = order
-        defaults.set(order, forKey: "modules.order")
     }
 
     func setDefaultTranslation(_ moduleID: String?) {
@@ -322,6 +351,31 @@ final class LibraryModel: ObservableObject {
         loadCurrentChapter()
     }
 
+    func selectPassage(
+        translationID: String,
+        bookNumber: Int,
+        chapterNumber: Int
+    ) {
+        guard !translationID.isEmpty, bookNumber > 0, chapterNumber > 0 else { return }
+        guard selectedTranslationID != translationID
+                || selectedBookNumber != bookNumber
+                || selectedChapterNumber != chapterNumber else { return }
+
+        let translationChanged = selectedTranslationID != translationID
+        selectedTranslationID = translationID
+        selectedBookNumber = bookNumber
+        selectedChapterNumber = chapterNumber
+        selectedVerseReference = nil
+        recordCurrentLocation()
+        persistLocation()
+
+        if translationChanged || !books.contains(where: { $0.id == bookNumber }) {
+            loadTranslation(translationID)
+        } else {
+            loadCurrentChapter()
+        }
+    }
+
     func navigateBackward() {
         guard let selectedBookNumber,
               let bookIndex = books.firstIndex(where: { $0.id == selectedBookNumber }) else { return }
@@ -442,12 +496,12 @@ final class LibraryModel: ObservableObject {
         selectedVerseReference = reference
     }
 
-    func requestDictionaryLookup(keys: [String]) {
+    func requestDictionaryLookup(keys: [String], word: String? = nil) {
         let normalizedKeys = keys
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() }
             .filter { !$0.isEmpty }
         guard !normalizedKeys.isEmpty else { return }
-        dictionaryLookupRequest = DictionaryLookupRequest(keys: normalizedKeys)
+        dictionaryLookupRequest = DictionaryLookupRequest(keys: normalizedKeys, word: word)
     }
 
     func consumeDictionaryLookupRequest(_ request: DictionaryLookupRequest) {
@@ -602,6 +656,12 @@ final class LibraryModel: ObservableObject {
         applyHistoryLocation(location)
     }
 
+    /// Restores a tab without treating the tab switch as a new reading-history
+    /// visit. Navigation performed inside the tab continues to use normal history.
+    func openReaderTabLocation(_ location: ReaderLocation) {
+        applyHistoryLocation(location)
+    }
+
     func clearNavigationHistory() {
         navigationHistory.clear(keeping: currentReaderLocation)
         persistNavigationHistory()
@@ -671,7 +731,24 @@ final class LibraryModel: ObservableObject {
         year: Int
     ) {
         let id = "\(planID)_\(day)_r\(readingIndex)_\(year)"
-        let completed = !completedReadingIDs.contains(id)
+        setReadingCompleted(
+            planID: planID,
+            day: day,
+            readingIndex: readingIndex,
+            year: year,
+            completed: !completedReadingIDs.contains(id)
+        )
+    }
+
+    func setReadingCompleted(
+        planID: String,
+        day: Int,
+        readingIndex: Int,
+        year: Int,
+        completed: Bool
+    ) {
+        let id = "\(planID)_\(day)_r\(readingIndex)_\(year)"
+        guard completedReadingIDs.contains(id) != completed else { return }
         Task {
             do {
                 try await library.setReadingCompleted(
@@ -724,11 +801,21 @@ final class LibraryModel: ObservableObject {
                 installedHighlightsByReference = [:]
                 noteReferences = []
                 installedNotesByReference = [:]
+                // Nothing to open — an empty library is a loaded library.
+                markInitialContentLoaded()
             }
         } catch {
             errorMessage = error.localizedDescription
+            markInitialContentLoaded()
         }
         isRefreshing = false
+    }
+
+    /// Marked even when a chapter load is cancelled or fails: a splash that never
+    /// leaves is worse than an interface that opens onto an error.
+    private func markInitialContentLoaded() {
+        guard !hasLoadedInitialContent else { return }
+        hasLoadedInitialContent = true
     }
 
     private func loadTranslation(_ moduleID: String) {
@@ -754,6 +841,7 @@ final class LibraryModel: ObservableObject {
                 chapter = nil
             }
             if !Task.isCancelled { isLoadingChapter = false }
+            markInitialContentLoaded()
         }
     }
 
@@ -770,6 +858,7 @@ final class LibraryModel: ObservableObject {
                 chapter = nil
             }
             if !Task.isCancelled { isLoadingChapter = false }
+            markInitialContentLoaded()
         }
     }
 
@@ -865,15 +954,9 @@ final class LibraryModel: ObservableObject {
         }
     }
 
-    private func visibleOrderedModules(kind: LampModuleKind) -> [LampInstalledModule] {
-        let positions = Dictionary(uniqueKeysWithValues: moduleOrder.enumerated().map { ($1, $0) })
+    private func visibleModules(kind: LampModuleKind) -> [LampInstalledModule] {
         return modules
             .filter { $0.kind == kind && !hiddenModuleIDs.contains($0.id) }
-            .sorted {
-                let left = positions[$0.id] ?? Int.max
-                let right = positions[$1.id] ?? Int.max
-                if left != right { return left < right }
-                return $0.name.localizedStandardCompare($1.name) == .orderedAscending
-            }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 }
