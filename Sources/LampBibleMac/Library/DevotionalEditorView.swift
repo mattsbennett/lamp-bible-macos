@@ -22,10 +22,96 @@ private enum DevotionalSaveState: Equatable {
     case failed(String)
 }
 
+private struct DevotionalWorkspaceEditorDocument: Identifiable, Equatable {
+    let url: URL
+    var text: String
+    var persistedText: String
+    var selection = NSRange(location: 0, length: 0)
+    var externalText: String?
+    var wasRemovedExternally = false
+    var errorMessage: String?
+
+    var id: String { url.lastPathComponent }
+    var title: String { url.lastPathComponent }
+    var previewTitle: String { url.deletingPathExtension().lastPathComponent }
+    var isDirty: Bool { text != persistedText }
+    var hasExternalConflict: Bool { externalText != nil || wasRemovedExternally }
+}
+
+private struct DevotionalRevisionHistoryRequest: Identifiable {
+    let id = UUID()
+    let documentID: String?
+    let documentPath: String
+    let documentTitle: String
+    let revisions: [DevotionalAgentRevision]
+}
+
+private struct NewWorkspaceMarkdownDocumentSheet: View {
+    let create: (String) -> String?
+
+    @Environment(\.dismiss) private var dismiss
+    @FocusState private var isFilenameFocused: Bool
+    @State private var filename = ""
+    @State private var errorMessage: String?
+
+    private var normalizedFilename: String? {
+        WorkspaceTextFileStore.normalizedMarkdownFilename(filename)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("New Markdown File")
+                .font(.title2.bold())
+            Text("Create a companion document beside Main Prose. If you omit the extension, Lamp adds `.md`.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+
+            TextField("Filename", text: $filename, prompt: Text("outline.md"))
+                .focused($isFilenameFocused)
+                .onChange(of: filename) { _, _ in errorMessage = nil }
+
+            if let normalizedFilename, normalizedFilename != filename {
+                Text("Will create \(normalizedFilename)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if let errorMessage {
+                Label(errorMessage, systemImage: "exclamationmark.triangle")
+                    .font(.callout)
+                    .foregroundStyle(.red)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Create") { createDocument() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(normalizedFilename == nil)
+            }
+        }
+        .padding(20)
+        .frame(width: 460)
+        .task { isFilenameFocused = true }
+    }
+
+    private func createDocument() {
+        guard normalizedFilename != nil else { return }
+        if let error = create(filename) {
+            errorMessage = error
+        } else {
+            dismiss()
+        }
+    }
+}
+
+/// Which surface the author types on. Preview is deliberately not one of these:
+/// it answers "am I writing or reading?", which is a different question from
+/// "which editor am I typing in", and folding the two into one picker is what made
+/// the old three-way control hard to read.
 private enum DevotionalEditorMode: String, CaseIterable, Identifiable {
     case visual
     case markdown
-    case preview
 
     var id: String { rawValue }
 
@@ -33,7 +119,20 @@ private enum DevotionalEditorMode: String, CaseIterable, Identifiable {
         switch self {
         case .visual: "Visual"
         case .markdown: "Markdown"
-        case .preview: "Preview"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .visual: "textformat"
+        case .markdown: "chevron.left.forwardslash.chevron.right"
+        }
+    }
+
+    var help: String {
+        switch self {
+        case .visual: "Write with formatting applied as you type"
+        case .markdown: "Write in Markdown source"
         }
     }
 }
@@ -175,20 +274,42 @@ private struct DevotionalEditorToolbarScrollView<Content: View>: View {
 struct DevotionalEditorView: View {
     let request: DevotionalEditorRequest
 
+    @Environment(\.openWindow) private var openWindow
     @EnvironmentObject private var model: LibraryModel
-    @AppStorage("devotional.editor.fontSize") private var editorFontSize = 15.0
+    @AppStorage("devotional.editor.fontSize")
+    private var editorFontSize = LampTextScale.writingEditorText.defaultValue
     @AppStorage("devotional.editor.showsDetails") private var showsDetails = true
     @AppStorage("devotional.editor.detailsWidth") private var detailsWidth = 320.0
     @AppStorage("devotional.editor.agentWidth") private var agentWidth = 480.0
-    @AppStorage("devotional.fontSize") private var previewFontSize = 17.0
+    /// The placement a newly opened editor inherits. Writing it is how a choice
+    /// carries to the next window; it is deliberately *not* what any open window
+    /// reads, because two editors sharing one live value fight over it — a
+    /// restored window with content re-asserting `.full` was enough to undo the
+    /// fallback a new, empty window had just applied to itself.
+    @AppStorage("writing.preview.placement")
+    private var storedPreviewPlacement = WritingPreviewPlacement.hidden
+    /// This window's own placement, seeded from the stored one when it opens.
+    @State private var windowPreviewPlacement: WritingPreviewPlacement?
+    @AppStorage("writing.preview.width") private var previewWidth = 460.0
     @AppStorage("agent.moduleAccess.enabled") private var agentModuleAccessEnabled = true
     @AppStorage("agent.moduleAccess.scope") private var agentModuleAccessScope = AgentModuleAccessScope.enabledModules.rawValue
     @AppStorage("agent.moduleAccess.personal") private var agentPersonalContentEnabled = false
     @State private var showingAgentWorkspace = false
+    @State private var linkedPresentationDecks: [LampPresentationDeck] = []
+    @State private var isOpeningPresentation = false
+    @State private var workspaceDocuments: [DevotionalWorkspaceEditorDocument] = []
+    @State private var selectedWorkspaceDocumentID: String?
+    @State private var workspaceIsAvailable = false
+    @State private var workspaceDocumentsInitialized = false
+    @State private var revisionHistoryRequest: DevotionalRevisionHistoryRequest?
+    @State private var showingNewWorkspaceDocument = false
 
-    /// Visual editing is deliberately the approachable default. Markdown and
-    /// Preview remain temporary modes within this editor window.
+    /// Visual editing is deliberately the approachable default; Markdown is the
+    /// source surface behind it.
     @State private var editorMode: DevotionalEditorMode = .visual
+    /// How far the Markdown surface is scrolled, mirrored into a split preview so
+    /// the rendered prose stays beside the paragraph being written.
+    @State private var editorScrollFraction: Double?
     @State private var identifier = UUID().uuidString
     @State private var createdDate: Date?
     @State private var title = ""
@@ -231,6 +352,89 @@ struct DevotionalEditorView: View {
         hasLoaded && editedFields != savedFields
     }
 
+    private var workspaceURL: URL {
+        DevotionalAgentWorkspaceFiles.workspaceURL(
+            libraryRootURL: model.library.rootURL,
+            devotionalID: identifier
+        )
+    }
+
+    private var activeWorkspaceDocument: DevotionalWorkspaceEditorDocument? {
+        guard let selectedWorkspaceDocumentID else { return nil }
+        return workspaceDocuments.first { $0.id == selectedWorkspaceDocumentID }
+    }
+
+    private var isEditingPrimaryDocument: Bool {
+        activeWorkspaceDocument == nil
+    }
+
+    private var activeText: String {
+        activeWorkspaceDocument?.text ?? content
+    }
+
+    private var activeEditorMode: DevotionalEditorMode {
+        isEditingPrimaryDocument ? editorMode : .markdown
+    }
+
+    private var activeRevisionDocumentPath: String? {
+        guard let document = activeWorkspaceDocument else {
+            return DevotionalAgentRevisionStore.primaryDocumentPath
+        }
+        return supportsRevisionHistory(document.url) ? document.id : nil
+    }
+
+    private var activeTextBinding: Binding<String> {
+        guard let selectedWorkspaceDocumentID else { return $content }
+        return Binding(
+            get: {
+                workspaceDocuments.first { $0.id == selectedWorkspaceDocumentID }?.text ?? ""
+            },
+            set: { text in
+                guard let index = workspaceDocuments.firstIndex(where: {
+                    $0.id == selectedWorkspaceDocumentID
+                }) else { return }
+                workspaceDocuments[index].text = text
+                workspaceDocuments[index].errorMessage = nil
+            }
+        )
+    }
+
+    private var activeSelectionBinding: Binding<NSRange> {
+        guard let selectedWorkspaceDocumentID else { return $contentSelection }
+        return Binding(
+            get: {
+                workspaceDocuments.first { $0.id == selectedWorkspaceDocumentID }?.selection
+                    ?? NSRange(location: 0, length: 0)
+            },
+            set: { selection in
+                guard let index = workspaceDocuments.firstIndex(where: {
+                    $0.id == selectedWorkspaceDocumentID
+                }) else { return }
+                workspaceDocuments[index].selection = selection
+            }
+        )
+    }
+
+    private var workspaceDocumentEditTrigger: [String] {
+        workspaceDocuments.map { "\($0.id)\u{0}\($0.text)" }
+    }
+
+    private var previewPlacement: WritingPreviewPlacement {
+        windowPreviewPlacement ?? storedPreviewPlacement
+    }
+
+    /// Changing placement from a control updates this window and the inherited
+    /// default together, so the next editor opens the way this one was left.
+    private var previewPlacementBinding: Binding<WritingPreviewPlacement> {
+        Binding(
+            get: { previewPlacement },
+            set: { newPlacement in
+                windowPreviewPlacement = newPlacement
+                storedPreviewPlacement = newPlacement
+            }
+        )
+    }
+
     private var hasSavableContent: Bool {
         [title, subtitle, author, tags, seriesName, summary, content, footnotes]
             .contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -257,7 +461,7 @@ struct DevotionalEditorView: View {
                 0
             )
             HStack(spacing: 0) {
-                editorPane
+                contentColumn(width: editorWidth)
                     // Horizontal editor toolbars have a much wider intrinsic
                     // content size than the document. Give the complete editor
                     // column its exact share of the split so those ScrollViews
@@ -303,12 +507,18 @@ struct DevotionalEditorView: View {
         }
         .frame(minWidth: 640, minHeight: 540)
         .navigationTitle(title.isEmpty ? "New Devotional" : title)
-        .navigationSubtitle(saveStateDescription)
+        .navigationSubtitle(activeSaveStateDescription)
         .toolbar { editorToolbar }
         .task(id: request) {
             editorMode = .visual
             load()
+            // Seeds this window only. Writing the stored default here would push
+            // the fallback onto every other open editor too.
+            windowPreviewPlacement = storedPreviewPlacement
+                .opening(hasContent: hasSavableContent)
         }
+        .task(id: identifier) { await monitorLinkedPresentationDecks() }
+        .task(id: identifier) { await monitorWorkspaceDocuments() }
         // Autosave starts after any authored field has content. A newly opened,
         // untouched editor still never leaves an empty devotional behind.
         .task(id: AutosaveTrigger(fields: editedFields, canSave: hasSavableContent)) {
@@ -322,25 +532,209 @@ struct DevotionalEditorView: View {
             guard !Task.isCancelled else { return }
             previewContent = content
         }
-        .onChange(of: editorMode) { _, mode in
-            if mode == .preview { previewContent = content }
+        .task(id: workspaceDocumentEditTrigger) {
+            guard workspaceDocuments.contains(where: { $0.isDirty && !$0.hasExternalConflict }) else {
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(900))
+            guard !Task.isCancelled else { return }
+            saveDirtyWorkspaceDocuments()
         }
+        // Opening the preview should show the draft as it stands, not whatever the
+        // debounce last caught.
+        .onChange(of: previewPlacement) { _, placement in
+            guard placement.isVisible else { return }
+            refreshPreview()
+        }
+        .focusedSceneValue(\.writingPreviewPlacement, previewPlacementBinding)
         .sheet(isPresented: $showingAudioRecorder) {
             DevotionalAudioRecorderView(devotionalID: identifier) { storedURL in
                 insertStoredAudio(storedURL)
             }
             .environmentObject(model)
         }
+        .sheet(item: $revisionHistoryRequest) { request in
+            DevotionalAgentRevisionHistoryView(
+                documentTitle: request.documentTitle,
+                revisions: request.revisions
+            ) { markdown in
+                restoreRevision(markdown, request: request)
+            }
+        }
+        .sheet(isPresented: $showingNewWorkspaceDocument) {
+            NewWorkspaceMarkdownDocumentSheet { proposedName in
+                createWorkspaceDocument(named: proposedName)
+            }
+        }
     }
 
-    private var editorPane: some View {
-        ZStack {
-            visualEditorPane
-            if editorMode == .markdown {
-                markdownEditorPane
-            } else if editorMode == .preview {
+    /// Everything that belongs to the document itself: the writing surface, the
+    /// preview when it is on screen, and the status bar beneath both. The details
+    /// and agent sidebars sit outside this, since they are about the document
+    /// rather than part of it.
+    private func contentColumn(width: Double) -> some View {
+        VStack(spacing: 0) {
+            documentTabBar
+            Divider()
+
+            switch previewPlacement {
+            case .hidden:
+                editorPane
+            case .full:
                 previewPane
+            case .split:
+                splitEditorAndPreview(totalWidth: width)
             }
+
+            Divider()
+            statusBar
+        }
+    }
+
+    private var documentTabBar: some View {
+        HStack(spacing: 0) {
+            ScrollView(.horizontal) {
+                HStack(spacing: 4) {
+                    documentTab(
+                        id: nil,
+                        title: "Main Prose",
+                        systemImage: "doc.text",
+                        isDirty: isDirty,
+                        hasConflict: false
+                    )
+                    ForEach(workspaceDocuments) { document in
+                        documentTab(
+                            id: document.id,
+                            title: document.title,
+                            systemImage: "doc.plaintext",
+                            isDirty: document.isDirty,
+                            hasConflict: document.hasExternalConflict
+                        )
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+            }
+            .scrollIndicators(.hidden)
+
+            Divider()
+                .frame(height: 22)
+
+            HStack(spacing: 10) {
+                Button("New Markdown File", systemImage: "plus") {
+                    showingNewWorkspaceDocument = true
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+                .help("Create a companion Markdown file")
+
+                Button("Reveal Workspace", systemImage: "folder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([workspaceURL])
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+                .disabled(!workspaceIsAvailable)
+                .help("Reveal the writing workspace in Finder")
+            }
+            .padding(.horizontal, 9)
+        }
+        .frame(height: 36)
+        .background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    private func documentTab(
+        id: String?,
+        title: String,
+        systemImage: String,
+        isDirty: Bool,
+        hasConflict: Bool
+    ) -> some View {
+        let isSelected = selectedWorkspaceDocumentID == id
+        return Button {
+            selectWorkspaceDocument(id)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: systemImage)
+                    .foregroundStyle(isSelected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                Text(title)
+                    .lineLimit(1)
+                if hasConflict {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .accessibilityLabel("File conflict")
+                } else if isDirty {
+                    Circle()
+                        .fill(.secondary)
+                        .frame(width: 6, height: 6)
+                        .accessibilityLabel("Unsaved changes")
+                }
+            }
+            .font(.callout)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(
+                isSelected ? Color.accentColor.opacity(0.18) : Color.clear,
+                in: RoundedRectangle(cornerRadius: 6)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(title)
+    }
+
+    private func selectWorkspaceDocument(_ id: String?) {
+        guard selectedWorkspaceDocumentID != id else { return }
+        if isEditingPrimaryDocument, editorMode == .visual, let coordinator = tipTapCoordinator {
+            coordinator.getContent { latestMarkdown in
+                DispatchQueue.main.async {
+                    content = latestMarkdown
+                    previewContent = latestMarkdown
+                }
+            }
+        }
+        selectedWorkspaceDocumentID = id
+        editorScrollFraction = nil
+    }
+
+    private func splitEditorAndPreview(totalWidth: Double) -> some View {
+        let dividerWidth = 1.0
+        let minimumEditorWidth = 320.0
+        let desiredMinimumPreviewWidth = 280.0
+        let maximumPreviewWidth = max(totalWidth - minimumEditorWidth - dividerWidth, 0)
+        let minimumPreviewWidth = min(desiredMinimumPreviewWidth, maximumPreviewWidth)
+        let resolvedPreviewWidth = min(
+            max(previewWidth, minimumPreviewWidth),
+            maximumPreviewWidth
+        )
+        let resolvedEditorWidth = max(totalWidth - resolvedPreviewWidth - dividerWidth, 0)
+
+        return HStack(spacing: 0) {
+            editorPane
+                .frame(width: resolvedEditorWidth)
+                .clipped()
+            DevotionalSidebarResizeHandle(
+                preferredWidth: $previewWidth,
+                displayedWidth: resolvedPreviewWidth,
+                minimumWidth: minimumPreviewWidth,
+                maximumWidth: maximumPreviewWidth
+            )
+            previewPane
+                .frame(width: resolvedPreviewWidth)
+                .clipped()
+        }
+    }
+
+    @ViewBuilder
+    private var editorPane: some View {
+        if isEditingPrimaryDocument {
+            ZStack {
+                visualEditorPane
+                if editorMode == .markdown {
+                    markdownEditorPane
+                }
+            }
+        } else {
+            markdownEditorPane
         }
     }
 
@@ -369,6 +763,10 @@ struct DevotionalEditorView: View {
                 }
             )
         }
+        // Shown while the web view is held back until its first paint, and behind
+        // it thereafter. Same colour the page is told to paint, so the reveal is
+        // invisible.
+        .background(Color(nsColor: .windowBackgroundColor))
         .onDisappear {
             visualEditorIsReady = false
             tipTapSelection = TipTapSelectionState()
@@ -525,62 +923,77 @@ struct DevotionalEditorView: View {
             Divider()
 
             MarkdownTextEditor(
-                text: $content,
-                selection: $contentSelection,
-                fontSize: editorFontSize
+                text: activeTextBinding,
+                selection: activeSelectionBinding,
+                fontSize: editorFontSize,
+                onScrollFractionChanged: previewPlacement == .split
+                    ? { editorScrollFraction = $0 }
+                    : nil
             )
+            // The text view draws no background of its own, so without this it
+            // shows whatever happens to be behind the window — which is close to
+            // the colour the visual editor is told to paint, but not equal to it.
+            // Naming the colour here makes the two surfaces match by construction.
+            .background(Color(nsColor: .windowBackgroundColor))
         }
     }
 
     private var previewPane: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(title.isEmpty ? "Untitled Devotional" : title)
-                        .font(.largeTitle.bold())
-                    if !subtitle.isEmpty {
-                        Text(subtitle).font(.title3).foregroundStyle(.secondary)
-                    }
-                    if !summary.isEmpty {
-                        Text(summary).font(.body).foregroundStyle(.secondary)
-                    }
+        WritingPreviewPane(
+            title: activeWorkspaceDocument?.previewTitle ?? title,
+            subtitle: isEditingPrimaryDocument ? subtitle : "",
+            summary: isEditingPrimaryDocument ? summary : "",
+            keyScriptures: isEditingPrimaryDocument ? keyScriptures : [],
+            markdown: activeWorkspaceDocument?.text ?? previewContent,
+            footnotes: isEditingPrimaryDocument ? footnotes : "",
+            libraryRootURL: model.library.rootURL,
+            placement: previewPlacementBinding,
+            // The visual surface is a web view whose scrolling this side cannot
+            // see, so only the Markdown surface offers a position to follow.
+            followedScrollFraction: activeEditorMode == .markdown ? editorScrollFraction : nil
+        )
+    }
+
+    private var statusBar: some View {
+        let statistics = WritingStatistics.measuring(markdown: activeText)
+        return HStack(spacing: 10) {
+            Text(activeSaveStateDescription)
+                .foregroundStyle(activeSaveStateIsProblem ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+
+            if let document = activeWorkspaceDocument, document.hasExternalConflict {
+                Button(document.wasRemovedExternally ? "Close Tab" : "Use Agent Version") {
+                    acceptExternalWorkspaceDocument(document.id)
                 }
-
-                if !keyScriptures.isEmpty {
-                    HStack(spacing: 8) {
-                        ForEach(keyScriptures) { scripture in
-                            Text(scripture.displayDescription)
-                                .font(.caption.weight(.semibold))
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 3)
-                                .background(.quaternary, in: Capsule())
-                        }
-                    }
+                .controlSize(.mini)
+                Button("Keep My Version") {
+                    saveWorkspaceDocument(document.id, force: true)
                 }
-
-                Divider()
-
-                DevotionalContentView(
-                    markdown: previewContent,
-                    libraryRootURL: model.library.rootURL,
-                    fontSize: previewFontSize
-                )
-
-                if !footnotes.isEmpty {
-                    Divider()
-                    DevotionalContentView(
-                        markdown: footnotes,
-                        libraryRootURL: model.library.rootURL,
-                        fontSize: max(previewFontSize - 1, 12)
-                    )
-                    .foregroundStyle(.secondary)
-                }
+                .controlSize(.mini)
             }
-            .frame(maxWidth: 680, alignment: .leading)
-            .padding(28)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
+
+            Spacer(minLength: 8)
+
+            Text(statistics.wordCountDescription)
+                .monospacedDigit()
+            Text("·")
+                .foregroundStyle(.tertiary)
+            Text(statistics.readingTimeDescription)
+                .monospacedDigit()
         }
-        .background(.background.secondary)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    private var activeSaveStateIsProblem: Bool {
+        if let document = activeWorkspaceDocument {
+            return document.errorMessage != nil || document.hasExternalConflict
+        }
+        if case .failed = saveState { return true }
+        return false
     }
 
     private var detailsPane: some View {
@@ -651,27 +1064,45 @@ struct DevotionalEditorView: View {
     @ToolbarContentBuilder
     private var editorToolbar: some ToolbarContent {
         ToolbarItem(placement: .navigation) {
-            Button(action: save) {
+            Button(action: saveActiveDocument) {
                 Image(nsImage: Self.saveIcon)
             }
             .accessibilityLabel("Save")
-            .disabled(!hasSavableContent || !isDirty || saveState == .saving)
+            .disabled(!activeDocumentCanSave)
             .keyboardShortcut("s", modifiers: .command)
-            .help(hasSavableContent
-                ? "Save this devotional"
-                : "Add devotional content before saving")
+            .help(activeSaveHelp)
+        }
+
+        ToolbarItem(placement: .navigation) {
+            Button("Revision History", systemImage: "clock.arrow.circlepath") {
+                showActiveRevisionHistory()
+            }
+            .labelStyle(.iconOnly)
+            .disabled(activeRevisionDocumentPath == nil)
+            .help(activeRevisionDocumentPath == nil
+                ? "Revision history is available for Markdown workspace files"
+                : "Review or restore revisions for this Markdown file")
         }
 
         ToolbarItem {
-            Picker("Editor Mode", selection: editorModeBinding) {
+            Picker("Writing Surface", selection: editorSurfaceSelection) {
                 ForEach(DevotionalEditorMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
+                    Text(mode.title).tag(Optional(mode))
                 }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
             .fixedSize(horizontal: true, vertical: false)
-            .help("Switch between visual editing, Markdown, and preview")
+            .disabled(!isEditingPrimaryDocument)
+            .help(isEditingPrimaryDocument
+                ? previewPlacement == .full
+                    ? "Choose a writing surface to return to writing"
+                    : "Choose the writing surface"
+                : "Supporting documents use the Markdown editor")
+        }
+
+        ToolbarItem {
+            previewToolbarControl
         }
 
         ToolbarItem {
@@ -695,9 +1126,61 @@ struct DevotionalEditorView: View {
                     showsDetails = !isShowing
                 }
             )) {
-                Label("Agent", systemImage: "terminal")
+                Label("Agent", systemImage: "sparkles")
             }
             .help(showingAgentWorkspace ? "Hide agent workspace" : "Show agent workspace")
+        }
+
+        ToolbarItem {
+            presentationToolbarControl
+        }
+    }
+
+    /// Clicking swaps between writing and reading the way ⌘E does in Obsidian; the
+    /// menu beside it chooses where the preview sits. One control, so the toolbar
+    /// never implies that "preview" is a third kind of editor.
+    private var previewToolbarControl: some View {
+        Menu {
+            Picker("Preview", selection: previewPlacementBinding) {
+                ForEach(WritingPreviewPlacement.allCases, id: \.self) { placement in
+                    Label(placement.title, systemImage: placement.systemImage)
+                        .tag(placement)
+                }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        } label: {
+            Label("Preview", systemImage: previewPlacement.isVisible ? "book.fill" : "book")
+        } primaryAction: {
+            previewPlacementBinding.wrappedValue = previewPlacement.toggled()
+        }
+        .help(previewPlacement.isVisible
+            ? "Hide the preview (⌘E)"
+            : "Preview this writing beside the editor (⌘E)")
+    }
+
+    @ViewBuilder
+    private var presentationToolbarControl: some View {
+        if linkedPresentationDecks.count > 1 {
+            Menu("Presentation Decks", systemImage: LinkedPresentationDeckLookup.systemImage) {
+                ForEach(linkedPresentationDecks) { deck in
+                    Button(deck.title) { openPresentationDeck(deck) }
+                }
+            }
+            .help("Open a presentation deck linked to this writing")
+        } else if let deck = linkedPresentationDecks.first {
+            Button("Open Presentation Deck", systemImage: LinkedPresentationDeckLookup.systemImage) {
+                openPresentationDeck(deck)
+            }
+            .help("Open the presentation deck linked to this writing")
+        } else {
+            Button("Build Presentation Deck", systemImage: LinkedPresentationDeckLookup.systemImage) {
+                openPresentationDeck(nil)
+            }
+            .disabled(!hasSavableContent || isOpeningPresentation)
+            .help(hasSavableContent
+                ? "Build a presentation deck accompanying this writing"
+                : "Add writing content before building a presentation deck")
         }
     }
 
@@ -709,6 +1192,38 @@ struct DevotionalEditorView: View {
         return request.devotionalID == nil ? "Not saved yet" : "Up to date"
     }
 
+    private var activeSaveStateDescription: String {
+        guard let document = activeWorkspaceDocument else { return saveStateDescription }
+        if document.wasRemovedExternally {
+            return "Conflict — this file was removed outside Lamp"
+        }
+        if document.externalText != nil {
+            return "Conflict — this file changed outside Lamp"
+        }
+        if let errorMessage = document.errorMessage {
+            return errorMessage.hasPrefix("Saved,")
+                ? errorMessage : "Issue — \(errorMessage)"
+        }
+        return document.isDirty ? "Unsaved changes" : "Up to date"
+    }
+
+    private var activeDocumentCanSave: Bool {
+        if let document = activeWorkspaceDocument {
+            return document.isDirty && !document.hasExternalConflict
+        }
+        return hasSavableContent && isDirty && saveState != .saving
+    }
+
+    private var activeSaveHelp: String {
+        if let document = activeWorkspaceDocument {
+            if document.hasExternalConflict { return "Resolve this file conflict before saving" }
+            return document.isDirty ? "Save \(document.title)" : "This file is up to date"
+        }
+        return hasSavableContent
+            ? "Save this devotional"
+            : "Add devotional content before saving"
+    }
+
     private var agentContextDocument: String {
         let scriptureList = keyScriptures.isEmpty
             ? "- None selected"
@@ -717,7 +1232,7 @@ struct DevotionalEditorView: View {
         return """
         # Devotional brief
 
-        - Title: \(title.isEmpty ? "Untitled Devotional" : title)
+        - Title: \(title.isEmpty ? "Untitled" : title)
         - Subtitle: \(subtitle.isEmpty ? "None" : subtitle)
         - Author: \(author.isEmpty ? "Unknown" : author)
         - Date: \(date)
@@ -758,12 +1273,29 @@ struct DevotionalEditorView: View {
         )
     }
 
+    /// Nil while the preview fills the window, because no writing surface is on
+    /// screen for the control to be reporting. Leaving it unselected also means
+    /// either segment is a genuine change, so tapping the one that *was* chosen
+    /// still brings the editor back — where a disabled control simply sat there,
+    /// and a plain binding would have ignored the tap as a no-op.
+    private var editorSurfaceSelection: Binding<DevotionalEditorMode?> {
+        Binding(
+            get: { previewPlacement == .full ? nil : activeEditorMode },
+            set: { newMode in
+                guard let newMode, isEditingPrimaryDocument else { return }
+                // Choosing a surface means "show me that", so make room for it.
+                if previewPlacement == .full { previewPlacementBinding.wrappedValue = .split }
+                switchEditorMode(to: newMode)
+            }
+        )
+    }
+
     private var visualStyleLabel: String {
         tipTapSelection.heading == 0 ? "Body" : "H\(tipTapSelection.heading)"
     }
 
     private func switchEditorMode(to newMode: DevotionalEditorMode) {
-        guard newMode != editorMode else { return }
+        guard isEditingPrimaryDocument, newMode != editorMode else { return }
 
         if editorMode == .visual, let coordinator = tipTapCoordinator {
             let contentBeforeSwitch = content
@@ -773,19 +1305,30 @@ struct DevotionalEditorView: View {
                     // into the Markdown surface.
                     if content == contentBeforeSwitch {
                         content = latestMarkdown
-                    }
-                    if newMode == .preview {
-                        previewContent = content == contentBeforeSwitch
-                            ? latestMarkdown
-                            : content
+                        previewContent = latestMarkdown
                     }
                 }
             }
-            if newMode == .preview { previewContent = content }
-            editorMode = newMode
-        } else {
-            if newMode == .preview { previewContent = content }
-            editorMode = newMode
+        }
+        editorMode = newMode
+        // Leaving the Markdown surface leaves its scroll position behind with it.
+        editorScrollFraction = nil
+    }
+
+    /// Brings the preview up to the current draft immediately. The visual surface
+    /// holds the authoritative text inside a web view, so it has to be asked.
+    private func refreshPreview() {
+        guard isEditingPrimaryDocument else { return }
+        guard editorMode == .visual, let coordinator = tipTapCoordinator else {
+            previewContent = content
+            return
+        }
+        previewContent = content
+        coordinator.getContent { latestMarkdown in
+            DispatchQueue.main.async {
+                content = latestMarkdown
+                previewContent = latestMarkdown
+            }
         }
     }
 
@@ -804,12 +1347,13 @@ struct DevotionalEditorView: View {
     }
 
     private var editorTextSizeControls: some View {
-        editorControlGroup("Text Size") {
+        let scale = LampTextScale.writingEditorText
+        return editorControlGroup("Text Size") {
             Button("Smaller", systemImage: "minus") {
-                editorFontSize -= 1
+                editorFontSize = scale.stepped(editorFontSize, by: -1)
             }
             .labelStyle(.iconOnly)
-            .disabled(editorFontSize <= 11)
+            .disabled(!scale.canDecrease(editorFontSize))
             .help("Decrease editor text size")
 
             Text("\(editorFontSize.formatted(.number.precision(.fractionLength(0)))) pt")
@@ -817,10 +1361,10 @@ struct DevotionalEditorView: View {
                 .frame(minWidth: 36)
 
             Button("Larger", systemImage: "plus") {
-                editorFontSize += 1
+                editorFontSize = scale.stepped(editorFontSize, by: 1)
             }
             .labelStyle(.iconOnly)
-            .disabled(editorFontSize >= 24)
+            .disabled(!scale.canIncrease(editorFontSize))
             .help("Increase editor text size")
         }
     }
@@ -851,27 +1395,30 @@ struct DevotionalEditorView: View {
     }
 
     private func apply(_ command: MarkdownCommand) {
-        let result = command.apply(to: content, selection: contentSelection)
-        content = result.text
-        contentSelection = result.selection
+        let result = command.apply(
+            to: activeTextBinding.wrappedValue,
+            selection: activeSelectionBinding.wrappedValue
+        )
+        activeTextBinding.wrappedValue = result.text
+        activeSelectionBinding.wrappedValue = result.selection
     }
 
     private func insert(_ snippet: String, onOwnLine: Bool = true) {
         let result = MarkdownEditor.insert(
             snippet,
-            in: content,
-            selection: contentSelection,
+            in: activeTextBinding.wrappedValue,
+            selection: activeSelectionBinding.wrappedValue,
             onOwnLine: onOwnLine
         )
-        content = result.text
-        contentSelection = result.selection
+        activeTextBinding.wrappedValue = result.text
+        activeSelectionBinding.wrappedValue = result.selection
     }
 
     private func insertScriptureLink() {
         guard let reference = model.selectedVerseReference else { return }
         let description = LampBibleReferenceFormatter.describeRange(from: reference, to: reference)
         let url = "lampbible://read?reference=\(reference)"
-        if editorMode == .visual, let coordinator = tipTapCoordinator {
+        if isEditingPrimaryDocument, editorMode == .visual, let coordinator = tipTapCoordinator {
             coordinator.getSelectedText { selectedText in
                 if selectedText.isEmpty {
                     coordinator.insertTextLink(label: description, url: url)
@@ -901,7 +1448,7 @@ struct DevotionalEditorView: View {
                     .conforms(to: .image) == true
                 let label = storedURL.deletingPathExtension().lastPathComponent
                 let portableURL = "lamp-media://\(identifier)/\(storedURL.lastPathComponent)"
-                if editorMode == .visual, let coordinator = tipTapCoordinator {
+                if isEditingPrimaryDocument, editorMode == .visual, let coordinator = tipTapCoordinator {
                     if isImage {
                         coordinator.insertImage(
                             mediaID: storedURL.lastPathComponent,
@@ -927,7 +1474,7 @@ struct DevotionalEditorView: View {
 
     private func insertStoredAudio(_ storedURL: URL) {
         let label = storedURL.deletingPathExtension().lastPathComponent
-        if editorMode == .visual, let coordinator = tipTapCoordinator {
+        if isEditingPrimaryDocument, editorMode == .visual, let coordinator = tipTapCoordinator {
             coordinator.insertAudio(
                 mediaID: storedURL.lastPathComponent,
                 caption: "▶︎ \(label)"
@@ -939,7 +1486,394 @@ struct DevotionalEditorView: View {
 
     // MARK: - Persistence
 
+    private func saveActiveDocument() {
+        if let selectedWorkspaceDocumentID {
+            saveWorkspaceDocument(selectedWorkspaceDocumentID)
+        } else {
+            save()
+        }
+    }
+
+    private func saveDirtyWorkspaceDocuments() {
+        let documentIDs = workspaceDocuments
+            .filter { $0.isDirty && !$0.hasExternalConflict }
+            .map(\.id)
+        for documentID in documentIDs {
+            saveWorkspaceDocument(documentID)
+        }
+    }
+
+    private func createWorkspaceDocument(named proposedName: String) -> String? {
+        do {
+            let needsDevotionalRecord = !model.devotionals.contains { $0.id == identifier }
+            let snapshot = try WorkspaceTextFileStore.createMarkdownDocument(
+                named: proposedName,
+                in: workspaceURL
+            )
+            if !workspaceDocuments.contains(where: { $0.id == snapshot.id }) {
+                workspaceDocuments.append(DevotionalWorkspaceEditorDocument(
+                    url: snapshot.url,
+                    text: snapshot.contents,
+                    persistedText: snapshot.contents
+                ))
+                workspaceDocuments.sort {
+                    $0.title.localizedStandardCompare($1.title) == .orderedAscending
+                }
+            }
+            workspaceIsAvailable = true
+            workspaceDocumentsInitialized = true
+            selectWorkspaceDocument(snapshot.id)
+            if needsDevotionalRecord {
+                // The library requires one authored field for a durable record.
+                // A neutral title keeps an outline-first workspace reachable
+                // without pretending the companion filename is the talk title.
+                if !hasSavableContent { title = "Untitled" }
+                save()
+            }
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    private func showActiveRevisionHistory() {
+        guard let documentPath = activeRevisionDocumentPath else { return }
+        do {
+            revisionHistoryRequest = DevotionalRevisionHistoryRequest(
+                documentID: activeWorkspaceDocument?.id,
+                documentPath: documentPath,
+                documentTitle: activeWorkspaceDocument?.title ?? "Main Prose",
+                revisions: try DevotionalAgentRevisionStore.revisions(
+                    in: workspaceURL,
+                    documentPath: documentPath
+                )
+            )
+        } catch {
+            if let documentID = activeWorkspaceDocument?.id,
+               let index = workspaceDocuments.firstIndex(where: { $0.id == documentID }) {
+                workspaceDocuments[index].errorMessage = error.localizedDescription
+            } else {
+                saveState = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    private func restoreRevision(
+        _ markdown: String,
+        request: DevotionalRevisionHistoryRequest
+    ) {
+        if let documentID = request.documentID {
+            guard let index = workspaceDocuments.firstIndex(where: { $0.id == documentID }),
+                  workspaceDocuments[index].text != markdown else { return }
+            workspaceDocuments[index].text = markdown
+            workspaceDocuments[index].externalText = nil
+            workspaceDocuments[index].wasRemovedExternally = false
+            saveWorkspaceDocument(documentID, force: true, changeKind: .restoration)
+            return
+        }
+
+        guard content != markdown else { return }
+        do {
+            try recordWorkspaceRevision(
+                kind: .restoration,
+                documentPath: DevotionalAgentRevisionStore.primaryDocumentPath,
+                before: content,
+                after: markdown
+            )
+            try WorkspaceTextFileStore.write(
+                markdown,
+                to: workspaceURL.appendingPathComponent(
+                    DevotionalAgentRevisionStore.primaryDocumentPath
+                ),
+                in: workspaceURL
+            )
+            try DevotionalAgentRevisionStore.markSynced(markdown, in: workspaceURL)
+            content = markdown
+            previewContent = markdown
+            save()
+        } catch {
+            saveState = .failed(error.localizedDescription)
+        }
+    }
+
+    private func supportsRevisionHistory(_ url: URL) -> Bool {
+        ["md", "markdown"].contains(url.pathExtension.lowercased())
+    }
+
+    private func recordWorkspaceRevision(
+        kind: DevotionalAgentRevisionKind,
+        documentPath: String,
+        before: String,
+        after: String
+    ) throws {
+        _ = try DevotionalAgentRevisionStore.record(
+            kind: kind,
+            documentPath: documentPath,
+            before: before,
+            after: after,
+            in: workspaceURL
+        )
+    }
+
+    private func recordExternalRevisionError(
+        for document: DevotionalWorkspaceEditorDocument,
+        after externalText: String
+    ) -> String? {
+        guard supportsRevisionHistory(document.url) else { return nil }
+        do {
+            try recordWorkspaceRevision(
+                kind: .agentEdit,
+                documentPath: document.id,
+                before: document.persistedText,
+                after: externalText
+            )
+            return nil
+        } catch {
+            return "Revision history could not be updated: \(error.localizedDescription)"
+        }
+    }
+
+    private func saveWorkspaceDocument(
+        _ documentID: String,
+        force: Bool = false,
+        changeKind: DevotionalAgentRevisionKind = .userEdit
+    ) {
+        guard let index = workspaceDocuments.firstIndex(where: { $0.id == documentID }) else {
+            return
+        }
+        let submittedText = workspaceDocuments[index].text
+        let fileURL = workspaceDocuments[index].url
+        let persistedText = workspaceDocuments[index].persistedText
+
+        do {
+            let fileExists = FileManager.default.fileExists(atPath: fileURL.path)
+            let diskText = fileExists
+                ? try String(contentsOf: fileURL, encoding: .utf8)
+                : nil
+            if !force {
+                guard let diskText else {
+                    workspaceDocuments[index].wasRemovedExternally = true
+                    workspaceDocuments[index].errorMessage = nil
+                    return
+                }
+                if diskText != persistedText, diskText != submittedText {
+                    workspaceDocuments[index].externalText = diskText
+                    workspaceDocuments[index].errorMessage = nil
+                    return
+                }
+            }
+
+            try WorkspaceTextFileStore.write(
+                submittedText,
+                to: fileURL,
+                in: workspaceURL
+            )
+            guard let savedIndex = workspaceDocuments.firstIndex(where: {
+                $0.id == documentID
+            }) else { return }
+            workspaceDocuments[savedIndex].persistedText = submittedText
+            workspaceDocuments[savedIndex].externalText = nil
+            workspaceDocuments[savedIndex].wasRemovedExternally = false
+            workspaceDocuments[savedIndex].errorMessage = nil
+
+            guard supportsRevisionHistory(fileURL) else { return }
+            do {
+                if let diskText {
+                    if diskText != persistedText {
+                        try recordWorkspaceRevision(
+                            kind: .agentEdit,
+                            documentPath: documentID,
+                            before: persistedText,
+                            after: diskText
+                        )
+                    }
+                    if submittedText != diskText {
+                        try recordWorkspaceRevision(
+                            kind: changeKind,
+                            documentPath: documentID,
+                            before: diskText,
+                            after: submittedText
+                        )
+                    }
+                } else {
+                    if !persistedText.isEmpty {
+                        try recordWorkspaceRevision(
+                            kind: .agentEdit,
+                            documentPath: documentID,
+                            before: persistedText,
+                            after: ""
+                        )
+                    }
+                    if !submittedText.isEmpty {
+                        try recordWorkspaceRevision(
+                            kind: changeKind,
+                            documentPath: documentID,
+                            before: "",
+                            after: submittedText
+                        )
+                    }
+                }
+            } catch {
+                workspaceDocuments[savedIndex].errorMessage =
+                    "Saved, but revision history could not be updated: \(error.localizedDescription)"
+            }
+        } catch {
+            guard let failedIndex = workspaceDocuments.firstIndex(where: {
+                $0.id == documentID
+            }) else { return }
+            workspaceDocuments[failedIndex].errorMessage = error.localizedDescription
+        }
+    }
+
+    private func acceptExternalWorkspaceDocument(_ documentID: String) {
+        guard let index = workspaceDocuments.firstIndex(where: { $0.id == documentID }) else {
+            return
+        }
+        if workspaceDocuments[index].wasRemovedExternally {
+            let document = workspaceDocuments[index]
+            if supportsRevisionHistory(document.url) {
+                try? recordWorkspaceRevision(
+                    kind: .agentEdit,
+                    documentPath: documentID,
+                    before: document.text,
+                    after: ""
+                )
+            }
+            workspaceDocuments.remove(at: index)
+            if selectedWorkspaceDocumentID == documentID {
+                selectedWorkspaceDocumentID = nil
+            }
+            return
+        }
+        guard let externalText = workspaceDocuments[index].externalText else { return }
+        let localText = workspaceDocuments[index].text
+        var revisionError: String?
+        if supportsRevisionHistory(workspaceDocuments[index].url) {
+            do {
+                try recordWorkspaceRevision(
+                    kind: .agentEdit,
+                    documentPath: documentID,
+                    before: localText,
+                    after: externalText
+                )
+            } catch {
+                revisionError = "Revision history could not be updated: \(error.localizedDescription)"
+            }
+        }
+        workspaceDocuments[index].text = externalText
+        workspaceDocuments[index].persistedText = externalText
+        workspaceDocuments[index].externalText = nil
+        workspaceDocuments[index].errorMessage = revisionError
+        let textLength = (externalText as NSString).length
+        let caret = min(workspaceDocuments[index].selection.location, textLength)
+        workspaceDocuments[index].selection = NSRange(location: caret, length: 0)
+    }
+
+    @MainActor
+    private func monitorWorkspaceDocuments() async {
+        refreshWorkspaceDocuments()
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(700))
+            guard !Task.isCancelled else { return }
+            refreshWorkspaceDocuments()
+        }
+    }
+
+    private func refreshWorkspaceDocuments() {
+        do {
+            workspaceIsAvailable = FileManager.default.fileExists(atPath: workspaceURL.path)
+            let snapshots = try WorkspaceTextFileStore.snapshots(
+                in: workspaceURL,
+                excludingFilenames: [
+                    DevotionalAgentWorkspaceFiles.draftFilename,
+                    DevotionalAgentWorkspaceFiles.contextFilename,
+                    "AGENTS.md",
+                    "CLAUDE.md",
+                ]
+            )
+            let snapshotIDs = Set(snapshots.map(\.id))
+
+            for snapshot in snapshots {
+                if let index = workspaceDocuments.firstIndex(where: { $0.id == snapshot.id }) {
+                    let document = workspaceDocuments[index]
+                    if snapshot.contents == document.persistedText {
+                        workspaceDocuments[index].wasRemovedExternally = false
+                    } else if snapshot.contents == document.text {
+                        let revisionError = recordExternalRevisionError(
+                            for: document,
+                            after: snapshot.contents
+                        )
+                        workspaceDocuments[index].persistedText = snapshot.contents
+                        workspaceDocuments[index].externalText = nil
+                        workspaceDocuments[index].wasRemovedExternally = false
+                        workspaceDocuments[index].errorMessage = revisionError
+                    } else if document.isDirty {
+                        workspaceDocuments[index].externalText = snapshot.contents
+                        workspaceDocuments[index].wasRemovedExternally = false
+                        workspaceDocuments[index].errorMessage = nil
+                    } else {
+                        let revisionError = recordExternalRevisionError(
+                            for: document,
+                            after: snapshot.contents
+                        )
+                        workspaceDocuments[index].text = snapshot.contents
+                        workspaceDocuments[index].persistedText = snapshot.contents
+                        workspaceDocuments[index].externalText = nil
+                        workspaceDocuments[index].wasRemovedExternally = false
+                        workspaceDocuments[index].errorMessage = revisionError
+                        let textLength = (snapshot.contents as NSString).length
+                        let caret = min(workspaceDocuments[index].selection.location, textLength)
+                        workspaceDocuments[index].selection = NSRange(location: caret, length: 0)
+                    }
+                } else {
+                    var document = DevotionalWorkspaceEditorDocument(
+                        url: snapshot.url,
+                        text: snapshot.contents,
+                        persistedText: snapshot.contents
+                    )
+                    if workspaceDocumentsInitialized, supportsRevisionHistory(snapshot.url) {
+                        do {
+                            try recordWorkspaceRevision(
+                                kind: .agentEdit,
+                                documentPath: snapshot.id,
+                                before: "",
+                                after: snapshot.contents
+                            )
+                        } catch {
+                            document.errorMessage =
+                                "Revision history could not be updated: \(error.localizedDescription)"
+                        }
+                    }
+                    workspaceDocuments.append(document)
+                }
+            }
+
+            for index in workspaceDocuments.indices where
+                !snapshotIDs.contains(workspaceDocuments[index].id) {
+                workspaceDocuments[index].wasRemovedExternally = true
+                workspaceDocuments[index].externalText = nil
+                workspaceDocuments[index].errorMessage = nil
+            }
+            workspaceDocuments.sort {
+                $0.title.localizedStandardCompare($1.title) == .orderedAscending
+            }
+            workspaceDocumentsInitialized = true
+        } catch {
+            guard let selectedWorkspaceDocumentID,
+                  let index = workspaceDocuments.firstIndex(where: {
+                      $0.id == selectedWorkspaceDocumentID
+                  }) else { return }
+            workspaceDocuments[index].errorMessage = error.localizedDescription
+        }
+    }
+
     private func load() {
+        workspaceDocuments = []
+        selectedWorkspaceDocumentID = nil
+        workspaceIsAvailable = false
+        workspaceDocumentsInitialized = false
+        revisionHistoryRequest = nil
+        showingNewWorkspaceDocument = false
         guard let devotionalID = request.devotionalID,
               let devotional = model.devotionals.first(where: { $0.id == devotionalID }) else {
             date = Self.today
@@ -972,10 +1906,11 @@ struct DevotionalEditorView: View {
     private func save() {
         guard hasSavableContent, saveState != .saving else { return }
         let submitted = editedFields
+        let previouslySavedContent = savedFields.indices.contains(9) ? savedFields[9] : ""
         let devotional = LampDevotional(
             id: identifier,
             moduleID: "personal-devotionals",
-            moduleName: "My Devotionals",
+            moduleName: "My Writing",
             title: title,
             subtitle: subtitle,
             author: author,
@@ -1012,9 +1947,100 @@ struct DevotionalEditorView: View {
                 persistedFields[0] = saved.title
                 savedFields = persistedFields
                 saveState = .saved
+                recordPrimaryUserRevisionIfNeeded(
+                    before: previouslySavedContent,
+                    after: submitted[9]
+                )
             } catch {
                 saveState = .failed(error.localizedDescription)
             }
+        }
+    }
+
+    private func recordPrimaryUserRevisionIfNeeded(before: String, after: String) {
+        guard before != after else { return }
+        do {
+            let latest = try DevotionalAgentRevisionStore.revisions(
+                in: workspaceURL,
+                documentPath: DevotionalAgentRevisionStore.primaryDocumentPath
+            ).first
+            // Agent imports and explicit restores already wrote their transition.
+            guard latest?.afterMarkdown != after else { return }
+            let revisionBefore: String
+            if let latest, latest.beforeMarkdown == before, latest.afterMarkdown != before {
+                // The user continued typing after an agent change arrived. Keep
+                // the agent result as the immediate base for the saved edit.
+                revisionBefore = latest.afterMarkdown
+            } else {
+                revisionBefore = before
+            }
+            try recordWorkspaceRevision(
+                kind: .userEdit,
+                documentPath: DevotionalAgentRevisionStore.primaryDocumentPath,
+                before: revisionBefore,
+                after: after
+            )
+        } catch {
+            // The devotional itself is already durable at this point. A later
+            // save can resume history without misreporting the successful save.
+        }
+    }
+
+    private func openPresentationDeck(_ deck: LampPresentationDeck?) {
+        if let deck {
+            openWindow(
+                id: "slide-studio",
+                value: SlideStudioRequest(deckID: deck.id)
+            )
+            return
+        }
+
+        if model.devotionals.contains(where: { $0.id == identifier }) {
+            openWindow(
+                id: "slide-studio",
+                value: SlideStudioRequest(devotionalID: identifier)
+            )
+            return
+        }
+
+        guard hasSavableContent, !isOpeningPresentation else { return }
+        isOpeningPresentation = true
+        save()
+        Task { @MainActor in
+            for _ in 0..<50 {
+                if model.devotionals.contains(where: { $0.id == identifier }) {
+                    openWindow(
+                        id: "slide-studio",
+                        value: SlideStudioRequest(devotionalID: identifier)
+                    )
+                    isOpeningPresentation = false
+                    return
+                }
+                if case .failed = saveState {
+                    isOpeningPresentation = false
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(100))
+                guard !Task.isCancelled else {
+                    isOpeningPresentation = false
+                    return
+                }
+            }
+            saveState = .failed("Save this writing before building its presentation.")
+            isOpeningPresentation = false
+        }
+    }
+
+    @MainActor
+    private func monitorLinkedPresentationDecks() async {
+        while !Task.isCancelled {
+            if let decks = try? LinkedPresentationDeckLookup.decks(
+                rootURL: model.library.rootURL,
+                devotionalID: identifier
+            ), decks != linkedPresentationDecks {
+                linkedPresentationDecks = decks
+            }
+            try? await Task.sleep(for: .seconds(2))
         }
     }
 

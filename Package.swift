@@ -17,6 +17,8 @@ let package = Package(
         // Apple's separately installed Metal toolchain. 1.11.2 has the same PTY
         // API used here without imposing that unrelated build prerequisite.
         .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", exact: "1.11.2"),
+        // Apache-2.0 SwiftUI chat components with first-class macOS support.
+        .package(url: "https://github.com/EnesKaraosman/SwiftyChat.git", exact: "4.1.1"),
     ],
     targets: [
         .target(
@@ -32,9 +34,11 @@ let package = Package(
                 .product(name: "LampCore", package: "lamp-bible-core"),
                 .product(name: "LampModuleKit", package: "lamp-bible-core"),
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
+                .product(name: "SwiftyChat", package: "SwiftyChat"),
             ],
             resources: [
                 .copy("Resources/TipTapEditor"),
+                .copy("Resources/AgentSkills"),
             ]
         ),
         .target(

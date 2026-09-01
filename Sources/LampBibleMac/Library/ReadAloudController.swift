@@ -125,3 +125,100 @@ extension ReadAloudController: AVSpeechSynthesizerDelegate {
         }
     }
 }
+
+/// Speaks one quiz card at a time. It deliberately shares the reader's voice and
+/// rate preferences, so read-aloud sounds consistent when the quiz is opened
+/// beside a plan reading.
+@MainActor
+final class QuizReadAloudController: NSObject, ObservableObject {
+    @Published private(set) var state: ReadAloudController.State = .stopped
+    @Published private(set) var currentQuestionID: Int64?
+
+    private let synthesizer = AVSpeechSynthesizer()
+    private var activeUtteranceID: ObjectIdentifier?
+
+    override init() {
+        super.init()
+        synthesizer.delegate = self
+    }
+
+    func toggle(
+        questionID: Int64,
+        text: String,
+        voiceIdentifier: String,
+        rate: Double
+    ) {
+        if currentQuestionID == questionID {
+            switch state {
+            case .playing:
+                guard synthesizer.pauseSpeaking(at: .word) else { return }
+                state = .paused
+                return
+            case .paused:
+                guard synthesizer.continueSpeaking() else { return }
+                state = .playing
+                return
+            case .stopped:
+                break
+            }
+        }
+        play(
+            questionID: questionID,
+            text: text,
+            voiceIdentifier: voiceIdentifier,
+            rate: rate
+        )
+    }
+
+    func play(
+        questionID: Int64,
+        text: String,
+        voiceIdentifier: String,
+        rate: Double
+    ) {
+        stop()
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.voice = AVSpeechSynthesisVoice(identifier: voiceIdentifier)
+            ?? AVSpeechSynthesisVoice(language: "en-US")
+        utterance.rate = Float(min(max(rate, 0.3), 0.65))
+        activeUtteranceID = ObjectIdentifier(utterance)
+        currentQuestionID = questionID
+        state = .playing
+        synthesizer.speak(utterance)
+    }
+
+    func stop() {
+        activeUtteranceID = nil
+        currentQuestionID = nil
+        state = .stopped
+        if synthesizer.isSpeaking || synthesizer.isPaused {
+            synthesizer.stopSpeaking(at: .immediate)
+        }
+    }
+}
+
+extension QuizReadAloudController: AVSpeechSynthesizerDelegate {
+    nonisolated func speechSynthesizer(
+        _ synthesizer: AVSpeechSynthesizer,
+        didFinish utterance: AVSpeechUtterance
+    ) {
+        finish(utterance)
+    }
+
+    nonisolated func speechSynthesizer(
+        _ synthesizer: AVSpeechSynthesizer,
+        didCancel utterance: AVSpeechUtterance
+    ) {
+        finish(utterance)
+    }
+
+    nonisolated private func finish(_ utterance: AVSpeechUtterance) {
+        let id = ObjectIdentifier(utterance)
+        Task { @MainActor [weak self] in
+            guard let self, activeUtteranceID == id else { return }
+            activeUtteranceID = nil
+            currentQuestionID = nil
+            state = .stopped
+        }
+    }
+}

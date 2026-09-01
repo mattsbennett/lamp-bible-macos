@@ -58,6 +58,67 @@ struct AgentRevisionSupportTests {
         #expect(try DevotionalAgentRevisionStore.revisions(in: workspace).count == 1)
     }
 
+    @Test func revisionsAreScopedToEachMarkdownDocument() throws {
+        let workspace = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workspace) }
+
+        try DevotionalAgentRevisionStore.record(
+            kind: .agentEdit,
+            before: "Before",
+            after: "After",
+            in: workspace
+        )
+        try DevotionalAgentRevisionStore.record(
+            kind: .userEdit,
+            documentPath: "outline.md",
+            before: "Before",
+            after: "After",
+            in: workspace
+        )
+
+        let draftRevisions = try DevotionalAgentRevisionStore.revisions(in: workspace)
+        let outlineRevisions = try DevotionalAgentRevisionStore.revisions(
+            in: workspace,
+            documentPath: "outline.md"
+        )
+        #expect(draftRevisions.count == 1)
+        #expect(draftRevisions.first?.resolvedDocumentPath == "draft.md")
+        #expect(outlineRevisions.count == 1)
+        #expect(outlineRevisions.first?.kind == .userEdit)
+        #expect(outlineRevisions.first?.resolvedDocumentPath == "outline.md")
+    }
+
+    @Test func legacyRevisionWithoutDocumentPathBelongsToDraft() throws {
+        let workspace = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let revisionsDirectory = workspace.appendingPathComponent(".lamp/revisions", isDirectory: true)
+        try FileManager.default.createDirectory(at: revisionsDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workspace) }
+
+        let identifier = UUID()
+        let legacyJSON = """
+        {
+          "afterMarkdown" : "After",
+          "beforeMarkdown" : "Before",
+          "createdAt" : 100000,
+          "id" : "\(identifier.uuidString)",
+          "kind" : "agentEdit"
+        }
+        """
+        try Data(legacyJSON.utf8).write(to: revisionsDirectory.appendingPathComponent("legacy.json"))
+
+        let draftRevisions = try DevotionalAgentRevisionStore.revisions(in: workspace)
+        #expect(draftRevisions.count == 1)
+        #expect(draftRevisions.first?.documentPath == nil)
+        #expect(draftRevisions.first?.resolvedDocumentPath == "draft.md")
+        #expect(try DevotionalAgentRevisionStore.revisions(
+            in: workspace,
+            documentPath: "outline.md"
+        ).isEmpty)
+    }
+
     @Test func synchronizedDraftRoundTrips() throws {
         let workspace = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

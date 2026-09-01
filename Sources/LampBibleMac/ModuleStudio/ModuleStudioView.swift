@@ -8,26 +8,15 @@ import UniformTypeIdentifiers
 
 struct ModuleStudioView: View {
     @EnvironmentObject private var libraryModel: LibraryModel
-    @StateObject private var model = ModuleStudioModel()
+    @ObservedObject var model: ModuleStudioModel
     @State private var showingImporter = false
     @State private var isDropTargeted = false
 
     var body: some View {
-        NavigationSplitView {
-            Group {
-                if model.documents.isEmpty {
-                    dropPrompt
-                        .padding(20)
-                } else {
-                    List(model.documents, selection: $model.selection) { document in
-                        ModuleDocumentRow(document: document)
-                            .tag(document.id)
-                    }
-                }
-            }
-            .navigationTitle("Sources")
-            .navigationSplitViewColumnWidth(min: 250, ideal: 290, max: 360)
-        } detail: {
+        VStack(spacing: 0) {
+            studioBar
+            Divider()
+
             if let document = model.selectedDocument {
                 ModuleInspectionView(
                     document: document,
@@ -37,14 +26,10 @@ struct ModuleStudioView: View {
                     installAction: { libraryModel.install([$0]) }
                 )
             } else {
-                ContentUnavailableView(
-                    "Drop Module JSON",
-                    systemImage: "doc.badge.plus",
-                    description: Text("Validate a Lamp module before building its .lamp package.")
-                )
+                studioIntroduction
             }
         }
-        .navigationSplitViewStyle(.balanced)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .dropDestination(for: URL.self) { urls, _ in
             model.inspect(urls)
             return urls.contains { $0.pathExtension.lowercased() == "json" }
@@ -55,18 +40,6 @@ struct ModuleStudioView: View {
                     .stroke(.tint, style: StrokeStyle(lineWidth: 3, dash: [8]))
                     .padding(10)
                     .allowsHitTesting(false)
-            }
-        }
-        .toolbar {
-            ToolbarItemGroup {
-                Button("Add JSON Files", systemImage: "plus") {
-                    showingImporter = true
-                }
-                if !model.documents.isEmpty {
-                    Button("Clear", systemImage: "trash", role: .destructive) {
-                        model.clear()
-                    }
-                }
             }
         }
         .fileImporter(
@@ -99,6 +72,41 @@ struct ModuleStudioView: View {
         }
     }
 
+    private var studioBar: some View {
+        HStack(spacing: 12) {
+            Label("Module Studio", systemImage: "hammer")
+                .font(.headline)
+
+            if !model.documents.isEmpty {
+                Divider()
+                    .frame(height: 20)
+
+                Picker("Source", selection: $model.selection) {
+                    ForEach(model.documents) { document in
+                        Text(document.displayName)
+                            .tag(Optional(document.id))
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(maxWidth: 300)
+            }
+
+            Spacer(minLength: 8)
+
+            Button("Add JSON Files", systemImage: "plus") {
+                showingImporter = true
+            }
+
+            if !model.documents.isEmpty {
+                Button("Clear", systemImage: "trash", role: .destructive) {
+                    model.clear()
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+
     private func chooseBuildDestination(for document: StudioDocument) {
         let panel = NSSavePanel()
         panel.title = "Build Lamp Module"
@@ -113,6 +121,48 @@ struct ModuleStudioView: View {
         model.buildSelected(to: destinationURL)
     }
 
+    private var studioIntroduction: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 14) {
+                    Image(systemName: "hammer")
+                        .font(.system(size: 38, weight: .medium))
+                        .foregroundStyle(.tint)
+                    Text("Create a .lamp Module from JSON")
+                        .font(.largeTitle.bold())
+                    Text("Open source .json files, validate their structure, and compile them into finished .lamp packages that Lamp Bible can install.")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                GroupBox {
+                    Label {
+                        Text("Input: Lamp module source .json. Output: an installable .lamp module. To use an already-built .lamp file, choose Install Module instead.")
+                            .fixedSize(horizontal: false, vertical: true)
+                    } icon: {
+                        Image(systemName: "info.circle")
+                            .foregroundStyle(.tint)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 4)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Choose or drop source .json below.")
+                        .font(.headline)
+                    Text("After validation, you can build the source into a .lamp package and optionally install it in your library.")
+                        .foregroundStyle(.secondary)
+                }
+
+                dropPrompt
+            }
+            .frame(maxWidth: 650, alignment: .leading)
+            .padding(40)
+            .frame(maxWidth: .infinity, alignment: .top)
+        }
+    }
+
     private var dropPrompt: some View {
         Button {
             showingImporter = true
@@ -120,7 +170,7 @@ struct ModuleStudioView: View {
             VStack(spacing: 12) {
                 Image(systemName: "arrow.down.doc")
                     .font(.system(size: 36))
-                Text("Drop module JSON here")
+                Text("Drop source .json here")
                     .font(.headline)
                 Text("or choose files")
                     .foregroundStyle(.secondary)
@@ -130,33 +180,6 @@ struct ModuleStudioView: View {
         }
         .buttonStyle(.plain)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
-    }
-}
-
-private struct ModuleDocumentRow: View {
-    let document: StudioDocument
-
-    var body: some View {
-        HStack {
-            Image(systemName: statusImage)
-                .foregroundStyle(statusColor)
-            VStack(alignment: .leading) {
-                Text(document.displayName)
-                Text(document.inspection?.kind?.rawValue.capitalized ?? "Unknown module")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private var statusImage: String {
-        if document.failureMessage != nil { return "xmark.circle.fill" }
-        return document.isValid ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
-    }
-
-    private var statusColor: Color {
-        if document.failureMessage != nil { return .red }
-        return document.isValid ? .green : .orange
     }
 }
 
@@ -170,7 +193,14 @@ private struct ModuleInspectionView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                header
+                HStack(alignment: .top, spacing: 20) {
+                    header
+                    Spacer(minLength: 16)
+                    Button("Build .lamp", systemImage: "shippingbox", action: buildAction)
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!document.canBuild || isBuilding)
+                        .help(buildHelp)
+                }
 
                 if let failure = document.failureMessage {
                     Label(failure, systemImage: "xmark.octagon.fill")
@@ -185,12 +215,6 @@ private struct ModuleInspectionView: View {
             }
             .frame(maxWidth: 820, alignment: .leading)
             .padding(32)
-        }
-        .navigationTitle(document.displayName)
-        .toolbar {
-            Button("Build .lamp", systemImage: "shippingbox", action: buildAction)
-                .disabled(!document.canBuild || isBuilding)
-                .help(buildHelp)
         }
     }
 

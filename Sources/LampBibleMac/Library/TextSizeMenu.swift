@@ -34,6 +34,18 @@ enum ProseTypeface: String, CaseIterable, Identifiable {
     }
 }
 
+extension ScripturePreviewContextAmount: Identifiable {
+    public var id: Int { rawValue }
+
+    var title: String {
+        switch self {
+        case .oneVerse: "1 Verse"
+        case .threeVerses: "3 Verses"
+        case .chapter: "Chapter"
+        }
+    }
+}
+
 /// The prose-appearance items themselves, so a panel that already owns a menu can
 /// fold them in beside its other controls rather than growing a second `aA` button.
 struct TextSizeMenuItems: View {
@@ -41,6 +53,7 @@ struct TextSizeMenuItems: View {
     let lineSpacing: Binding<Double>
     var typeface: Binding<ProseTypeface>?
     var defaultTypeface: ProseTypeface?
+    var previewContextAmount: Binding<ScripturePreviewContextAmount>?
     var fontScale: LampTextScale = .readerText
     var lineSpacingScale: LampTextScale = .readerLineSpacing
     /// Only one text-size menu per window can own ⌘+ / ⌘−; the reader takes them.
@@ -56,6 +69,17 @@ struct TextSizeMenuItems: View {
                     }
                 }
                 .pickerStyle(.inline)
+                .labelsHidden()
+            }
+        }
+
+        if let previewContextAmount {
+            Menu("Preview Context", systemImage: "rectangle.expand.vertical") {
+                Picker("Preview Context", selection: previewContextAmount) {
+                    ForEach(ScripturePreviewContextAmount.allCases) { amount in
+                        Text(amount.title).tag(amount)
+                    }
+                }
                 .labelsHidden()
             }
         }
@@ -133,6 +157,7 @@ struct TextSizeMenu: View {
     let lineSpacing: Binding<Double>
     var typeface: Binding<ProseTypeface>?
     var defaultTypeface: ProseTypeface?
+    var previewContextAmount: Binding<ScripturePreviewContextAmount>?
     var fontScale: LampTextScale = .readerText
     var lineSpacingScale: LampTextScale = .readerLineSpacing
     var help: String = "Choose the typeface, text size, and line spacing"
@@ -145,6 +170,7 @@ struct TextSizeMenu: View {
                 lineSpacing: lineSpacing,
                 typeface: typeface,
                 defaultTypeface: defaultTypeface,
+                previewContextAmount: previewContextAmount,
                 fontScale: fontScale,
                 lineSpacingScale: lineSpacingScale,
                 usesKeyboardShortcuts: usesKeyboardShortcuts

@@ -80,4 +80,63 @@ public extension LampTextScale {
         step: 1,
         defaultValue: 6
     )
+
+    /// Quiz cards need to stay compact beside a plan reading, but their prompts
+    /// benefit from a larger starting size than dense commentary paragraphs.
+    static let quizText = LampTextScale(
+        minimum: 11,
+        maximum: 30,
+        step: 1,
+        defaultValue: 17
+    )
+
+    static let quizLineSpacing = LampTextScale(
+        minimum: 0,
+        maximum: 14,
+        step: 1,
+        defaultValue: 5
+    )
+
+    /// The writing preview shows a draft as its readers will meet it, so it starts
+    /// at the same size the published devotional view uses and stretches as far as
+    /// scripture does — a writer proofreading their own prose zooms in further
+    /// than a reader ever does.
+    static let writingPreviewText = LampTextScale(
+        minimum: 13,
+        maximum: 32,
+        step: 1,
+        defaultValue: 17
+    )
+
+    static let writingPreviewLineSpacing = LampTextScale(
+        minimum: 0,
+        maximum: 16,
+        step: 1,
+        defaultValue: 6
+    )
+
+    /// The Markdown source surface. Monospaced text reads smaller than prose at the
+    /// same point size, so it starts below the preview beside it.
+    static let writingEditorText = LampTextScale(
+        minimum: 11,
+        maximum: 24,
+        step: 1,
+        defaultValue: 15
+    )
+
+    /// Long-form books need a comfortable prose default while still allowing
+    /// compact reference works and large-print reading.
+    static let bookText = LampTextScale(
+        minimum: 13,
+        maximum: 34,
+        step: 1,
+        defaultValue: 18
+    )
+
+    static let bookLineSpacing = LampTextScale(
+        minimum: 0,
+        maximum: 16,
+        step: 1,
+        defaultValue: 6
+    )
 }

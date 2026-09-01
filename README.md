@@ -15,6 +15,7 @@ This repository intentionally contains Mac-specific application lifecycle and UI
 - Save-panel export with integrity verification, checksums, and Finder reveal
 - Persistent module-native library with integrity-checked `.lamp` installation
 - Translation reader with native book/chapter menus and keyboard navigation
+- Long-form book reader with hierarchical contents, search, rich annotations and footnotes, covers, image/audio media, bookmarks, and synced reading position and typography
 - Rich translation rendering for red-letter text, supplied-word italics, divine names, variants, and poetry layout
 - Full-text scripture search across all translations or a selected translation
 - Search-result deep links with exact verse scrolling and focus treatment
@@ -40,10 +41,14 @@ This repository intentionally contains Mac-specific application lifecycle and UI
 - Exact text-range highlights with styles, named sets, and reusable themes
 - Verse-range Markdown notes with editable footnotes
 - Personal devotional authoring, images, audio attachment/recording/playback, presentation, import, export, and sharing
+- Native Slide Studio with semantic layouts, speaker notes, linked writing decks, `.lampdeck` import/export, validation, autosave, and indexed full-screen presentation
+- Bonjour presentation discovery with QR-first, challenge-bound encrypted pairing and synchronized iPhone/iPad controls for current/next slide, notes, timing, navigation, and blackout
+- A bundled agent skill that turns devotional workspaces into validated Slide Studio decks without writable module access
+- Native devotional agent chat (powered by the Apache-2.0 SwiftyChat UI) with resumable Codex, Claude Code, and OpenCode sessions, browser sign-in, and a terminal-mode toggle
 - Actual-word-count reading estimates, daily notifications, and external Bible app links
 - Default, visibility, and ordering preferences for translations, dictionaries, and commentaries
 - Finder document opening and `lampbible://` deep links
-- Portable iCloud Drive/folder and WebDAV sync for modules, settings, notes, highlights/themes, devotionals, and media
+- Portable iCloud Drive/folder and WebDAV sync for modules, settings, notes, highlights/themes, devotionals, media, and user-authored devotional workspace files
 - A menu-bar Today surface as the native Mac equivalent of the iOS widget
 
 Personal edits are stored outside immutable modules and can be imported or exported as canonical JSON or `.lamp` modules, while every canonical module type can also be built and installed through Module Studio.

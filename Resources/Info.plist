@@ -24,6 +24,12 @@
     <string>public.app-category.reference</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Record audio for your personal devotionals.</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Connect Lamp Bible presentations to an iPhone or iPad remote on your local network.</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_lamp-present._tcp</string>
+    </array>
     <key>CFBundleURLTypes</key>
     <array>
         <dict>
@@ -44,6 +50,16 @@
             <string>Owner</string>
             <key>LSItemContentTypes</key>
             <array><string>com.neus.lamp-bible.lamp</string></array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Lamp Presentation Deck</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+            <key>LSItemContentTypes</key>
+            <array><string>com.neus.lamp-bible.presentation-deck</string></array>
         </dict>
         <dict>
             <key>CFBundleTypeName</key>
@@ -71,6 +87,21 @@
                 <array><string>lamp</string></array>
                 <key>public.mime-type</key>
                 <string>application/x-lamp-bible</string>
+            </dict>
+        </dict>
+        <dict>
+            <key>UTTypeConformsTo</key>
+            <array><string>public.json</string></array>
+            <key>UTTypeDescription</key>
+            <string>Lamp Presentation Deck</string>
+            <key>UTTypeIdentifier</key>
+            <string>com.neus.lamp-bible.presentation-deck</string>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array><string>lampdeck</string></array>
+                <key>public.mime-type</key>
+                <string>application/vnd.lamp-bible.presentation+json</string>
             </dict>
         </dict>
     </array>

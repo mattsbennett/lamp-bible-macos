@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import LampCore
 #if canImport(LampBibleMacSupport)
 import LampBibleMacSupport
@@ -12,7 +13,7 @@ private enum LibrarySection: String, CaseIterable, Identifiable, Hashable {
     case reader = "Reader"
     case books = "Books"
     case plans = "Reading Plans"
-    case devotionals = "Devotionals"
+    case devotionals = "Writing"
     case quizzes = "Quizzes"
     case search = "Search"
     case modules = "Modules"
@@ -38,8 +39,9 @@ private extension LampDeepLinkSection {
         switch self {
         case .today: "Today"
         case .reader: "Reader"
+        case .books: "Books"
         case .plans: "Reading Plans"
-        case .devotionals: "Devotionals"
+        case .devotionals: "Writing"
         case .quizzes: "Quizzes"
         case .search: "Search"
         case .modules: "Modules"
@@ -66,10 +68,17 @@ struct LibraryRootView: View {
     @State private var requestedBookID: String?
     @State private var requestedBookSectionID: String?
     @State private var isStudyInspectorMounted = false
-    @State private var isStudyInspectorRevealed = false
-    @State private var isStudyInspectorSpaceReserved = false
+    /// How much of the study column is on screen, in points. The single animated
+    /// value behind the whole transition: it sets the reader's width, the gap, and
+    /// the pane's opacity, so those three cannot disagree.
+    @State private var studyInspectorRevealedWidth: Double = 0
     @State private var isStudyInspectorContentReady = false
+    @State private var isStudyInspectorTransitioning = false
     @State private var planReadingMode: PlanReadingMode?
+    // Keep hover mutations out of this view's observation graph. Only the small
+    // readout observes the store, so moving between words cannot rebuild the
+    // reader's selectable text hierarchy underneath the pointer.
+    @State private var readerLexicalHoverStore = ReaderLexicalHoverStore()
     @AppStorage("studyInspector.width") private var studyInspectorWidth = StudyInspectorMetrics.defaultWidth
 
     var body: some View {
@@ -89,7 +98,10 @@ struct LibraryRootView: View {
             readerTabs.updateSelected(location: model.readerLocation)
             model.start()
         }
-        .task { await syncController.syncAutomaticallyIfNeeded(library: model.library) }
+        .task {
+            await syncController.syncAutomaticallyIfNeeded(library: model.library)
+            model.refresh()
+        }
     }
 
     private var libraryInterface: some View {
@@ -130,25 +142,11 @@ struct LibraryRootView: View {
             .navigationTitle("Lamp Bible")
             .navigationSplitViewColumnWidth(min: 210, ideal: 235, max: 300)
             .safeAreaInset(edge: .bottom) {
-                VStack(alignment: .leading, spacing: 12) {
-                    Button {
-                        showingImporter = true
-                    } label: {
-                        Label("Install Module…", systemImage: "square.and.arrow.down")
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    Button {
-                        showingStudyDataImporter = true
-                    } label: {
-                        Label("Import Study Data…", systemImage: "arrow.up.arrow.down.square")
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    Button {
-                        openWindow(id: "module-studio")
-                    } label: {
-                        Label("Module Studio", systemImage: "hammer")
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
+                Button {
+                    openWindow(id: "add-to-library")
+                } label: {
+                    Label("Import or Create…", systemImage: "plus.square.on.square")
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .buttonStyle(.plain)
                 .padding()
@@ -244,11 +242,31 @@ struct LibraryRootView: View {
     }
 
     private func handleOpenURL(_ url: URL) {
+        if url.pathExtension.lowercased() == "lampdeck" {
+            let didAccess = url.startAccessingSecurityScopedResource()
+            defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
+            do {
+                let store = LampPresentationDeckStore(rootURL: model.library.rootURL)
+                let deck = try store.decode(Data(contentsOf: url))
+                try store.save(deck)
+                openWindow(
+                    id: "slide-studio",
+                    value: SlideStudioRequest(deckID: deck.id)
+                )
+            } catch {
+                model.errorMessage = error.localizedDescription
+            }
+            return
+        }
         guard let deepLink = LampDeepLink(url: url) else { return }
         switch deepLink {
         case .reader(let reference, let translationID):
             model.openReference(reference, translationID: translationID)
             selection = .section(.reader)
+        case .book(let moduleID, let sectionID):
+            requestedBookID = moduleID
+            requestedBookSectionID = sectionID
+            selection = .section(.books)
         case .section(let section):
             selection = .section(LibrarySection(rawValue: section.displayName) ?? .reader)
         case .moduleFile(let url):
@@ -376,86 +394,143 @@ struct LibraryRootView: View {
                 // for the titlebar it expects to meet, and takes the tab bar's
                 // divider with it. Here the tab bar spans the window and the study
                 // column starts underneath it.
-                ZStack(alignment: .trailing) {
+                //
+                // Every frame between here and the reader's ScrollView is measured
+                // in exact points, and that is what keeps the app responsive. A
+                // flexible frame (`maxWidth: .infinity`) has to ask its child how
+                // big it wants to be, and a ScrollView answers that by measuring its
+                // content — which makes the lazy passage lay out every paragraph.
+                // Several nested flexible stacks each re-asking turns one layout
+                // pass into minutes of spinning on the main thread.
+                //
+                // The GeometryReader supplies the real numbers: it reports its own
+                // size without consulting its children, so sizing stops here and
+                // everything below is told its size rather than asked for it.
+                GeometryReader { geometry in
+                    let columnWidth = StudyInspectorMetrics.totalWidth(studyInspectorWidth)
+                    // The animated value only governs while the column is actually
+                    // moving. Once it has settled the width tracks the column
+                    // exactly, so dragging the resize handle widens the column
+                    // rather than leaving a stale reveal behind it — which showed
+                    // the pane spilling over the quiz panel, half faded, with the
+                    // handle no longer hit-testable because the reveal was short of
+                    // its own width.
+                    let revealedWidth = isStudyInspectorTransitioning
+                        ? min(max(studyInspectorRevealedWidth, 0), columnWidth)
+                        : (showingStudyInspector ? columnWidth : 0)
+                    let revealProgress = columnWidth > 0 ? revealedWidth / columnWidth : 0
+                    // A plain row, not an overlay: the column is a sibling of the
+                    // reader so the layout itself decides where it sits.
                     HStack(spacing: 0) {
                         TranslationReaderView(
                             planReadingMode: $planReadingMode,
                             showingStudyInspector: $showingStudyInspector,
+                            lexicalHoverStore: readerLexicalHoverStore,
+                            isSidebarTransitioning: isStudyInspectorTransitioning,
                             showImporter: { showingImporter = true }
                         )
-                        .frame(maxWidth: .infinity)
-
-                        if isStudyInspectorSpaceReserved {
-                            Color.clear
-                                .frame(width: StudyInspectorMetrics.totalWidth(studyInspectorWidth))
-                        }
-                    }
-
-                    if isStudyInspectorMounted {
-                        StudyInspectorColumn(width: $studyInspectorWidth) {
-                            if isStudyInspectorContentReady {
-                                StudyInspectorView(isPresented: $showingStudyInspector)
-                                    .environmentObject(model)
-                                    .environmentObject(scrollLink)
-                            } else {
-                                ProgressView("Opening Study Tools…")
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            }
-                        }
-                        .offset(
-                            x: isStudyInspectorRevealed
-                                ? 0
-                                : StudyInspectorMetrics.totalWidth(studyInspectorWidth)
+                        // Animated, and the passage re-wraps as it goes — the same
+                        // thing the plan-reading quiz panel does, which is smooth.
+                        // The reflow was never the expensive part; measuring the
+                        // passage to *derive* a width was, and the exact frames here
+                        // and around the ScrollView are what stop that happening.
+                        .frame(
+                            width: max(geometry.size.width - revealedWidth, 0),
+                            height: geometry.size.height
                         )
-                        .allowsHitTesting(isStudyInspectorRevealed)
+                        // No blur or opacity on the reader. Both force a full window
+                        // of text into an offscreen buffer for every frame they are
+                        // animated over.
+
+                        if isStudyInspectorMounted {
+                            StudyInspectorColumn(width: $studyInspectorWidth) {
+                                if isStudyInspectorContentReady {
+                                    StudyInspectorView(isPresented: $showingStudyInspector)
+                                        .environmentObject(model)
+                                        .environmentObject(scrollLink)
+                                } else {
+                                    ProgressView("Opening Study Tools…")
+                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                }
+                            }
+                            // Laid out at full width and pinned to the trailing edge,
+                            // so the pane itself never moves — the gap opens around
+                            // it and it fades up in place.
+                            //
+                            // It must not move. This column contains `ScrollView`s,
+                            // which on macOS are `NSScrollView`s, and SwiftUI sets a
+                            // hosted AppKit view's frame once at the end of an
+                            // animation rather than on each frame. Slide the column
+                            // by any means — offset, padding, or its position in this
+                            // row — and the chrome travels while the entries snap
+                            // straight to where they will finish. Opacity has no such
+                            // problem: it is a layer property, and the hosted views
+                            // inherit it.
+                            .frame(width: columnWidth, height: geometry.size.height)
+                            .frame(width: revealedWidth, alignment: .trailing)
+                            .opacity(revealProgress)
+                            .allowsHitTesting(revealProgress > 0.99)
+                        }
                     }
-                }
-                .clipped()
-                .task(id: showingStudyInspector) {
-                    let duration = 0.22
-                    if showingStudyInspector {
-                        isStudyInspectorMounted = true
-                        isStudyInspectorContentReady = false
-                        await Task.yield()
-                        guard !Task.isCancelled, showingStudyInspector else { return }
-
-                        withAnimation(.smooth(duration: duration)) {
-                            isStudyInspectorRevealed = true
-                        }
-                        do {
-                            try await Task.sleep(for: .seconds(duration))
-                        } catch {
+                    // Owned by the view rather than driven by `withAnimation` at the
+                    // call site: the change happens inside an async `.task`, and a
+                    // transaction opened there does not reliably reach the update
+                    // that renders it.
+                    .animation(
+                        .smooth(duration: StudyInspectorMetrics.revealDuration),
+                        value: revealedWidth
+                    )
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+                    .clipped()
+                    .overlay(alignment: .bottomLeading) {
+                        ReaderLexicalHoverDetailsView(store: readerLexicalHoverStore)
+                    }
+                    // One animated width drives the whole transition: the reader
+                    // slides aside as the gap opens, and the pane fades up in the
+                    // space without moving.
+                    .task(id: showingStudyInspector) {
+                        let columnWidth = StudyInspectorMetrics.totalWidth(studyInspectorWidth)
+                        if !showingStudyInspector,
+                           !isStudyInspectorMounted,
+                           studyInspectorRevealedWidth == 0 {
+                            isStudyInspectorTransitioning = false
                             return
                         }
-                        guard showingStudyInspector else { return }
+                        let duration = StudyInspectorMetrics.revealDuration
+                        isStudyInspectorTransitioning = true
+                        if showingStudyInspector {
+                            // Mount before moving. SwiftUI does not animate a view's
+                            // first layout, so mounting and revealing in one pass
+                            // would always look like a jump.
+                            isStudyInspectorMounted = true
+                            // Mount the real inspector immediately so a lookup made by
+                            // the click that opens this column is adopted while the
+                            // column arrives, rather than after the animation ends.
+                            isStudyInspectorContentReady = true
+                            await Task.yield()
+                            guard !Task.isCancelled, showingStudyInspector else { return }
 
-                        // Reserve the column in one non-animated layout pass after
-                        // the overlay has covered that part of the reader.
-                        var transaction = Transaction()
-                        transaction.disablesAnimations = true
-                        withTransaction(transaction) {
-                            isStudyInspectorSpaceReserved = true
+                            // No `withAnimation`: the row carries its own.
+                            studyInspectorRevealedWidth = columnWidth
+                            do {
+                                try await Task.sleep(for: .seconds(duration))
+                            } catch {
+                                return
+                            }
+                            guard !Task.isCancelled, showingStudyInspector else { return }
+                            isStudyInspectorTransitioning = false
+                        } else {
+                            studyInspectorRevealedWidth = 0
+                            do {
+                                try await Task.sleep(for: .seconds(duration))
+                            } catch {
+                                return
+                            }
+                            guard !showingStudyInspector else { return }
+                            isStudyInspectorMounted = false
+                            isStudyInspectorContentReady = false
+                            isStudyInspectorTransitioning = false
                         }
-                        await Task.yield()
-                        guard !Task.isCancelled, showingStudyInspector else { return }
-                        isStudyInspectorContentReady = true
-                    } else {
-                        var transaction = Transaction()
-                        transaction.disablesAnimations = true
-                        withTransaction(transaction) {
-                            isStudyInspectorSpaceReserved = false
-                        }
-                        withAnimation(.smooth(duration: duration)) {
-                            isStudyInspectorRevealed = false
-                        }
-                        do {
-                            try await Task.sleep(for: .seconds(duration))
-                        } catch {
-                            return
-                        }
-                        guard !showingStudyInspector else { return }
-                        isStudyInspectorMounted = false
-                        isStudyInspectorContentReady = false
                     }
                 }
             }
@@ -534,6 +609,7 @@ struct LibraryRootView: View {
             ContentUnavailableView("Choose a Section", systemImage: "sidebar.left")
         }
     }
+
 }
 
 /// Shown while the library is being read, in place of an interface that would
@@ -584,6 +660,9 @@ private enum StudyInspectorMetrics {
     static let defaultWidth = 410.0
     static let minimumWidth = 330.0
     static let maximumWidth = 580.0
+
+    /// How long the column takes to arrive or leave.
+    static let revealDuration: Double = 0.3
 
     static func clamped(_ width: Double) -> Double {
         min(max(width, minimumWidth), maximumWidth)
@@ -1032,7 +1111,7 @@ private struct PlanReadingModeBar: View {
                     Label("Plan Reading", systemImage: "checklist")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.tint)
-                    Text("\(mode.planName) · Day \(mode.day)")
+                    Text("\(mode.planName) · \(formattedDate(for: mode))")
                         .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
                 }
@@ -1109,11 +1188,18 @@ private struct PlanReadingModeBar: View {
             reading.completionID(planID: mode.planID, day: mode.day, year: mode.year)
         )
     }
+
+    private func formattedDate(for mode: PlanReadingMode) -> String {
+        LampPlanCalendar.date(forDayNumber: mode.day, year: mode.year)?
+            .formatted(date: .abbreviated, time: .omitted)
+            ?? "Day \(mode.day)"
+    }
 }
 
 private struct PlanReadingQuizPanel: View {
     @EnvironmentObject private var model: LibraryModel
     @AppStorage("quiz.defaultAgeGroup") private var defaultQuizAgeGroup = ""
+    @AppStorage("quiz.alwaysShowAnswers") private var alwaysShowAnswers = false
     let mode: PlanReadingMode
     let close: () -> Void
     let openReference: (Int) -> Void
@@ -1122,6 +1208,7 @@ private struct PlanReadingQuizPanel: View {
     @State private var questions: [LampQuizQuestion] = []
     @State private var revealedAnswers: Set<Int64> = []
     @State private var isLoading = false
+    @StateObject private var readAloud = QuizReadAloudController()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1134,6 +1221,7 @@ private struct PlanReadingQuizPanel: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                QuizOptionsMenu()
                 Button("Close Quiz", systemImage: "xmark") { close() }
                     .labelStyle(.iconOnly)
                     .buttonStyle(.borderless)
@@ -1180,10 +1268,13 @@ private struct PlanReadingQuizPanel: View {
         .onAppear { configureSelection() }
         .onChange(of: matchingQuizIDs) { _, _ in configureSelection() }
         .onChange(of: selectedQuizID) { _, _ in configureAgeGroup() }
+        .onChange(of: loadKey) { _, _ in readAloud.stop() }
+        .onChange(of: alwaysShowAnswers) { _, _ in readAloud.stop() }
         .onChange(of: selectedAgeGroupID) { _, ageGroupID in
             if let ageGroupID { defaultQuizAgeGroup = ageGroupID }
         }
         .task(id: loadKey) { await loadQuestions() }
+        .onDisappear { readAloud.stop() }
     }
 
     @ViewBuilder
@@ -1211,60 +1302,22 @@ private struct PlanReadingQuizPanel: View {
     }
 
     private func questionCard(_ question: LampQuizQuestion) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Button(question.readingDescription) {
-                    openReference(question.startReference)
-                }
-                .buttonStyle(.link)
-                Spacer()
-                if question.isChristFocused {
-                    Label("Christ-focused", systemImage: "star.fill")
-                        .labelStyle(.iconOnly)
-                        .foregroundStyle(.secondary)
-                        .help("Christ-focused question")
-                }
-            }
-
-            Text(question.question)
-                .font(.body.weight(.semibold))
-                .textSelection(.enabled)
-
-            if revealedAnswers.contains(question.id) {
-                Divider()
-                Text(question.answer)
-                    .textSelection(.enabled)
-                let references = Array(Set(question.references + question.crossReferences)).sorted()
-                if !references.isEmpty {
-                    ScrollView(.horizontal) {
-                        HStack(spacing: 8) {
-                            ForEach(references, id: \.self) { reference in
-                                Button(LampBibleReferenceFormatter.describeRange(from: reference, to: reference)) {
-                                    openReference(reference)
-                                }
-                                .buttonStyle(.link)
-                            }
-                        }
-                    }
-                    .scrollIndicators(.hidden)
-                }
-            }
-
-            Button(revealedAnswers.contains(question.id) ? "Hide Answer" : "Reveal Answer") {
+        QuizQuestionCard(
+            question: question,
+            answerVisible: alwaysShowAnswers || revealedAnswers.contains(question.id),
+            allowsAnswerToggle: !alwaysShowAnswers,
+            showsTheme: false,
+            readAloud: readAloud,
+            openReference: openReference,
+            toggleAnswer: {
+                readAloud.stop()
                 if revealedAnswers.contains(question.id) {
                     revealedAnswers.remove(question.id)
                 } else {
                     revealedAnswers.insert(question.id)
                 }
             }
-            .buttonStyle(.bordered)
-        }
-        .padding(13)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 10))
-        .overlay {
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(.separator.opacity(0.4))
-        }
+        )
     }
 
     private var matchingQuizzes: [LampQuizModule] {
@@ -1331,7 +1384,7 @@ private struct PlanReadingQuizPanel: View {
     }
 }
 
-private enum ReaderLayoutMode: String, CaseIterable, Identifiable {
+enum ReaderLayoutMode: String, CaseIterable, Identifiable {
     case continuousParagraphs
     case versePerLine
 
@@ -1352,26 +1405,116 @@ private enum ReaderLayoutMode: String, CaseIterable, Identifiable {
     }
 }
 
-private struct ReaderParagraph: Identifiable {
+struct ReaderParagraph: Identifiable {
     let verses: [LampVerse]
 
     var id: Int { verses[0].id }
     var firstVerse: LampVerse { verses[0] }
 }
 
-private struct ReaderParagraphFrame: Equatable {
-    let reference: Int
-    let frame: CGRect
+/// The reader and every compact scripture preview use this one grouping rule so
+/// paragraph markers, headings, and poetry produce the same breaks everywhere.
+enum ReaderParagraphPlanner {
+    static func paragraphs(in chapter: LampChapter) -> [ReaderParagraph] {
+        let headingVerses = Set(chapter.headings.map(\.beforeVerse))
+        var result: [ReaderParagraph] = []
+        var current: [LampVerse] = []
+
+        func flushCurrent() {
+            guard !current.isEmpty else { return }
+            result.append(ReaderParagraph(verses: current))
+            current = []
+        }
+
+        for verse in chapter.verses {
+            let isPoetry = verse.poetry != nil
+            let followsPoetry = current.last?.poetry != nil
+            let startsParagraph = current.isEmpty
+                || verse.beginsParagraph
+                || headingVerses.contains(verse.number)
+                || isPoetry
+                || followsPoetry
+            if startsParagraph { flushCurrent() }
+            current.append(verse)
+            if isPoetry { flushCurrent() }
+        }
+        flushCurrent()
+        return result
+    }
 }
 
-private struct ReaderParagraphFramesKey: PreferenceKey {
-    static var defaultValue: [ReaderParagraphFrame] { [] }
+/// Where each continuously laid-out paragraph currently sits, and which verses it
+/// contains, for the scroll link's sub-paragraph anchor.
+///
+/// Deliberately a plain class rather than a `PreferenceKey` or an observable
+/// object. Gathering per-row geometry through the preference system from inside a
+/// `LazyVStack` rewrites the key every time a row is materialised — several times
+/// in a single pass — which is what SwiftUI reports as "Bound preference
+/// ReaderParagraphFramesKey tried to update multiple times per frame", and each of
+/// those writes used to re-plan every paragraph in the passage before the frame
+/// could finish. Recording into a reference type invalidates no views, so the
+/// reader can note positions as often as it likes and read them once per scroll.
+@MainActor
+private final class ReaderParagraphAnchorStore {
+    private var frames: [Int: CGRect] = [:]
+    private var segmentsByParagraph: [Int: [ReaderParagraphSegment]] = [:]
+    private var paragraphsByChapter: [String: [ReaderParagraph]] = [:]
 
-    static func reduce(
-        value: inout [ReaderParagraphFrame],
-        nextValue: () -> [ReaderParagraphFrame]
-    ) {
-        value.append(contentsOf: nextValue())
+    func record(_ frame: CGRect, for reference: Int) {
+        frames[reference] = frame
+    }
+
+    func forget(_ reference: Int) {
+        frames.removeValue(forKey: reference)
+    }
+
+    /// The paragraphs of a chapter, planned once and kept.
+    ///
+    /// The reader's body rebuilds this list every time it re-evaluates, and it
+    /// re-evaluates whenever its frame changes — which is exactly what opening the
+    /// study column does. Re-planning every paragraph of a multi-chapter passage
+    /// on the main thread, mid-transition, is enough to starve the animation of
+    /// frames so completely that it renders only its first and last.
+    ///
+    /// Filling a cache during a body evaluation is safe here precisely because
+    /// this is a plain class: nothing observes it, so nothing is invalidated.
+    func paragraphs(in chapter: LampChapter) -> [ReaderParagraph] {
+        let key = "\(chapter.translationID):\(chapter.book.id):\(chapter.number)"
+        if let cached = paragraphsByChapter[key] { return cached }
+        let planned = ReaderParagraphPlanner.paragraphs(in: chapter)
+        paragraphsByChapter[key] = planned
+        return planned
+    }
+
+    /// Plans the passage's paragraphs once, when the passage changes, instead of
+    /// on every geometry report.
+    func prepare(for chapters: [LampChapter]) {
+        frames.removeAll(keepingCapacity: true)
+        segmentsByParagraph = Dictionary(
+            uniqueKeysWithValues: chapters
+                .flatMap { paragraphs(in: $0) }
+                .map { paragraph in
+                    (paragraph.id, paragraph.verses.map { verse in
+                        ReaderParagraphSegment(
+                            reference: verse.id,
+                            characterCount: verse.text.count + String(verse.number).count + 1
+                        )
+                    })
+                }
+        )
+    }
+
+    /// The verse at the reader's top edge: the highest paragraph still on screen,
+    /// then the verse that far into it.
+    var topEdgeReference: Int? {
+        guard let (reference, frame) = frames
+            .filter({ $0.value.maxY > 0 })
+            .min(by: { $0.value.minY < $1.value.minY }) else { return nil }
+        guard let segments = segmentsByParagraph[reference], !segments.isEmpty else {
+            return reference
+        }
+        let progress = -frame.minY / max(frame.height, 1)
+        return ReaderParagraphAnchorResolver.reference(at: progress, in: segments)
     }
 }
 
@@ -1383,6 +1526,105 @@ private struct ReaderPassageChapter: Identifiable {
     }
 }
 
+/// Reader scripture uses AppKit selection directly. SwiftUI's `.textSelection`
+/// installs a `SelectionOverlay` that can enter an unbounded update loop when a
+/// lazy scroll view materialises attributed text containing many metadata runs.
+/// An ordinary non-editable `NSTextView` provides the same native selection and
+/// contextual menu without involving that overlay.
+private struct ReaderSelectableText: NSViewRepresentable {
+    let attributedText: NSAttributedString
+    let openLink: (URL) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(openLink: openLink)
+    }
+
+    func makeNSView(context: Context) -> NSTextView {
+        let textView = NSTextView(frame: .zero)
+        textView.delegate = context.coordinator
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isRichText = true
+        textView.drawsBackground = false
+        textView.textContainerInset = .zero
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.heightTracksTextView = false
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = true
+        textView.maxSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.linkTextAttributes = [:]
+        textView.textStorage?.setAttributedString(attributedText)
+        return textView
+    }
+
+    func updateNSView(_ textView: NSTextView, context: Context) {
+        context.coordinator.openLink = openLink
+        guard textView.attributedString() != attributedText else { return }
+        let selection = textView.selectedRange()
+        textView.textStorage?.setAttributedString(attributedText)
+        if selection.location != NSNotFound,
+           NSMaxRange(selection) <= attributedText.length {
+            textView.setSelectedRange(selection)
+        }
+    }
+
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        nsView textView: NSTextView,
+        context: Context
+    ) -> CGSize? {
+        guard let width = proposal.width, width > 0 else { return nil }
+
+        // Measurement must be observational. Resizing the live text container
+        // here causes NSTextView to invalidate its hosted size while SwiftUI's
+        // LazyVStack is still asking for that size. The lazy stack then places
+        // the row again, which measures it again, and so on without settling.
+        // NSAttributedString's bounding calculation uses an independent layout
+        // context and cannot feed back into the represented view.
+        let bounds = attributedText.boundingRect(
+            with: NSSize(
+                width: width,
+                height: CGFloat.greatestFiniteMagnitude
+            ),
+            options: [.usesLineFragmentOrigin, .usesFontLeading]
+        )
+        return CGSize(
+            width: width,
+            height: max(ceil(bounds.height), 1)
+        )
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var openLink: (URL) -> Void
+
+        init(openLink: @escaping (URL) -> Void) {
+            self.openLink = openLink
+        }
+
+        func textView(
+            _ textView: NSTextView,
+            clickedOnLink link: Any,
+            at charIndex: Int
+        ) -> Bool {
+            let url: URL?
+            if let value = link as? URL {
+                url = value
+            } else if let value = link as? String {
+                url = URL(string: value)
+            } else {
+                url = nil
+            }
+            guard let url else { return false }
+            openLink(url)
+            return true
+        }
+    }
+}
+
 private struct PlanReadingChapterRequest: Equatable, Hashable {
     let translationID: String
     let readingID: Int
@@ -1390,7 +1632,209 @@ private struct PlanReadingChapterRequest: Equatable, Hashable {
     let endReference: Int
 }
 
-private struct ReaderContextMenuEntry {
+private struct ReaderLexicalHoverDetails: Equatable {
+    enum Kind: Equatable {
+        case mapped(keys: [String])
+        case unmapped
+    }
+
+    let word: String
+    let kind: Kind
+
+    var systemImage: String {
+        switch kind {
+        case .mapped: "character.book.closed"
+        case .unmapped: "text.badge.xmark"
+        }
+    }
+
+    var message: String {
+        switch kind {
+        case .mapped(let keys):
+            "\(word)  ·  \(keys.joined(separator: " · "))"
+        case .unmapped:
+            "\(word)  ·  No direct original-language match"
+        }
+    }
+}
+
+@MainActor
+private final class ReaderLexicalHoverStore: ObservableObject {
+    @Published var details: ReaderLexicalHoverDetails?
+    let linkActivations = PassthroughSubject<URL, Never>()
+    private weak var readerWindow: NSWindow?
+    private var eventMonitor: Any?
+    private var isDetailsEnabled = false
+    private var isScrollFrozen = false
+    private var clickTrackingGeneration = 0
+
+    init() {
+        eventMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.mouseMoved, .leftMouseDown]
+        ) { [weak self] event in
+            self?.observe(event)
+            return event
+        }
+    }
+
+    deinit {
+        if let eventMonitor {
+            NSEvent.removeMonitor(eventMonitor)
+        }
+    }
+
+    func configure(isScrollFrozen: Bool) {
+        if isScrollFrozen, !self.isScrollFrozen {
+            cancelClickTracking()
+        }
+        self.isScrollFrozen = isScrollFrozen
+    }
+
+    func configure(isDetailsEnabled: Bool) {
+        guard self.isDetailsEnabled != isDetailsEnabled else { return }
+        self.isDetailsEnabled = isDetailsEnabled
+        guard !isDetailsEnabled else { return }
+        cancelClickTracking()
+        details = nil
+    }
+
+    func attach(to window: NSWindow?) {
+        guard let window else { return }
+        if readerWindow !== window {
+            cancelClickTracking()
+        }
+        readerWindow = window
+        window.acceptsMouseMovedEvents = true
+    }
+
+    func clearForScrolling() {
+        cancelClickTracking()
+        if details != nil {
+            details = nil
+        }
+    }
+
+    private func observe(_ event: NSEvent) {
+        guard isDetailsEnabled,
+              let readerWindow,
+              event.window === readerWindow else { return }
+
+        switch event.type {
+        case .mouseMoved:
+            guard !isScrollFrozen else { return }
+            updateDetails(for: textHit(at: event.locationInWindow, in: readerWindow))
+        case .leftMouseDown:
+            beginLinkClickTracking(for: event, in: readerWindow)
+        default:
+            break
+        }
+    }
+
+    /// AppKit's selectable text enters its own mouse-tracking loop after mouse-down,
+    /// so a local event monitor never sees the matching mouse-up. A block queued in
+    /// the default run-loop mode resumes after that tracking loop has completed,
+    /// without intercepting or replaying any native text event.
+    private func beginLinkClickTracking(for event: NSEvent, in window: NSWindow) {
+        cancelClickTracking()
+        guard !isScrollFrozen,
+              event.clickCount == 1,
+              event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty,
+              let url = textHit(at: event.locationInWindow, in: window)?.link,
+              LexiconLookupLink(url: url) != nil,
+              let startPoint = event.cgEvent?.location ?? CGEvent(source: nil)?.location else {
+            return
+        }
+
+        clickTrackingGeneration &+= 1
+        let generation = clickTrackingGeneration
+        RunLoop.main.perform(inModes: [.default]) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self,
+                      self.clickTrackingGeneration == generation else { return }
+                let movedBeyondClickTolerance = (CGEvent(source: nil)?.location).map { point in
+                    let deltaX = point.x - startPoint.x
+                    let deltaY = point.y - startPoint.y
+                    return (deltaX * deltaX) + (deltaY * deltaY) > 36
+                } ?? false
+                guard !movedBeyondClickTolerance,
+                      !self.isScrollFrozen else { return }
+                self.linkActivations.send(url)
+            }
+        }
+    }
+
+    private func cancelClickTracking() {
+        clickTrackingGeneration &+= 1
+    }
+
+    private func updateDetails(for hit: ReaderTextHit?) {
+        let newDetails: ReaderLexicalHoverDetails?
+        if let hit,
+           let link = hit.link,
+           let lookup = LexiconLookupLink(url: link) {
+            newDetails = ReaderLexicalHoverDetails(
+                word: lookup.word ?? hit.word ?? lookup.keys.joined(separator: " · "),
+                kind: .mapped(keys: lookup.keys)
+            )
+        } else if let hit, hit.link == nil, let word = hit.word {
+            newDetails = ReaderLexicalHoverDetails(word: word, kind: .unmapped)
+        } else {
+            newDetails = nil
+        }
+        guard details != newDetails else { return }
+        details = newDetails
+    }
+
+    private func textHit(at windowPoint: NSPoint, in window: NSWindow) -> ReaderTextHit? {
+        for candidate in ReaderLexicalHoverRowRegistry.registeredRows(in: window) {
+            guard let row = candidate as?
+                    ReaderNativeContextMenuAugmenter.ContextMenuObservationView,
+                  isEffectivelyVisible(row) else { continue }
+            let localPoint = row.convert(windowPoint, from: nil)
+            guard row.visibleRect.insetBy(dx: -2, dy: -2).contains(localPoint) else { continue }
+            if let hit = row.textHit(at: windowPoint, in: window) {
+                return hit
+            }
+        }
+        return nil
+    }
+
+    private func isEffectivelyVisible(_ view: NSView) -> Bool {
+        var candidate: NSView? = view
+        while let current = candidate {
+            if current.isHidden || current.alphaValue <= 0 { return false }
+            candidate = current.superview
+        }
+        return true
+    }
+
+}
+
+private struct ReaderLexicalHoverDetailsView: View {
+    @ObservedObject var store: ReaderLexicalHoverStore
+
+    var body: some View {
+        if let details = store.details {
+            Label(details.message, systemImage: details.systemImage)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(.bar, in: RoundedRectangle(cornerRadius: 7))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 7)
+                        .stroke(.separator.opacity(0.45), lineWidth: 0.5)
+                }
+                .padding(.leading, 14)
+                .padding(.bottom, 12)
+                .allowsHitTesting(false)
+                .accessibilityAddTraits(.isStaticText)
+                .transition(.opacity)
+        }
+    }
+}
+
+struct ReaderContextMenuEntry {
     enum Kind {
         case action(() -> Void)
         case submenu([ReaderContextMenuEntry])
@@ -1434,17 +1878,50 @@ private struct ReaderContextMenuEntry {
     }
 }
 
-/// SwiftUI's selectable Text owns the native contextual menu. Observe the contextual
-/// click without intercepting it, then add reader actions to that same menu when it
-/// begins tracking.
-private struct ReaderNativeContextMenuAugmenter: NSViewRepresentable {
+@MainActor
+private enum ReaderLexicalHoverRowRegistry {
+    private static let rows = NSHashTable<NSView>.weakObjects()
+
+    static func update(_ view: NSView, participates: Bool) {
+        rows.remove(view)
+        if participates, view.window != nil {
+            rows.add(view)
+        }
+    }
+
+    static func registeredRows(in window: NSWindow) -> [NSView] {
+        rows.allObjects.filter { $0.window === window }
+    }
+}
+
+/// SwiftUI's selectable Text owns selection and the native contextual menu. This
+/// non-intercepting sibling only augments that menu and marks lexical reader rows.
+struct ReaderNativeContextMenuAugmenter: NSViewRepresentable {
     let entries: [ReaderContextMenuEntry]
+    let openLink: (URL) -> Void
+    let participatesInLexicalHover: Bool
+    let showsLinkCursor: Bool
+
+    init(
+        entries: [ReaderContextMenuEntry],
+        openLink: @escaping (URL) -> Void,
+        participatesInLexicalHover: Bool = false,
+        showsLinkCursor: Bool = false
+    ) {
+        self.entries = entries
+        self.openLink = openLink
+        self.participatesInLexicalHover = participatesInLexicalHover
+        self.showsLinkCursor = showsLinkCursor
+    }
 
     func makeCoordinator() -> Coordinator { Coordinator(entries: entries) }
 
     func makeNSView(context: Context) -> ContextMenuObservationView {
         let view = ContextMenuObservationView()
         view.menuAugmenter = context.coordinator.augment(menu:)
+        view.linkHandler = openLink
+        view.participatesInLexicalHover = participatesInLexicalHover
+        view.showsLinkCursor = showsLinkCursor
         view.setAccessibilityElement(false)
         return view
     }
@@ -1452,6 +1929,9 @@ private struct ReaderNativeContextMenuAugmenter: NSViewRepresentable {
     func updateNSView(_ view: ContextMenuObservationView, context: Context) {
         context.coordinator.entries = entries
         view.menuAugmenter = context.coordinator.augment(menu:)
+        view.linkHandler = openLink
+        view.participatesInLexicalHover = participatesInLexicalHover
+        view.showsLinkCursor = showsLinkCursor
     }
 
     final class Coordinator: NSObject {
@@ -1531,9 +2011,30 @@ private struct ReaderNativeContextMenuAugmenter: NSViewRepresentable {
 
     final class ContextMenuObservationView: NSView {
         var menuAugmenter: ((NSMenu) -> Void)?
+        var linkHandler: ((URL) -> Void)?
+        var showsLinkCursor = false {
+            didSet {
+                guard oldValue != showsLinkCursor else { return }
+                if !showsLinkCursor { restoreLinkCursor() }
+                enableMouseMovedEventsIfNeeded()
+                updateTrackingAreas()
+            }
+        }
+        var participatesInLexicalHover = false {
+            didSet {
+                guard oldValue != participatesInLexicalHover else { return }
+                ReaderLexicalHoverRowRegistry.update(
+                    self,
+                    participates: participatesInLexicalHover
+                )
+            }
+        }
         private var eventMonitor: Any?
         private var hasPendingContextClick = false
+        private var pendingInternalContextLink = false
         private var pendingContextClickGeneration = 0
+        private var linkTrackingArea: NSTrackingArea?
+        private var isShowingLinkCursor = false
 
         override init(frame frameRect: NSRect) {
             super.init(frame: frameRect)
@@ -1546,7 +2047,7 @@ private struct ReaderNativeContextMenuAugmenter: NSViewRepresentable {
             eventMonitor = NSEvent.addLocalMonitorForEvents(
                 matching: [.rightMouseDown, .leftMouseDown]
             ) { [weak self] event in
-                self?.observeContextualClick(event)
+                self?.observeMouseEvent(event)
                 return event
             }
         }
@@ -1556,6 +2057,7 @@ private struct ReaderNativeContextMenuAugmenter: NSViewRepresentable {
         }
 
         deinit {
+            restoreLinkCursor()
             if let eventMonitor {
                 NSEvent.removeMonitor(eventMonitor)
             }
@@ -1566,29 +2068,257 @@ private struct ReaderNativeContextMenuAugmenter: NSViewRepresentable {
             nil
         }
 
-        private func observeContextualClick(_ event: NSEvent) {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window == nil { restoreLinkCursor() }
+            enableMouseMovedEventsIfNeeded()
+            ReaderLexicalHoverRowRegistry.update(
+                self,
+                participates: participatesInLexicalHover
+            )
+        }
+
+        /// `NSTrackingArea.mouseMoved` is only continuous when its window opts in
+        /// to moved events. Without this, AppKit still sends occasional enter and
+        /// cursor-update events, which makes link cursors appear to work for one
+        /// run and then stop as the pointer moves within the same text field.
+        private func enableMouseMovedEventsIfNeeded() {
+            guard showsLinkCursor else { return }
+            window?.acceptsMouseMovedEvents = true
+        }
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            if let linkTrackingArea {
+                removeTrackingArea(linkTrackingArea)
+                self.linkTrackingArea = nil
+            }
+            guard showsLinkCursor else { return }
+            let trackingArea = NSTrackingArea(
+                rect: .zero,
+                options: [
+                    .activeInKeyWindow,
+                    .inVisibleRect,
+                    .mouseEnteredAndExited,
+                    .mouseMoved,
+                    .cursorUpdate,
+                ],
+                owner: self,
+                userInfo: nil
+            )
+            addTrackingArea(trackingArea)
+            linkTrackingArea = trackingArea
+        }
+
+        override func mouseEntered(with event: NSEvent) {
+            updateLinkCursor(for: event)
+        }
+
+        override func mouseMoved(with event: NSEvent) {
+            updateLinkCursor(for: event)
+        }
+
+        override func cursorUpdate(with event: NSEvent) {
+            updateLinkCursor(for: event)
+        }
+
+        override func mouseExited(with event: NSEvent) {
+            restoreLinkCursor()
+        }
+
+        private func observeMouseEvent(_ event: NSEvent) {
             guard let window,
-                  event.window === window,
-                  bounds.contains(convert(event.locationInWindow, from: nil)),
-                  event.type == .rightMouseDown
-                    || (event.type == .leftMouseDown && event.modifierFlags.contains(.control)) else {
+                  event.window === window else {
                 return
             }
 
+            switch event.type {
+            case .rightMouseDown:
+                guard contains(event.locationInWindow) else { return }
+                rememberContextClick(
+                    hit: textHit(at: event.locationInWindow, in: window)
+                )
+            case .leftMouseDown:
+                guard contains(event.locationInWindow) else { return }
+                if event.modifierFlags.contains(.control) {
+                    rememberContextClick(
+                        hit: textHit(at: event.locationInWindow, in: window)
+                    )
+                }
+            default:
+                break
+            }
+        }
+
+        private func contains(_ windowPoint: NSPoint) -> Bool {
+            bounds.contains(convert(windowPoint, from: nil))
+        }
+
+        private func updateLinkCursor(for event: NSEvent) {
+            guard showsLinkCursor, let window, event.window === window,
+                  contains(event.locationInWindow) else {
+                restoreLinkCursor()
+                return
+            }
+            let isOverLink = textHit(at: event.locationInWindow, in: window)?.link != nil
+            if isOverLink {
+                if !isShowingLinkCursor {
+                    NSCursor.pointingHand.push()
+                    isShowingLinkCursor = true
+                } else {
+                    NSCursor.pointingHand.set()
+                }
+            } else {
+                restoreLinkCursor()
+            }
+        }
+
+        private func restoreLinkCursor() {
+            guard isShowingLinkCursor else { return }
+            NSCursor.pop()
+            isShowingLinkCursor = false
+        }
+
+        private func rememberContextClick(hit: ReaderTextHit?) {
             hasPendingContextClick = true
+            pendingInternalContextLink = hit?.link.map { LexiconLookupLink(url: $0) != nil } ?? false
             pendingContextClickGeneration &+= 1
             let generation = pendingContextClickGeneration
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
                 guard self?.pendingContextClickGeneration == generation else { return }
                 self?.hasPendingContextClick = false
+                self?.pendingInternalContextLink = false
             }
+        }
+
+        func textHit(at windowPoint: NSPoint, in window: NSWindow) -> ReaderTextHit? {
+            guard let contentView = window.contentView else { return nil }
+            let contentPoint = contentView.convert(windowPoint, from: nil)
+            var candidate = contentView.hitTest(contentPoint)
+            while let view = candidate {
+                if let textView = view as? NSTextView,
+                   let hit = ReaderTextLinkHitTester.hit(
+                        at: textView.convert(windowPoint, from: nil),
+                        in: textView
+                   ) {
+                    return hit
+                }
+                if let textField = view as? NSTextField,
+                   let hit = ReaderTextLinkHitTester.hit(
+                        at: textField.convert(windowPoint, from: nil),
+                        in: textField
+                   ) {
+                    return hit
+                }
+                candidate = view.superview
+            }
+
+            // SwiftUI's selectable Text and this non-intercepting representable
+            // are sibling branches. Walk outward until their smallest common
+            // ancestor is found, rather than searching the entire window first.
+            // This also keeps unrelated labels (including the hover readout)
+            // from being mistaken for passage text.
+            var searchRoot = superview
+            while let root = searchRoot {
+                if let hit = descendantTextHit(
+                    at: windowPoint,
+                    in: root,
+                    excluding: self
+                ) {
+                    return hit
+                }
+                guard root !== contentView else { break }
+                searchRoot = root.superview
+            }
+            return nil
+        }
+
+        private func descendantTextHit(
+            at windowPoint: NSPoint,
+            in root: NSView,
+            excluding excludedView: NSView
+        ) -> ReaderTextHit? {
+            for subview in root.subviews.reversed() where
+                subview !== excludedView
+                    && !subview.isHidden
+                    && subview.alphaValue > 0 {
+                let localPoint = subview.convert(windowPoint, from: nil)
+                guard subview.bounds.insetBy(dx: -2, dy: -2).contains(localPoint) else {
+                    continue
+                }
+                if let hit = descendantTextHit(
+                    at: windowPoint,
+                    in: subview,
+                    excluding: excludedView
+                ) {
+                    return hit
+                }
+                if let textView = subview as? NSTextView,
+                   let hit = ReaderTextLinkHitTester.hit(at: localPoint, in: textView) {
+                    return hit
+                }
+                if let textField = subview as? NSTextField,
+                   let hit = ReaderTextLinkHitTester.hit(at: localPoint, in: textField) {
+                    return hit
+                }
+            }
+            return nil
         }
 
         @objc private func menuDidBeginTracking(_ notification: Notification) {
             guard hasPendingContextClick,
                   let menu = notification.object as? NSMenu else { return }
             hasPendingContextClick = false
+            if pendingInternalContextLink {
+                for item in menu.items.reversed() where isNativeLinkCommand(item) {
+                    menu.removeItem(item)
+                }
+            }
+            pendingInternalContextLink = false
             menuAugmenter?(menu)
+        }
+
+        private func isNativeLinkCommand(_ item: NSMenuItem) -> Bool {
+            let action = item.action.map(NSStringFromSelector) ?? ""
+            let identifier = item.identifier?.rawValue ?? ""
+            let description = "\(item.title) \(action) \(identifier)"
+                .lowercased()
+                .replacingOccurrences(of: " ", with: "")
+            return description.contains("openlink") || description.contains("copylink")
+        }
+    }
+}
+
+/// One hover tracker for the reader. Passage rows remain lightweight markers;
+/// the single observer resolves the row and its text immediately on mouse move.
+struct ReaderLexicalHoverObserver: NSViewRepresentable {
+    fileprivate let interactionStore: ReaderLexicalHoverStore
+
+    func makeNSView(context: Context) -> HoverObservationView {
+        let view = HoverObservationView()
+        view.interactionStore = interactionStore
+        view.setAccessibilityElement(false)
+        return view
+    }
+
+    func updateNSView(_ view: HoverObservationView, context: Context) {
+        view.interactionStore = interactionStore
+    }
+
+    final class HoverObservationView: NSView {
+        fileprivate var interactionStore: ReaderLexicalHoverStore? {
+            didSet {
+                interactionStore?.attach(to: window)
+            }
+        }
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            nil
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            interactionStore?.attach(to: window)
         }
     }
 }
@@ -1778,15 +2508,37 @@ private struct TranslationReaderView: View {
     @AppStorage("studyInspector.tab") private var selectedStudyTab = "commentary"
     @StateObject private var readAloud = ReadAloudController()
     @State private var showingPlanQuiz = false
+    /// Mount and reveal are separate so the panel exists before it is asked to
+    /// appear — SwiftUI does not animate a view's first layout.
+    @State private var isQuizPanelMounted = false
+    @State private var quizRevealedWidth: Double = 0
+    @State private var isQuizTransitioning = false
+
+    /// True while either side panel is opening or closing. The reader suspends its
+    /// scroll reporting throughout, so a position measured mid-re-wrap can never
+    /// become the anchor the next transition restores to.
+    private var isPanelTransitioning: Bool {
+        isSidebarTransitioning || isQuizTransitioning
+    }
+
+    /// The quiz panel and its leading divider.
+    private static let quizPanelWidth: Double = 411
     @State private var showingReaderLocationPicker = false
     @State private var highlightVerse: LampVerse?
     @State private var planReadingChapters: [LampChapter] = []
     @State private var loadedPlanReadingRequest: PlanReadingChapterRequest?
     @State private var isLoadingPlanReading = false
     @State private var planReadingError: String?
+    /// Set by the reader's own click handlers, so the selection they make does not
+    /// come back as an instruction to scroll to it.
+    @State private var isSelectingVerseFromReader = false
+    @State private var linkActivationGate = ReaderLinkActivationGate()
+    @State private var paragraphAnchors = ReaderParagraphAnchorStore()
     @Namespace private var readerScrollCoordinateSpace
     @Binding var planReadingMode: PlanReadingMode?
     @Binding var showingStudyInspector: Bool
+    let lexicalHoverStore: ReaderLexicalHoverStore
+    let isSidebarTransitioning: Bool
     let showImporter: () -> Void
 
     var body: some View {
@@ -1800,20 +2552,67 @@ private struct TranslationReaderView: View {
                 Divider()
             }
 
-            HStack(spacing: 0) {
-                readerContent
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // The same transition as the study column, for the same reasons: one
+            // animated width so the reader and the panel cannot disagree, and a
+            // panel that fades up in place rather than sliding, because its
+            // contents are AppKit-hosted and would not travel with it.
+            GeometryReader { geometry in
+                let revealed = min(max(quizRevealedWidth, 0), Self.quizPanelWidth)
+                let progress = revealed / Self.quizPanelWidth
+                HStack(spacing: 0) {
+                    readerContent
+                        .frame(
+                            width: max(geometry.size.width - revealed, 0),
+                            height: geometry.size.height
+                        )
 
-                if showingPlanQuiz, let planReadingMode {
-                    Divider()
-                    PlanReadingQuizPanel(
-                        mode: planReadingMode,
-                        close: { showingPlanQuiz = false },
-                        openReference: { model.openReference($0) }
-                    )
-                    .frame(width: 410)
+                    if let planReadingMode, isQuizPanelMounted {
+                        HStack(spacing: 0) {
+                            Divider()
+                            PlanReadingQuizPanel(
+                                mode: planReadingMode,
+                                close: { showingPlanQuiz = false },
+                                openReference: { model.openReference($0) }
+                            )
+                        }
+                        .frame(width: Self.quizPanelWidth, height: geometry.size.height)
+                        .frame(width: revealed, alignment: .trailing)
+                        .opacity(progress)
+                        .allowsHitTesting(progress > 0.99)
+                    }
                 }
+                .animation(
+                    .smooth(duration: StudyInspectorMetrics.revealDuration),
+                    value: revealed
+                )
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .clipped()
             }
+        }
+        .task(id: showingPlanQuiz) {
+            isQuizTransitioning = true
+            if showingPlanQuiz {
+                isQuizPanelMounted = true
+                await Task.yield()
+                guard !Task.isCancelled, showingPlanQuiz else { return }
+                quizRevealedWidth = Self.quizPanelWidth
+                do {
+                    try await Task.sleep(for: .seconds(StudyInspectorMetrics.revealDuration))
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled, showingPlanQuiz else { return }
+            } else {
+                quizRevealedWidth = 0
+                do {
+                    try await Task.sleep(for: .seconds(StudyInspectorMetrics.revealDuration))
+                } catch {
+                    return
+                }
+                guard !showingPlanQuiz else { return }
+                isQuizPanelMounted = false
+            }
+            isQuizTransitioning = false
         }
         .toolbar { readerToolbar }
         .toolbar(removing: .title)
@@ -1826,7 +2625,13 @@ private struct TranslationReaderView: View {
             guard followReadAloud, let reference else { return }
             model.focusVerse(reference)
         }
-        .onChange(of: model.selectedTranslationID) { _, _ in readAloud.stop() }
+        .onChange(of: model.selectedTranslationID) { _, _ in
+            readAloud.stop()
+            // Do not leave details from the previous translation visible while
+            // the replacement passage is loading. The new passage opts back in
+            // after confirming it contains Strong's annotations.
+            lexicalHoverStore.configure(isDetailsEnabled: false)
+        }
         .onChange(of: model.selectedBookNumber) { _, _ in readAloud.stop() }
         .onChange(of: model.selectedChapterNumber) { _, _ in readAloud.stop() }
         .onChange(of: planReadingMode) { _, mode in
@@ -1835,15 +2640,12 @@ private struct TranslationReaderView: View {
         .task(id: planReadingChapterRequest) {
             await loadPlanReadingChapters(for: planReadingChapterRequest)
         }
-        .onDisappear { readAloud.stop() }
+        .onDisappear {
+            readAloud.stop()
+            lexicalHoverStore.details = nil
+        }
         .environment(\.openURL, OpenURLAction { url in
-            if let reference = readerVerseReference(from: url) {
-                openVerseStudy(reference: reference)
-                return .handled
-            }
-            guard let lookup = LexiconLookupLink(url: url) else { return .systemAction }
-            openLexicon(lookup)
-            return .handled
+            handleReaderLink(url) ? .handled : .systemAction
         })
     }
 
@@ -2065,76 +2867,175 @@ private struct TranslationReaderView: View {
     private func passageView(_ chapters: [LampChapter]) -> some View {
         let sections = chapters.map { ReaderPassageChapter(chapter: $0) }
         let passageIdentity = sections.map(\.id).joined(separator: ",")
-        return ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(sections) { section in
-                        readerChapterSection(
-                            section.chapter,
-                            isFirst: section.id == sections.first?.id
-                        )
+        let showsInstantDetails = StrongsKey.hasAnnotations(
+            chapters.lazy
+                .flatMap { $0.verses }
+                .flatMap { $0.annotations }
+                .map(\.strongs)
+        )
+        // Sized from the outside in. A ScrollView asked how big it would like to be
+        // answers by measuring its content, and measuring this content means
+        // walking every paragraph of the passage. Handing it exact bounds means
+        // nothing above it ever has to ask.
+        return GeometryReader { viewport in
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        // Typical reader passages contain only a few dozen rows.
+                        // A lazy stack buys nothing at that scale, while its row
+                        // estimation can enter a non-converging placement loop when
+                        // scrolling wrapped NSViewRepresentable text: it repeatedly
+                        // materialises the same rows, grows the estimated scroll
+                        // extent, and allocates until the app is unresponsive.
+                        // A regular stack measures the bounded passage once and gives
+                        // the scroll view a stable content extent.
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(sections) { section in
+                                readerChapterSection(
+                                    section.chapter,
+                                    isFirst: section.id == sections.first?.id,
+                                    showsInstantDetails: showsInstantDetails
+                                )
+                            }
+                        }
+                        // The two modes intentionally reuse verse references as scroll
+                        // targets. Give the container a new identity when switching so
+                        // SwiftUI cannot reuse a whole paragraph for a single-verse row.
+                        .id(readerLayoutMode)
+                        .scrollTargetLayout()
+
+                        // Keep the tail outside the lazy stack. A lazy final child is
+                        // not measured until it nears the viewport, which changes the
+                        // scroll extent mid-scroll and makes the scrollbar thumb jump.
+                        Color.clear
+                            .containerRelativeFrame(.vertical) { viewportHeight, _ in
+                                ReaderScrollTail.height(for: viewportHeight)
+                            }
+                            .accessibilityHidden(true)
                     }
+                    .frame(maxWidth: 780, alignment: .leading)
+                    .padding(.horizontal, 48)
+                    .padding(.vertical, 42)
+                    // The live viewport width, so the passage uses whatever room it
+                    // has and re-wraps as that changes. Exact rather than flexible:
+                    // the ScrollView is never asked to derive a width by measuring
+                    // its content, which is what used to make opening the column an
+                    // O(passage) operation.
+                    .frame(width: viewport.size.width)
                 }
-                // The two modes intentionally reuse verse references as scroll
-                // targets. Give the container a new identity when switching so
-                // SwiftUI cannot reuse a whole paragraph for a single-verse row.
-                .id(readerLayoutMode)
-                .scrollTargetLayout()
-                .frame(maxWidth: 780, alignment: .leading)
-                .padding(.horizontal, 48)
-                .padding(.vertical, 42)
-                .frame(maxWidth: .infinity)
-            }
-            // A new passage gets a fresh scroll container at its natural zero
-            // offset, including the padding above the book heading.
-            .id(passageIdentity)
-            .onScrollTargetVisibilityChange(idType: Int.self) { visible in
-                guard readerLayoutMode == .versePerLine else { return }
-                scrollLink.readerDidScroll(to: visible.min())
-            }
-            .onPreferenceChange(ReaderParagraphFramesKey.self) { frames in
-                guard readerLayoutMode == .continuousParagraphs else { return }
-                scrollLink.readerDidScroll(to: continuousReaderReference(
-                    in: frames,
-                    chapters: chapters
-                ))
-            }
-            .onScrollPhaseChange { oldPhase, newPhase, context in
-                if !oldPhase.isUserDriven, newPhase.isUserDriven {
-                    scrollLink.readerUserScrollDidBegin()
+                .frame(width: viewport.size.width, height: viewport.size.height)
+                .scrollIndicators(isPanelTransitioning ? .hidden : .automatic)
+                .onReceive(lexicalHoverStore.linkActivations) { url in
+                    _ = handleReaderLink(url)
                 }
-                guard oldPhase.isScrolling,
-                      !newPhase.isScrolling,
-                      readerReachedBottom(context.geometry) else { return }
-                completeActivePlanReading()
-            }
-            .onReceive(scrollLink.toolAnchors) { reference in
-                proxy.scrollTo(scrollTarget(for: reference, in: chapters), anchor: .top)
-            }
-            .onAppear { scrollToReaderLocation(proxy, chapters: chapters) }
-            .onChange(of: model.selectedVerseReference) { _, _ in
-                scrollToReaderLocation(proxy, chapters: chapters)
-            }
-            .onChange(of: passageIdentity) { _, _ in
-                scrollLink.reset()
-            }
-            .onChange(of: readerLayoutMode) { _, _ in
-                scrollLink.reset()
-                scrollToReaderLocation(proxy, chapters: chapters)
-            }
-            .coordinateSpace(name: readerScrollCoordinateSpace)
+                // A new passage gets a fresh scroll container at its natural zero
+                // offset, including the padding above the book heading.
+                .id(passageIdentity)
+                .onScrollTargetVisibilityChange(idType: Int.self) { visible in
+                    guard !isPanelTransitioning,
+                          readerLayoutMode == .versePerLine else { return }
+                    scrollLink.readerDidScroll(to: visible.min())
+                }
+                // Read once per scroll rather than once per paragraph that happens to
+                // move: the paragraphs report their positions into a store that
+                // invalidates nothing, and the scroll itself decides when to look.
+                .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                    geometry.contentOffset.y
+                } action: { _, _ in
+                    guard !isPanelTransitioning,
+                          readerLayoutMode == .continuousParagraphs else { return }
+                    scrollLink.readerDidScroll(to: paragraphAnchors.topEdgeReference)
+                }
+                .onScrollPhaseChange { oldPhase, newPhase, context in
+                    if oldPhase.isUserDriven != newPhase.isUserDriven {
+                        // Keep scroll phase outside SwiftUI state. Invalidating the
+                        // reader here makes SwiftUI reconstruct the selectable
+                        // attributed-text overlay while the passage is moving.
+                        lexicalHoverStore.configure(isScrollFrozen: newPhase.isUserDriven)
+                        if newPhase.isUserDriven {
+                            lexicalHoverStore.clearForScrolling()
+                        }
+                    }
+                    if !oldPhase.isUserDriven, newPhase.isUserDriven {
+                        scrollLink.readerUserScrollDidBegin()
+                    }
+                    guard oldPhase.isScrolling,
+                          !newPhase.isScrolling,
+                          readerReachedBottom(context.geometry) else { return }
+                    completeActivePlanReading()
+                }
+                .onReceive(scrollLink.toolAnchors) { reference in
+                    // A study pane appearing or disappearing lays out, reports its
+                    // position, and would drag the reader to it. The link is for
+                    // following a pane the reader is scrolling, not for being
+                    // rearranged by one that just arrived.
+                    guard !isPanelTransitioning else { return }
+                    proxy.scrollTo(scrollTarget(for: reference, in: chapters), anchor: .top)
+                }
+                .onAppear { scrollToReaderLocation(proxy, chapters: chapters) }
+                .onChange(of: model.selectedVerseReference) { _, _ in
+                    // Selecting a verse by clicking it in the reader must not move
+                    // the reader: the verse is already under the pointer. This
+                    // scroll is for selections made elsewhere — search, history, a
+                    // cross-reference — where the verse is somewhere off screen.
+                    guard !isSelectingVerseFromReader else {
+                        isSelectingVerseFromReader = false
+                        return
+                    }
+                    scrollToReaderLocation(proxy, chapters: chapters)
+                }
+                .onChange(of: passageIdentity, initial: true) { _, _ in
+                    paragraphAnchors.prepare(for: chapters)
+                    scrollLink.reset()
+                    // Translation changes temporarily disable the shared store
+                    // while the next passage loads. Re-enable it for every new
+                    // passage, even when both translations contain annotations
+                    // and this availability value therefore remains `true`.
+                    lexicalHoverStore.configure(isDetailsEnabled: showsInstantDetails)
+                }
+                // Visibility reports arrive on first layout; a scroll-driven read does
+                // not. Seed the anchor after the passage lays out so opening a study
+                // pane before scrolling still finds a position to adopt.
+                .task(id: passageIdentity) {
+                    await Task.yield()
+                    guard !isPanelTransitioning,
+                          readerLayoutMode == .continuousParagraphs else { return }
+                    scrollLink.readerDidScroll(to: paragraphAnchors.topEdgeReference)
+                }
+                .onChange(of: readerLayoutMode) { _, _ in
+                    scrollLink.reset()
+                    scrollToReaderLocation(proxy, chapters: chapters)
+                }
+                // Settle back onto the verse the reader was showing before a side
+                // panel changed its width. The passage re-wraps at the new width,
+                // so without this the reading position drifts by however much the
+                // text above it grew or shrank.
+                .coordinateSpace(name: readerScrollCoordinateSpace)
+                .overlay {
+                    ReaderLexicalHoverObserver(
+                        interactionStore: lexicalHoverStore
+                    )
+                        .frame(width: viewport.size.width, height: viewport.size.height)
+                }
+        }
         }
     }
 
     @ViewBuilder
-    private func readerChapterSection(_ chapter: LampChapter, isFirst: Bool) -> some View {
+    private func readerChapterSection(
+        _ chapter: LampChapter,
+        isFirst: Bool,
+        showsInstantDetails: Bool
+    ) -> some View {
         let headingsByVerse = Dictionary(grouping: chapter.headings, by: \.beforeVerse)
         VStack(alignment: .leading, spacing: 5) {
             Text(chapter.book.name)
                 .font(.largeTitle.bold())
+                .textSelection(.enabled)
             Text("Chapter \(chapter.number)")
                 .font(.title2)
                 .foregroundStyle(.secondary)
+                .textSelection(.enabled)
         }
         .padding(.top, isFirst ? 0 : 52)
         .padding(.bottom, 28)
@@ -2146,7 +3047,7 @@ private struct TranslationReaderView: View {
                 // whole verses; loose heading ids would look like verse references.
                 VStack(alignment: .leading, spacing: 0) {
                     readerHeadings(headingsByVerse[verse.number] ?? [])
-                    verseRow(verse)
+                    verseRow(verse, showsInstantDetails: showsInstantDetails)
                 }
                 .id(verse.id)
             }
@@ -2154,20 +3055,18 @@ private struct TranslationReaderView: View {
             ForEach(continuousParagraphs(in: chapter)) { paragraph in
                 VStack(alignment: .leading, spacing: 0) {
                     readerHeadings(headingsByVerse[paragraph.firstVerse.number] ?? [])
-                    continuousParagraph(paragraph)
+                    continuousParagraph(
+                        paragraph,
+                        showsInstantDetails: showsInstantDetails
+                    )
                 }
                 .id(paragraph.id)
-                .background {
-                    GeometryReader { geometry in
-                        Color.clear.preference(
-                            key: ReaderParagraphFramesKey.self,
-                            value: [ReaderParagraphFrame(
-                                reference: paragraph.id,
-                                frame: geometry.frame(in: .named(readerScrollCoordinateSpace))
-                            )]
-                        )
-                    }
+                .onGeometryChange(for: CGRect.self) { geometry in
+                    geometry.frame(in: .named(readerScrollCoordinateSpace))
+                } action: { frame in
+                    paragraphAnchors.record(frame, for: paragraph.id)
                 }
+                .onDisappear { paragraphAnchors.forget(paragraph.id) }
             }
         }
     }
@@ -2177,16 +3076,18 @@ private struct TranslationReaderView: View {
         ForEach(headings) { heading in
             Text(heading.text)
                 .font(heading.level == 1 ? .title2.weight(.semibold) : .title3.weight(.semibold))
+                .textSelection(.enabled)
                 .padding(.top, heading.level == 1 ? 26 : 18)
                 .padding(.bottom, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
-    private func continuousParagraph(_ paragraph: ReaderParagraph) -> some View {
+    private func continuousParagraph(
+        _ paragraph: ReaderParagraph,
+        showsInstantDetails: Bool
+    ) -> some View {
         continuousParagraphText(paragraph)
-            .lineSpacing(lineSpacing)
-            .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
             .padding(.top, continuousTopPadding(for: paragraph.firstVerse))
             .padding(.leading, paragraphIndent(for: paragraph))
@@ -2194,7 +3095,11 @@ private struct TranslationReaderView: View {
             .padding(.vertical, 3)
             .frame(maxWidth: .infinity, alignment: .leading)
             .overlay {
-                ReaderNativeContextMenuAugmenter(entries: paragraphContextMenuEntries(paragraph))
+                ReaderNativeContextMenuAugmenter(
+                    entries: paragraphContextMenuEntries(paragraph),
+                    openLink: { _ = handleReaderLink($0) },
+                    participatesInLexicalHover: showsInstantDetails
+                )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
     }
@@ -2204,7 +3109,10 @@ private struct TranslationReaderView: View {
         if paragraph.verses.count == 1, let verse = paragraph.verses.first {
             renderedVerseText(for: verse)
         } else {
-            continuousText(for: paragraph.verses)
+            ReaderSelectableText(
+                attributedText: continuousText(for: paragraph.verses),
+                openLink: { _ = handleReaderLink($0) }
+            )
         }
     }
 
@@ -2214,155 +3122,149 @@ private struct TranslationReaderView: View {
     }
 
     private func continuousParagraphs(in chapter: LampChapter) -> [ReaderParagraph] {
-        let headingVerses = Set(chapter.headings.map(\.beforeVerse))
-        var result: [ReaderParagraph] = []
-        var current: [LampVerse] = []
-
-        func flushCurrent() {
-            guard !current.isEmpty else { return }
-            result.append(ReaderParagraph(verses: current))
-            current = []
-        }
-
-        for verse in chapter.verses {
-            let isPoetry = verse.poetry != nil
-            let followsPoetry = current.last?.poetry != nil
-            let startsParagraph = current.isEmpty
-                || verse.beginsParagraph
-                || headingVerses.contains(verse.number)
-                || isPoetry
-                || followsPoetry
-            if startsParagraph { flushCurrent() }
-            current.append(verse)
-            if isPoetry { flushCurrent() }
-        }
-        flushCurrent()
-        return result
+        // Memoised. This is called from the reader's body, which re-evaluates on
+        // every frame change — including each frame of the study column opening.
+        paragraphAnchors.paragraphs(in: chapter)
     }
 
-    private func continuousReaderReference(
-        in frames: [ReaderParagraphFrame],
-        chapters: [LampChapter]
-    ) -> Int? {
-        guard let visibleFrame = frames
-            .filter({ $0.frame.maxY > 0 })
-            .min(by: { $0.frame.minY < $1.frame.minY }) else { return nil }
-        let paragraphs = chapters
-            .flatMap(continuousParagraphs(in:))
-        guard let paragraph = paragraphs.first(where: { $0.id == visibleFrame.reference }) else {
-            return visibleFrame.reference
-        }
-
-        let height = max(visibleFrame.frame.height, 1)
-        let progress = -visibleFrame.frame.minY / height
-        let segments = paragraph.verses.map { verse in
-            ReaderParagraphSegment(
-                reference: verse.id,
-                characterCount: verse.text.count + String(verse.number).count + 1
-            )
-        }
-        return ReaderParagraphAnchorResolver.reference(at: progress, in: segments)
-    }
-
-    private func continuousText(for verses: [LampVerse]) -> Text {
-        var result = Text("")
+    private func continuousText(for verses: [LampVerse]) -> NSAttributedString {
+        let result = NSMutableAttributedString(string: "")
         for (index, verse) in verses.enumerated() {
-            if index > 0 { result = result + Text(" ") }
-            result = result + verseMarkerText(for: verse)
-            result = result + verseBodyText(for: verse)
+            if index > 0 {
+                result.append(NSAttributedString(string: " ", attributes: bodyTextAttributes()))
+            }
+            result.append(verseMarkerText(for: verse))
+            result.append(verseBodyText(for: verse))
         }
         return result
     }
 
-    private func verseMarkerText(for verse: LampVerse) -> Text {
-        var result = Text("")
+    private func verseMarkerText(for verse: LampVerse) -> NSAttributedString {
+        let result = NSMutableAttributedString(string: "")
         let verseURL = readerVerseURL(reference: verse.id)
         let isSelected = model.selectedVerseReference == verse.id
 
-        var number = AttributedString(verse.number.formatted())
-        number.font = .system(size: max(fontSize * 0.58, 10), weight: .semibold)
-        number.foregroundColor = isSelected ? .accentColor : .secondary
-        number.baselineOffset = max(fontSize * 0.28, 4)
-        number.link = verseURL
-        result = result + Text(number)
+        var numberAttributes = markerTextAttributes(
+            size: max(fontSize * 0.58, 10),
+            weight: .semibold,
+            color: isSelected ? .controlAccentColor : .secondaryLabelColor,
+            baselineOffset: max(fontSize * 0.28, 4)
+        )
+        numberAttributes[.link] = verseURL
+        result.append(NSAttributedString(
+            string: verse.number.formatted(),
+            attributes: numberAttributes
+        ))
 
         if verse.hasFootnotes {
-            var marker = AttributedString("*")
-            marker.font = .system(size: max(fontSize * 0.55, 10), weight: .bold)
-            marker.foregroundColor = .accentColor
-            marker.baselineOffset = max(fontSize * 0.32, 5)
-            marker.link = verseURL
-            result = result + Text(marker)
+            var attributes = markerTextAttributes(
+                size: max(fontSize * 0.55, 10),
+                weight: .bold,
+                color: .controlAccentColor,
+                baselineOffset: max(fontSize * 0.32, 5)
+            )
+            attributes[.link] = verseURL
+            result.append(NSAttributedString(string: "*", attributes: attributes))
         }
 
         if model.hasPersonalNote(for: verse.id) {
-            var marker = AttributedString("✎")
-            marker.font = .system(size: max(fontSize * 0.48, 9), weight: .semibold)
-            marker.foregroundColor = .orange
-            marker.baselineOffset = max(fontSize * 0.28, 4)
-            marker.link = verseURL
-            result = result + Text(marker)
+            var attributes = markerTextAttributes(
+                size: max(fontSize * 0.48, 9),
+                weight: .semibold,
+                color: .systemOrange,
+                baselineOffset: max(fontSize * 0.28, 4)
+            )
+            attributes[.link] = verseURL
+            result.append(NSAttributedString(string: "✎", attributes: attributes))
         }
 
         if model.hasInstalledNote(for: verse.id) {
-            var marker = AttributedString("▣")
-            marker.font = .system(size: max(fontSize * 0.43, 8), weight: .semibold)
-            marker.foregroundColor = .purple
-            marker.baselineOffset = max(fontSize * 0.28, 4)
-            marker.link = verseURL
-            result = result + Text(marker)
+            var attributes = markerTextAttributes(
+                size: max(fontSize * 0.43, 8),
+                weight: .semibold,
+                color: .systemPurple,
+                baselineOffset: max(fontSize * 0.28, 4)
+            )
+            attributes[.link] = verseURL
+            result.append(NSAttributedString(string: "▣", attributes: attributes))
         }
 
-        return result + Text(" ")
+        result.append(NSAttributedString(string: " ", attributes: bodyTextAttributes()))
+        return result
     }
 
     @ViewBuilder
     private func renderedVerseText(for verse: LampVerse) -> some View {
         if let poetryRange = partialPoetryRange(for: verse) {
             VStack(alignment: .leading, spacing: 4) {
-                verseMarkerText(for: verse)
-                    + verseBodyText(
+                ReaderSelectableText(
+                    attributedText: verseText(
                         for: verse,
-                        range: ReaderTextRange(startOffset: 0, endOffset: poetryRange.startOffset)
-                    )
-
-                verseBodyText(
-                    for: verse,
-                    range: poetryRange
+                        range: ReaderTextRange(startOffset: 0, endOffset: poetryRange.startOffset),
+                        includesMarker: true
+                    ),
+                    openLink: { _ = handleReaderLink($0) }
                 )
-                .padding(.leading, poetryIndent(for: verse))
+
+                ReaderSelectableText(
+                    attributedText: verseBodyText(for: verse, range: poetryRange),
+                    openLink: { _ = handleReaderLink($0) }
+                )
+                    .padding(.leading, poetryIndent(for: verse))
 
                 if poetryRange.endOffset < verse.text.count {
-                    verseBodyText(
-                        for: verse,
-                        range: ReaderTextRange(
-                            startOffset: poetryRange.endOffset,
-                            endOffset: verse.text.count
-                        )
+                    ReaderSelectableText(
+                        attributedText: verseBodyText(
+                            for: verse,
+                            range: ReaderTextRange(
+                                startOffset: poetryRange.endOffset,
+                                endOffset: verse.text.count
+                            )
+                        ),
+                        openLink: { _ = handleReaderLink($0) }
                     )
                 }
             }
         } else {
-            continuousText(for: [verse])
+            ReaderSelectableText(
+                attributedText: continuousText(for: [verse]),
+                openLink: { _ = handleReaderLink($0) }
+            )
         }
+    }
+
+    private func verseText(
+        for verse: LampVerse,
+        range: ReaderTextRange? = nil,
+        includesMarker: Bool
+    ) -> NSAttributedString {
+        let result = NSMutableAttributedString(string: "")
+        if includesMarker {
+            result.append(verseMarkerText(for: verse))
+        }
+        result.append(verseBodyText(for: verse, range: range))
+        return result
     }
 
     private func verseBodyText(
         for verse: LampVerse,
         range: ReaderTextRange? = nil
-    ) -> Text {
+    ) -> NSAttributedString {
         let text = styledText(for: verse)
-        guard let range else { return Text(text) }
+        guard let range else { return text }
 
         let characterIndices = Array(verse.text.indices) + [verse.text.endIndex]
         guard range.startOffset >= 0,
               range.endOffset > range.startOffset,
               range.endOffset < characterIndices.count,
-              let start = AttributedString.Index(characterIndices[range.startOffset], within: text),
-              let end = AttributedString.Index(characterIndices[range.endOffset], within: text) else {
-            return Text("")
+              range.startOffset < characterIndices.count else {
+            return NSAttributedString(string: "", attributes: bodyTextAttributes())
         }
-        return Text(AttributedString(text[start..<end]))
+        let nativeRange = NSRange(
+            characterIndices[range.startOffset]..<characterIndices[range.endOffset],
+            in: verse.text
+        )
+        return text.attributedSubstring(from: nativeRange)
     }
 
     private func partialPoetryRange(for verse: LampVerse) -> ReaderTextRange? {
@@ -2391,14 +3293,16 @@ private struct TranslationReaderView: View {
             + geometry.contentInsets.bottom
             - geometry.containerSize.height
         guard scrollableHeight > 1 else { return false }
-        return geometry.visibleRect.maxY >= geometry.contentSize.height - 8
+        return ReaderScrollTail.hasReachedContentBottom(
+            visibleMaxY: geometry.visibleRect.maxY,
+            totalContentHeight: geometry.contentSize.height,
+            viewportHeight: geometry.containerSize.height
+        )
     }
 
     @ViewBuilder
-    private func verseRow(_ verse: LampVerse) -> some View {
+    private func verseRow(_ verse: LampVerse, showsInstantDetails: Bool) -> some View {
         renderedVerseText(for: verse)
-            .lineSpacing(lineSpacing)
-            .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
             .padding(.top, topPadding(for: verse))
             .padding(.leading, partialPoetryRange(for: verse) == nil ? poetryIndent(for: verse) : 0)
@@ -2407,7 +3311,11 @@ private struct TranslationReaderView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .help(verseStudyHelp(verse))
             .overlay {
-                ReaderNativeContextMenuAugmenter(entries: verseContextMenuEntries(verse))
+                ReaderNativeContextMenuAugmenter(
+                    entries: verseContextMenuEntries(verse),
+                    openLink: { _ = handleReaderLink($0) },
+                    participatesInLexicalHover: showsInstantDetails
+                )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
     }
@@ -2442,13 +3350,13 @@ private struct TranslationReaderView: View {
             systemImage: "square.and.pencil"
         ) {
             prepareChapterForStudy(reference: verse.id)
-            model.focusVerse(verse.id)
+            selectVerseFromReader(verse.id)
             selectedStudyTab = "notes"
             showingStudyInspector = true
         })
         entries.append(.action("Show Study Tools", systemImage: "sidebar.trailing") {
             prepareChapterForStudy(reference: verse.id)
-            model.focusVerse(verse.id)
+            selectVerseFromReader(verse.id)
             showingStudyInspector = true
         })
         return entries
@@ -2548,7 +3456,7 @@ private struct TranslationReaderView: View {
 
     private func openVerseStudy(_ verse: LampVerse) {
         prepareChapterForStudy(reference: verse.id)
-        model.focusVerse(verse.id)
+        selectVerseFromReader(verse.id)
         if model.hasPersonalNote(for: verse.id) || model.hasInstalledNote(for: verse.id) {
             selectedStudyTab = "notes"
         } else if verse.hasFootnotes || verse.annotations.contains(where: { $0.strongs != nil }) {
@@ -2584,46 +3492,61 @@ private struct TranslationReaderView: View {
         return Int(host)
     }
 
-    private func styledText(for verse: LampVerse) -> AttributedString {
-        var result = AttributedString(verse.text)
-        result.font = .system(size: fontSize, design: typeface.design)
+    private func styledText(for verse: LampVerse) -> NSAttributedString {
+        let result = NSMutableAttributedString(
+            string: verse.text,
+            attributes: bodyTextAttributes()
+        )
 
         // `index(startIndex, offsetBy:)` walks the string from the front every
         // time it is asked, and a densely tagged verse asks once per annotation
         // per pass. One walk up front turns each of those into a subscript.
         let characterIndices = Array(verse.text.indices) + [verse.text.endIndex]
 
-        func attributedRange(
-            from startOffset: Int,
-            to endOffset: Int,
-            in string: AttributedString
-        ) -> Range<AttributedString.Index>? {
+        func attributedRange(from startOffset: Int, to endOffset: Int) -> NSRange? {
             guard startOffset >= 0,
                   endOffset > startOffset,
                   endOffset < characterIndices.count,
-                  let start = AttributedString.Index(characterIndices[startOffset], within: string),
-                  let end = AttributedString.Index(characterIndices[endOffset], within: string) else {
+                  startOffset < characterIndices.count else {
                 return nil
             }
-            return start..<end
+            return NSRange(
+                characterIndices[startOffset]..<characterIndices[endOffset],
+                in: verse.text
+            )
         }
 
         for annotation in verse.annotations {
             guard let range = attributedRange(
                 from: annotation.startOffset,
-                to: annotation.endOffset,
-                in: result
+                to: annotation.endOffset
             ) else { continue }
 
             switch annotation.kind {
             case "red-letter":
-                result[range].foregroundColor = .red.opacity(0.82)
+                result.addAttribute(
+                    .foregroundColor,
+                    value: NSColor.systemRed.withAlphaComponent(0.82),
+                    range: range
+                )
             case "added", "selah":
-                result[range].font = .system(size: fontSize, design: typeface.design).italic()
+                result.addAttribute(
+                    .font,
+                    value: readerFont(size: fontSize, traits: .italicFontMask),
+                    range: range
+                )
             case "divine-name":
-                result[range].font = .system(size: fontSize, design: typeface.design).weight(.semibold).smallCaps()
+                result.addAttribute(
+                    .font,
+                    value: readerFont(size: fontSize, weight: .semibold),
+                    range: range
+                )
             case "variant":
-                result[range].underlineStyle = .single
+                result.addAttribute(
+                    .underlineStyle,
+                    value: NSUnderlineStyle.single.rawValue,
+                    range: range
+                )
             default:
                 break
             }
@@ -2636,52 +3559,157 @@ private struct TranslationReaderView: View {
             VerseAnnotationRange(start: annotation.startOffset, end: annotation.endOffset)
         }
         for (annotationRange, annotations) in groupedLexicalAnnotations {
-            let keys = annotations.compactMap(\.strongs)
+            let keys = StrongsKey.readerLookupKeys(annotations.compactMap(\.strongs))
             guard annotationRange.start >= 0,
                   annotationRange.end > annotationRange.start,
-                  annotationRange.end < characterIndices.count else { continue }
+                  annotationRange.end < characterIndices.count,
+                  !keys.isEmpty else { continue }
             let word = String(
                 verse.text[characterIndices[annotationRange.start]..<characterIndices[annotationRange.end]]
             )
             guard let lookup = LexiconLookupLink(keys: keys, reference: verse.id, word: word),
-                  let url = lookup.url,
+                  let route = lookup.url?.absoluteString,
                   let range = attributedRange(
                       from: annotationRange.start,
-                      to: annotationRange.end,
-                      in: result
+                      to: annotationRange.end
                   ) else { continue }
-            result[range].link = url
+            // Lexicon mappings are Lamp-owned hit-test metadata, not native
+            // links. A normal `.link` leaks the routing URL in hover UI and
+            // changes AppKit's right-click selection behavior.
+            result.addAttribute(.languageIdentifier, value: route, range: range)
             let overlapsRedLetter = verse.annotations.contains { annotation in
                 annotation.kind == "red-letter"
                     && annotation.startOffset < annotationRange.end
                     && annotation.endOffset > annotationRange.start
             }
             if !overlapsRedLetter {
-                result[range].foregroundColor = .primary
+                result.addAttribute(.foregroundColor, value: NSColor.labelColor, range: range)
             }
         }
 
         for highlight in model.highlights(for: verse.id) {
             let startOffset = min(max(highlight.startOffset, 0), verse.text.count)
             let endOffset = min(max(highlight.endOffset, startOffset), verse.text.count)
-            guard let range = attributedRange(from: startOffset, to: endOffset, in: result) else { continue }
-            let color = Color(lampHex: highlight.color ?? "FFCC00") ?? .yellow
+            guard let range = attributedRange(from: startOffset, to: endOffset) else { continue }
+            let color = readerColor(hex: highlight.color ?? "FFCC00") ?? .systemYellow
             switch highlight.style {
             case .highlight:
-                result[range].backgroundColor = color.opacity(0.34)
-            case .underlineSolid, .underlineDashed, .underlineDotted:
-                result[range].underlineStyle = .single
-                result[range].foregroundColor = color
+                result.addAttribute(
+                    .backgroundColor,
+                    value: color.withAlphaComponent(0.34),
+                    range: range
+                )
+            case .underlineSolid:
+                result.addAttributes([
+                    .underlineStyle: NSUnderlineStyle.single.rawValue,
+                    .underlineColor: color,
+                ], range: range)
+            case .underlineDashed:
+                result.addAttributes([
+                    .underlineStyle: NSUnderlineStyle.single
+                        .union(.patternDash).rawValue,
+                    .underlineColor: color,
+                ], range: range)
+            case .underlineDotted:
+                result.addAttributes([
+                    .underlineStyle: NSUnderlineStyle.single
+                        .union(.patternDot).rawValue,
+                    .underlineColor: color,
+                ], range: range)
             }
         }
+
         return result
     }
 
+    private func bodyTextAttributes() -> [NSAttributedString.Key: Any] {
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineSpacing = lineSpacing
+        return [
+            .font: readerFont(size: fontSize),
+            .foregroundColor: NSColor.labelColor,
+            .paragraphStyle: paragraphStyle,
+        ]
+    }
+
+    private func markerTextAttributes(
+        size: CGFloat,
+        weight: NSFont.Weight,
+        color: NSColor,
+        baselineOffset: CGFloat
+    ) -> [NSAttributedString.Key: Any] {
+        var result = bodyTextAttributes()
+        result[.font] = readerFont(size: size, weight: weight)
+        result[.foregroundColor] = color
+        result[.baselineOffset] = baselineOffset
+        return result
+    }
+
+    private func readerFont(
+        size: CGFloat,
+        weight: NSFont.Weight = .regular,
+        traits: NSFontTraitMask = []
+    ) -> NSFont {
+        let systemFont = NSFont.systemFont(ofSize: size, weight: weight)
+        let designedFont: NSFont
+        if typeface == .serif,
+           let descriptor = systemFont.fontDescriptor.withDesign(.serif),
+           let font = NSFont(descriptor: descriptor, size: size) {
+            designedFont = font
+        } else {
+            designedFont = systemFont
+        }
+        guard !traits.isEmpty else { return designedFont }
+        return NSFontManager.shared.convert(designedFont, toHaveTrait: traits)
+    }
+
+    private func readerColor(hex value: String) -> NSColor? {
+        let normalized = value
+            .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalized.count == 6 || normalized.count == 8,
+              let raw = UInt64(normalized, radix: 16) else { return nil }
+        let includesAlpha = normalized.count == 8
+        let red = CGFloat((raw >> (includesAlpha ? 24 : 16)) & 0xFF) / 255
+        let green = CGFloat((raw >> (includesAlpha ? 16 : 8)) & 0xFF) / 255
+        let blue = CGFloat((raw >> (includesAlpha ? 8 : 0)) & 0xFF) / 255
+        let alpha = includesAlpha ? CGFloat(raw & 0xFF) / 255 : 1
+        return NSColor(srgbRed: red, green: green, blue: blue, alpha: alpha)
+    }
+
+    /// Selects a verse the user clicked in the reader.
+    ///
+    /// Distinct from `model.focusVerse` on purpose: a selection made *here* must
+    /// not scroll the reader to the verse, because the verse is already on screen
+    /// under the pointer. Selections from elsewhere — search, history, read-aloud,
+    /// a cross-reference — still scroll, because there the verse may be anywhere.
+    private func selectVerseFromReader(_ reference: Int) {
+        isSelectingVerseFromReader = true
+        model.focusVerse(reference)
+    }
+
     private func openLexicon(_ lookup: LexiconLookupLink) {
-        model.focusVerse(lookup.reference)
+        selectVerseFromReader(lookup.reference)
+        // Queue the lookup before mounting the inspector. Its first rendered
+        // instance can then adopt this exact request immediately on appearance.
+        model.requestDictionaryLookup(keys: lookup.keys, word: lookup.word)
         selectedStudyTab = "dictionary"
         showingStudyInspector = true
-        model.requestDictionaryLookup(keys: lookup.keys, word: lookup.word)
+    }
+
+    private func handleReaderLink(_ url: URL) -> Bool {
+        let isReaderLink = readerVerseReference(from: url) != nil || LexiconLookupLink(url: url) != nil
+        guard isReaderLink else { return false }
+        guard linkActivationGate.shouldActivate(url, at: ProcessInfo.processInfo.systemUptime) else {
+            return true
+        }
+
+        if let reference = readerVerseReference(from: url) {
+            openVerseStudy(reference: reference)
+        } else if let lookup = LexiconLookupLink(url: url) {
+            openLexicon(lookup)
+        }
+        return true
     }
 
     private func setHighlight(_ color: String?, for verse: LampVerse) {
@@ -3070,40 +4098,48 @@ private struct TranslationSearchView: View {
 private struct InstalledModulesView: View {
     @EnvironmentObject private var model: LibraryModel
     @State private var moduleToRemove: LampInstalledModule?
+    @State private var exportRequest: ModuleExportRequest?
     let showImporter: () -> Void
 
+    private var exportChoices: [ModuleExportChoice] {
+        LampPersonalModule.allCases.map(ModuleExportChoice.personal)
+            + model.modules.filter { !$0.isBundled }.map(ModuleExportChoice.installed)
+    }
+
     var body: some View {
-        Group {
-            if model.modules.isEmpty {
-                ContentUnavailableView {
-                    Label("No Modules Installed", systemImage: "square.stack.3d.up")
-                } description: {
-                    Text("Install .lamp translations, dictionaries, commentaries, reading plans, devotionals, quizzes, notes, and highlights.")
-                } actions: {
-                    Button("Install Module…", action: showImporter)
-                        .buttonStyle(.borderedProminent)
-                }
-            } else {
-                List {
-                    moduleSection("Translations", modules: model.modules.filter { $0.kind == .translation })
-                    moduleSection("Dictionaries", modules: model.modules.filter { $0.kind == .dictionary })
-                    moduleSection("Commentaries", modules: model.modules.filter { $0.kind == .commentary })
-                    moduleSection("Reading Plans", modules: model.planModules)
-                    moduleSection("Devotionals", modules: model.devotionalModules)
-                    moduleSection("Quizzes", modules: model.quizModuleInstallations)
-                    moduleSection("Notes", modules: model.noteModules)
-                    moduleSection("Highlights", modules: model.highlightModules)
-                }
-            }
+        List {
+            personalModuleSection
+            moduleSection("Translations", modules: model.modules.filter { $0.kind == .translation })
+            moduleSection("Dictionaries", modules: model.modules.filter { $0.kind == .dictionary })
+            moduleSection("Commentaries", modules: model.modules.filter { $0.kind == .commentary })
+            moduleSection("Books", modules: model.modules.filter { $0.kind == .book })
+            moduleSection("Reading Plans", modules: model.planModules)
+            moduleSection("Writing", modules: model.devotionalModules)
+            moduleSection("Quizzes", modules: model.quizModuleInstallations)
+            moduleSection("Notes", modules: model.noteModules)
+            moduleSection("Highlights", modules: model.highlightModules)
         }
         .navigationTitle("Modules")
         .toolbar {
             ToolbarItemGroup {
                 Button("Install Module…", systemImage: "plus", action: showImporter)
+                    .help("Install a Lamp module")
+                Button("Export Module…", systemImage: "square.and.arrow.up") {
+                    exportRequest = ModuleExportRequest(initialChoiceID: nil)
+                }
+                .help("Export a personal or user-installed module")
                 Button("Show Library in Finder", systemImage: "folder") {
                     NSWorkspace.shared.open(model.library.rootURL)
                 }
+                .help("Show the Lamp Bible library in Finder")
             }
+        }
+        .sheet(item: $exportRequest) { request in
+            ModuleExportWizard(
+                choices: exportChoices,
+                initialChoiceID: request.initialChoiceID
+            )
+            .environmentObject(model)
         }
         .confirmationDialog(
             "Remove Module?",
@@ -3119,6 +4155,39 @@ private struct InstalledModulesView: View {
             }
         } message: { module in
             Text("This removes the installed copy of \(module.name). Your original .lamp file is not affected.")
+        }
+    }
+
+    private var personalModuleSection: some View {
+        Section("Personal") {
+            ForEach(LampPersonalModule.allCases) { personalModule in
+                let choice = ModuleExportChoice.personal(personalModule)
+                HStack(spacing: 12) {
+                    Image(systemName: icon(for: personalModule.kind))
+                        .font(.title3)
+                        .foregroundStyle(.tint)
+                        .frame(width: 28)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(personalModule.name)
+                        Text("Personal")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Export", systemImage: "square.and.arrow.up") {
+                        exportRequest = ModuleExportRequest(initialChoiceID: choice.id)
+                    }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.borderless)
+                    .help("Export \(personalModule.name)")
+                }
+                .padding(.vertical, 4)
+                .contextMenu {
+                    Button("Export Module…", systemImage: "square.and.arrow.up") {
+                        exportRequest = ModuleExportRequest(initialChoiceID: choice.id)
+                    }
+                }
+            }
         }
     }
 
@@ -3152,16 +4221,31 @@ private struct InstalledModulesView: View {
                         }
                         Spacer()
                         if !module.isBundled {
+                            Button("Export", systemImage: "square.and.arrow.up") {
+                                exportRequest = ModuleExportRequest(
+                                    initialChoiceID: ModuleExportChoice.installed(module).id
+                                )
+                            }
+                            .labelStyle(.iconOnly)
+                            .buttonStyle(.borderless)
+                            .help("Export \(module.name)")
                             Button("Remove", systemImage: "trash", role: .destructive) {
                                 moduleToRemove = module
                             }
                             .labelStyle(.iconOnly)
                             .buttonStyle(.borderless)
+                            .help("Remove \(module.name)")
                         }
                     }
                     .padding(.vertical, 4)
                     .contextMenu {
                         if !module.isBundled {
+                            Button("Export Module…", systemImage: "square.and.arrow.up") {
+                                exportRequest = ModuleExportRequest(
+                                    initialChoiceID: ModuleExportChoice.installed(module).id
+                                )
+                            }
+                            Divider()
                             Button("Remove Module", role: .destructive) {
                                 moduleToRemove = module
                             }
@@ -3183,6 +4267,225 @@ private struct InstalledModulesView: View {
         case .quiz: "questionmark.bubble"
         case .notes: "note.text"
         case .highlights: "highlighter"
+        }
+    }
+}
+
+private struct ModuleExportChoice: Identifiable {
+    enum Source {
+        case personal(LampPersonalModule)
+        case installed(LampInstalledModule)
+    }
+
+    let id: String
+    let name: String
+    let kind: LampModuleKind
+    let exportIdentifier: String
+    let source: Source
+
+    static func personal(_ module: LampPersonalModule) -> Self {
+        Self(
+            id: "personal:\(module.id)",
+            name: module.name,
+            kind: module.kind,
+            exportIdentifier: module.id,
+            source: .personal(module)
+        )
+    }
+
+    static func installed(_ module: LampInstalledModule) -> Self {
+        Self(
+            id: "installed:\(module.kind.rawValue):\(module.id)",
+            name: module.name,
+            kind: module.kind,
+            exportIdentifier: module.id,
+            source: .installed(module)
+        )
+    }
+
+    var supportedFormats: [LampModuleExportFormat] {
+        switch source {
+        case .personal(let module):
+            LampLibrary.supportedExportFormats(for: module)
+        case .installed(let module):
+            LampLibrary.supportsMarkdownExport(for: module.kind)
+                ? [.lamp, .markdown]
+                : [.lamp]
+        }
+    }
+}
+
+private struct ModuleExportRequest: Identifiable {
+    let id = UUID()
+    let initialChoiceID: String?
+}
+
+private struct ModuleExportWizard: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var model: LibraryModel
+    let choices: [ModuleExportChoice]
+
+    @State private var selectedChoiceID: String
+    @State private var format = LampModuleExportFormat.lamp
+    @State private var isExporting = false
+    @State private var errorMessage: String?
+
+    init(choices: [ModuleExportChoice], initialChoiceID: String?) {
+        self.choices = choices
+        let initialID = initialChoiceID.flatMap { requestedID in
+            choices.first(where: { $0.id == requestedID })?.id
+        } ?? choices.first?.id ?? ""
+        _selectedChoiceID = State(initialValue: initialID)
+    }
+
+    private var selectedChoice: ModuleExportChoice? {
+        choices.first { $0.id == selectedChoiceID }
+    }
+
+    private var supportsMarkdown: Bool {
+        selectedChoice?.supportedFormats.contains(.markdown) == true
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Export Personal Module", systemImage: "square.and.arrow.up")
+                    .font(.title2.bold())
+                Text("Choose a personal or user-installed module and the portable format to create.")
+                    .foregroundStyle(.secondary)
+            }
+            .padding([.horizontal, .top], 24)
+
+            Form {
+                Picker("Module", selection: $selectedChoiceID) {
+                    ForEach(choices) { choice in
+                        Text("\(choice.name) — \(choice.kind.exportDisplayName)")
+                            .tag(choice.id)
+                    }
+                }
+                .help("Choose the personal or user-installed module to export")
+
+                if supportsMarkdown {
+                    Picker("Format", selection: $format) {
+                        Text("Lamp Module (.lamp)")
+                            .tag(LampModuleExportFormat.lamp)
+                        Text("Markdown (.md)")
+                            .tag(LampModuleExportFormat.markdown)
+                    }
+                    .pickerStyle(.radioGroup)
+                    .help("Choose the exported file format")
+                } else {
+                    LabeledContent("Format") {
+                        Text("Lamp Module (.lamp)")
+                    }
+                    .accessibilityLabel("Format: Lamp Module")
+                }
+
+                LabeledContent("About this format") {
+                    Text(formatDescription)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: 330, alignment: .leading)
+                }
+            }
+            .formStyle(.grouped)
+            .onChange(of: selectedChoiceID) { _, _ in
+                if !supportsMarkdown { format = .lamp }
+            }
+
+            Divider()
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Export…", systemImage: "square.and.arrow.up") {
+                    chooseDestinationAndExport()
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(selectedChoice == nil || isExporting)
+                .help("Choose where to save the exported module")
+            }
+            .padding(16)
+        }
+        .frame(width: 540, height: 390)
+        .alert(
+            "Module Could Not Be Exported",
+            isPresented: Binding(
+                get: { errorMessage != nil },
+                set: { if !$0 { errorMessage = nil } }
+            )
+        ) {
+            Button("OK") { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "The module could not be exported.")
+        }
+    }
+
+    private var formatDescription: String {
+        switch format {
+        case .lamp:
+            if let choice = selectedChoice, case .personal = choice.source {
+                "A portable snapshot of the current personal collection, preserving its structured content and metadata."
+            } else {
+                "A lossless copy of the original module, including all metadata, annotations, and structured content."
+            }
+        case .markdown:
+            "A readable text version of the module. Use the Lamp format when you need to preserve every module feature."
+        }
+    }
+
+    private func chooseDestinationAndExport() {
+        guard let choice = selectedChoice else { return }
+        let panel = NSSavePanel()
+        panel.title = "Export \(choice.name)"
+        panel.prompt = "Export"
+        panel.nameFieldStringValue = choice.exportIdentifier + (format == .lamp ? ".lamp" : ".md")
+        panel.allowedContentTypes = format == .lamp
+            ? [UTType(exportedAs: "com.neus.lamp-bible.lamp", conformingTo: .data)]
+            : [UTType(importedAs: "net.daringfireball.markdown", conformingTo: .plainText)]
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let destinationURL = panel.url else { return }
+
+        isExporting = true
+        errorMessage = nil
+        Task {
+            do {
+                switch choice.source {
+                case .personal(let module):
+                    try await model.library.exportPersonalModule(
+                        module,
+                        format: format,
+                        to: destinationURL
+                    )
+                case .installed(let module):
+                    try await model.library.exportModule(
+                        moduleID: module.id,
+                        format: format,
+                        to: destinationURL
+                    )
+                }
+                dismiss()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isExporting = false
+        }
+    }
+}
+
+private extension LampModuleKind {
+    var exportDisplayName: String {
+        switch self {
+        case .translation: "Translation"
+        case .dictionary: "Dictionary"
+        case .commentary: "Commentary"
+        case .book: "Book"
+        case .devotional: "Writing"
+        case .notes: "Notes"
+        case .plan: "Reading Plan"
+        case .highlights: "Highlights"
+        case .quiz: "Quiz"
         }
     }
 }

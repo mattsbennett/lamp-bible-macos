@@ -56,6 +56,21 @@
 		A1000000000000000000002F /* MCP in Frameworks */ = {isa = PBXBuildFile; productRef = G10000000000000000000007 /* MCP */; };
 		A10000000000000000000030 /* lamp-mcp in Embed Helper Tools */ = {isa = PBXBuildFile; fileRef = B1000000000000000000002C /* lamp-mcp */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		A10000000000000000000031 /* BookModulesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000002D /* BookModulesView.swift */; };
+		A10000000000000000000032 /* AddToLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000002E /* AddToLibraryView.swift */; };
+		A10000000000000000000033 /* SlideStudioView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000002F /* SlideStudioView.swift */; };
+		A10000000000000000000034 /* SlidePresentationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000030 /* SlidePresentationView.swift */; };
+		A10000000000000000000035 /* AgentSkills in Resources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000031 /* AgentSkills */; };
+		A10000000000000000000036 /* SlideRemoteHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000032 /* SlideRemoteHost.swift */; };
+		A10000000000000000000037 /* SlideRemotePairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000033 /* SlideRemotePairingView.swift */; };
+		A10000000000000000000038 /* WritingPreviewSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000034 /* WritingPreviewSupport.swift */; };
+		A10000000000000000000039 /* WritingPreviewPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000035 /* WritingPreviewPane.swift */; };
+		A1000000000000000000003A /* WrappingRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000036 /* WrappingRow.swift */; };
+		A1000000000000000000003B /* NativeAgentChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000037 /* NativeAgentChatView.swift */; };
+		A1000000000000000000003C /* AgentChatSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000038 /* AgentChatSupport.swift */; };
+		A1000000000000000000003D /* SwiftyChat in Frameworks */ = {isa = PBXBuildFile; productRef = G1000000000000000000000A /* SwiftyChat */; };
+		A1000000000000000000003E /* WorkspaceTextFileSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000039 /* WorkspaceTextFileSupport.swift */; };
+		A1000000000000000000003F /* WorkspaceSkillSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000003A /* WorkspaceSkillSupport.swift */; };
+		A10000000000000000000040 /* BookReadingSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000003B /* BookReadingSupport.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -104,6 +119,20 @@
 		B1000000000000000000002B /* LampMCPServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampMCPServer/LampMCPServer.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000002C /* lamp-mcp */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "lamp-mcp"; sourceTree = BUILT_PRODUCTS_DIR; };
 		B1000000000000000000002D /* BookModulesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/BookModulesView.swift; sourceTree = SOURCE_ROOT; };
+		B1000000000000000000002E /* AddToLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/AddToLibraryView.swift; sourceTree = SOURCE_ROOT; };
+		B1000000000000000000002F /* SlideStudioView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Presentation/SlideStudioView.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000030 /* SlidePresentationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Presentation/SlidePresentationView.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000031 /* AgentSkills */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Sources/LampBibleMac/Resources/AgentSkills; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000032 /* SlideRemoteHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Presentation/SlideRemoteHost.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000033 /* SlideRemotePairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Presentation/SlideRemotePairingView.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000034 /* WritingPreviewSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/WritingPreviewSupport.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000035 /* WritingPreviewPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/WritingPreviewPane.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000036 /* WrappingRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/WrappingRow.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000037 /* NativeAgentChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/NativeAgentChatView.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000038 /* AgentChatSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/AgentChatSupport.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000039 /* WorkspaceTextFileSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/WorkspaceTextFileSupport.swift; sourceTree = SOURCE_ROOT; };
+		B1000000000000000000003A /* WorkspaceSkillSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/WorkspaceSkillSupport.swift; sourceTree = SOURCE_ROOT; };
+		B1000000000000000000003B /* BookReadingSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/BookReadingSupport.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXContainerItemProxy section */
@@ -138,6 +167,7 @@
 				A1000000000000000000000B /* LampCore in Frameworks */,
 				A1000000000000000000000C /* LampModuleKit in Frameworks */,
 				A10000000000000000000026 /* SwiftTerm in Frameworks */,
+				A1000000000000000000003D /* SwiftyChat in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -173,8 +203,16 @@
 				B10000000000000000000015 /* LibrarySyncController.swift */,
 				B10000000000000000000003 /* LibraryModel.swift */,
 				B10000000000000000000004 /* LibraryRootView.swift */,
+				B1000000000000000000002E /* AddToLibraryView.swift */,
 				B1000000000000000000002D /* BookModulesView.swift */,
 				B1000000000000000000000C /* DevotionalsAndQuizzesView.swift */,
+				B1000000000000000000002F /* SlideStudioView.swift */,
+				B10000000000000000000030 /* SlidePresentationView.swift */,
+				B10000000000000000000032 /* SlideRemoteHost.swift */,
+				B10000000000000000000033 /* SlideRemotePairingView.swift */,
+				B10000000000000000000034 /* WritingPreviewSupport.swift */,
+				B10000000000000000000035 /* WritingPreviewPane.swift */,
+				B10000000000000000000036 /* WrappingRow.swift */,
 				B10000000000000000000010 /* DevotionalEditorView.swift */,
 				B10000000000000000000016 /* DevotionalContentView.swift */,
 				B10000000000000000000018 /* DevotionalAudioRecorderView.swift */,
@@ -199,6 +237,11 @@
 				B10000000000000000000022 /* TextScaleSupport.swift */,
 				B10000000000000000000023 /* TextSizeMenu.swift */,
 				B10000000000000000000024 /* DevotionalAgentWorkspaceView.swift */,
+				B10000000000000000000037 /* NativeAgentChatView.swift */,
+				B10000000000000000000038 /* AgentChatSupport.swift */,
+				B10000000000000000000039 /* WorkspaceTextFileSupport.swift */,
+				B1000000000000000000003A /* WorkspaceSkillSupport.swift */,
+				B1000000000000000000003B /* BookReadingSupport.swift */,
 				B10000000000000000000025 /* AgentRevisionSupport.swift */,
 				B10000000000000000000026 /* AgentMCPConfigurationSupport.swift */,
 				B10000000000000000000027 /* AgentModuleAccess.swift */,
@@ -221,6 +264,7 @@
 				B10000000000000000000021 /* Assets.xcassets */,
 				B1000000000000000000000D /* bundled_modules.db.zlib */,
 				B1000000000000000000001E /* TipTapEditor */,
+				B10000000000000000000031 /* AgentSkills */,
 			);
 			name = Resources;
 			sourceTree = "<group>";
@@ -258,6 +302,7 @@
 				G10000000000000000000002 /* LampCore */,
 				G10000000000000000000003 /* LampModuleKit */,
 				G10000000000000000000005 /* SwiftTerm */,
+				G1000000000000000000000A /* SwiftyChat */,
 			);
 			productName = "Lamp Bible";
 			productReference = B1000000000000000000000B /* Lamp Bible.app */;
@@ -314,6 +359,7 @@
 				G10000000000000000000001 /* XCLocalSwiftPackageReference "lamp-bible-core" */,
 				G10000000000000000000004 /* XCRemoteSwiftPackageReference "SwiftTerm" */,
 				G10000000000000000000006 /* XCRemoteSwiftPackageReference "swift-sdk" */,
+				G10000000000000000000009 /* XCRemoteSwiftPackageReference "SwiftyChat" */,
 			);
 			productRefGroup = H10000000000000000000003 /* Products */;
 			projectDirPath = "";
@@ -333,6 +379,7 @@
 				A10000000000000000000022 /* Assets.xcassets in Resources */,
 				A1000000000000000000000E /* bundled_modules.db.zlib in Resources */,
 				A1000000000000000000001F /* TipTapEditor in Resources */,
+				A10000000000000000000035 /* AgentSkills in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -350,7 +397,15 @@
 				A10000000000000000000002 /* LampBibleMacApp.swift in Sources */,
 				A10000000000000000000003 /* LibraryModel.swift in Sources */,
 				A10000000000000000000004 /* LibraryRootView.swift in Sources */,
+				A10000000000000000000032 /* AddToLibraryView.swift in Sources */,
 				A10000000000000000000031 /* BookModulesView.swift in Sources */,
+				A10000000000000000000033 /* SlideStudioView.swift in Sources */,
+				A10000000000000000000034 /* SlidePresentationView.swift in Sources */,
+				A10000000000000000000036 /* SlideRemoteHost.swift in Sources */,
+				A10000000000000000000037 /* SlideRemotePairingView.swift in Sources */,
+				A10000000000000000000038 /* WritingPreviewSupport.swift in Sources */,
+				A10000000000000000000039 /* WritingPreviewPane.swift in Sources */,
+				A1000000000000000000003A /* WrappingRow.swift in Sources */,
 				A10000000000000000000005 /* ReadingPlansView.swift in Sources */,
 				A10000000000000000000006 /* StudyHighlightPalette.swift in Sources */,
 				A10000000000000000000007 /* StudyInspectorView.swift in Sources */,
@@ -371,6 +426,11 @@
 				A10000000000000000000023 /* TextScaleSupport.swift in Sources */,
 				A10000000000000000000024 /* TextSizeMenu.swift in Sources */,
 				A10000000000000000000025 /* DevotionalAgentWorkspaceView.swift in Sources */,
+				A1000000000000000000003B /* NativeAgentChatView.swift in Sources */,
+				A1000000000000000000003C /* AgentChatSupport.swift in Sources */,
+				A1000000000000000000003E /* WorkspaceTextFileSupport.swift in Sources */,
+				A1000000000000000000003F /* WorkspaceSkillSupport.swift in Sources */,
+				A10000000000000000000040 /* BookReadingSupport.swift in Sources */,
 				A10000000000000000000027 /* AgentRevisionSupport.swift in Sources */,
 				A10000000000000000000028 /* AgentMCPConfigurationSupport.swift in Sources */,
 				A10000000000000000000029 /* AgentModuleAccess.swift in Sources */,
@@ -585,6 +645,14 @@
 				version = 0.12.1;
 			};
 		};
+		G10000000000000000000009 /* XCRemoteSwiftPackageReference "SwiftyChat" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/EnesKaraosman/SwiftyChat.git";
+			requirement = {
+				kind = exactVersion;
+				version = 4.1.1;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -612,6 +680,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = G10000000000000000000001 /* XCLocalSwiftPackageReference "lamp-bible-core" */;
 			productName = LampCore;
+		};
+		G1000000000000000000000A /* SwiftyChat */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = G10000000000000000000009 /* XCRemoteSwiftPackageReference "SwiftyChat" */;
+			productName = SwiftyChat;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

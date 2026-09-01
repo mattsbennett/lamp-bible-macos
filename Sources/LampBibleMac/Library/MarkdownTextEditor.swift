@@ -14,6 +14,10 @@ struct MarkdownTextEditor: NSViewRepresentable {
     @Binding var selection: NSRange
     var fontSize: Double = 15
     var isEditable: Bool = true
+    /// Reports how far through the document the view is scrolled, from 0 to 1, so
+    /// a preview beside it can follow. Nil when nothing is listening, which keeps
+    /// the notification observer off entirely.
+    var onScrollFractionChanged: ((Double) -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -36,6 +40,7 @@ struct MarkdownTextEditor: NSViewRepresentable {
         scrollView.hasVerticalScroller = true
         scrollView.drawsBackground = false
         textView.drawsBackground = false
+        context.coordinator.observeScrolling(of: scrollView)
         return scrollView
     }
 
@@ -74,12 +79,65 @@ struct MarkdownTextEditor: NSViewRepresentable {
         }
     }
 
+    static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
+        coordinator.stopObservingScrolling()
+    }
+
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: MarkdownTextEditor
         var pendingSelection: NSRange?
+        private var scrollObserver: NSObjectProtocol?
+        private var lastReportedFraction: Double?
 
         init(_ parent: MarkdownTextEditor) {
             self.parent = parent
+        }
+
+        deinit {
+            if let scrollObserver {
+                NotificationCenter.default.removeObserver(scrollObserver)
+            }
+        }
+
+        func observeScrolling(of scrollView: NSScrollView) {
+            guard scrollObserver == nil else { return }
+            let clipView = scrollView.contentView
+            clipView.postsBoundsChangedNotifications = true
+            scrollObserver = NotificationCenter.default.addObserver(
+                forName: NSView.boundsDidChangeNotification,
+                object: clipView,
+                queue: .main
+            ) { [weak self, weak scrollView] _ in
+                MainActor.assumeIsolated {
+                    guard let self, let scrollView else { return }
+                    self.reportScrollFraction(of: scrollView)
+                }
+            }
+        }
+
+        func stopObservingScrolling() {
+            guard let scrollObserver else { return }
+            NotificationCenter.default.removeObserver(scrollObserver)
+            self.scrollObserver = nil
+        }
+
+        @MainActor
+        private func reportScrollFraction(of scrollView: NSScrollView) {
+            guard let report = parent.onScrollFractionChanged else { return }
+            let contentHeight = scrollView.documentView?.bounds.height ?? 0
+            let viewportHeight = scrollView.contentView.bounds.height
+            let fraction = ProportionalScrollSync.fraction(
+                offset: scrollView.contentView.bounds.origin.y,
+                contentHeight: contentHeight,
+                viewportHeight: viewportHeight
+            )
+            guard ProportionalScrollSync.isSignificantChange(
+                from: lastReportedFraction,
+                to: fraction,
+                scrollableHeight: max(contentHeight - viewportHeight, 0)
+            ) else { return }
+            lastReportedFraction = fraction
+            report(fraction)
         }
 
         func textDidChange(_ notification: Notification) {

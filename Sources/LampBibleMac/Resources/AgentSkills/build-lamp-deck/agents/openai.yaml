@@ -1,0 +1,4 @@
+interface:
+  display_name: "Build Lamp Deck"
+  short_description: "Build accessible decks from Lamp writing"
+  default_prompt: "Use $build-lamp-deck to create a presentation deck accompanying this devotional."

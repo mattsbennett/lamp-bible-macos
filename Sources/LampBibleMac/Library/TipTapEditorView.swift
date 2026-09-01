@@ -56,12 +56,42 @@ struct TipTapEditorView: NSViewRepresentable {
         let coordinator = context.coordinator
 
         configuration.userContentController.add(coordinator, name: "tiptapBridge")
+
+        // The page's own stylesheet paints pure black before any host message can
+        // reach it, which reads as a flash of black as the editor opens. Injecting
+        // the host colour at document start means the very first paint is already
+        // the right one — waiting for `ready` is far too late.
+        let initialBackground = cssColor(
+            for: .windowBackgroundColor,
+            in: NSApp?.effectiveAppearance ?? .currentDrawing()
+        )
+        configuration.userContentController.addUserScript(
+            WKUserScript(
+                source: TipTapEditorCoordinator.backgroundStyleScript(cssColor: initialBackground),
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            )
+        )
+        configuration.userContentController.addUserScript(
+            WKUserScript(
+                source: TipTapEditorCoordinator.firstPaintScript,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            )
+        )
+
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = coordinator
         webView.allowsBackForwardNavigationGestures = false
         webView.setContentHuggingPriority(.defaultLow, for: .horizontal)
         webView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        webView.isHidden = !isVisible
+        // A web view is opaque white until its first paint, and no amount of page
+        // styling reaches that frame — the page has not started drawing yet. Stay
+        // hidden until there is something to show; the host's own background sits
+        // behind and is already the right colour.
+        webView.isHidden = true
+        webView.underPageBackgroundColor = .windowBackgroundColor
+        coordinator.hostWantsVisible = isVisible
 
         coordinator.webView = webView
         coordinator.updateMediaScopeID(mediaScopeID)
@@ -71,6 +101,7 @@ struct TipTapEditorView: NSViewRepresentable {
         coordinator.setContent(markdownContent)
         coordinator.setFontSize(fontSize)
         coordinator.setTheme(isDark: context.environment.colorScheme == .dark)
+        applyBackgroundColor(to: webView, coordinator: coordinator)
         coordinator.onReady = { onCoordinatorReady(coordinator) }
 
         do {
@@ -91,16 +122,14 @@ struct TipTapEditorView: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
-        let shouldHide = !isVisible
-        if webView.isHidden != shouldHide {
-            webView.isHidden = shouldHide
-        }
         let coordinator = context.coordinator
+        coordinator.hostWantsVisible = isVisible
         coordinator.updateMediaScopeID(mediaScopeID)
         coordinator.onContentChanged = bindingUpdater
         coordinator.setMediaMap(mediaMap)
         coordinator.setFontSize(fontSize)
         coordinator.setTheme(isDark: context.environment.colorScheme == .dark)
+        applyBackgroundColor(to: webView, coordinator: coordinator)
 
         // Changes made by TipTap have already updated lastKnownMarkdown. A
         // different value here therefore came from loading a devotional or from
@@ -117,6 +146,32 @@ struct TipTapEditorView: NSViewRepresentable {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "tiptapBridge")
         webView.navigationDelegate = nil
         coordinator.webView = nil
+    }
+
+    /// The Markdown surface is a text view that draws no background of its own, so
+    /// it shows the window colour straight through. Resolving that same colour and
+    /// handing it to the web view is what makes the two writing surfaces match,
+    /// and keeps them matching when the system appearance changes.
+    private func applyBackgroundColor(
+        to webView: WKWebView,
+        coordinator: TipTapEditorCoordinator
+    ) {
+        let color = NSColor.windowBackgroundColor
+        webView.underPageBackgroundColor = color
+        coordinator.setBackgroundColor(cssColor(for: color, in: webView.effectiveAppearance))
+    }
+
+    /// Dynamic system colours have no fixed value until they are resolved against
+    /// an appearance, and CSS needs a literal.
+    private func cssColor(for color: NSColor, in appearance: NSAppearance) -> String {
+        var resolved = color
+        appearance.performAsCurrentDrawingAppearance {
+            resolved = color.usingColorSpace(.sRGB) ?? color
+        }
+        let red = Int((resolved.redComponent * 255).rounded())
+        let green = Int((resolved.greenComponent * 255).rounded())
+        let blue = Int((resolved.blueComponent * 255).rounded())
+        return String(format: "#%02X%02X%02X", red, green, blue)
     }
 
     private var bindingUpdater: (String) -> Void {
@@ -202,6 +257,19 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     private var pendingMediaMap: [String: String]?
     private var pendingFontSize: Double?
     private var pendingTheme: Bool?
+    private var pendingBackgroundColor: String?
+    private var appliedBackgroundColor: String?
+    private var appliedTheme: Bool?
+
+    /// Whether the host wants the editor on screen at all. Kept apart from
+    /// `hasPainted` so switching surfaces never re-exposes an unpainted view.
+    var hostWantsVisible = true {
+        didSet {
+            guard hostWantsVisible != oldValue else { return }
+            updateVisibility()
+        }
+    }
+    private var hasPainted = false
 
     init(mediaScopeID: String) {
         self.mediaScopeID = mediaScopeID
@@ -209,6 +277,49 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
 
     func updateMediaScopeID(_ mediaScopeID: String) {
         self.mediaScopeID = mediaScopeID
+    }
+
+    /// Driven by the page reporting that it has produced a frame. Neither `ready`
+    /// nor `didFinish` is that moment — both fire while the web view is still
+    /// showing its blank white backing, and revealing on either put the flash back.
+    private func markPainted() {
+        guard !hasPainted else { return }
+        hasPainted = true
+        updateVisibility()
+    }
+
+    /// A page that never reports painting — a failed load showing the error HTML,
+    /// or a bundle whose script did not run — must still be shown, or the editor
+    /// is a permanently blank pane.
+    private func scheduleRevealFallback() {
+        guard !hasPainted else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            self?.markPainted()
+        }
+    }
+
+    private func updateVisibility() {
+        webView?.isHidden = !(hostWantsVisible && hasPainted)
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        scheduleRevealFallback()
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        didFail navigation: WKNavigation!,
+        withError error: Error
+    ) {
+        scheduleRevealFallback()
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        didFailProvisionalNavigation navigation: WKNavigation!,
+        withError error: Error
+    ) {
+        scheduleRevealFallback()
     }
 
     func userContentController(
@@ -238,7 +349,14 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
                 pendingTheme = nil
                 setTheme(isDark: isDark)
             }
+            if let color = pendingBackgroundColor {
+                pendingBackgroundColor = nil
+                setBackgroundColor(color)
+            }
             onReady?()
+
+        case "painted":
+            markPainted()
 
         case "contentChanged":
             guard let editorMarkdown = body["markdown"] as? String else { return }
@@ -434,8 +552,75 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
             pendingTheme = isDark
             return
         }
+        // Every host update calls this; only a real change is worth a round trip
+        // into the page.
+        guard appliedTheme != isDark else { return }
+        appliedTheme = isDark
         evaluate("window.editorAPI.setTheme(\(isDark))")
     }
+
+    /// Paints the page the colour the surrounding window is painted, so the visual
+    /// editor sits in the window rather than as a black rectangle inside it. The
+    /// bundled stylesheet hardcodes pure black for its dark theme, which is far
+    /// darker than any native surface beside it.
+    ///
+    /// Only needed when the appearance changes after load; the same style is
+    /// already injected at document start so the first paint never flashes.
+    func setBackgroundColor(_ cssColor: String) {
+        guard isReady else {
+            pendingBackgroundColor = cssColor
+            return
+        }
+        guard appliedBackgroundColor != cssColor else { return }
+        appliedBackgroundColor = cssColor
+        evaluate(Self.backgroundStyleScript(cssColor: cssColor))
+    }
+
+    /// Overrides the stylesheet's `--bg-color` from a `<style>` element the host
+    /// owns. `!important` is what lets one rule survive the theme class being
+    /// toggled underneath it, so the colour never has to be re-applied.
+    static func backgroundStyleScript(cssColor: String) -> String {
+        """
+        (function () {
+          var id = 'lamp-host-background';
+          var style = document.getElementById(id);
+          if (!style) {
+            style = document.createElement('style');
+            style.id = id;
+            (document.head || document.documentElement).appendChild(style);
+          }
+          style.textContent =
+            'body, body.dark { --bg-color: \(cssColor) !important; }';
+        })();
+        """
+    }
+
+    /// Reports the first frame the page actually produces.
+    ///
+    /// Two nested animation frames is the reliable "we have painted" signal: the
+    /// first is scheduled before the upcoming paint, the second runs after it.
+    /// Waiting for the document to parse first means that paint includes the
+    /// styled background rather than an empty viewport.
+    static let firstPaintScript = """
+    (function () {
+      function signalPainted() {
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () {
+            try {
+              window.webkit.messageHandlers.tiptapBridge.postMessage({
+                type: 'painted'
+              });
+            } catch (error) {}
+          });
+        });
+      }
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', signalPainted);
+      } else {
+        signalPainted();
+      }
+    })();
+    """
 
     private func editorMarkdown(from portableMarkdown: String) -> String {
         portableMarkdown.replacingOccurrences(

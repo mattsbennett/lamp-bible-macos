@@ -1,5 +1,7 @@
+import AppKit
 import Foundation
 import LampModuleKit
+import SwiftUI
 import Testing
 @testable import LampBibleMacSupport
 
@@ -33,6 +35,17 @@ struct ReaderSupportTests {
         #expect(LexiconLookupLink(keys: ["H7225"], reference: 1_001_001)?.word == nil)
     }
 
+    @Test func scriptureAnnotationLinksPreserveTheirRange() throws {
+        let link = try #require(ScriptureAnnotationLink(
+            startReference: 1_001_003,
+            endReference: 1_001_005
+        ))
+        #expect(ScriptureAnnotationLink(url: try #require(link.url)) == link)
+        #expect(ScriptureAnnotationLink(startReference: 0) == nil)
+        #expect(ScriptureAnnotationLink(startReference: 1_001_005, endReference: 1_001_003) == nil)
+        #expect(ScriptureAnnotationLink(url: try #require(URL(string: "https://example.com"))) == nil)
+    }
+
     @Test func strongsKeysCompareAcrossSpellings() {
         #expect(StrongsKey.normalized(" h07225 ") == "H7225")
         #expect(StrongsKey.normalized("G3588a") == "G3588A")
@@ -48,6 +61,129 @@ struct ReaderSupportTests {
         #expect(!StrongsKey.matches("H3056", "G3056"))
         #expect(!StrongsKey.matches("G3588a", "G3588b"))
         #expect(!StrongsKey.matches("", "H7225"))
+    }
+
+    @Test func readerLookupKeysDropUntranslatedMarkersAndExpandLegacyLists() {
+        #expect(StrongsKey.readerLookupKeys(["H853"]) == [])
+        #expect(StrongsKey.readerLookupKeys(["H853", "H1254"]) == ["H1254"])
+        #expect(StrongsKey.readerLookupKeys(["H0853,H01254", "H1254"]) == ["H1254"])
+        #expect(StrongsKey.readerLookupKeys(["G3056 G3588a"]) == ["G3056", "G3588A"])
+    }
+
+    @Test func instantDetailsRequireStrongsAnnotations() {
+        #expect(!StrongsKey.hasAnnotations([nil, "", "   "]))
+        #expect(StrongsKey.hasAnnotations([nil, " H7225 "]))
+    }
+
+    @Test func readerLinkActivationCoalescesNativeAndFallbackCallbacks() throws {
+        let first = try #require(URL(string: "lamp-lexicon://lookup?key=H1254&reference=1001001"))
+        let second = try #require(URL(string: "lamp-lexicon://lookup?key=H776&reference=1001001"))
+        var gate = ReaderLinkActivationGate()
+
+        let firstActivation = gate.shouldActivate(first, at: 10)
+        let nativeDuplicate = gate.shouldActivate(first, at: 10.1)
+        let differentLink = gate.shouldActivate(second, at: 10.2)
+        let returnToFirstLink = gate.shouldActivate(first, at: 10.3)
+        let laterActivation = gate.shouldActivate(first, at: 10.8)
+
+        #expect(firstActivation)
+        #expect(!nativeDuplicate)
+        #expect(differentLink)
+        #expect(returnToFirstLink)
+        #expect(laterActivation)
+    }
+
+    @Test func readerScrollTailExposesTheFinalAnchorWithoutDelayingCompletion() {
+        #expect(ReaderScrollTail.height(for: 600) == 599)
+        #expect(ReaderScrollTail.height(for: 0) == 0)
+
+        let totalHeight: CGFloat = 1_599
+        #expect(!ReaderScrollTail.hasReachedContentBottom(
+            visibleMaxY: 991,
+            totalContentHeight: totalHeight,
+            viewportHeight: 600
+        ))
+        #expect(ReaderScrollTail.hasReachedContentBottom(
+            visibleMaxY: 992,
+            totalContentHeight: totalHeight,
+            viewportHeight: 600
+        ))
+    }
+
+    @Test func scripturePreviewContextIncludesAndMarksNeighboringVerses() {
+        let chapter = (1...10).map { 43_001_000 + $0 }
+
+        #expect(ScripturePreviewContextResolver.references(
+            in: chapter,
+            from: 43_001_005,
+            to: 43_001_006,
+            contextAmount: .oneVerse
+        ) == [
+            ScripturePreviewReference(reference: 43_001_004, isContext: true),
+            ScripturePreviewReference(reference: 43_001_005, isContext: false),
+            ScripturePreviewReference(reference: 43_001_006, isContext: false),
+            ScripturePreviewReference(reference: 43_001_007, isContext: true),
+        ])
+
+        #expect(ScripturePreviewContextResolver.references(
+            in: chapter,
+            from: 43_001_002,
+            to: 43_001_002,
+            contextAmount: .threeVerses
+        ).map(\.reference) == Array(chapter[0...4]))
+    }
+
+    @Test func scripturePreviewChapterContextKeepsPrimaryVersesDistinct() {
+        let chapter = (1...5).map { 43_001_000 + $0 }
+        let preview = ScripturePreviewContextResolver.references(
+            in: chapter,
+            from: 43_001_003,
+            to: 43_001_003,
+            contextAmount: .chapter
+        )
+
+        #expect(preview.map(\.reference) == chapter)
+        #expect(preview.filter { !$0.isContext }.map(\.reference) == [43_001_003])
+        #expect(ScripturePreviewContextResolver.references(
+            in: chapter,
+            from: 43_002_001,
+            to: 43_002_001,
+            contextAmount: .oneVerse
+        ).isEmpty)
+    }
+
+    @Test @MainActor func selectableSwiftUITextLinksCanBeHitTested() throws {
+        let url = try #require(URL(string: "lamp-lexicon://lookup?key=H1254&reference=1001001"))
+        var attributedString = AttributedString("created the heavens")
+        let linkEnd = attributedString.index(
+            attributedString.startIndex,
+            offsetByCharacters: "created".count
+        )
+        attributedString[attributedString.startIndex..<linkEnd].languageIdentifier = url.absoluteString
+        attributedString.font = .system(size: 20)
+
+        let hostingView = NSHostingView(rootView:
+            Text(attributedString)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(width: 300, alignment: .leading)
+        )
+        hostingView.frame = NSRect(x: 0, y: 0, width: 300, height: 80)
+        hostingView.layoutSubtreeIfNeeded()
+        let textField = try #require(firstTextField(in: hostingView))
+
+        let linkedPoint = NSPoint(x: 4, y: textField.bounds.midY)
+        let unlinkedWordPoint = NSPoint(x: 130, y: textField.bounds.midY)
+        let unlinkedPoint = NSPoint(x: textField.bounds.maxX - 4, y: textField.bounds.midY)
+        #expect(textField.attributedStringValue.attribute(.link, at: 0, effectiveRange: nil) == nil)
+        #expect(ReaderTextLinkHitTester.link(at: linkedPoint, in: textField) == url)
+        #expect(ReaderTextLinkHitTester.link(at: unlinkedPoint, in: textField) == nil)
+        #expect(ReaderTextLinkHitTester.hit(at: linkedPoint, in: textField)?.word == "created")
+        let unlinkedWordHit = try #require(
+            ReaderTextLinkHitTester.hit(at: unlinkedWordPoint, in: textField)
+        )
+        #expect(unlinkedWordHit.link == nil)
+        #expect(unlinkedWordHit.word == "heavens")
     }
 
     @Test func readAloudQueueStartsAtReferenceAndAdvances() {
@@ -219,6 +355,9 @@ struct ReaderSupportTests {
         #expect(LampDeepLink(url: try #require(URL(string: "lampbible://read?reference=43003016&translation=KJV")))
             == .reader(reference: 43_003_016, translationID: "KJV"))
         #expect(LampDeepLink(url: try #require(URL(string: "lampbible://plans"))) == .section(.plans))
+        #expect(LampDeepLink(url: try #require(URL(string: "lampbible://books"))) == .section(.books))
+        #expect(LampDeepLink(url: try #require(URL(string: "lampbible://books?module=TEST_BOOK&section=chapter-one")))
+            == .book(moduleID: "TEST_BOOK", sectionID: "chapter-one"))
         #expect(LampDeepLink(url: URL(fileURLWithPath: "/tmp/test.lamp"))
             == .moduleFile(URL(fileURLWithPath: "/tmp/test.lamp")))
         #expect(LampDeepLink(url: URL(fileURLWithPath: "/tmp/notes.json"))
@@ -304,4 +443,10 @@ struct ReaderSupportTests {
             endReference: end
         )?.absoluteString == "accord://read/John_3:16-John_3:18")
     }
+}
+
+@MainActor
+private func firstTextField(in view: NSView) -> NSTextField? {
+    if let textField = view as? NSTextField { return textField }
+    return view.subviews.lazy.compactMap(firstTextField(in:)).first
 }

@@ -1,0 +1,81 @@
+{
+  "aspectRatio": "widescreen",
+  "id": "60910124-99b3-48ca-9310-11c63ed118c0",
+  "schemaVersion": 1,
+  "slides": [
+    {
+      "blocks": [
+        {
+          "id": "3921b8a7-335a-4424-945b-bcb9d949bd64",
+          "kind": "title",
+          "text": "Living Hope"
+        },
+        {
+          "id": "f935a821-4242-4fa6-a0f8-807983837e3e",
+          "kind": "subtitle",
+          "text": "A devotional presentation"
+        }
+      ],
+      "id": "3b184129-31c5-48c8-962e-fe79e2862cc8",
+      "isHidden": false,
+      "layout": "title",
+      "speakerNotes": "Welcome the audience and establish the central question."
+    },
+    {
+      "blocks": [
+        {
+          "id": "e6169c57-d147-4c97-87c7-b226ec4c8f34",
+          "kind": "scripture",
+          "scriptureReference": {
+            "bookNumber": 60,
+            "chapterNumber": 1,
+            "endVerse": 3,
+            "startVerse": 3,
+            "translationID": "NRSVue"
+          },
+          "text": "Place the verified scripture wording here."
+        },
+        {
+          "id": "f07630a8-1147-46c3-906f-682399381f48",
+          "kind": "citation",
+          "text": "1 Peter 1:3 (NRSVue)"
+        }
+      ],
+      "id": "3f54bac4-32dd-4510-bd78-af87a10fd4e6",
+      "isHidden": false,
+      "layout": "scripture",
+      "speakerNotes": "Read slowly, then connect the passage to the devotional's main idea."
+    },
+    {
+      "blocks": [
+        {
+          "id": "7d5e3659-14ce-4194-a675-86fd4e280679",
+          "kind": "title",
+          "text": "Practices of hope"
+        },
+        {
+          "id": "0de8d708-b150-4871-86e1-f6238265ac55",
+          "kind": "body",
+          "listStyle": "unordered",
+          "text": "Remember God's faithfulness\nName the hope you have\nEncourage someone else"
+        }
+      ],
+      "id": "a9152139-3895-44c3-9002-37a1c35597ce",
+      "isHidden": false,
+      "layout": "title-and-body",
+      "speakerNotes": "Pause briefly after each practice and invite a concrete response."
+    }
+  ],
+  "source": {
+    "id": "replace-with-DEVOTIONAL_ID",
+    "kind": "devotional"
+  },
+  "theme": {
+    "accentColor": "#F59E0B",
+    "backgroundColor": "#111827",
+    "foregroundColor": "#F9FAFB",
+    "id": "lamp-dark",
+    "typeface": "system-serif"
+  },
+  "title": "Living Hope"
+}

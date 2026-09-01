@@ -41,7 +41,7 @@ struct UnifiedSearchView: View {
             }
         }
         if selectedKind == nil || selectedKind == .devotional {
-            values.append(("personal-devotionals", "My Devotionals"))
+            values.append(("personal-devotionals", "My Writing"))
         }
         var seen: Set<String> = []
         return values.filter { seen.insert($0.id).inserted }

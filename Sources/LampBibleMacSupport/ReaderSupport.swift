@@ -1,4 +1,157 @@
+import AppKit
 import Foundation
+
+/// Resolves attributed-string links at a point in AppKit's selectable text
+/// implementations. SwiftUI currently hosts selectable `Text` in an
+/// `NSTextField`, while other render paths can use `NSTextView`.
+public struct ReaderTextHit: Equatable, Sendable {
+    public let link: URL?
+    public let word: String?
+
+    public init(link: URL?, word: String?) {
+        self.link = link
+        self.word = word
+    }
+}
+
+@MainActor
+public enum ReaderTextLinkHitTester {
+    public static func link(at point: NSPoint, in textView: NSTextView) -> URL? {
+        hit(at: point, in: textView)?.link
+    }
+
+    public static func hit(at point: NSPoint, in textView: NSTextView) -> ReaderTextHit? {
+        guard let textStorage = textView.textStorage,
+              textStorage.length > 0,
+              let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer else { return nil }
+        let containerPoint = NSPoint(
+            x: point.x - textView.textContainerOrigin.x,
+            y: point.y - textView.textContainerOrigin.y
+        )
+        return hit(
+            at: containerPoint,
+            attributedString: textStorage,
+            layoutManager: layoutManager,
+            textContainer: textContainer
+        )
+    }
+
+    public static func link(at point: NSPoint, in textField: NSTextField) -> URL? {
+        hit(at: point, in: textField)?.link
+    }
+
+    public static func hit(at point: NSPoint, in textField: NSTextField) -> ReaderTextHit? {
+        let attributedString = textField.attributedStringValue
+        guard attributedString.length > 0 else { return nil }
+
+        let drawingRect = textField.cell?.drawingRect(forBounds: textField.bounds)
+            ?? textField.bounds
+        guard drawingRect.contains(point), drawingRect.width > 0, drawingRect.height > 0 else {
+            return nil
+        }
+
+        let textStorage = NSTextStorage(attributedString: attributedString)
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(size: drawingRect.size)
+        textContainer.lineFragmentPadding = 0
+        textContainer.lineBreakMode = textField.lineBreakMode
+        textContainer.maximumNumberOfLines = textField.maximumNumberOfLines
+        layoutManager.addTextContainer(textContainer)
+        textStorage.addLayoutManager(layoutManager)
+        layoutManager.ensureLayout(for: textContainer)
+
+        let containerPoint = NSPoint(
+            x: point.x - drawingRect.minX,
+            y: point.y - drawingRect.minY
+        )
+        return hit(
+            at: containerPoint,
+            attributedString: attributedString,
+            layoutManager: layoutManager,
+            textContainer: textContainer
+        )
+    }
+
+    private static func hit(
+        at point: NSPoint,
+        attributedString: NSAttributedString,
+        layoutManager: NSLayoutManager,
+        textContainer: NSTextContainer
+    ) -> ReaderTextHit? {
+        var fraction: CGFloat = 0
+        let glyphIndex = layoutManager.glyphIndex(
+            for: point,
+            in: textContainer,
+            fractionOfDistanceThroughGlyph: &fraction
+        )
+        guard glyphIndex < layoutManager.numberOfGlyphs else { return nil }
+        let glyphRect = layoutManager.boundingRect(
+            forGlyphRange: NSRange(location: glyphIndex, length: 1),
+            in: textContainer
+        )
+        guard glyphRect.insetBy(dx: -2, dy: -2).contains(point) else { return nil }
+
+        let characterIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
+        guard characterIndex < attributedString.length else { return nil }
+        var effectiveLinkRange = NSRange(location: NSNotFound, length: 0)
+        let value = attributedString.attribute(
+            .link,
+            at: characterIndex,
+            effectiveRange: &effectiveLinkRange
+        )
+        var link = linkURL(from: value)
+        if link == nil {
+            var internalRange = NSRange(location: NSNotFound, length: 0)
+            let internalValue = attributedString.attribute(
+                .languageIdentifier,
+                at: characterIndex,
+                effectiveRange: &internalRange
+            )
+            if let url = linkURL(from: internalValue), LexiconLookupLink(url: url) != nil {
+                link = url
+                effectiveLinkRange = internalRange
+            }
+        }
+
+        let linkedText: String? = if link != nil,
+                                    effectiveLinkRange.location != NSNotFound,
+                                    NSMaxRange(effectiveLinkRange) <= attributedString.length {
+            attributedString.attributedSubstring(from: effectiveLinkRange).string
+        } else {
+            nil
+        }
+        let word = linkedText.flatMap(nonemptyTrimmed(_:))
+            ?? word(atUTF16Offset: characterIndex, in: attributedString.string)
+        return ReaderTextHit(link: link, word: word)
+    }
+
+    private static func linkURL(from value: Any?) -> URL? {
+        if let url = value as? URL { return url }
+        if let string = value as? String { return URL(string: string) }
+        return nil
+    }
+
+    private static func nonemptyTrimmed(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func word(atUTF16Offset offset: Int, in text: String) -> String? {
+        guard !text.isEmpty, offset >= 0, offset < text.utf16.count else { return nil }
+        let clickedIndex = String.Index(utf16Offset: offset, in: text)
+        var clickedWord: String?
+        text.enumerateSubstrings(
+            in: text.startIndex..<text.endIndex,
+            options: [.byWords, .substringNotRequired]
+        ) { _, range, _, stop in
+            guard range.contains(clickedIndex) else { return }
+            clickedWord = String(text[range])
+            stop = true
+        }
+        return clickedWord.flatMap(nonemptyTrimmed(_:))
+    }
+}
 
 public struct LexiconLookupLink: Equatable, Sendable {
     public let keys: [String]
@@ -46,7 +199,155 @@ public struct LexiconLookupLink: Equatable, Sendable {
     }
 }
 
+/// An internal link attached to scripture annotations in selectable prose such
+/// as quiz questions and answers. Keeping both endpoints lets future previews
+/// retain the annotated range even though today's reader opens at its first verse.
+public struct ScriptureAnnotationLink: Equatable, Sendable {
+    public let startReference: Int
+    public let endReference: Int
+
+    public init?(startReference: Int, endReference: Int? = nil) {
+        let resolvedEnd = endReference ?? startReference
+        guard startReference > 0, resolvedEnd >= startReference else { return nil }
+        self.startReference = startReference
+        self.endReference = resolvedEnd
+    }
+
+    public init?(url: URL) {
+        guard url.scheme?.lowercased() == "lamp-scripture",
+              url.host?.lowercased() == "open",
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let rawStart = components.queryItems?.first(where: { $0.name == "start" })?.value,
+              let start = Int(rawStart) else { return nil }
+        let end = components.queryItems?
+            .first(where: { $0.name == "end" })?
+            .value
+            .flatMap(Int.init)
+        self.init(startReference: start, endReference: end)
+    }
+
+    public var url: URL? {
+        var components = URLComponents()
+        components.scheme = "lamp-scripture"
+        components.host = "open"
+        components.queryItems = [
+            URLQueryItem(name: "start", value: String(startReference)),
+            URLQueryItem(name: "end", value: String(endReference)),
+        ]
+        return components.url
+    }
+}
+
+/// Coalesces the native AppKit link callback with the reader's click fallback.
+/// Both may observe the same click, but opening the inspector twice can replace
+/// an in-flight lookup request and make link activation appear intermittent.
+public struct ReaderLinkActivationGate: Sendable {
+    public let duplicateInterval: TimeInterval
+    private var lastURL: URL?
+    private var lastActivationTime: TimeInterval?
+
+    public init(duplicateInterval: TimeInterval = 0.4) {
+        self.duplicateInterval = duplicateInterval
+    }
+
+    public mutating func shouldActivate(_ url: URL, at time: TimeInterval) -> Bool {
+        defer {
+            lastURL = url
+            lastActivationTime = time
+        }
+        guard lastURL == url, let lastActivationTime else { return true }
+        return time - lastActivationTime > duplicateInterval
+    }
+}
+
+/// Adds enough non-content space after a scroll-linked passage for its final
+/// anchor to reach the viewport's top edge. Completion checks subtract this
+/// artificial tail so reaching the real passage end keeps its original meaning.
+public enum ReaderScrollTail {
+    public static func height(for viewportHeight: CGFloat) -> CGFloat {
+        max(viewportHeight - 1, 0)
+    }
+
+    public static func hasReachedContentBottom(
+        visibleMaxY: CGFloat,
+        totalContentHeight: CGFloat,
+        viewportHeight: CGFloat,
+        tolerance: CGFloat = 8
+    ) -> Bool {
+        visibleMaxY >= totalContentHeight - height(for: viewportHeight) - tolerance
+    }
+}
+
+/// How much neighboring scripture a reference preview includes. The raw values
+/// intentionally match iOS so the choices keep the same meaning across apps.
+public enum ScripturePreviewContextAmount: Int, CaseIterable, Hashable, Sendable {
+    case oneVerse = 1
+    case threeVerses = 3
+    case chapter = 0
+
+    fileprivate var neighboringVerseCount: Int? {
+        switch self {
+        case .oneVerse: 1
+        case .threeVerses: 3
+        case .chapter: nil
+        }
+    }
+}
+
+public struct ScripturePreviewReference: Equatable, Sendable {
+    public let reference: Int
+    public let isContext: Bool
+
+    public init(reference: Int, isContext: Bool) {
+        self.reference = reference
+        self.isContext = isContext
+    }
+}
+
+public enum ScripturePreviewContextResolver {
+    /// Selects the primary range and its neighboring verses from one chapter.
+    /// Multi-chapter loading remains the caller's responsibility because context
+    /// is deliberately only added around compact, single-chapter references.
+    public static func references(
+        in chapterReferences: [Int],
+        from startReference: Int,
+        to endReference: Int,
+        contextAmount: ScripturePreviewContextAmount
+    ) -> [ScripturePreviewReference] {
+        guard startReference > 0, endReference >= startReference,
+              let firstPrimaryIndex = chapterReferences.firstIndex(where: {
+                  $0 >= startReference && $0 <= endReference
+              }),
+              let lastPrimaryIndex = chapterReferences.lastIndex(where: {
+                  $0 >= startReference && $0 <= endReference
+              }) else { return [] }
+
+        let bounds: ClosedRange<Int>
+        if let neighboringVerseCount = contextAmount.neighboringVerseCount {
+            bounds = (
+                max(0, firstPrimaryIndex - neighboringVerseCount)
+                    ... min(chapterReferences.count - 1, lastPrimaryIndex + neighboringVerseCount)
+            )
+        } else {
+            bounds = chapterReferences.indices.first!...chapterReferences.indices.last!
+        }
+
+        return bounds.map { index in
+            let reference = chapterReferences[index]
+            return ScripturePreviewReference(
+                reference: reference,
+                isContext: reference < startReference || reference > endReference
+            )
+        }
+    }
+}
+
 public enum StrongsKey {
+    /// Keys that encode source-language grammar without representing an English
+    /// word. SWORD/OSIS aligners sometimes attach these to the following object,
+    /// which otherwise makes a visible English phrase open an unrelated entry.
+    private static let untranslatedEnglishMarkers: Set<String> = ["H853"]
+
     /// Strong's keys are written `H7225`, `h07225` or bare `7225` depending on who
     /// compiled the dictionary, and some carry a disambiguating letter (`G3588a`).
     /// Normalizing puts case and zero-padding aside so two spellings of the same
@@ -75,6 +376,34 @@ public enum StrongsKey {
         let rightPrefixed = right.first == "H" || right.first == "G"
         guard leftPrefixed != rightPrefixed else { return false }
         return left.drop { $0 == "H" || $0 == "G" } == right.drop { $0 == "H" || $0 == "G" }
+    }
+
+    /// Whether a loaded translation passage contains Strong's annotations. The
+    /// reader uses this to avoid offering lexical hover details for translations
+    /// that have no lexical metadata to inspect.
+    public static func hasAnnotations<S: Sequence>(_ rawKeys: S) -> Bool
+    where S.Element == String? {
+        rawKeys.contains { rawKey in
+            rawKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        }
+    }
+
+    /// Produces key targets suitable for clicking English translation text. This
+    /// also expands legacy comma/space-delimited values and removes duplicates.
+    public static func readerLookupKeys(_ rawKeys: [String]) -> [String] {
+        var seen = Set<String>()
+        return rawKeys
+            .flatMap {
+                $0.split(whereSeparator: { character in
+                    character == "," || character == ";" || character == "|" || character.isWhitespace
+                })
+            }
+            .map { normalized(String($0)) }
+            .filter {
+                !$0.isEmpty
+                    && !untranslatedEnglishMarkers.contains($0)
+                    && seen.insert($0).inserted
+            }
     }
 }
 
@@ -462,6 +791,7 @@ public struct ReadingReminderConfiguration: Codable, Equatable, Sendable {
 public enum LampDeepLinkSection: String, Codable, Equatable, Sendable {
     case today
     case reader
+    case books
     case plans
     case devotionals
     case quizzes
@@ -471,6 +801,7 @@ public enum LampDeepLinkSection: String, Codable, Equatable, Sendable {
 
 public enum LampDeepLink: Equatable, Sendable {
     case reader(reference: Int, translationID: String?)
+    case book(moduleID: String?, sectionID: String?)
     case section(LampDeepLinkSection)
     case moduleFile(URL)
     case dataFile(URL)
@@ -497,11 +828,26 @@ public enum LampDeepLink: Equatable, Sendable {
             }
             let translation = components?.queryItems?.first(where: { $0.name == "translation" })?.value
             self = .reader(reference: reference, translationID: translation)
+        } else if route == "book" || route == "books" {
+            let moduleID = components?.queryItems?
+                .first(where: { $0.name == "module" })?.value
+                .flatMap(Self.nonempty)
+            let sectionID = components?.queryItems?
+                .first(where: { $0.name == "section" })?.value
+                .flatMap(Self.nonempty)
+            self = moduleID == nil && sectionID == nil
+                ? .section(.books)
+                : .book(moduleID: moduleID, sectionID: sectionID)
         } else if let section = LampDeepLinkSection(rawValue: route) {
             self = .section(section)
         } else {
             return nil
         }
+    }
+
+    private static func nonempty(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 
@@ -554,6 +900,213 @@ public enum DevotionalMarkdownParser {
 
     private static func isAudioURL(_ url: URL) -> Bool {
         ["mp3", "m4a", "wav", "aac", "aiff", "caf"].contains(url.pathExtension.lowercased())
+    }
+}
+
+/// One structural piece of devotional prose.
+///
+/// `AttributedString(markdown:)` renders inline emphasis faithfully but discards
+/// every block boundary, so a whole document handed to it comes back as a single
+/// run-on paragraph with its headings, quotes and list items butted together.
+/// Splitting the prose first is what lets the preview show the shape the author
+/// actually wrote.
+public enum DevotionalProseBlock: Equatable, Sendable {
+    case heading(level: Int, text: String)
+    case paragraph(String)
+    /// The paragraphs inside a block quote, already stripped of their `>` markers.
+    case quote([String])
+    case bulletList([String])
+    case numberedList([String])
+    case rule
+}
+
+/// Whether a document's opening heading merely restates the title shown above it.
+///
+/// Writing that is authored as a Markdown file usually carries its own title as
+/// the first heading. A reader that also displays the title from metadata then
+/// shows it twice, one line apart.
+public enum DevotionalHeadingMatch {
+    public static func restatesTitle(_ heading: String, title: String) -> Bool {
+        let left = normalized(heading)
+        let right = normalized(title)
+        return !left.isEmpty && left == right
+    }
+
+    /// Compares what a reader would see rather than the characters: case, edge
+    /// punctuation and runs of whitespace all fail to make two titles different.
+    private static func normalized(_ value: String) -> String {
+        let collapsed = value
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        return collapsed
+            .trimmingCharacters(in: CharacterSet(charactersIn: ".:;,!?-–— "))
+            .lowercased()
+    }
+}
+
+public enum DevotionalProseParser {
+    public static func parse(_ text: String) -> [DevotionalProseBlock] {
+        var blocks: [DevotionalProseBlock] = []
+        var paragraphLines: [String] = []
+        var bulletItems: [String] = []
+        var numberedItems: [String] = []
+        var quoteLines: [String] = []
+
+        func flushParagraph() {
+            let joined = paragraphLines
+                .joined(separator: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !joined.isEmpty { blocks.append(.paragraph(joined)) }
+            paragraphLines.removeAll()
+        }
+
+        func flushBullets() {
+            if !bulletItems.isEmpty { blocks.append(.bulletList(bulletItems)) }
+            bulletItems.removeAll()
+        }
+
+        func flushNumbered() {
+            if !numberedItems.isEmpty { blocks.append(.numberedList(numberedItems)) }
+            numberedItems.removeAll()
+        }
+
+        func flushQuote() {
+            // Blank lines inside a quote separate its paragraphs.
+            var paragraphs: [String] = []
+            var current: [String] = []
+            for line in quoteLines {
+                if line.trimmingCharacters(in: .whitespaces).isEmpty {
+                    if !current.isEmpty {
+                        paragraphs.append(current.joined(separator: " "))
+                        current.removeAll()
+                    }
+                } else {
+                    current.append(line)
+                }
+            }
+            if !current.isEmpty { paragraphs.append(current.joined(separator: " ")) }
+            if !paragraphs.isEmpty { blocks.append(.quote(paragraphs)) }
+            quoteLines.removeAll()
+        }
+
+        /// Everything except the kind of block being started, so a list that
+        /// follows a paragraph does not swallow it.
+        func flushAll(except kind: PendingKind = .none) {
+            if kind != .paragraph { flushParagraph() }
+            if kind != .bullet { flushBullets() }
+            if kind != .numbered { flushNumbered() }
+            if kind != .quote { flushQuote() }
+        }
+
+        for rawLine in text.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+
+            if line.isEmpty {
+                // A blank line ends a paragraph and a list, but is kept inside a
+                // quote so the quote can hold more than one paragraph.
+                if !quoteLines.isEmpty {
+                    quoteLines.append("")
+                } else {
+                    flushAll()
+                }
+                continue
+            }
+
+            if isRule(line) {
+                flushAll()
+                blocks.append(.rule)
+                continue
+            }
+
+            if let heading = heading(from: line) {
+                flushAll()
+                blocks.append(heading)
+                continue
+            }
+
+            if let quoted = quoteContent(of: line) {
+                flushAll(except: .quote)
+                quoteLines.append(quoted)
+                continue
+            }
+
+            if let item = bulletContent(of: line) {
+                flushAll(except: .bullet)
+                bulletItems.append(item)
+                continue
+            }
+
+            if let item = numberedContent(of: line) {
+                flushAll(except: .numbered)
+                numberedItems.append(item)
+                continue
+            }
+
+            flushAll(except: .paragraph)
+            paragraphLines.append(line)
+        }
+
+        flushAll()
+        return blocks
+    }
+
+    private enum PendingKind {
+        case none
+        case paragraph
+        case bullet
+        case numbered
+        case quote
+    }
+
+    private static func isRule(_ line: String) -> Bool {
+        let compact = line.filter { !$0.isWhitespace }
+        guard compact.count >= 3 else { return false }
+        return compact.allSatisfy { $0 == "-" } ||
+            compact.allSatisfy { $0 == "*" } ||
+            compact.allSatisfy { $0 == "_" }
+    }
+
+    private static func heading(from line: String) -> DevotionalProseBlock? {
+        guard line.hasPrefix("#") else { return nil }
+        let hashes = line.prefix { $0 == "#" }
+        guard hashes.count <= 6 else { return nil }
+        let remainder = line.dropFirst(hashes.count)
+        // `#tagged` is not a heading; ATX headings require a space.
+        guard remainder.first == " " else { return nil }
+        let text = remainder.trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty else { return nil }
+        return .heading(level: hashes.count, text: text)
+    }
+
+    private static func quoteContent(of line: String) -> String? {
+        guard line.hasPrefix(">") else { return nil }
+        var remainder = Substring(line.dropFirst())
+        if remainder.first == " " { remainder = remainder.dropFirst() }
+        return String(remainder)
+    }
+
+    private static func bulletContent(of line: String) -> String? {
+        guard let marker = line.first, marker == "-" || marker == "*" || marker == "+" else {
+            return nil
+        }
+        let remainder = line.dropFirst()
+        guard remainder.first == " " else { return nil }
+        let item = remainder.trimmingCharacters(in: .whitespaces)
+        return item.isEmpty ? nil : item
+    }
+
+    private static func numberedContent(of line: String) -> String? {
+        let digits = line.prefix { $0.isNumber }
+        guard !digits.isEmpty else { return nil }
+        var remainder = line.dropFirst(digits.count)
+        guard let separator = remainder.first, separator == "." || separator == ")" else {
+            return nil
+        }
+        remainder = remainder.dropFirst()
+        guard remainder.first == " " else { return nil }
+        let item = remainder.trimmingCharacters(in: .whitespaces)
+        return item.isEmpty ? nil : item
     }
 }
 import LampModuleKit

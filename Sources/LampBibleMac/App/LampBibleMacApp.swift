@@ -11,6 +11,7 @@ struct LampBibleMacApp: App {
     @StateObject private var libraryModel = LibraryModel()
     @StateObject private var syncController = LibrarySyncController()
     @StateObject private var scrollLink = ReaderScrollLink()
+    @StateObject private var presentationRemoteHost = LampPresentationRemoteHost()
 
     var body: some Scene {
         WindowGroup("Lamp Bible", id: "reader") {
@@ -24,12 +25,17 @@ struct LampBibleMacApp: App {
             LampBibleCommands()
         }
 
-        WindowGroup("Module Studio", id: "module-studio") {
-            ModuleStudioView()
+        WindowGroup("Book Reader", id: "book-reader", for: BookReaderRequest.self) { $request in
+            StandaloneBookReaderView(request: request ?? BookReaderRequest())
                 .environmentObject(libraryModel)
-                .environmentObject(syncController)
         }
-        .defaultSize(width: 1_080, height: 720)
+        .defaultSize(width: 1_180, height: 820)
+
+        Window("Import or Create Content", id: "add-to-library") {
+            AddToLibraryView()
+                .environmentObject(libraryModel)
+        }
+        .defaultSize(width: 1_100, height: 700)
 
         // A window rather than a sheet so a devotional can be written with the
         // reader open beside it — the scripture being written about is usually the
@@ -40,6 +46,40 @@ struct LampBibleMacApp: App {
                 .environmentObject(syncController)
         }
         .defaultSize(width: 1_180, height: 780)
+
+        WindowGroup("Slide Studio", id: "slide-studio", for: SlideStudioRequest.self) { $request in
+            SlideStudioView(request: request ?? SlideStudioRequest())
+                .environmentObject(libraryModel)
+                .environmentObject(presentationRemoteHost)
+        }
+        .defaultSize(width: 1_360, height: 860)
+
+        WindowGroup(
+            "Slide Presenter",
+            id: "slide-presenter",
+            for: SlidePresentationRequest.self
+        ) { $request in
+            if let request {
+                SlidePresentationView(request: request)
+                    .environmentObject(libraryModel)
+                    .environmentObject(presentationRemoteHost)
+            }
+        }
+        .defaultSize(width: 1_440, height: 900)
+        .windowStyle(.hiddenTitleBar)
+
+        WindowGroup(
+            "Presenter",
+            id: "devotional-presenter",
+            for: DevotionalPresentationRequest.self
+        ) { $request in
+            if let request {
+                DevotionalPresentationView(request: request)
+                    .environmentObject(libraryModel)
+            }
+        }
+        .defaultSize(width: 1_440, height: 900)
+        .windowStyle(.hiddenTitleBar)
 
         Settings {
             ReaderSettingsView()
@@ -55,6 +95,28 @@ struct LampBibleMacApp: App {
     }
 }
 
+private struct StandaloneBookReaderView: View {
+    @Environment(\.openWindow) private var openWindow
+    @EnvironmentObject private var model: LibraryModel
+
+    let request: BookReaderRequest
+
+    var body: some View {
+        NavigationStack {
+            BookModulesView(
+                initialBookID: request.bookID,
+                initialSectionID: request.sectionID,
+                allowsStandaloneWindow: false,
+                showImporter: { openWindow(id: "add-to-library") },
+                openReference: { reference in
+                    model.openReference(reference)
+                    openWindow(id: "reader")
+                }
+            )
+        }
+    }
+}
+
 private struct ReaderSettingsView: View {
     @EnvironmentObject private var model: LibraryModel
     @EnvironmentObject private var syncController: LibrarySyncController
@@ -64,6 +126,9 @@ private struct ReaderSettingsView: View {
     @AppStorage("commentary.fontSize") private var commentaryFontSize = LampTextScale.commentaryText.defaultValue
     @AppStorage("commentary.lineSpacing") private var commentaryLineSpacing = LampTextScale.commentaryLineSpacing.defaultValue
     @AppStorage("commentary.typeface") private var commentaryTypeface = ProseTypeface.commentaryDefault
+    @AppStorage("books.fontSize") private var bookFontSize = LampTextScale.bookText.defaultValue
+    @AppStorage("books.lineSpacing") private var bookLineSpacing = LampTextScale.bookLineSpacing.defaultValue
+    @AppStorage("books.typeface") private var bookTypeface = ProseTypeface.readerDefault
     @AppStorage("reader.readAloud.voice") private var readAloudVoice = ""
     @AppStorage("reader.readAloud.rate") private var readAloudRate = 0.5
     @AppStorage("reader.readAloud.followAlong") private var followReadAloud = true
@@ -79,8 +144,24 @@ private struct ReaderSettingsView: View {
     @AppStorage("studyInspector.greekDictionaryModuleID") private var defaultGreekDictionaryID = ""
     @AppStorage("studyInspector.hebrewDictionaryModuleID") private var defaultHebrewDictionaryID = ""
     @AppStorage("studyInspector.commentaryModuleID") private var defaultCommentaryID = ""
+    @State private var selectedSettingsSection = ReaderSettingsSection.reader
     @State private var selectedModuleType = ConfigurableModuleType.translations
-    @AppStorage("devotional.fontSize") private var devotionalFontSize = 17.0
+    @AppStorage("devotional.fontSize")
+    private var devotionalFontSize = LampTextScale.writingPreviewText.defaultValue
+    @AppStorage("devotional.lineSpacing")
+    private var devotionalLineSpacing = LampTextScale.writingPreviewLineSpacing.defaultValue
+    @AppStorage("devotional.typeface")
+    private var devotionalTypeface = ProseTypeface.readerDefault
+    @AppStorage("devotional.editor.fontSize")
+    private var writingEditorFontSize = LampTextScale.writingEditorText.defaultValue
+    @AppStorage("writing.preview.fontSize")
+    private var writingPreviewFontSize = LampTextScale.writingPreviewText.defaultValue
+    @AppStorage("writing.preview.lineSpacing")
+    private var writingPreviewLineSpacing = LampTextScale.writingPreviewLineSpacing.defaultValue
+    @AppStorage("writing.preview.typeface")
+    private var writingPreviewTypeface = ProseTypeface.readerDefault
+    @AppStorage("writing.preview.followsEditorScrolling")
+    private var writingPreviewFollowsEditorScrolling = true
     @AppStorage("quiz.defaultAgeGroup") private var defaultQuizAgeGroup = ""
     @AppStorage("agent.moduleAccess.enabled") private var agentModuleAccessEnabled = true
     @AppStorage("agent.moduleAccess.scope") private var agentModuleAccessScope = AgentModuleAccessScope.enabledModules.rawValue
@@ -100,257 +181,397 @@ private struct ReaderSettingsView: View {
     }
 
     var body: some View {
-        Form {
-            Section("Reader") {
-                Picker("Typeface", selection: $typeface) {
-                    ForEach(ProseTypeface.allCases) { option in
-                        Text(option.title).tag(option)
-                    }
+        NavigationSplitView {
+            List(selection: $selectedSettingsSection) {
+                Section("Reading") {
+                    settingsLink(.reader)
+                    settingsLink(.books)
+                    settingsLink(.studySidebar)
+                    settingsLink(.readingPlans)
                 }
-                metricSlider("Text Size", value: $fontSize, scale: .readerText)
-                metricSlider("Line Spacing", value: $lineSpacing, scale: .readerLineSpacing)
-                Picker("Read Aloud Voice", selection: $readAloudVoice) {
-                    Text("System Default").tag("")
-                    ForEach(voices, id: \.identifier) { voice in
-                        Text("\(voice.name) — \(voice.language)").tag(voice.identifier)
-                    }
+
+                Section("Content") {
+                    settingsLink(.modules)
+                    settingsLink(.devotionalsAndQuizzes)
+                    settingsLink(.writing)
                 }
-                LabeledContent("Read Aloud Speed") {
-                    HStack {
-                        Slider(value: $readAloudRate, in: 0.3...0.65, step: 0.025)
-                            .frame(width: 220)
-                        Text(readAloudRate.formatted(.number.precision(.fractionLength(2))))
-                            .monospacedDigit()
-                            .frame(width: 36, alignment: .trailing)
-                    }
-                }
-                Toggle("Follow the spoken verse", isOn: $followReadAloud)
-                Toggle("Show Strong’s number hints", isOn: $showStrongsHints)
-                Toggle("Sort cross-references canonically", isOn: $canonicalCrossReferenceOrder)
-                Button("Restore Reader Defaults") {
-                    fontSize = LampTextScale.readerText.defaultValue
-                    lineSpacing = LampTextScale.readerLineSpacing.defaultValue
-                    typeface = .readerDefault
-                    readAloudVoice = ""
-                    readAloudRate = 0.5
-                    followReadAloud = true
-                    showStrongsHints = true
-                    canonicalCrossReferenceOrder = false
+
+                Section("Services") {
+                    settingsLink(.aiAndAgents)
+                    settingsLink(.sync)
                 }
             }
-
-            Section("Study Sidebar") {
-                Picker("Typeface", selection: $commentaryTypeface) {
-                    ForEach(ProseTypeface.allCases) { option in
-                        Text(option.title).tag(option)
-                    }
-                }
-                metricSlider("Text Size", value: $commentaryFontSize, scale: .commentaryText)
-                metricSlider("Line Spacing", value: $commentaryLineSpacing, scale: .commentaryLineSpacing)
-                Button("Restore Sidebar Defaults") {
-                    commentaryFontSize = LampTextScale.commentaryText.defaultValue
-                    commentaryLineSpacing = LampTextScale.commentaryLineSpacing.defaultValue
-                    commentaryTypeface = .commentaryDefault
-                }
-            }
-
-            Section("Modules") {
-                Picker("Module Type", selection: $selectedModuleType) {
-                    ForEach(ConfigurableModuleType.allCases) { type in
-                        Text(type.title).tag(type)
-                    }
-                }
-                .pickerStyle(.segmented)
-
-                switch selectedModuleType {
-                case .translations:
-                    Picker("Default Translation", selection: Binding(
-                        get: { validDefault(defaultTranslationID, in: enabledTranslationModules) },
-                        set: {
-                            defaultTranslationID = $0
-                            model.setDefaultTranslation($0.isEmpty ? nil : $0)
+            .navigationTitle("Settings")
+            .navigationSplitViewColumnWidth(min: 180, ideal: 205, max: 235)
+        } detail: {
+            Form {
+                switch selectedSettingsSection {
+                case .reader:
+                    Section("Reader") {
+                        Picker("Typeface", selection: $typeface) {
+                            ForEach(ProseTypeface.allCases) { option in
+                                Text(option.title).tag(option)
+                            }
                         }
-                    )) {
-                        Text("First Enabled").tag("")
-                        ForEach(enabledTranslationModules) { translation in
-                            Text(translation.name).tag(translation.id)
+                        metricSlider("Text Size", value: $fontSize, scale: .readerText)
+                        metricSlider("Line Spacing", value: $lineSpacing, scale: .readerLineSpacing)
+                        Picker("Read Aloud Voice", selection: $readAloudVoice) {
+                            Text("System Default").tag("")
+                            ForEach(voices, id: \.identifier) { voice in
+                                Text("\(voice.name) — \(voice.language)").tag(voice.identifier)
+                            }
+                        }
+                        LabeledContent("Read Aloud Speed") {
+                            HStack {
+                                Slider(value: $readAloudRate, in: 0.3...0.65, step: 0.025)
+                                    .frame(width: 220)
+                                Text(readAloudRate.formatted(.number.precision(.fractionLength(2))))
+                                    .monospacedDigit()
+                                    .frame(width: 36, alignment: .trailing)
+                            }
+                        }
+                        Toggle("Follow the spoken verse", isOn: $followReadAloud)
+                        Toggle("Show Strong’s number hints", isOn: $showStrongsHints)
+                        Toggle("Sort cross-references canonically", isOn: $canonicalCrossReferenceOrder)
+                        Button("Restore Reader Defaults") {
+                            fontSize = LampTextScale.readerText.defaultValue
+                            lineSpacing = LampTextScale.readerLineSpacing.defaultValue
+                            typeface = .readerDefault
+                            readAloudVoice = ""
+                            readAloudRate = 0.5
+                            followReadAloud = true
+                            showStrongsHints = true
+                            canonicalCrossReferenceOrder = false
                         }
                     }
-                    ForEach(translationModules) { module in
-                        moduleToggle(module) {
-                            if defaultTranslationID == module.id {
-                                defaultTranslationID = ""
-                                model.setDefaultTranslation(nil)
+
+                case .studySidebar:
+                    Section("Study Sidebar") {
+                        Picker("Typeface", selection: $commentaryTypeface) {
+                            ForEach(ProseTypeface.allCases) { option in
+                                Text(option.title).tag(option)
+                            }
+                        }
+                        metricSlider("Text Size", value: $commentaryFontSize, scale: .commentaryText)
+                        metricSlider(
+                            "Line Spacing", value: $commentaryLineSpacing, scale: .commentaryLineSpacing)
+                        Button("Restore Sidebar Defaults") {
+                            commentaryFontSize = LampTextScale.commentaryText.defaultValue
+                            commentaryLineSpacing = LampTextScale.commentaryLineSpacing.defaultValue
+                            commentaryTypeface = .commentaryDefault
+                        }
+                    }
+
+                case .books:
+                    Section("Books") {
+                        Picker("Typeface", selection: $bookTypeface) {
+                            ForEach(ProseTypeface.allCases) { option in
+                                Text(option.title).tag(option)
+                            }
+                        }
+                        metricSlider("Text Size", value: $bookFontSize, scale: .bookText)
+                        metricSlider(
+                            "Line Spacing",
+                            value: $bookLineSpacing,
+                            scale: .bookLineSpacing
+                        )
+                        Button("Restore Book Defaults") {
+                            bookFontSize = LampTextScale.bookText.defaultValue
+                            bookLineSpacing = LampTextScale.bookLineSpacing.defaultValue
+                            bookTypeface = .readerDefault
+                        }
+                    }
+
+                case .modules:
+                    Section("Modules") {
+                        Picker("Module Type", selection: $selectedModuleType) {
+                            ForEach(ConfigurableModuleType.allCases) { type in
+                                Text(type.title).tag(type)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+
+                        switch selectedModuleType {
+                        case .translations:
+                            Picker(
+                                "Default Translation",
+                                selection: Binding(
+                                    get: { validDefault(defaultTranslationID, in: enabledTranslationModules) },
+                                    set: {
+                                        defaultTranslationID = $0
+                                        model.setDefaultTranslation($0.isEmpty ? nil : $0)
+                                    }
+                                )
+                            ) {
+                                Text("First Enabled").tag("")
+                                ForEach(enabledTranslationModules) { translation in
+                                    Text(translation.name).tag(translation.id)
+                                }
+                            }
+                            ForEach(translationModules) { module in
+                                moduleToggle(module) {
+                                    if defaultTranslationID == module.id {
+                                        defaultTranslationID = ""
+                                        model.setDefaultTranslation(nil)
+                                    }
+                                }
+                            }
+
+                        case .dictionaries:
+                            Picker(
+                                "Default Greek Dictionary",
+                                selection: defaultModuleBinding(
+                                    $defaultGreekDictionaryID,
+                                    modules: enabledGreekDictionaryModules
+                                )
+                            ) {
+                                Text("First Enabled").tag("")
+                                ForEach(enabledGreekDictionaryModules) { dictionary in
+                                    Text(dictionary.name).tag(dictionary.id)
+                                }
+                            }
+                            Picker(
+                                "Default Hebrew Dictionary",
+                                selection: defaultModuleBinding(
+                                    $defaultHebrewDictionaryID,
+                                    modules: enabledHebrewDictionaryModules
+                                )
+                            ) {
+                                Text("First Enabled").tag("")
+                                ForEach(enabledHebrewDictionaryModules) { dictionary in
+                                    Text(dictionary.name).tag(dictionary.id)
+                                }
+                            }
+                            ForEach(dictionaryModules) { module in
+                                moduleToggle(module) {
+                                    if defaultGreekDictionaryID == module.id { defaultGreekDictionaryID = "" }
+                                    if defaultHebrewDictionaryID == module.id { defaultHebrewDictionaryID = "" }
+                                }
+                            }
+
+                        case .commentaries:
+                            Picker(
+                                "Default Commentary",
+                                selection: defaultModuleBinding(
+                                    $defaultCommentaryID, modules: enabledCommentaryModules)
+                            ) {
+                                Text("First Enabled").tag("")
+                                ForEach(enabledCommentaryModules) { commentary in
+                                    Text(commentary.name).tag(commentary.id)
+                                }
+                            }
+                            ForEach(commentaryModules) { module in
+                                moduleToggle(module) {
+                                    if defaultCommentaryID == module.id { defaultCommentaryID = "" }
+                                }
                             }
                         }
                     }
 
-                case .dictionaries:
-                    Picker(
-                        "Default Greek Dictionary",
-                        selection: defaultModuleBinding(
-                            $defaultGreekDictionaryID,
-                            modules: enabledGreekDictionaryModules
+                case .devotionalsAndQuizzes:
+                    Section("Devotionals & Quizzes") {
+                        metricSlider(
+                            "Devotional Text Size",
+                            value: $devotionalFontSize,
+                            scale: .writingPreviewText
                         )
-                    ) {
-                        Text("First Enabled").tag("")
-                        ForEach(enabledGreekDictionaryModules) { dictionary in
-                            Text(dictionary.name).tag(dictionary.id)
-                        }
-                    }
-                    Picker(
-                        "Default Hebrew Dictionary",
-                        selection: defaultModuleBinding(
-                            $defaultHebrewDictionaryID,
-                            modules: enabledHebrewDictionaryModules
+                        metricSlider(
+                            "Devotional Line Spacing",
+                            value: $devotionalLineSpacing,
+                            scale: .writingPreviewLineSpacing
                         )
-                    ) {
-                        Text("First Enabled").tag("")
-                        ForEach(enabledHebrewDictionaryModules) { dictionary in
-                            Text(dictionary.name).tag(dictionary.id)
+                        Picker("Devotional Typeface", selection: $devotionalTypeface) {
+                            ForEach(ProseTypeface.allCases) { option in
+                                Text(option.title).tag(option)
+                            }
+                        }
+                        TextField("Preferred quiz age-group ID", text: $defaultQuizAgeGroup)
+                    }
+
+                case .writing:
+                    Section("Writing") {
+                        metricSlider(
+                            "Editor Text Size",
+                            value: $writingEditorFontSize,
+                            scale: .writingEditorText
+                        )
+                        metricSlider(
+                            "Preview Text Size",
+                            value: $writingPreviewFontSize,
+                            scale: .writingPreviewText
+                        )
+                        metricSlider(
+                            "Preview Line Spacing",
+                            value: $writingPreviewLineSpacing,
+                            scale: .writingPreviewLineSpacing
+                        )
+                        Picker("Preview Typeface", selection: $writingPreviewTypeface) {
+                            ForEach(ProseTypeface.allCases) { option in
+                                Text(option.title).tag(option)
+                            }
+                        }
+                        Toggle(
+                            "Preview follows the editor while writing",
+                            isOn: $writingPreviewFollowsEditorScrolling
+                        )
+                        Button("Restore Writing Defaults") {
+                            writingEditorFontSize = LampTextScale.writingEditorText.defaultValue
+                            writingPreviewFontSize = LampTextScale.writingPreviewText.defaultValue
+                            writingPreviewLineSpacing = LampTextScale.writingPreviewLineSpacing.defaultValue
+                            writingPreviewTypeface = ProseTypeface.readerDefault
+                            writingPreviewFollowsEditorScrolling = true
                         }
                     }
-                    ForEach(dictionaryModules) { module in
-                        moduleToggle(module) {
-                            if defaultGreekDictionaryID == module.id { defaultGreekDictionaryID = "" }
-                            if defaultHebrewDictionaryID == module.id { defaultHebrewDictionaryID = "" }
+
+                case .aiAndAgents:
+                    Section("AI Provider Accounts") {
+                        AIProviderAccountsSettingsView()
+                        Divider()
+                        Toggle("Allow agents to query Lamp modules", isOn: $agentModuleAccessEnabled)
+                        Picker("Module Access", selection: $agentModuleAccessScope) {
+                            ForEach(AgentModuleAccessScope.allCases) { scope in
+                                Text(scope.title).tag(scope.rawValue)
+                            }
+                        }
+                        .disabled(!agentModuleAccessEnabled)
+                        Toggle(
+                            "Include personal devotionals, notes, and highlights",
+                            isOn: $agentPersonalContentEnabled
+                        )
+                        .disabled(!agentModuleAccessEnabled)
+                        HStack {
+                            Text(
+                                "Module results are sent to the AI provider you launch. All Lamp tools are read-only."
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Test Module Tools", systemImage: "stethoscope") {
+                                testAgentModuleAccess()
+                            }
+                            .controlSize(.small)
+                            .disabled(!agentModuleAccessEnabled)
+                        }
+                        if let agentModuleAccessStatus {
+                            Label(agentModuleAccessStatus, systemImage: "server.rack")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     }
 
-                case .commentaries:
-                    Picker(
-                        "Default Commentary",
-                        selection: defaultModuleBinding($defaultCommentaryID, modules: enabledCommentaryModules)
-                    ) {
-                        Text("First Enabled").tag("")
-                        ForEach(enabledCommentaryModules) { commentary in
-                            Text(commentary.name).tag(commentary.id)
+                case .readingPlans:
+                    Section("Reading Plans") {
+                        Stepper(
+                            "Reading speed: \(wordsPerMinute) words per minute", value: $wordsPerMinute,
+                            in: 80...600, step: 5)
+                        Picker("Default External Bible", selection: $externalBibleApp) {
+                            Text("Ask Each Time").tag("")
+                            ForEach(ExternalBibleApplication.allCases) { application in
+                                Text(application.rawValue).tag(application.rawValue)
+                            }
+                        }
+                        Toggle("Daily reading reminder", isOn: $reminderEnabled)
+                        DatePicker(
+                            "Reminder Time",
+                            selection: Binding(
+                                get: { reminderDate },
+                                set: { updateReminderTime($0) }
+                            ),
+                            displayedComponents: .hourAndMinute
+                        )
+                        .datePickerStyle(.field)
+                        .disabled(!reminderEnabled)
+                        if let reminderError {
+                            Label(reminderError, systemImage: "exclamationmark.triangle")
+                                .font(.callout)
+                                .foregroundStyle(.red)
                         }
                     }
-                    ForEach(commentaryModules) { module in
-                        moduleToggle(module) {
-                            if defaultCommentaryID == module.id { defaultCommentaryID = "" }
+
+                case .sync:
+                    Section("Sync") {
+                        Picker(
+                            "Provider",
+                            selection: Binding(
+                                get: { syncController.provider },
+                                set: { syncController.provider = $0 }
+                            )
+                        ) {
+                            ForEach(LibrarySyncController.Provider.allCases) { provider in
+                                Text(provider.displayName).tag(provider)
+                            }
+                        }
+                        if syncController.provider == .folder {
+                            LabeledContent("Folder", value: syncController.folderName ?? "Not Chosen")
+                            Button("Choose iCloud Drive or Folder…", systemImage: "folder") {
+                                syncController.chooseFolder()
+                            }
+                        } else if syncController.provider == .webDAV {
+                            TextField("WebDAV folder URL", text: $webDAVEndpoint)
+                                .onChange(of: webDAVEndpoint) { _, value in syncController.endpoint = value }
+                            TextField("Username", text: $webDAVUsername)
+                                .onChange(of: webDAVUsername) { _, value in syncController.username = value }
+                            LabeledContent("Password") {
+                                HStack {
+                                    SecureField("New password", text: $webDAVPassword)
+                                        .frame(minWidth: 180)
+                                        .help("Leave blank to keep the password already saved in Keychain")
+                                    Button("Update Password") {
+                                        if syncController.updateWebDAVPassword(webDAVPassword) {
+                                            webDAVPassword = ""
+                                        }
+                                    }
+                                    .disabled(webDAVPassword.isEmpty)
+                                }
+                            }
+                        }
+                        Toggle("Sync automatically when Lamp Bible opens", isOn: $automaticSync)
+                            .disabled(syncController.provider == .off)
+                        Text("Includes companion writing files, agent context, custom workspace skills, and revision history. Provider credentials and generated agent configuration stay on this Mac.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        HStack {
+                            Button("Sync Now", systemImage: "arrow.triangle.2.circlepath") {
+                                Task {
+                                    if !webDAVPassword.isEmpty {
+                                        guard syncController.updateWebDAVPassword(webDAVPassword) else { return }
+                                        webDAVPassword = ""
+                                    }
+                                    await syncController.sync(library: model.library)
+                                    model.refresh()
+                                }
+                            }
+                            .disabled(syncController.provider == .off || syncController.isSyncing)
+                            if syncController.isSyncing { ProgressView().controlSize(.small) }
+                            if let status = syncController.statusMessage {
+                                Text(status).font(.callout).foregroundStyle(.secondary)
+                            }
+                        }
+                        if let error = syncController.errorMessage {
+                            Label(error, systemImage: "exclamationmark.triangle")
+                                .font(.callout)
+                                .foregroundStyle(.red)
                         }
                     }
                 }
             }
-
-            Section("Devotionals & Quizzes") {
-                LabeledContent("Devotional Text Size") {
-                    Slider(value: $devotionalFontSize, in: 13...30, step: 1)
-                        .frame(width: 220)
-                }
-                TextField("Preferred quiz age-group ID", text: $defaultQuizAgeGroup)
-            }
-
-            Section("AI Provider Accounts") {
-                AIProviderAccountsSettingsView()
-                Divider()
-                Toggle("Allow agents to query Lamp modules", isOn: $agentModuleAccessEnabled)
-                Picker("Module Access", selection: $agentModuleAccessScope) {
-                    ForEach(AgentModuleAccessScope.allCases) { scope in
-                        Text(scope.title).tag(scope.rawValue)
-                    }
-                }
-                .disabled(!agentModuleAccessEnabled)
-                Toggle("Include personal devotionals, notes, and highlights", isOn: $agentPersonalContentEnabled)
-                    .disabled(!agentModuleAccessEnabled)
-                HStack {
-                    Text("Module results are sent to the AI provider you launch. All Lamp tools are read-only.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Test Module Tools", systemImage: "stethoscope") {
-                        testAgentModuleAccess()
-                    }
-                    .controlSize(.small)
-                    .disabled(!agentModuleAccessEnabled)
-                }
-                if let agentModuleAccessStatus {
-                    Label(agentModuleAccessStatus, systemImage: "server.rack")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Section("Reading Plans") {
-                Stepper("Reading speed: \(wordsPerMinute) words per minute", value: $wordsPerMinute, in: 80...600, step: 5)
-                Picker("Default External Bible", selection: $externalBibleApp) {
-                    Text("Ask Each Time").tag("")
-                    ForEach(ExternalBibleApplication.allCases) { application in
-                        Text(application.rawValue).tag(application.rawValue)
-                    }
-                }
-                Toggle("Daily reading reminder", isOn: $reminderEnabled)
-                DatePicker(
-                    "Reminder Time",
-                    selection: Binding(
-                        get: { reminderDate },
-                        set: { updateReminderTime($0) }
-                    ),
-                    displayedComponents: .hourAndMinute
-                )
-                .datePickerStyle(.field)
-                .disabled(!reminderEnabled)
-                if let reminderError {
-                    Label(reminderError, systemImage: "exclamationmark.triangle")
-                        .font(.callout)
-                        .foregroundStyle(.red)
-                }
-            }
-
-            Section("Sync") {
-                Picker("Provider", selection: Binding(
-                    get: { syncController.provider },
-                    set: { syncController.provider = $0 }
-                )) {
-                    ForEach(LibrarySyncController.Provider.allCases) { provider in
-                        Text(provider.displayName).tag(provider)
-                    }
-                }
-                if syncController.provider == .folder {
-                    LabeledContent("Folder", value: syncController.folderName ?? "Not Chosen")
-                    Button("Choose iCloud Drive or Folder…", systemImage: "folder") {
-                        syncController.chooseFolder()
-                    }
-                } else if syncController.provider == .webDAV {
-                    TextField("WebDAV folder URL", text: $webDAVEndpoint)
-                        .onChange(of: webDAVEndpoint) { _, value in syncController.endpoint = value }
-                    TextField("Username", text: $webDAVUsername)
-                        .onChange(of: webDAVUsername) { _, value in syncController.username = value }
-                    SecureField("Password", text: $webDAVPassword)
-                        .onChange(of: webDAVPassword) { _, value in syncController.password = value }
-                }
-                Toggle("Sync automatically when Lamp Bible opens", isOn: $automaticSync)
-                    .disabled(syncController.provider == .off)
-                HStack {
-                    Button("Sync Now", systemImage: "arrow.triangle.2.circlepath") {
-                        Task { await syncController.sync(library: model.library) }
-                    }
-                    .disabled(syncController.provider == .off || syncController.isSyncing)
-                    if syncController.isSyncing { ProgressView().controlSize(.small) }
-                    if let status = syncController.statusMessage {
-                        Text(status).font(.callout).foregroundStyle(.secondary)
-                    }
-                }
-                if let error = syncController.errorMessage {
-                    Label(error, systemImage: "exclamationmark.triangle")
-                        .font(.callout)
-                        .foregroundStyle(.red)
-                }
-            }
+            .formStyle(.grouped)
+            .navigationTitle(selectedSettingsSection.title)
         }
-        .formStyle(.grouped)
-        .frame(width: 680, height: 760)
-        .padding()
+        .navigationSplitViewStyle(.balanced)
+        .frame(width: 880, height: 640)
         .onChange(of: reminderEnabled) { _, _ in applyReminder() }
         .onChange(of: reminderHour) { _, _ in applyReminder() }
         .onChange(of: reminderMinute) { _, _ in applyReminder() }
         .onAppear {
             webDAVEndpoint = syncController.endpoint
             webDAVUsername = syncController.username
-            webDAVPassword = syncController.password
         }
+    }
+
+    private func settingsLink(_ section: ReaderSettingsSection) -> some View {
+        Label(section.title, systemImage: section.systemImage)
+            .tag(section)
     }
 
     /// The same bounds the `aA` menus step through, so a size set in Settings and a
@@ -479,6 +700,48 @@ private struct ReaderSettingsView: View {
                     withExtension: "zlib"
                 )
             )
+        }
+    }
+}
+
+private enum ReaderSettingsSection: String, CaseIterable, Identifiable {
+    case reader
+    case books
+    case studySidebar
+    case modules
+    case devotionalsAndQuizzes
+    case writing
+    case aiAndAgents
+    case readingPlans
+    case sync
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .reader: "Reader"
+        case .books: "Books"
+        case .studySidebar: "Study Sidebar"
+        case .modules: "Modules"
+        case .devotionalsAndQuizzes: "Devotionals & Quizzes"
+        case .writing: "Writing"
+        case .aiAndAgents: "AI & Agents"
+        case .readingPlans: "Reading Plans"
+        case .sync: "Sync"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .reader: "book"
+        case .books: "books.vertical"
+        case .studySidebar: "sidebar.right"
+        case .modules: "shippingbox"
+        case .devotionalsAndQuizzes: "heart.text.square"
+        case .writing: "square.and.pencil"
+        case .aiAndAgents: "sparkles"
+        case .readingPlans: "calendar"
+        case .sync: "arrow.triangle.2.circlepath"
         }
     }
 }

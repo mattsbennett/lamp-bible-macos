@@ -89,6 +89,14 @@ struct StudyInspectorView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay {
+            ReaderNativeContextMenuAugmenter(
+                entries: [],
+                openLink: { _ in },
+                showsLinkCursor: true
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
         .onAppear {
             // Inspector content can exist while its column is hidden. Leave the
             // request pending until the presented instance can retain the lookup.
@@ -132,6 +140,9 @@ private extension View {
     /// to act on.
     func studyPaneState() -> some View {
         fixedSize(horizontal: false, vertical: true)
+            // Top-aligned, but not jammed against the divider above it.
+            .padding(.top, 28)
+            .padding(.horizontal, 16)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 }
@@ -927,6 +938,7 @@ private struct DictionaryInspectorView: View {
     @AppStorage("commentary.fontSize") private var fontSize = LampTextScale.commentaryText.defaultValue
     @AppStorage("commentary.lineSpacing") private var lineSpacing = LampTextScale.commentaryLineSpacing.defaultValue
     @AppStorage("commentary.typeface") private var typeface = ProseTypeface.commentaryDefault
+    @AppStorage("commentary.previewContextAmount") private var previewContextAmount = ScripturePreviewContextAmount.oneVerse
     @AppStorage("studyInspector.greekDictionaryModuleID") private var preferredGreekModuleID = ""
     @AppStorage("studyInspector.hebrewDictionaryModuleID") private var preferredHebrewModuleID = ""
     @State private var moduleID: String?
@@ -937,6 +949,11 @@ private struct DictionaryInspectorView: View {
     /// The key text this view put in the field on the user's behalf. Typing is
     /// meant to abandon the lookup, and seeding the field is not typing.
     @State private var seededQuery: String?
+    /// The requests whose results are actually on screen. Empty results only mean
+    /// "nothing found" once the matching request has finished; until then they mean
+    /// "not asked yet", and the two must not look alike.
+    @State private var completedLookupRequest: DictionaryLookupRequestKey?
+    @State private var completedSearchRequest: DictionarySearchRequest?
 
     private var searchRequest: DictionarySearchRequest {
         DictionarySearchRequest(query: query, moduleIDs: activeDictionaryIDs(for: [query]))
@@ -993,9 +1010,10 @@ private struct DictionaryInspectorView: View {
                         lineSpacing: $lineSpacing,
                         typeface: $typeface,
                         defaultTypeface: .commentaryDefault,
+                        previewContextAmount: $previewContextAmount,
                         fontScale: .commentaryText,
                         lineSpacingScale: .commentaryLineSpacing,
-                        help: "Choose the shared dictionary and commentary text appearance"
+                        help: "Choose shared text appearance and scripture preview context"
                     )
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
@@ -1084,7 +1102,14 @@ private struct DictionaryInspectorView: View {
             )
             .studyPaneState()
         } else if lookup != nil {
-            if isSearching && sections.isEmpty {
+            // Keyed on the request rather than on `isSearching`, which is still
+            // false for the first render after a lookup arrives — its `.task` has
+            // not run yet. `sections` is empty at that moment too, and
+            // `[].allSatisfy` is vacuously true, so the branch below used to
+            // announce "Not in Any Dictionary" before the search had begun. When
+            // the lookup is what opens the study column, that wrong answer is what
+            // you watch slide in, replaced by real entries a moment later.
+            if completedLookupRequest != lookupRequest {
                 ProgressView("Looking Up…")
                     .studyPaneState()
             } else if sections.allSatisfy({ $0.entries.isEmpty && $0.mentions.isEmpty }) {
@@ -1095,31 +1120,44 @@ private struct DictionaryInspectorView: View {
                 )
                 .studyPaneState()
             } else {
-                List {
-                    ForEach(sections) { section in
-                        Section {
-                            ForEach(section.entries) { result in
-                                dictionaryResult(result, isExpanded: true)
-                            }
-                            if !section.mentions.isEmpty {
-                                DisclosureGroup(
-                                    section.entries.isEmpty
-                                        ? "No exact entry — \(referencingEntriesLabel(section.mentions.count))"
-                                        : referencingEntriesLabel(section.mentions.count)
-                                ) {
-                                    ForEach(section.mentions) { result in
-                                        dictionaryResult(result)
-                                    }
+                // A ScrollView rather than a List, and not for looks. `List` is
+                // `NSTableView` inside an `NSScrollView`; an AppKit view hosted
+                // that deep does not follow a SwiftUI layout animation, so while
+                // the study column slid in, the results stayed where they would
+                // finish and simply appeared. Every other study pane already uses
+                // a plain scroll view, which is why only this one misbehaved.
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 10, pinnedViews: [.sectionHeaders]) {
+                        ForEach(sections) { section in
+                            Section {
+                                ForEach(section.entries) { result in
+                                    dictionaryResult(result, isExpanded: true)
                                 }
-                                .font(.caption)
+                                if !section.mentions.isEmpty {
+                                    DisclosureGroup(
+                                        section.entries.isEmpty
+                                            ? "No exact entry — \(referencingEntriesLabel(section.mentions.count))"
+                                            : referencingEntriesLabel(section.mentions.count)
+                                    ) {
+                                        ForEach(section.mentions) { result in
+                                            dictionaryResult(result)
+                                        }
+                                    }
+                                    .font(.caption)
+                                }
+                            } header: {
+                                Text(section.id)
+                                    .font(.caption.monospaced().weight(.semibold))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.vertical, 4)
+                                    .background(.bar)
                             }
-                        } header: {
-                            Text(section.id)
-                                .font(.caption.monospaced().weight(.semibold))
                         }
                     }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .listStyle(.inset)
             }
         } else if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             ContentUnavailableView(
@@ -1128,17 +1166,25 @@ private struct DictionaryInspectorView: View {
                 description: Text("Click a linked word in the reader, or search by English word, lemma, transliteration, or key such as G3056.")
             )
             .studyPaneState()
-        } else if isSearching && results.isEmpty {
+        } else if completedSearchRequest != searchRequest {
+            // Same reasoning as the lookup above: "no results" is only true once a
+            // search has actually run, and this one is debounced by 200 ms.
             ProgressView("Searching…")
                 .studyPaneState()
         } else if results.isEmpty {
             ContentUnavailableView.search(text: query)
                 .studyPaneState()
         } else {
-            List(results) { result in
-                dictionaryResult(result)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    ForEach(results) { result in
+                        dictionaryResult(result)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .listStyle(.inset)
         }
     }
 
@@ -1161,6 +1207,11 @@ private struct DictionaryInspectorView: View {
             lineSpacing: dictionaryLineSpacing,
             typeface: typeface
         )
+        // Claims the column's full width. Without it the entry sizes to its text,
+        // the stack around it is only as wide as its widest row, and a scroll view
+        // centres content narrower than itself — so definitions ended up as a
+        // floating centred block instead of a left-aligned column.
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var lookupKeyList: String {
@@ -1203,11 +1254,26 @@ private struct DictionaryInspectorView: View {
         lookup = nil
     }
 
+    /// Loads a lookup in two passes: the definitions the word actually has, then
+    /// the entries that merely cite it.
+    ///
+    /// The second pass is a full-text search across every installed dictionary and
+    /// costs about as much as everything else combined, but it only feeds a
+    /// disclosure group that starts collapsed. Waiting for it before showing
+    /// anything meant the pane finished arriving before it had a word in it.
     private func loadLookup() async {
         guard let lookup else {
             sections = []
             return
         }
+        let request = lookupRequest
+        // No in-flight guard here, deliberately. `.task(id:)` fires twice for one
+        // unchanged id, and skipping the second pass left the pane spinning for
+        // good whenever the first was then cancelled: nothing set
+        // `completedLookupRequest`, and the id never changed again to retrigger it.
+        // The duplicate is cheap now that mappings are cached, and a wasted query
+        // is much better than a loader that never resolves.
+
         // Show the keys being looked up in the field, so the pane says what it is
         // showing and the user can edit that text into a search.
         let seed = lookup.keys.joined(separator: " ")
@@ -1215,28 +1281,54 @@ private struct DictionaryInspectorView: View {
         if query != seed { query = seed }
         isSearching = true
         errorMessage = nil
+
+        var exactKeysByKey: [String: Set<String>] = [:]
         var loaded: [DictionaryKeySection] = []
         do {
             for key in lookup.keys {
                 try Task.checkCancellation()
                 let dictionaryIDs = activeDictionaryIDs(for: [key])
-                let mappedKeys = try await model.library.lexiconMappings(sourceKey: key)
-                let normalizedSourceKey = StrongsKey.normalized(key)
-                let exactKeys = [key, normalizedSourceKey] + mappedKeys
-                let exactKeySet = Set(exactKeys.map { $0.uppercased() })
+                // Through the model, so this picks up the query already started by
+                // the click that asked for the lookup.
+                let mappedKeys = try await model.lexiconMappings(sourceKey: key)
+                let exactKeys = [key, StrongsKey.normalized(key)] + mappedKeys
+                exactKeysByKey[key] = Set(exactKeys.map { $0.uppercased() })
                 let exactEntries = try await model.library.dictionaryEntries(
                     keys: exactKeys,
                     moduleIDs: dictionaryIDs
                 )
+                loaded.append(DictionaryKeySection(id: key, entries: exactEntries, mentions: []))
+            }
+            sections = loaded
+            completedLookupRequest = request
+        } catch is CancellationError {
+            return
+        } catch {
+            errorMessage = error.localizedDescription
+            sections = []
+            completedLookupRequest = request
+            isSearching = false
+            return
+        }
+
+        // Second pass. The definitions are already on screen, so this only adds
+        // the cross-references — and any entry whose dictionary spells the key
+        // differently, which is why it can still contribute to `entries`.
+        var refined: [DictionaryKeySection] = []
+        do {
+            for section in loaded {
+                try Task.checkCancellation()
+                let key = section.id
                 let matches = try await model.library.searchDictionaries(
                     query: key,
-                    moduleIDs: dictionaryIDs,
+                    moduleIDs: activeDictionaryIDs(for: [key]),
                     limit: 60
                 )
                 var seenEntryIDs = Set<String>()
-                let entries = (exactEntries + matches.filter { StrongsKey.matches($0.key, key) })
+                let entries = (section.entries + matches.filter { StrongsKey.matches($0.key, key) })
                     .filter { seenEntryIDs.insert($0.id).inserted }
-                loaded.append(DictionaryKeySection(
+                let exactKeySet = exactKeysByKey[key] ?? []
+                refined.append(DictionaryKeySection(
                     id: key,
                     entries: entries,
                     mentions: matches.filter {
@@ -1245,12 +1337,12 @@ private struct DictionaryInspectorView: View {
                     }
                 ))
             }
-            sections = loaded
+            sections = refined
         } catch is CancellationError {
             return
         } catch {
-            errorMessage = error.localizedDescription
-            sections = []
+            // The definitions stand on their own; a failed cross-reference search
+            // is not worth replacing them with an error.
         }
         isSearching = false
     }
@@ -1264,6 +1356,7 @@ private struct DictionaryInspectorView: View {
         }
         guard !trimmedQuery.isEmpty else {
             results = []
+            completedSearchRequest = searchRequest
             isSearching = false
             return
         }
@@ -1282,6 +1375,7 @@ private struct DictionaryInspectorView: View {
             errorMessage = error.localizedDescription
             results = []
         }
+        completedSearchRequest = searchRequest
         isSearching = false
     }
 }
@@ -1310,6 +1404,9 @@ private struct VerseInspectorView: View {
     @EnvironmentObject private var model: LibraryModel
     @AppStorage("reader.showStrongsHints") private var showStrongsHints = true
     @AppStorage("reader.crossReferences.canonicalOrder") private var canonicalCrossReferenceOrder = false
+    @AppStorage("commentary.typeface") private var typeface = ProseTypeface.commentaryDefault
+    @AppStorage("commentary.lineSpacing") private var lineSpacing = LampTextScale.commentaryLineSpacing.defaultValue
+    @AppStorage("commentary.previewContextAmount") private var previewContextAmount = ScripturePreviewContextAmount.oneVerse
     @State private var footnotesByReference: [Int: [LampVerseFootnote]] = [:]
     @State private var isLoading = false
     @State private var errorMessage: String?
@@ -1436,7 +1533,9 @@ private struct VerseInspectorView: View {
                                 text: description,
                                 startReference: reference,
                                 endReference: annotation.endReference
-                            ))
+                            ), typeface: typeface,
+                               lineSpacing: LampTextScale.commentaryLineSpacing.clamped(lineSpacing),
+                               contextAmount: previewContextAmount)
                         }
                     }
                 }
@@ -1624,80 +1723,183 @@ private struct DictionaryResultView: View {
 
     @State private var isShowingDetail: Bool?
 
+    private var isDetailShown: Bool { isShowingDetail ?? isExpanded }
+
+    /// Built from a button and a conditional body rather than a `DisclosureGroup`.
+    /// That control indents its content by a fixed, sizeable amount on macOS, which
+    /// is fine for a settings row and wrong for a definition — it left the text as
+    /// a narrow column floating in the middle of the pane, with no way to turn the
+    /// inset off.
+    /// The chevron's width plus the gap after it, so the definition starts at the
+    /// same left edge as the label it belongs to rather than under the chevron.
+    private static let detailIndent: CGFloat = 16
+
     var body: some View {
-        DisclosureGroup(isExpanded: Binding(
-            get: { isShowingDetail ?? isExpanded },
-            set: { isShowingDetail = $0 }
-        )) {
-            VStack(alignment: .leading, spacing: 14) {
-                ForEach(Array(result.senses.enumerated()), id: \.offset) { index, sense in
-                    VStack(alignment: .leading, spacing: 6) {
-                        if result.senses.count > 1 {
-                            Text("Sense \(index + 1)")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                        }
-                        if let partOfSpeech = sense.partOfSpeech {
-                            Text(partOfSpeech)
-                                .font(.caption.italic())
-                                .foregroundStyle(.secondary)
-                        }
-                        if let gloss = sense.gloss {
-                            Text(gloss)
-                                .font(.system(size: fontSize, weight: .semibold, design: typeface.design))
-                        }
-                        if let shortDefinition = sense.shortDefinition {
-                            Text(shortDefinition)
-                                .font(.system(size: fontSize, design: typeface.design))
-                        }
-                        if let definition = sense.definition,
-                           definition != sense.shortDefinition {
-                            Text(definition)
-                                .font(.system(size: fontSize, design: typeface.design))
-                                .textSelection(.enabled)
-                        }
-                        if let usage = sense.usage {
-                            Text("Usage: \(usage)")
-                                .font(.system(size: max(fontSize - 1, 9), design: typeface.design))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    if index < result.senses.count - 1 { Divider() }
-                }
-            }
-            .padding(.vertical, 8)
-            .lineSpacing(lineSpacing)
-        } label: {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    // Which dictionary this came from leads the row: with several
-                    // installed, the same key yields several entries, and the source
-                    // is the only thing that tells them apart.
-                    Text(result.moduleName)
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                isShowingDetail = !isDetailShown
+            } label: {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: "chevron.right")
                         .font(.caption2.weight(.semibold))
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(.quaternary, in: Capsule())
-                    Text(result.key)
-                        .font(.caption.monospaced().weight(.semibold))
                         .foregroundStyle(.secondary)
-                    Text(result.lemma)
-                        .font(.system(size: fontSize + 2, weight: .semibold, design: typeface.design))
-                    Spacer()
+                        .rotationEffect(.degrees(isDetailShown ? 90 : 0))
+                        .frame(width: 10)
+                    summaryLabel
                 }
-                if let transliteration = result.transliteration {
-                    Text(transliteration)
-                        .font(.system(size: max(fontSize - 1, 9), design: typeface.design).italic())
-                        .foregroundStyle(.secondary)
-                }
-                if let summary = result.summary {
-                    Text(summary)
-                        .font(.system(size: max(fontSize - 1, 9), design: typeface.design))
-                        .lineLimit(2)
-                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            .padding(.vertical, 4)
-            .lineSpacing(lineSpacing)
+            .buttonStyle(.plain)
+
+            if isDetailShown {
+                detail
+                    .padding(.leading, Self.detailIndent)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .animation(.easeInOut(duration: 0.16), value: isDetailShown)
+    }
+
+    private var detail: some View {
+    VStack(alignment: .leading, spacing: 14) {
+            ForEach(Array(result.senses.enumerated()), id: \.offset) { index, sense in
+                VStack(alignment: .leading, spacing: 6) {
+                    if result.senses.count > 1 {
+                        Text("Sense \(index + 1)")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    if let partOfSpeech = sense.partOfSpeech {
+                        Text(partOfSpeech)
+                            .font(.caption.italic())
+                            .foregroundStyle(.secondary)
+                    }
+                    if let gloss = sense.gloss {
+                        linkedText(gloss, sense: sense)
+                            .font(.system(size: fontSize, weight: .semibold, design: typeface.design))
+                    }
+                    if let shortDefinition = sense.shortDefinition {
+                        linkedText(shortDefinition, sense: sense)
+                            .font(.system(size: fontSize, design: typeface.design))
+                    }
+                    if let definition = sense.definition,
+                       definition != sense.shortDefinition {
+                        linkedText(definition, sense: sense)
+                            .font(.system(size: fontSize, design: typeface.design))
+                    }
+                    if let derivation = sense.derivation {
+                        linkedText("Derivation: \(derivation)", sense: sense)
+                            .font(.system(size: max(fontSize - 1, 9), design: typeface.design))
+                            .foregroundStyle(.secondary)
+                    }
+                    if let usage = sense.usage {
+                        linkedText("Usage: \(usage)", sense: sense)
+                            .font(.system(size: max(fontSize - 1, 9), design: typeface.design))
+                            .foregroundStyle(.secondary)
+                    }
+                    let unmatchedScripture = unmatchedScriptureLinks(in: sense)
+                    let unmatchedDictionary = unmatchedDictionaryLinks(in: sense)
+                    if !unmatchedScripture.isEmpty || !unmatchedDictionary.isEmpty {
+                        ScriptureLinkedText(
+                            text: "",
+                            links: [],
+                            dictionaryModuleID: result.moduleID,
+                            appendedLinks: unmatchedScripture,
+                            appendedDictionaryLinks: unmatchedDictionary
+                        )
+                        .font(.system(size: max(fontSize - 1, 9), design: typeface.design))
+                    }
+                }
+                if index < result.senses.count - 1 { Divider() }
+            }
+        }
+        .padding(.vertical, 8)
+        .lineSpacing(lineSpacing)
+    }
+
+    private var summaryLabel: some View {
+    VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                // Which dictionary this came from leads the row: with several
+                // installed, the same key yields several entries, and the source
+                // is the only thing that tells them apart.
+                Text(result.moduleName)
+                    .font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(.quaternary, in: Capsule())
+                Text(result.key)
+                    .font(.caption.monospaced().weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text(result.lemma)
+                    .font(.system(size: fontSize + 2, weight: .semibold, design: typeface.design))
+                Spacer()
+            }
+            if let transliteration = result.transliteration {
+                Text(transliteration)
+                    .font(.system(size: max(fontSize - 1, 9), design: typeface.design).italic())
+                    .foregroundStyle(.secondary)
+            }
+            // A preview of the definition, and only useful as one: `summary` is the
+            // first sense's short definition, which is the same text the detail
+            // opens with. Showing it while the entry is expanded prints it twice.
+            if !isDetailShown, let summary = result.summary {
+                Text(summary)
+                    .font(.system(size: max(fontSize - 1, 9), design: typeface.design))
+                    .lineLimit(2)
+            }
+    }
+        .padding(.vertical, 4)
+        .lineSpacing(lineSpacing)
+    }
+
+    private func linkedText(
+        _ text: String,
+        sense: LampDictionarySense
+    ) -> some View {
+        ScriptureLinkedText(
+            text: text,
+            links: sense.scriptureLinks,
+            dictionaryLinks: sense.dictionaryLinks,
+            dictionaryModuleID: result.moduleID
+        )
+    }
+
+    /// Explicit dictionary `references` do not necessarily repeat their labels in
+    /// the definition. Keep those visible as trailing links while annotations that
+    /// do match prose remain inline.
+    private func unmatchedScriptureLinks(
+        in sense: LampDictionarySense
+    ) -> [LampScriptureLink] {
+        let visibleText = [
+            sense.gloss,
+            sense.shortDefinition,
+            sense.definition == sense.shortDefinition ? nil : sense.definition,
+            sense.derivation,
+            sense.usage,
+        ].compactMap { $0 }
+        return sense.scriptureLinks.filter { link in
+            !visibleText.contains {
+                $0.range(of: link.inlineLabel, options: [.caseInsensitive]) != nil
+            }
+        }
+    }
+
+    private func unmatchedDictionaryLinks(
+        in sense: LampDictionarySense
+    ) -> [LampDictionaryLink] {
+        let visibleText = [
+            sense.gloss,
+            sense.shortDefinition,
+            sense.definition == sense.shortDefinition ? nil : sense.definition,
+            sense.derivation,
+            sense.usage,
+        ].compactMap { $0 }
+        return sense.dictionaryLinks.filter { link in
+            !visibleText.contains {
+                $0.range(of: link.inlineLabel, options: [.caseInsensitive]) != nil
+            }
         }
     }
 }
@@ -1714,6 +1916,7 @@ private struct CommentaryInspectorView: View {
     @AppStorage("commentary.fontSize") private var fontSize = LampTextScale.commentaryText.defaultValue
     @AppStorage("commentary.lineSpacing") private var lineSpacing = LampTextScale.commentaryLineSpacing.defaultValue
     @AppStorage("commentary.typeface") private var typeface = ProseTypeface.commentaryDefault
+    @AppStorage("commentary.previewContextAmount") private var previewContextAmount = ScripturePreviewContextAmount.oneVerse
     @State private var units: [LampCommentaryUnit] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
@@ -1762,9 +1965,10 @@ private struct CommentaryInspectorView: View {
                     lineSpacing: $lineSpacing,
                     typeface: $typeface,
                     defaultTypeface: .commentaryDefault,
+                    previewContextAmount: $previewContextAmount,
                     fontScale: .commentaryText,
                     lineSpacingScale: .commentaryLineSpacing,
-                    help: "Choose the commentary typeface, text size, and line spacing"
+                    help: "Choose commentary text appearance and scripture preview context"
                 )
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
@@ -1932,25 +2136,25 @@ private struct CommentaryUnitView: View {
                     ))
             }
             if let introduction = unit.introduction {
-                CommentaryLinkedText(text: introduction, links: unit.scriptureLinks)
+                ScriptureLinkedText(text: introduction, links: unit.scriptureLinks)
                     .font(.system(size: fontSize, design: typeface.design))
             }
             if let translation = unit.translation {
-                CommentaryLinkedText(text: translation, links: unit.scriptureLinks)
+                ScriptureLinkedText(text: translation, links: unit.scriptureLinks)
                     .font(.system(size: fontSize, design: typeface.design).italic())
                     .foregroundStyle(.secondary)
             }
             if let commentary = unit.commentary {
-                CommentaryLinkedText(text: commentary, links: unit.scriptureLinks)
+                ScriptureLinkedText(text: commentary, links: unit.scriptureLinks)
                     .font(.system(size: fontSize, design: typeface.design))
             }
             if let footnotes = unit.footnotes {
-                CommentaryLinkedText(text: footnotes, links: unit.scriptureLinks)
+                ScriptureLinkedText(text: footnotes, links: unit.scriptureLinks)
                     .font(.system(size: max(fontSize - 2, 9), design: typeface.design))
                     .foregroundStyle(.secondary)
             }
             if !unmatchedScriptureLinks.isEmpty {
-                CommentaryLinkedText(
+                ScriptureLinkedText(
                     text: "",
                     links: [],
                     appendedLinks: unmatchedScriptureLinks
@@ -1983,11 +2187,19 @@ private struct CommentaryUnitView: View {
     }
 }
 
-private struct CommentaryLinkedText: View {
+/// Shared annotated prose renderer for commentary and dictionary content. Tapping
+/// an inline scripture or dictionary-key annotation opens its matching preview.
+private struct ScriptureLinkedText: View {
     let text: String
     let links: [LampScriptureLink]
+    var dictionaryLinks: [LampDictionaryLink] = []
+    var dictionaryModuleID: String?
     var appendedLinks: [LampScriptureLink] = []
-    @State private var previewLink: LampScriptureLink?
+    var appendedDictionaryLinks: [LampDictionaryLink] = []
+    @AppStorage("commentary.typeface") private var typeface = ProseTypeface.commentaryDefault
+    @AppStorage("commentary.lineSpacing") private var lineSpacing = LampTextScale.commentaryLineSpacing.defaultValue
+    @AppStorage("commentary.previewContextAmount") private var previewContextAmount = ScripturePreviewContextAmount.oneVerse
+    @State private var preview: LinkedTextPreview?
     @State private var hoverLocation: CGPoint?
     @State private var previewAnchor = CGRect.zero
 
@@ -2004,30 +2216,63 @@ private struct CommentaryLinkedText: View {
             }
             .environment(\.openURL, OpenURLAction { url in
                 guard url.scheme == "lampbible",
-                      url.host == "read",
-                      let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-                      let value = components.queryItems?.first(where: { $0.name == "reference" })?.value,
-                      let reference = Int(value) else { return .systemAction }
-                let endReference = components.queryItems?
-                    .first(where: { $0.name == "end" })?
-                    .value
-                    .flatMap(Int.init)
+                      let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+                    return .systemAction
+                }
                 previewAnchor = hoverLocation.map {
                     CGRect(x: $0.x - 1, y: $0.y - 1, width: 2, height: 2)
                 } ?? .zero
-                previewLink = LampScriptureLink(
-                    startReference: reference,
-                    endReference: endReference
-                )
-                return .handled
+                switch url.host {
+                case "read":
+                    guard let value = components.queryItems?
+                        .first(where: { $0.name == "reference" })?.value,
+                          let reference = Int(value) else { return .systemAction }
+                    let endReference = components.queryItems?
+                        .first(where: { $0.name == "end" })?
+                        .value
+                        .flatMap(Int.init)
+                    preview = .scripture(LampScriptureLink(
+                        startReference: reference,
+                        endReference: endReference
+                    ))
+                    return .handled
+                case "dictionary":
+                    guard let key = components.queryItems?
+                        .first(where: { $0.name == "key" })?.value else {
+                        return .systemAction
+                    }
+                    let availableLinks = dictionaryLinks + appendedDictionaryLinks
+                    let link = availableLinks.first {
+                        $0.key.caseInsensitiveCompare(key) == .orderedSame
+                    } ?? LampDictionaryLink(key: key)
+                    preview = .dictionary(link, moduleID: dictionaryModuleID)
+                    return .handled
+                default:
+                    return .systemAction
+                }
             })
             .popover(
-                item: $previewLink,
+                item: $preview,
                 attachmentAnchor: previewAnchor == .zero
                     ? .rect(.bounds)
                     : .rect(.rect(previewAnchor))
-            ) { link in
-                ScriptureReferencePopover(link: link)
+            ) { preview in
+                switch preview {
+                case .scripture(let link):
+                    ScriptureReferencePopover(
+                        link: link,
+                        typeface: typeface,
+                        lineSpacing: LampTextScale.commentaryLineSpacing.clamped(lineSpacing),
+                        contextAmount: previewContextAmount
+                    )
+                case .dictionary(let link, let moduleID):
+                    DictionaryReferencePopover(
+                        link: link,
+                        preferredModuleID: moduleID,
+                        typeface: typeface,
+                        lineSpacing: LampTextScale.commentaryLineSpacing.clamped(lineSpacing)
+                    )
+                }
             }
     }
 
@@ -2048,10 +2293,39 @@ private struct CommentaryLinkedText: View {
             occupiedRanges.append(stringRange)
         }
 
+        for link in dictionaryLinks {
+            guard let stringRange = firstAvailableRange(
+                of: link.inlineLabel,
+                occupiedRanges: occupiedRanges
+            ),
+                  let attributedRange = attributedRange(for: stringRange, in: result),
+                  let url = link.inlineURL else { continue }
+            result[attributedRange].link = url
+            result[attributedRange].foregroundColor = .accentColor
+            result[attributedRange].underlineStyle = .single
+            occupiedRanges.append(stringRange)
+        }
+
         if !appendedLinks.isEmpty {
             if !text.isEmpty { result.append(AttributedString(" ")) }
             result.append(AttributedString("("))
             for (index, link) in appendedLinks.enumerated() {
+                if index > 0 { result.append(AttributedString("; ")) }
+                var label = AttributedString(link.inlineLabel)
+                if let url = link.inlineURL {
+                    label.link = url
+                    label.foregroundColor = .accentColor
+                    label.underlineStyle = .single
+                }
+                result.append(label)
+            }
+            result.append(AttributedString(")"))
+        }
+
+        if !appendedDictionaryLinks.isEmpty {
+            if !text.isEmpty || !appendedLinks.isEmpty { result.append(AttributedString(" ")) }
+            result.append(AttributedString("("))
+            for (index, link) in appendedDictionaryLinks.enumerated() {
                 if index > 0 { result.append(AttributedString("; ")) }
                 var label = AttributedString(link.inlineLabel)
                 if let url = link.inlineURL {
@@ -2095,6 +2369,19 @@ private struct CommentaryLinkedText: View {
     }
 }
 
+private enum LinkedTextPreview: Identifiable {
+    case scripture(LampScriptureLink)
+    case dictionary(LampDictionaryLink, moduleID: String?)
+
+    var id: String {
+        switch self {
+        case .scripture(let link): "scripture:\(link.id)"
+        case .dictionary(let link, let moduleID):
+            "dictionary:\(moduleID ?? "any"):\(link.id)"
+        }
+    }
+}
+
 private extension LampScriptureLink {
     var inlineLabel: String {
         if let label = text?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -2120,8 +2407,29 @@ private extension LampScriptureLink {
     }
 }
 
-private struct ScriptureReferenceButton: View {
+private extension LampDictionaryLink {
+    var inlineLabel: String {
+        if let text = text?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !text.isEmpty {
+            return text
+        }
+        return key
+    }
+
+    var inlineURL: URL? {
+        var components = URLComponents()
+        components.scheme = "lampbible"
+        components.host = "dictionary"
+        components.queryItems = [URLQueryItem(name: "key", value: key)]
+        return components.url
+    }
+}
+
+struct ScriptureReferenceButton: View {
     let link: LampScriptureLink
+    let typeface: ProseTypeface
+    let lineSpacing: Double
+    let contextAmount: ScripturePreviewContextAmount
     @State private var isShowingPreview = false
 
     var body: some View {
@@ -2130,17 +2438,26 @@ private struct ScriptureReferenceButton: View {
         }
         .buttonStyle(.link)
         .popover(isPresented: $isShowingPreview) {
-            ScriptureReferencePopover(link: link)
+            ScriptureReferencePopover(
+                link: link,
+                typeface: typeface,
+                lineSpacing: lineSpacing,
+                contextAmount: contextAmount
+            )
         }
     }
 }
 
-private struct ScriptureReferencePopover: View {
+struct ScriptureReferencePopover: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.readerReferenceActions) private var referenceActions
     @EnvironmentObject private var model: LibraryModel
     let link: LampScriptureLink
-    @State private var chapter: LampChapter?
+    let typeface: ProseTypeface
+    let lineSpacing: Double
+    let contextAmount: ScripturePreviewContextAmount
+    @AppStorage("reader.layoutMode") private var readerLayoutMode = ReaderLayoutMode.continuousParagraphs
+    @State private var chapters: [LampChapter] = []
     @State private var errorMessage: String?
     @State private var isLoading = false
 
@@ -2170,7 +2487,7 @@ private struct ScriptureReferencePopover: View {
                         description: Text(errorMessage)
                     )
                     .frame(minHeight: 150)
-                } else if previewVerses.isEmpty {
+                } else if previewSections.isEmpty {
                     ContentUnavailableView(
                         "Passage Unavailable",
                         systemImage: "book.closed",
@@ -2178,29 +2495,33 @@ private struct ScriptureReferencePopover: View {
                     )
                     .frame(minHeight: 150)
                 } else {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 10) {
-                            ForEach(previewVerses) { verse in
-                                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                    Text(verse.number.formatted())
-                                        .font(.caption.weight(.semibold))
-                                        .foregroundStyle(.secondary)
-                                        .frame(minWidth: 20, alignment: .trailing)
-                                    Text(verse.text)
-                                        .font(.system(.body, design: .serif))
-                                        .textSelection(.enabled)
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 14) {
+                                ForEach(previewSections) { section in
+                                    VStack(alignment: .leading, spacing: 10) {
+                                        if previewSections.count > 1 {
+                                            Text(section.title)
+                                                .font(.subheadline.weight(.semibold))
+                                                .foregroundStyle(.secondary)
+                                                .padding(.leading, 28)
+                                        }
+
+                                        previewSection(section)
+                                    }
                                 }
+
                             }
-                            if hasMoreVerses {
-                                Text("Passage continues…")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .padding(.leading, 28)
-                            }
+                            .padding(16)
                         }
-                        .padding(16)
+                        .frame(maxHeight: 340)
+                        .task(id: previewScrollID) {
+                            // The macOS scroll view ignores a target installed in
+                            // the same update unless layout gets one turn first.
+                            await Task.yield()
+                            proxy.scrollTo(link.startReference, anchor: .center)
+                        }
                     }
-                    .frame(maxHeight: 300)
                 }
             }
 
@@ -2241,52 +2562,405 @@ private struct ScriptureReferencePopover: View {
         "\(translation?.id ?? "none"):\(link.startReference):\(link.endReference ?? link.startReference)"
     }
 
-    private var allPreviewVerses: [LampVerse] {
-        guard let chapter else { return [] }
-        let start = LampBibleReferenceFormatter.components(of: link.startReference)
-        let endReference = max(link.endReference ?? link.startReference, link.startReference)
-        let end = LampBibleReferenceFormatter.components(of: endReference)
-        return chapter.verses.filter { verse in
-            guard verse.id >= link.startReference else { return false }
-            if start.book == end.book, start.chapter == end.chapter {
-                return verse.id <= endReference
+    private var previewScrollID: String {
+        let chapterIdentity = chapters.map {
+            "\($0.book.id).\($0.number).\($0.verses.count)"
+        }.joined(separator: ",")
+        return "\(loadID):\(readerLayoutMode.rawValue):\(chapterIdentity)"
+    }
+
+    @ViewBuilder
+    private func previewSection(_ section: ScripturePreviewSection) -> some View {
+        if readerLayoutMode == .versePerLine {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(section.verses) { item in
+                    verseRow(item)
+                        .id(item.verse.id)
+                }
             }
-            return true
+        } else {
+            continuousPreview(section)
         }
     }
 
-    private var previewVerses: [LampVerse] {
-        Array(allPreviewVerses.prefix(12))
+    private func verseRow(_ item: ScripturePreviewVerse) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(item.verse.number.formatted())
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(
+                    item.isContext
+                        ? Color.secondary.opacity(0.55)
+                        : Color.secondary
+                )
+                .frame(minWidth: 20, alignment: .trailing)
+            Text(item.verse.text)
+                .font(.system(.body, design: typeface.design))
+                .lineSpacing(lineSpacing)
+                .foregroundStyle(
+                    item.isContext
+                        ? Color.secondary.opacity(0.8)
+                        : Color.primary
+                )
+                .textSelection(.enabled)
+        }
     }
 
-    private var hasMoreVerses: Bool {
-        allPreviewVerses.count > previewVerses.count
-            || LampBibleReferenceFormatter.components(of: link.startReference).chapter
-                != LampBibleReferenceFormatter.components(of: link.endReference ?? link.startReference).chapter
-            || LampBibleReferenceFormatter.components(of: link.startReference).book
-                != LampBibleReferenceFormatter.components(of: link.endReference ?? link.startReference).book
+    @ViewBuilder
+    private func continuousPreview(_ section: ScripturePreviewSection) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(section.paragraphs) { paragraph in
+                continuousText(paragraph.verses)
+                    .padding(.vertical, 3)
+                    .overlay {
+                        referenceAnchor(in: paragraph)
+                    }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func referenceAnchor(in paragraph: ScripturePreviewParagraph) -> some View {
+        if let progress = referenceProgress(in: paragraph) {
+            GeometryReader { geometry in
+                Color.clear
+                    .frame(width: 1, height: 1)
+                    .position(
+                        x: 0,
+                        y: min(max(geometry.size.height * progress, 0), geometry.size.height)
+                    )
+                    .id(link.startReference)
+            }
+            .allowsHitTesting(false)
+        }
+    }
+
+    private func referenceProgress(in paragraph: ScripturePreviewParagraph) -> CGFloat? {
+        guard let startIndex = paragraph.verses.firstIndex(where: {
+            $0.verse.id == link.startReference
+        }) else { return nil }
+        let characterCounts = paragraph.verses.map {
+            $0.verse.text.count + String($0.verse.number).count + 1
+        }
+        let precedingCount = characterCounts[..<startIndex].reduce(0, +)
+        let totalCount = max(characterCounts.reduce(0, +), 1)
+        return CGFloat(precedingCount) / CGFloat(totalCount)
+    }
+
+    private func continuousText(_ verses: [ScripturePreviewVerse]) -> some View {
+        Text(continuousAttributedText(verses))
+            .font(.system(.body, design: typeface.design))
+            .lineSpacing(lineSpacing)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func continuousAttributedText(
+        _ verses: [ScripturePreviewVerse]
+    ) -> AttributedString {
+        var result = AttributedString()
+        for (index, item) in verses.enumerated() {
+            if index > 0 { result.append(AttributedString(" ")) }
+
+            var number = AttributedString("\(item.verse.number) ")
+            number.font = .system(size: 11, weight: .semibold, design: typeface.design)
+            number.foregroundColor = item.isContext
+                ? Color.secondary.opacity(0.55)
+                : Color.secondary
+            result.append(number)
+
+            var text = AttributedString(item.verse.text)
+            text.foregroundColor = item.isContext
+                ? Color.secondary.opacity(0.8)
+                : Color.primary
+            result.append(text)
+        }
+        return result
+    }
+
+    private var isSingleChapterReference: Bool {
+        let start = LampBibleReferenceFormatter.components(of: link.startReference)
+        let end = LampBibleReferenceFormatter.components(
+            of: max(link.endReference ?? link.startReference, link.startReference)
+        )
+        return start.book == end.book && start.chapter == end.chapter
+    }
+
+    private var previewSections: [ScripturePreviewSection] {
+        let endReference = max(link.endReference ?? link.startReference, link.startReference)
+        if isSingleChapterReference, let chapter = chapters.first {
+            let references = ScripturePreviewContextResolver.references(
+                in: chapter.verses.map(\.id),
+                from: link.startReference,
+                to: endReference,
+                contextAmount: contextAmount
+            )
+            let versesByReference = Dictionary(uniqueKeysWithValues: chapter.verses.map {
+                ($0.id, $0)
+            })
+            let previewVerses = references.compactMap { reference -> ScripturePreviewVerse? in
+                guard let verse = versesByReference[reference.reference] else { return nil }
+                return ScripturePreviewVerse(verse: verse, isContext: reference.isContext)
+            }
+            guard !previewVerses.isEmpty else { return [] }
+            return [makePreviewSection(chapter: chapter, verses: previewVerses)]
+        }
+
+        return chapters.compactMap { chapter in
+            let verses = chapter.verses
+                .filter { $0.id >= link.startReference && $0.id <= endReference }
+                .map { ScripturePreviewVerse(verse: $0, isContext: false) }
+            guard !verses.isEmpty else { return nil }
+            return makePreviewSection(chapter: chapter, verses: verses)
+        }
+    }
+
+    private func makePreviewSection(
+        chapter: LampChapter,
+        verses: [ScripturePreviewVerse]
+    ) -> ScripturePreviewSection {
+        let versesByReference = Dictionary(uniqueKeysWithValues: verses.map {
+            ($0.verse.id, $0)
+        })
+        let paragraphs = ReaderParagraphPlanner.paragraphs(in: chapter).compactMap {
+            paragraph -> ScripturePreviewParagraph? in
+            let includedVerses = paragraph.verses.compactMap {
+                versesByReference[$0.id]
+            }
+            guard !includedVerses.isEmpty else { return nil }
+            return ScripturePreviewParagraph(
+                id: paragraph.id,
+                verses: includedVerses
+            )
+        }
+        return ScripturePreviewSection(
+            id: chapter.book.id * 1_000 + chapter.number,
+            title: "\(chapter.book.name) \(chapter.number)",
+            verses: verses,
+            paragraphs: paragraphs
+        )
     }
 
     @MainActor
     private func loadPassage() async {
         guard let translation else {
-            chapter = nil
+            chapters = []
             errorMessage = "Install a translation to preview scripture references."
+            isLoading = false
             return
         }
-        let reference = LampBibleReferenceFormatter.components(of: link.startReference)
         isLoading = true
         errorMessage = nil
+        chapters = []
         do {
-            chapter = try await model.library.chapter(
-                moduleID: translation.id,
-                bookNumber: reference.book,
-                chapterNumber: reference.chapter
+            let books = try await model.library.translationBooks(moduleID: translation.id)
+            try Task.checkCancellation()
+            let locations = ReaderPassageChapterPlanner.locations(
+                from: link.startReference,
+                to: max(link.endReference ?? link.startReference, link.startReference),
+                books: books.map {
+                    ReaderBookStructure(bookNumber: $0.id, chapterCount: $0.chapterCount)
+                }
             )
+            guard !locations.isEmpty else {
+                errorMessage = "This scripture reference is invalid."
+                isLoading = false
+                return
+            }
+
+            var loadedChapters: [LampChapter] = []
+            for location in locations {
+                try Task.checkCancellation()
+                loadedChapters.append(try await model.library.chapter(
+                    moduleID: translation.id,
+                    bookNumber: location.bookNumber,
+                    chapterNumber: location.chapterNumber
+                ))
+            }
+            try Task.checkCancellation()
+            chapters = loadedChapters
+        } catch is CancellationError {
+            return
         } catch {
-            chapter = nil
+            chapters = []
             errorMessage = error.localizedDescription
         }
         isLoading = false
+    }
+}
+
+private struct ScripturePreviewSection: Identifiable {
+    let id: Int
+    let title: String
+    let verses: [ScripturePreviewVerse]
+    let paragraphs: [ScripturePreviewParagraph]
+}
+
+private struct ScripturePreviewParagraph: Identifiable {
+    let id: Int
+    let verses: [ScripturePreviewVerse]
+}
+
+private struct ScripturePreviewVerse: Identifiable {
+    let verse: LampVerse
+    let isContext: Bool
+
+    var id: Int { verse.id }
+}
+
+private struct DictionaryReferencePopover: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var model: LibraryModel
+    let link: LampDictionaryLink
+    let preferredModuleID: String?
+    let typeface: ProseTypeface
+    let lineSpacing: Double
+    @State private var results: [LampDictionaryResult] = []
+    @State private var errorMessage: String?
+    @State private var isLoading = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(link.inlineLabel)
+                    .font(.headline)
+                if link.inlineLabel.caseInsensitiveCompare(link.key) != .orderedSame {
+                    Text(link.key)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(16)
+
+            Divider()
+
+            Group {
+                if isLoading {
+                    ProgressView("Loading entry…")
+                        .frame(maxWidth: .infinity, minHeight: 120)
+                } else if let errorMessage {
+                    ContentUnavailableView(
+                        "Entry Unavailable",
+                        systemImage: "character.book.closed",
+                        description: Text(errorMessage)
+                    )
+                    .frame(minHeight: 150)
+                } else if results.isEmpty {
+                    ContentUnavailableView(
+                        "Entry Unavailable",
+                        systemImage: "character.book.closed",
+                        description: Text("No installed dictionary contains \(link.key).")
+                    )
+                    .frame(minHeight: 150)
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 14) {
+                            ForEach(results) { result in
+                                DictionaryPopoverEntryView(
+                                    result: result,
+                                    typeface: typeface,
+                                    lineSpacing: lineSpacing
+                                )
+                                if result.id != results.last?.id { Divider() }
+                            }
+                        }
+                        .padding(16)
+                    }
+                    .frame(maxHeight: 320)
+                }
+            }
+
+            Divider()
+
+            HStack {
+                Spacer()
+                Button("Open in Dictionary", systemImage: "character.book.closed") {
+                    model.requestDictionaryLookup(keys: [link.key])
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .padding(12)
+        }
+        .frame(width: 420)
+        .task(id: loadID) {
+            await loadEntry()
+        }
+    }
+
+    private var loadID: String {
+        "\(preferredModuleID ?? "any"):\(link.key.uppercased())"
+    }
+
+    @MainActor
+    private func loadEntry() async {
+        isLoading = true
+        errorMessage = nil
+        do {
+            if let preferredModuleID {
+                results = try await model.library.dictionaryEntries(
+                    keys: [link.key],
+                    moduleIDs: [preferredModuleID]
+                )
+            }
+            if results.isEmpty {
+                results = try await model.library.dictionaryEntries(keys: [link.key])
+            }
+        } catch {
+            results = []
+            errorMessage = error.localizedDescription
+        }
+        isLoading = false
+    }
+}
+
+private struct DictionaryPopoverEntryView: View {
+    let result: LampDictionaryResult
+    let typeface: ProseTypeface
+    let lineSpacing: Double
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(result.moduleName)
+                    .font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(.quaternary, in: Capsule())
+                Text(result.lemma)
+                    .font(.title3.weight(.semibold))
+            }
+            if let transliteration = result.transliteration {
+                Text(transliteration)
+                    .font(.callout.italic())
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(Array(result.senses.enumerated()), id: \.offset) { index, sense in
+                VStack(alignment: .leading, spacing: 5) {
+                    if result.senses.count > 1 {
+                        Text("Sense \(index + 1)")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    if let shortDefinition = sense.shortDefinition {
+                        Text(shortDefinition)
+                    }
+                    if let definition = sense.definition,
+                       definition != sense.shortDefinition {
+                        Text(definition)
+                            .textSelection(.enabled)
+                    }
+                    if let derivation = sense.derivation {
+                        Text("Derivation: \(derivation)")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if index < result.senses.count - 1 { Divider() }
+            }
+        }
+        .fontDesign(typeface.design)
+        .lineSpacing(lineSpacing)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

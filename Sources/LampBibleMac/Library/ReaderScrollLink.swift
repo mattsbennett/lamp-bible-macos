@@ -145,10 +145,21 @@ struct VerseAnchoredScrollView<Content: View>: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 18) {
-                    content
+                VStack(alignment: .leading, spacing: 18) {
+                    LazyVStack(alignment: .leading, spacing: 18) {
+                        content
+                    }
+                    .scrollTargetLayout()
+
+                    // This must be an eager sibling of the lazy content. If it is
+                    // the lazy stack's last child, SwiftUI discovers its height
+                    // only near the bottom and changes the scrollbar range.
+                    Color.clear
+                        .containerRelativeFrame(.vertical) { viewportHeight, _ in
+                            ReaderScrollTail.height(for: viewportHeight)
+                        }
+                        .accessibilityHidden(true)
                 }
-                .scrollTargetLayout()
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding()
             }

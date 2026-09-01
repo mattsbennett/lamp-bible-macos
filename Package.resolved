@@ -1,5 +1,5 @@
 {
-  "originHash" : "6acdd506e8f4e803f3a84fc51e7b7846b44304fee74936d2f435ced76f6c2073",
+  "originHash" : "4ef104b2a3667b16489e35b13290e67bd2045f8528bcba6628063455a5f91f73",
   "pins" : [
     {
       "identity" : "eventsource",
@@ -17,6 +17,15 @@
       "state" : {
         "revision" : "2cf6c756e1e5ef6901ebae16576a7e4e4b834622",
         "version" : "6.29.3"
+      }
+    },
+    {
+      "identity" : "kingfisher",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/onevcat/Kingfisher.git",
+      "state" : {
+        "revision" : "be0d257b9bd47a4e6e1265fc8c237411825f107a",
+        "version" : "8.12.0"
       }
     },
     {
@@ -89,6 +98,24 @@
       "state" : {
         "revision" : "b1262db5b6bea699a8260a8c66999436c508ca56",
         "version" : "1.11.2"
+      }
+    },
+    {
+      "identity" : "swiftuiektensions",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/EnesKaraosman/SwiftUIEKtensions.git",
+      "state" : {
+        "revision" : "bf96c0d841d2bc81dac0d7e28aa9ab71cd7d6c2a",
+        "version" : "0.4.0"
+      }
+    },
+    {
+      "identity" : "swiftychat",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/EnesKaraosman/SwiftyChat.git",
+      "state" : {
+        "revision" : "f9e2a587bfbe4aa88ef7b7814a3b60e0e6a1fe3c",
+        "version" : "4.1.1"
       }
     }
   ],

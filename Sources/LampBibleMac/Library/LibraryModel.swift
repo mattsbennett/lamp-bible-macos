@@ -51,6 +51,48 @@ extension LampInstalledModule {
     }
 }
 
+/// Remembers Strong's-to-lexicon mappings, off the main actor.
+///
+/// Deliberately its own actor rather than state on `LibraryModel`. The model is
+/// `@MainActor`, so warming a cache through it has to be *scheduled on the main
+/// thread* — which during a study-column open is busy reflowing the reader and
+/// running the reveal for 130–210 ms. A prefetch that cannot start until that is
+/// over is not a prefetch. Here the query begins on the click regardless of what
+/// the main thread is doing.
+actor LexiconMappingStore {
+    private let library: LampLibrary
+    private var mappingsByKey: [String: [String]] = [:]
+    private var tasksByKey: [String: Task<[String], Error>] = [:]
+
+    init(library: LampLibrary) {
+        self.library = library
+    }
+
+    /// Concurrent callers for one key share a single query rather than queueing
+    /// behind each other on the library actor.
+    func mappings(sourceKey: String) async throws -> [String] {
+        if let cached = mappingsByKey[sourceKey] { return cached }
+        if let inFlight = tasksByKey[sourceKey] { return try await inFlight.value }
+
+        let task = Task { [library] in try await library.lexiconMappings(sourceKey: sourceKey) }
+        tasksByKey[sourceKey] = task
+        defer { tasksByKey[sourceKey] = nil }
+        let mappings = try await task.value
+        mappingsByKey[sourceKey] = mappings
+        return mappings
+    }
+
+    /// Fire-and-forget warming, for the moment a lookup is asked for rather than
+    /// the moment a view exists to display it.
+    nonisolated func prefetch(sourceKeys: [String]) {
+        Task.detached(priority: .userInitiated) { [self] in
+            for key in sourceKeys {
+                _ = try? await mappings(sourceKey: key)
+            }
+        }
+    }
+}
+
 @MainActor
 final class LibraryModel: ObservableObject {
     @Published private(set) var modules: [LampInstalledModule] = []
@@ -92,6 +134,7 @@ final class LibraryModel: ObservableObject {
     private var searchTask: Task<Void, Never>?
     private var moduleSearchTask: Task<Void, Never>?
     private var searchToken: UUID?
+    private let lexiconMappingStore: LexiconMappingStore
     private let defaults: UserDefaults
     private var navigationHistory: ReaderNavigationHistory
     @Published private(set) var hiddenModuleIDs: Set<String>
@@ -163,12 +206,14 @@ final class LibraryModel: ObservableObject {
         library: LampLibrary? = nil,
         defaults: UserDefaults = .standard
     ) {
-        self.library = library ?? LampLibrary(
+        let resolvedLibrary = library ?? LampLibrary(
             bundledModulesArchiveURL: Bundle.main.url(
                 forResource: "bundled_modules.db",
                 withExtension: "zlib"
             )
         )
+        self.library = resolvedLibrary
+        self.lexiconMappingStore = LexiconMappingStore(library: resolvedLibrary)
         self.defaults = defaults
         if let historyData = defaults.data(forKey: "reader.navigationHistory"),
            let history = try? JSONDecoder().decode(ReaderNavigationHistory.self, from: historyData) {
@@ -297,6 +342,33 @@ final class LibraryModel: ObservableObject {
                 studyImportMessage = skippedCount == 0
                     ? "Imported \(importedCount) note or highlight entr\(importedCount == 1 ? "y" : "ies")."
                     : "Imported \(importedCount); kept \(skippedCount) existing entr\(skippedCount == 1 ? "y" : "ies")."
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isImportingStudyData = false
+        }
+    }
+
+    func importPersonalMarkdown(_ urls: [URL], as kind: LampPersonalMarkdownKind) {
+        guard !urls.isEmpty, !isImportingStudyData else { return }
+        isImportingStudyData = true
+        errorMessage = nil
+        studyImportMessage = nil
+        Task {
+            do {
+                var importedCount = 0
+                for url in urls {
+                    let result = try await library.importPersonalMarkdown(from: url, as: kind)
+                    importedCount += result.importedCount
+                }
+                switch kind {
+                case .notes:
+                    reloadCurrentChapterStudyData()
+                    studyImportMessage = "Imported \(importedCount) Markdown note entr\(importedCount == 1 ? "y" : "ies")."
+                case .devotionals:
+                    await refreshLibrary()
+                    studyImportMessage = "Imported \(importedCount) Markdown devotional\(importedCount == 1 ? "" : "s")."
+                }
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -502,6 +574,18 @@ final class LibraryModel: ObservableObject {
             .filter { !$0.isEmpty }
         guard !normalizedKeys.isEmpty else { return }
         dictionaryLookupRequest = DictionaryLookupRequest(keys: normalizedKeys, word: word)
+
+        // Start the lookup on the click, rather than leaving it until the dictionary
+        // pane exists. The pane's own load does not get a turn until the study column
+        // has mounted and laid out — measured at 130–210 ms after the click. This
+        // call does not touch the main actor, so the query runs during that window
+        // instead of after it.
+        lexiconMappingStore.prefetch(sourceKeys: normalizedKeys)
+    }
+
+    /// Strong's-to-lexicon mappings for a key, fetched once and remembered.
+    func lexiconMappings(sourceKey: String) async throws -> [String] {
+        try await lexiconMappingStore.mappings(sourceKey: sourceKey)
     }
 
     func consumeDictionaryLookupRequest(_ request: DictionaryLookupRequest) {

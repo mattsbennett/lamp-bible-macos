@@ -2,6 +2,7 @@ import Foundation
 
 public enum DevotionalAgentRevisionKind: String, Codable, Sendable {
     case agentEdit
+    case userEdit
     case restoration
 }
 
@@ -13,6 +14,9 @@ public struct DevotionalAgentRevision: Codable, Equatable, Identifiable, Sendabl
     public let createdAt: Date
     public let kind: DevotionalAgentRevisionKind
     public let providerName: String?
+    /// Missing in revision records created before multi-file history. Those
+    /// records are interpreted as revisions of the primary `draft.md` document.
+    public let documentPath: String?
     public let beforeMarkdown: String
     public let afterMarkdown: String
 
@@ -21,6 +25,7 @@ public struct DevotionalAgentRevision: Codable, Equatable, Identifiable, Sendabl
         createdAt: Date = Date(),
         kind: DevotionalAgentRevisionKind,
         providerName: String? = nil,
+        documentPath: String? = nil,
         beforeMarkdown: String,
         afterMarkdown: String
     ) {
@@ -28,12 +33,19 @@ public struct DevotionalAgentRevision: Codable, Equatable, Identifiable, Sendabl
         self.createdAt = createdAt
         self.kind = kind
         self.providerName = providerName
+        self.documentPath = documentPath
         self.beforeMarkdown = beforeMarkdown
         self.afterMarkdown = afterMarkdown
+    }
+
+    public var resolvedDocumentPath: String {
+        documentPath ?? DevotionalAgentRevisionStore.primaryDocumentPath
     }
 }
 
 public enum DevotionalAgentRevisionStore {
+    public static let primaryDocumentPath = "draft.md"
+
     private struct SyncState: Codable {
         let version: Int
         let markdown: String
@@ -43,7 +55,10 @@ public enum DevotionalAgentRevisionStore {
     private static let revisionsDirectoryName = "revisions"
     private static let syncStateFilename = "draft-sync.json"
 
-    public static func revisions(in workspace: URL) throws -> [DevotionalAgentRevision] {
+    public static func revisions(
+        in workspace: URL,
+        documentPath: String = primaryDocumentPath
+    ) throws -> [DevotionalAgentRevision] {
         let directory = revisionsDirectory(in: workspace)
         guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
         return try FileManager.default.contentsOfDirectory(
@@ -56,6 +71,7 @@ public enum DevotionalAgentRevisionStore {
             guard let data = try? Data(contentsOf: url) else { return nil }
             return try? decoder.decode(DevotionalAgentRevision.self, from: data)
         }
+        .filter { $0.resolvedDocumentPath == documentPath }
         .sorted { $0.createdAt > $1.createdAt }
     }
 
@@ -63,6 +79,7 @@ public enum DevotionalAgentRevisionStore {
     public static func record(
         kind: DevotionalAgentRevisionKind,
         providerName: String? = nil,
+        documentPath: String = primaryDocumentPath,
         before beforeMarkdown: String,
         after afterMarkdown: String,
         in workspace: URL,
@@ -72,7 +89,7 @@ public enum DevotionalAgentRevisionStore {
 
         // File notifications and polling can report the same atomic replacement
         // more than once. Only the newest identical transition is a duplicate.
-        if let latest = try revisions(in: workspace).first,
+        if let latest = try revisions(in: workspace, documentPath: documentPath).first,
            latest.kind == kind,
            latest.beforeMarkdown == beforeMarkdown,
            latest.afterMarkdown == afterMarkdown {
@@ -83,6 +100,7 @@ public enum DevotionalAgentRevisionStore {
             createdAt: createdAt,
             kind: kind,
             providerName: providerName,
+            documentPath: documentPath,
             beforeMarkdown: beforeMarkdown,
             afterMarkdown: afterMarkdown
         )

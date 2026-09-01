@@ -59,6 +59,10 @@ struct TextScaleSupportTests {
             .readerLineSpacing,
             .commentaryText,
             .commentaryLineSpacing,
+            .quizText,
+            .quizLineSpacing,
+            .bookText,
+            .bookLineSpacing,
         ] {
             #expect(scale.range.contains(scale.defaultValue))
         }
