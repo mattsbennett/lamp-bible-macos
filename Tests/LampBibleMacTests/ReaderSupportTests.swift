@@ -340,6 +340,108 @@ struct ReaderSupportTests {
         #expect(tabs.tabs.count == 1)
     }
 
+    @Test func readerTabsRoundTripOrderSelectionAndVerseLocations() throws {
+        let genesis = ReaderLocation(translationID: "WEB", bookNumber: 1, chapterNumber: 2, verseReference: 1_002_003)
+        let john = ReaderLocation(translationID: "KJV", bookNumber: 43, chapterNumber: 3, verseReference: 43_003_016)
+        var tabs = ReaderTabCollection(initialLocation: genesis)
+        let firstID = tabs.selectedID
+        tabs.add(location: john)
+        tabs.select(firstID)
+
+        let restored = try JSONDecoder().decode(ReaderTabCollection.self, from: JSONEncoder().encode(tabs))
+        #expect(restored == tabs)
+        #expect(restored.tabs.map(\.location) == [genesis, john])
+        #expect(restored.selectedID == firstID)
+    }
+
+    @Test func readerTabSessionSurvivesRelaunchAndSavesClosedTabs() throws {
+        let suite = "reader-tabs-tests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let genesis = ReaderLocation(translationID: "WEB", bookNumber: 1, chapterNumber: 1)
+        let john = ReaderLocation(translationID: "KJV", bookNumber: 43, chapterNumber: 3)
+        var tabs = ReaderTabCollection(initialLocation: genesis)
+        let firstID = tabs.selectedID
+        tabs.add(location: john)
+        tabs.close(firstID)
+        ReaderTabSessionStore.save(tabs, defaults: defaults)
+
+        let relaunchedDefaults = try #require(UserDefaults(suiteName: suite))
+        let restored = ReaderTabSessionStore.load(
+            sceneData: nil, defaults: relaunchedDefaults,
+            translationIDs: ["WEB", "KJV"], fallbackLocation: genesis
+        )
+        #expect(restored == tabs)
+        #expect(restored.tabs.count == 1)
+        #expect(restored.selectedTab?.location == john)
+    }
+
+    @Test func restoredWindowUsesItsOwnTabsBeforeTheLastSessionFallback() throws {
+        let suite = "reader-tabs-tests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let genesis = ReaderLocation(translationID: "WEB", bookNumber: 1, chapterNumber: 1)
+        let john = ReaderLocation(translationID: "WEB", bookNumber: 43, chapterNumber: 3)
+        let windowTabs = ReaderTabCollection(initialLocation: genesis)
+        let otherWindowTabs = ReaderTabCollection(initialLocation: john)
+        let sceneData = ReaderTabSessionStore.save(windowTabs, defaults: defaults)
+        ReaderTabSessionStore.save(otherWindowTabs, defaults: defaults)
+
+        #expect(ReaderTabSessionStore.load(
+            sceneData: sceneData, defaults: defaults,
+            translationIDs: ["WEB"], fallbackLocation: nil
+        ) == windowTabs)
+        #expect(ReaderTabSessionStore.load(
+            sceneData: Data("invalid JSON".utf8), defaults: defaults,
+            translationIDs: ["WEB"], fallbackLocation: nil
+        ) == otherWindowTabs)
+    }
+
+    @Test func removedTranslationsFallBackToAnAvailableTab() {
+        let available = ReaderLocation(translationID: "WEB", bookNumber: 1, chapterNumber: 1)
+        let removed = ReaderLocation(translationID: "removed", bookNumber: 43, chapterNumber: 3)
+        var tabs = ReaderTabCollection(initialLocation: available)
+        let firstID = tabs.selectedID
+        tabs.add(location: removed)
+        tabs.restoreAvailableLocations(translationIDs: ["WEB"], fallbackLocation: available)
+        #expect(tabs.tabs.count == 1)
+        #expect(tabs.selectedID == firstID)
+        #expect(tabs.selectedTab?.location == available)
+
+        tabs.restoreAvailableLocations(translationIDs: [], fallbackLocation: nil)
+        #expect(tabs.tabs.count == 1)
+        #expect(tabs.selectedTab != nil)
+        #expect(tabs.selectedTab?.location == nil)
+    }
+
+    @Test func savedTabDecodingRepairsEmptyDuplicateAndMissingSelections() throws {
+        let empty = try JSONDecoder().decode(ReaderTabCollection.self, from: Data(#"{"tabs":[]}"#.utf8))
+        #expect(empty.tabs.count == 1)
+        #expect(empty.selectedTab != nil)
+
+        let tab = ReaderTab(location: ReaderLocation(translationID: "WEB", bookNumber: 1, chapterNumber: 1))
+        let duplicateData = try JSONSerialization.data(withJSONObject: [
+            "tabs": try JSONSerialization.jsonObject(with: JSONEncoder().encode([tab, tab])),
+            "selectedID": UUID().uuidString,
+        ])
+        let repaired = try JSONDecoder().decode(ReaderTabCollection.self, from: duplicateData)
+        #expect(repaired.tabs == [tab])
+        #expect(repaired.selectedID == tab.id)
+    }
+
+    @Test func unreadableTabSessionFallsBackToThePreviousReadingLocation() throws {
+        let suite = "reader-tabs-tests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let previousLocation = ReaderLocation(translationID: "WEB", bookNumber: 19, chapterNumber: 23)
+        let restored = ReaderTabSessionStore.load(
+            sceneData: Data("not JSON".utf8), defaults: defaults,
+            translationIDs: ["WEB"], fallbackLocation: previousLocation
+        )
+        #expect(restored.tabs.count == 1)
+        #expect(restored.selectedTab?.location == previousLocation)
+    }
+
     @Test func estimatesReadingTimeAndNormalizesReminderTime() {
         #expect(ReadingTimeEstimator.minutes(wordCount: 451, wordsPerMinute: 225) == 3)
         #expect(ReadingTimeEstimator.description(wordCount: 100, wordsPerMinute: 225) == "1 min")

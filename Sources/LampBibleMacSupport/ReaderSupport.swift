@@ -1130,7 +1130,7 @@ public struct ReaderLocation: Codable, Equatable, Hashable, Sendable {
     }
 }
 
-public struct ReaderTab: Identifiable, Equatable, Sendable {
+public struct ReaderTab: Codable, Identifiable, Equatable, Sendable {
     public let id: UUID
     public var location: ReaderLocation?
 
@@ -1142,7 +1142,7 @@ public struct ReaderTab: Identifiable, Equatable, Sendable {
 
 /// Lightweight tab state independent from the loaded chapter. The active reader
 /// model can load one location at a time while each tab retains its own place.
-public struct ReaderTabCollection: Equatable, Sendable {
+public struct ReaderTabCollection: Codable, Equatable, Sendable {
     public private(set) var tabs: [ReaderTab]
     public private(set) var selectedID: UUID
 
@@ -1150,6 +1150,34 @@ public struct ReaderTabCollection: Equatable, Sendable {
         let tab = ReaderTab(location: initialLocation)
         tabs = [tab]
         selectedID = tab.id
+    }
+
+    private enum CodingKeys: String, CodingKey { case tabs, selectedID }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedTabs = try values.decode([ReaderTab].self, forKey: .tabs)
+        let decodedSelection = try values.decodeIfPresent(UUID.self, forKey: .selectedID)
+        var seenIDs = Set<UUID>()
+        var restoredTabs = decodedTabs.filter { seenIDs.insert($0.id).inserted }
+        if restoredTabs.isEmpty { restoredTabs = [ReaderTab()] }
+        tabs = restoredTabs
+        selectedID = decodedSelection.flatMap { id in restoredTabs.contains { $0.id == id } ? id : nil }
+            ?? restoredTabs[0].id
+    }
+
+    /// Module removal must not prevent the remaining tabs from reopening.
+    public mutating func restoreAvailableLocations(
+        translationIDs: Set<String>,
+        fallbackLocation: ReaderLocation?
+    ) {
+        tabs.removeAll { tab in
+            guard let location = tab.location else { return true }
+            return !translationIDs.contains(location.translationID)
+                || location.bookNumber < 1 || location.chapterNumber < 1
+        }
+        if tabs.isEmpty { tabs = [ReaderTab(location: fallbackLocation)] }
+        if !tabs.contains(where: { $0.id == selectedID }) { selectedID = tabs[0].id }
     }
 
     public var selectedTab: ReaderTab? {
@@ -1192,6 +1220,39 @@ public struct ReaderTabCollection: Equatable, Sendable {
             selectedID = tabs[min(index, tabs.count - 1)].id
         }
         return selectedTab?.location
+    }
+}
+
+public enum ReaderTabSessionStore {
+    private static let lastSessionKey = "reader.tabs.lastSession"
+
+    public static func load(
+        sceneData: Data?,
+        defaults: UserDefaults = .standard,
+        translationIDs: Set<String>,
+        fallbackLocation: ReaderLocation?
+    ) -> ReaderTabCollection {
+        // Scene storage preserves each restored window. The defaults snapshot
+        // also reopens tabs when macOS creates a fresh window after relaunch.
+        var collection = [sceneData, defaults.data(forKey: lastSessionKey)]
+            .compactMap { $0 }
+            .lazy
+            .compactMap { try? JSONDecoder().decode(ReaderTabCollection.self, from: $0) }
+            .first ?? ReaderTabCollection(initialLocation: fallbackLocation)
+        collection.restoreAvailableLocations(
+            translationIDs: translationIDs, fallbackLocation: fallbackLocation
+        )
+        return collection
+    }
+
+    @discardableResult
+    public static func save(
+        _ collection: ReaderTabCollection,
+        defaults: UserDefaults = .standard
+    ) -> Data? {
+        guard let data = try? JSONEncoder().encode(collection) else { return nil }
+        defaults.set(data, forKey: lastSessionKey)
+        return data
     }
 }
 

@@ -34,6 +34,7 @@ This repository intentionally contains Mac-specific application lifecycle and UI
 - The same read-only bundled translations, lexicons, commentaries, plans, and quiz module as the iOS app
 - Year-scoped reading completion persisted outside portable modules
 - Restored reading location, selectable scripture text, and reader typography settings
+- Reader tabs restored on relaunch, including tab order, translations, chapters, focused verses, and the selected tab
 - Module management with Finder access and safe removal
 - One-click installation of a successful Module Studio build
 - Persistent reader navigation history and unified all-module search history
@@ -45,6 +46,7 @@ This repository intentionally contains Mac-specific application lifecycle and UI
 - Bonjour presentation discovery with QR-first, challenge-bound encrypted pairing and synchronized iPhone/iPad controls for current/next slide, notes, timing, navigation, and blackout
 - A bundled agent skill that turns devotional workspaces into validated Slide Studio decks without writable module access
 - Native devotional agent chat (powered by the Apache-2.0 SwiftyChat UI) with resumable Codex, Claude Code, and OpenCode sessions, browser sign-in, and a terminal-mode toggle
+- Resizable reader chat sidebar using the same provider accounts and chat UI, with read-only module research, per-message chapter context, and separate saved conversations for each reader window
 - Actual-word-count reading estimates, daily notifications, and external Bible app links
 - Default, visibility, and ordering preferences for translations, dictionaries, and commentaries
 - Finder document opening and `lampbible://` deep links
@@ -79,3 +81,5 @@ Open `Lamp Bible.xcodeproj` in Xcode, choose the **Lamp Bible** scheme and **My 
 The Xcode target copies `../lamp-bible-modules/modules_db/bundled_modules.db.zlib` into the application bundle. Keep the sibling repositories in the layout above and rebuild that canonical archive from `lamp-bible-modules` when bundled content changes; both Apple apps consume the same artifact.
 
 Install a translation with File → Install Module… (`⌘O`), import editable study data with `⌥⌘O`, navigate chapters with `⌘[` and `⌘]`, and toggle study tools with `⇧⌘I`. Clicking a verse number focuses the inspector; right-clicking a verse exposes highlight and personal-note actions.
+
+Open Reader Chat with the speech-bubble toolbar button (`⇧⌘J`). Ask about the displayed chapter or name any other passage; each message includes the reader’s current chapter and translation. Chat can query all installed modules through read-only tools. AI & Agents settings control whether module queries and personal study content are available. Reader conversations are saved separately from Writing and resume when the sidebar reopens.

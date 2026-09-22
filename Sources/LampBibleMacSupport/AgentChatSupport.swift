@@ -6,6 +6,67 @@ public enum AgentChatWireProvider: String, Sendable {
     case openCode
 }
 
+public enum AgentChatMode: Equatable, Sendable {
+    case writing
+    case reader(LampAgentMCPConfiguration)
+
+    public var isReadOnly: Bool {
+        if case .reader = self { return true }
+        return false
+    }
+}
+
+public enum AgentChatLaunchArguments {
+    public static func make(
+        provider: AgentChatWireProvider,
+        prompt: String,
+        sessionID: String?,
+        proposedSessionID: String?,
+        mode: AgentChatMode = .writing
+    ) -> [String] {
+        switch provider {
+        case .codex:
+            var arguments = [
+                "exec", "--json", "--sandbox", mode.isReadOnly ? "read-only" : "workspace-write",
+                "--skip-git-repo-check",
+            ]
+            if case .reader(let configuration) = mode {
+                // Explicit overrides also work before a generated workspace is trusted.
+                arguments += ["-c", "approval_policy=\"never\""]
+                arguments += configuration.codexCommandLineOverrides
+            }
+            if let sessionID { arguments += ["resume", sessionID] }
+            arguments += ["--", prompt]
+            return arguments
+        case .claude:
+            var arguments = [
+                "-p", "--output-format", "stream-json", "--verbose",
+                "--include-partial-messages", "--permission-mode", mode.isReadOnly ? "dontAsk" : "acceptEdits",
+            ]
+            if case .reader(let configuration) = mode {
+                arguments += [
+                    "--tools", "", "--allowedTools", "mcp__lamp__*",
+                    "--strict-mcp-config", "--mcp-config", configuration.claudeJSON,
+                    "--disable-slash-commands",
+                ]
+            }
+            if let sessionID {
+                arguments += ["--resume", sessionID]
+            } else if let proposedSessionID {
+                arguments += ["--session-id", proposedSessionID]
+            }
+            arguments += ["--", prompt]
+            return arguments
+        case .openCode:
+            var arguments = ["run", "--format", "json"]
+            if mode.isReadOnly { arguments += ["--pure", "--agent", "lamp-reader"] }
+            if let sessionID { arguments += ["--session", sessionID] }
+            arguments += ["--", prompt]
+            return arguments
+        }
+    }
+}
+
 public enum AgentChatWireEvent: Equatable, Sendable {
     case sessionStarted(String)
     case textFragment(String)

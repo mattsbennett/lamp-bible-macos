@@ -26,6 +26,11 @@ struct AgentMCPConfigurationSupportTests {
             JSONSerialization.jsonObject(with: openCode) as? [String: Any]
         )
         #expect(openCodeObject["$schema"] as? String == "https://opencode.ai/config.json")
+        let openCodeServers = try #require(openCodeObject["mcp"] as? [String: Any])
+        let openCodeLamp = try #require(openCodeServers["lamp"] as? [String: Any])
+        #expect(openCodeLamp["command"] as? [String] == [configuration.helperExecutableURL.path] + configuration.arguments)
+        #expect(openCodeLamp["enabled"] as? Bool == true)
+        #expect(openCodeObject["agent"] == nil)
     }
 
     @Test func writesAllThreeProjectLocalFiles() throws {

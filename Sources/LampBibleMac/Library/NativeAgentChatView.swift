@@ -45,43 +45,6 @@ extension AIProviderCLI {
         case .openCode: .openCode
         }
     }
-
-    func chatArguments(
-        prompt: String,
-        sessionID: String?,
-        proposedSessionID: String?
-    ) -> [String] {
-        switch self {
-        case .codex:
-            var arguments = [
-                "exec", "--json", "--sandbox", "workspace-write",
-                "--skip-git-repo-check",
-            ]
-            if let sessionID {
-                arguments += ["resume", sessionID, prompt]
-            } else {
-                arguments.append(prompt)
-            }
-            return arguments
-        case .claude:
-            var arguments = [
-                "-p", "--output-format", "stream-json", "--verbose",
-                "--include-partial-messages", "--permission-mode", "acceptEdits",
-            ]
-            if let sessionID {
-                arguments += ["--resume", sessionID]
-            } else if let proposedSessionID {
-                arguments += ["--session-id", proposedSessionID]
-            }
-            arguments.append(prompt)
-            return arguments
-        case .openCode:
-            var arguments = ["run", "--format", "json"]
-            if let sessionID { arguments += ["--session", sessionID] }
-            arguments.append(prompt)
-            return arguments
-        }
-    }
 }
 
 struct AgentCLIProcessResult: Sendable {
@@ -249,7 +212,7 @@ private enum NativeAgentChatTranscriptStore {
 private struct NativeAgentChatInputView: View {
     @Binding var message: String
     let placeholder: String
-    let onCommit: (String) -> Void
+    let onCommit: (String) -> Bool
 
     private var canSubmit: Bool {
         !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -301,8 +264,7 @@ private struct NativeAgentChatInputView: View {
     private func submit() {
         guard canSubmit else { return }
         let submittedMessage = message
-        message = ""
-        onCommit(submittedMessage)
+        if onCommit(submittedMessage) { message = "" }
     }
 }
 
@@ -314,6 +276,7 @@ private final class NativeAgentChatModel: ObservableObject {
 
     let provider: AIProviderCLI
     private let workspace: URL
+    private let mode: AgentChatMode
     private let runner = AgentCLIProcessRunner()
     private var sessionID: String?
     private var didLoad = false
@@ -325,9 +288,10 @@ private final class NativeAgentChatModel: ObservableObject {
         avatar: NSImage(systemSymbolName: "person.crop.circle.fill", accessibilityDescription: nil)
     )
 
-    init(provider: AIProviderCLI, workspace: URL) {
+    init(provider: AIProviderCLI, workspace: URL, mode: AgentChatMode) {
         self.provider = provider
         self.workspace = workspace
+        self.mode = mode
     }
 
     func load() {
@@ -338,7 +302,7 @@ private final class NativeAgentChatModel: ObservableObject {
         messages = transcript.messages.map(makeChatMessage)
     }
 
-    func send(_ rawPrompt: String) async {
+    func send(_ rawPrompt: String, contextualPrompt: String) async {
         let prompt = rawPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty, !isRunning else { return }
         errorMessage = nil
@@ -367,10 +331,12 @@ private final class NativeAgentChatModel: ObservableObject {
             ? UUID().uuidString.lowercased() : nil
         let result = await runner.run(
             executableName: provider.executable,
-            arguments: provider.chatArguments(
-                prompt: prompt,
+            arguments: AgentChatLaunchArguments.make(
+                provider: provider.wireProvider,
+                prompt: contextualPrompt,
                 sessionID: sessionID,
-                proposedSessionID: proposedSessionID
+                proposedSessionID: proposedSessionID,
+                mode: mode
             ),
             workingDirectory: workspace
         )
@@ -495,6 +461,9 @@ private final class NativeAgentChatModel: ObservableObject {
 
 struct NativeAgentChatView: View {
     let provider: AIProviderCLI
+    let mode: AgentChatMode
+    let canSend: Bool
+    let preparePrompt: (String) throws -> String
 
     @StateObject private var model: NativeAgentChatModel
     @State private var draft = ""
@@ -503,15 +472,35 @@ struct NativeAgentChatView: View {
     @State private var authenticationProvider: AIProviderCLI?
     @State private var terminalRequest: AIProviderTerminalRequest?
     @State private var showingClearConfirmation = false
+    @State private var submissionError: String?
 
-    init(provider: AIProviderCLI, workspace: URL) {
+    init(
+        provider: AIProviderCLI,
+        workspace: URL,
+        mode: AgentChatMode = .writing,
+        canSend: Bool = true,
+        preparePrompt: @escaping (String) throws -> String = { $0 }
+    ) {
         self.provider = provider
-        _model = StateObject(wrappedValue: NativeAgentChatModel(provider: provider, workspace: workspace))
+        self.mode = mode
+        self.canSend = canSend
+        self.preparePrompt = preparePrompt
+        _model = StateObject(wrappedValue: NativeAgentChatModel(
+            provider: provider, workspace: workspace, mode: mode
+        ))
     }
 
     var body: some View {
         VStack(spacing: 0) {
             chatHeader
+            if let error = submissionError ?? model.errorMessage {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .textSelection(.enabled)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
             Divider()
             ZStack {
                 ChatView(messages: $model.messages, scrollToBottom: $scrollToBottom) {
@@ -519,12 +508,22 @@ struct NativeAgentChatView: View {
                         message: $draft,
                         placeholder: model.isRunning ? "\(provider.shortName) is working…" : "Message \(provider.shortName)"
                     ) { prompt in
-                        Task {
-                            await model.send(prompt)
-                            scrollToBottom = true
+                        do {
+                            // Prepare synchronously before starting the task: the current
+                            // chapter must be captured at Send, not after navigation.
+                            let contextualPrompt = try preparePrompt(prompt)
+                            submissionError = nil
+                            Task {
+                                await model.send(prompt, contextualPrompt: contextualPrompt)
+                                scrollToBottom = true
+                            }
+                            return true
+                        } catch {
+                            submissionError = error.localizedDescription
+                            return false
                         }
                     }
-                    .disabled(model.isRunning || connectionState != .connected)
+                    .disabled(!canSend || model.isRunning || connectionState != .connected)
                 }
                 .environment(\.chatStyle, chatStyle)
 
@@ -623,14 +622,18 @@ struct NativeAgentChatView: View {
                 Image(systemName: "bubble.left.and.bubble.right")
                     .font(.system(size: 34, weight: .light))
                     .foregroundStyle(.secondary)
-                Text("Ask \(provider.shortName) to help with this devotional")
+                Text(mode.isReadOnly ? "Chat about scripture" : "Ask \(provider.shortName) to help with this devotional")
                     .font(.headline)
-                Text("The agent can read your context and Lamp modules. Its changes appear in the devotional editor automatically.")
+                    .multilineTextAlignment(.center)
+                Text(mode.isReadOnly
+                    ? "Ask about the chapter you’re reading, or mention any passage. Explore your translations, commentaries, dictionaries, and other modules together."
+                    : "The agent can read your context and Lamp modules. Its changes appear in the devotional editor automatically.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 420)
             }
+            .padding(24)
             .allowsHitTesting(false)
         }
     }
