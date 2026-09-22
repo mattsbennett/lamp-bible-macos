@@ -1,9 +1,8 @@
 import AppKit
 import Foundation
 
-/// Resolves attributed-string links at a point in AppKit's selectable text
-/// implementations. SwiftUI currently hosts selectable `Text` in an
-/// `NSTextField`, while other render paths can use `NSTextView`.
+/// Resolves attributed-string links at a point in supported AppKit selectable
+/// text implementations. Callers can use either `NSTextField` or `NSTextView`.
 public struct ReaderTextHit: Equatable, Sendable {
     public let link: URL?
     public let word: String?

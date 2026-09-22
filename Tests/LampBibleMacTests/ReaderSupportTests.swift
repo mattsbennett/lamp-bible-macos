@@ -1,7 +1,6 @@
 import AppKit
 import Foundation
 import LampModuleKit
-import SwiftUI
 import Testing
 @testable import LampBibleMacSupport
 
@@ -152,25 +151,27 @@ struct ReaderSupportTests {
         ).isEmpty)
     }
 
-    @Test @MainActor func selectableSwiftUITextLinksCanBeHitTested() throws {
+    @Test @MainActor func appKitTextLinksCanBeHitTested() throws {
         let url = try #require(URL(string: "lamp-lexicon://lookup?key=H1254&reference=1001001"))
-        var attributedString = AttributedString("created the heavens")
-        let linkEnd = attributedString.index(
-            attributedString.startIndex,
-            offsetByCharacters: "created".count
+        let attributedString = NSMutableAttributedString(
+            string: "created the heavens",
+            attributes: [.font: NSFont.systemFont(ofSize: 20)]
         )
-        attributedString[attributedString.startIndex..<linkEnd].languageIdentifier = url.absoluteString
-        attributedString.font = .system(size: 20)
+        attributedString.addAttribute(
+            .languageIdentifier,
+            value: url.absoluteString,
+            range: NSRange(location: 0, length: "created".count)
+        )
 
-        let hostingView = NSHostingView(rootView:
-            Text(attributedString)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(width: 300, alignment: .leading)
+        let textField = NSTextField(labelWithAttributedString: attributedString)
+        textField.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: 300,
+            height: textField.intrinsicContentSize.height
         )
-        hostingView.frame = NSRect(x: 0, y: 0, width: 300, height: 80)
-        hostingView.layoutSubtreeIfNeeded()
-        let textField = try #require(firstTextField(in: hostingView))
+        textField.lineBreakMode = .byClipping
+        textField.maximumNumberOfLines = 1
 
         let linkedPoint = NSPoint(x: 4, y: textField.bounds.midY)
         let unlinkedWordPoint = NSPoint(x: 130, y: textField.bounds.midY)
@@ -545,10 +546,4 @@ struct ReaderSupportTests {
             endReference: end
         )?.absoluteString == "accord://read/John_3:16-John_3:18")
     }
-}
-
-@MainActor
-private func firstTextField(in view: NSView) -> NSTextField? {
-    if let textField = view as? NSTextField { return textField }
-    return view.subviews.lazy.compactMap(firstTextField(in:)).first
 }
