@@ -50,7 +50,13 @@ struct LampBibleCommands: Commands {
     @FocusedValue(\.writingPreviewPlacement) private var writingPreviewPlacement
     @FocusedObject private var scrollLink: ReaderScrollLink?
 
+    let softwareUpdater: SoftwareUpdater
+
     var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            CheckForUpdatesCommand(updater: softwareUpdater)
+        }
+
         CommandGroup(after: .newItem) {
             Button("Install Module…") {
                 installModule?()
@@ -124,6 +130,18 @@ struct LampBibleCommands: Commands {
             }
             .keyboardShortcut("e", modifiers: [.command, .shift])
             .disabled(writingPreviewPlacement == nil)
+        }
+
+        CommandGroup(after: .help) {
+            Button("Third-Party Notices") {
+                if let readme = Bundle.main.url(
+                    forResource: "README",
+                    withExtension: "txt",
+                    subdirectory: "Third Party Licenses"
+                ) {
+                    NSWorkspace.shared.open(readme)
+                }
+            }
         }
 
         SidebarCommands()

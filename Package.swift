@@ -19,6 +19,8 @@ let package = Package(
         .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", exact: "1.11.2"),
         // Apache-2.0 SwiftUI chat components with first-class macOS support.
         .package(url: "https://github.com/EnesKaraosman/SwiftyChat.git", exact: "4.1.1"),
+        // Direct-download auto-updates; the app isn't sandboxed, so it can't ship through the Mac App Store.
+        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.0"),
     ],
     targets: [
         .target(
@@ -35,6 +37,7 @@ let package = Package(
                 .product(name: "LampModuleKit", package: "lamp-bible-core"),
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
                 .product(name: "SwiftyChat", package: "SwiftyChat"),
+                .product(name: "Sparkle", package: "Sparkle"),
             ],
             resources: [
                 .copy("Resources/TipTapEditor"),

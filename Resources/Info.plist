@@ -22,6 +22,10 @@
     <string>$(CURRENT_PROJECT_VERSION)</string>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.reference</string>
+    <key>SUFeedURL</key>
+    <string>https://lampbible.com/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>t9jFgpCbBbga5JtxyeVZiWpjs8ntm7y0MqMJSDN1IOI=</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Record audio for your personal devotionals.</string>
     <key>NSLocalNetworkUsageDescription</key>

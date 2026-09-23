@@ -1,0 +1,5 @@
+SwiftUIEKtensions 0.4.0
+https://github.com/EnesKaraosman/SwiftUIEKtensions.git
+Author: EnesKaraosman
+
+No licence has been published for this component.

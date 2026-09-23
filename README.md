@@ -57,6 +57,8 @@ Personal edits are stored outside immutable modules and can be imported or expor
 
 The detailed iOS-to-macOS capability matrix is in [Documentation/FeatureParity.md](Documentation/FeatureParity.md).
 
+The Mac app ships as a notarized direct download with Sparkle auto-updates. The release process — signing, notarization, update signing, third-party notices and the website feed — is in [Documentation/Releasing.md](Documentation/Releasing.md).
+
 ## Development
 
 The package uses a local sibling dependency while both repositories are evolving:

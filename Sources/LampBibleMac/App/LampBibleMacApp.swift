@@ -12,6 +12,7 @@ struct LampBibleMacApp: App {
     @StateObject private var syncController = LibrarySyncController()
     @StateObject private var scrollLink = ReaderScrollLink()
     @StateObject private var presentationRemoteHost = LampPresentationRemoteHost()
+    @StateObject private var softwareUpdater = SoftwareUpdater()
 
     var body: some Scene {
         WindowGroup("Lamp Bible", id: "reader") {
@@ -22,7 +23,7 @@ struct LampBibleMacApp: App {
         }
         .defaultSize(width: 1_240, height: 820)
         .commands {
-            LampBibleCommands()
+            LampBibleCommands(softwareUpdater: softwareUpdater)
         }
 
         WindowGroup("Book Reader", id: "book-reader", for: BookReaderRequest.self) { $request in
@@ -85,6 +86,7 @@ struct LampBibleMacApp: App {
             ReaderSettingsView()
                 .environmentObject(libraryModel)
                 .environmentObject(syncController)
+                .environmentObject(softwareUpdater)
         }
 
         MenuBarExtra("Lamp Bible", systemImage: "book.closed.fill") {
@@ -120,6 +122,7 @@ private struct StandaloneBookReaderView: View {
 private struct ReaderSettingsView: View {
     @EnvironmentObject private var model: LibraryModel
     @EnvironmentObject private var syncController: LibrarySyncController
+    @EnvironmentObject private var softwareUpdater: SoftwareUpdater
     @AppStorage("reader.fontSize") private var fontSize = LampTextScale.readerText.defaultValue
     @AppStorage("reader.lineSpacing") private var lineSpacing = LampTextScale.readerLineSpacing.defaultValue
     @AppStorage("reader.typeface") private var typeface = ProseTypeface.readerDefault
@@ -199,6 +202,7 @@ private struct ReaderSettingsView: View {
                 Section("Services") {
                     settingsLink(.aiAndAgents)
                     settingsLink(.sync)
+                    settingsLink(.updates)
                 }
             }
             .navigationTitle("Settings")
@@ -488,6 +492,40 @@ private struct ReaderSettingsView: View {
                         }
                     }
 
+                case .updates:
+                    Section("Software Updates") {
+                        LabeledContent("Version", value: appVersion)
+                        if softwareUpdater.isConfigured {
+                            Toggle("Check for updates automatically", isOn: Binding(
+                                get: { softwareUpdater.automaticallyChecksForUpdates },
+                                set: { softwareUpdater.automaticallyChecksForUpdates = $0 }
+                            ))
+                            Toggle("Download and install updates automatically", isOn: Binding(
+                                get: { softwareUpdater.automaticallyDownloadsUpdates },
+                                set: { softwareUpdater.automaticallyDownloadsUpdates = $0 }
+                            ))
+                            .disabled(
+                                !softwareUpdater.automaticallyChecksForUpdates
+                                    || !softwareUpdater.allowsAutomaticUpdates
+                            )
+                            LabeledContent(
+                                "Last Checked",
+                                value: softwareUpdater.lastUpdateCheckDate?
+                                    .formatted(date: .abbreviated, time: .shortened) ?? "Never"
+                            )
+                            Text("Checking downloads a small update feed from lampbible.com. Like any web request it reveals your IP address and identifies the app and its version; nothing about you or your library is sent.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Button("Check Now", systemImage: "arrow.down.circle") {
+                                softwareUpdater.checkForUpdates()
+                            }
+                            .disabled(!softwareUpdater.canCheckForUpdates)
+                        } else {
+                            Text("Automatic updates aren’t configured in this build.")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
                 case .sync:
                     Section("Sync") {
                         Picker(
@@ -567,6 +605,13 @@ private struct ReaderSettingsView: View {
             webDAVEndpoint = syncController.endpoint
             webDAVUsername = syncController.username
         }
+    }
+
+    private var appVersion: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "—"
+        let build = info?["CFBundleVersion"] as? String ?? "—"
+        return "\(version) (\(build))"
     }
 
     private func settingsLink(_ section: ReaderSettingsSection) -> some View {
@@ -714,6 +759,7 @@ private enum ReaderSettingsSection: String, CaseIterable, Identifiable {
     case aiAndAgents
     case readingPlans
     case sync
+    case updates
 
     var id: Self { self }
 
@@ -728,6 +774,7 @@ private enum ReaderSettingsSection: String, CaseIterable, Identifiable {
         case .aiAndAgents: "AI & Agents"
         case .readingPlans: "Reading Plans"
         case .sync: "Sync"
+        case .updates: "Updates"
         }
     }
 
@@ -742,6 +789,7 @@ private enum ReaderSettingsSection: String, CaseIterable, Identifiable {
         case .aiAndAgents: "sparkles"
         case .readingPlans: "calendar"
         case .sync: "arrow.triangle.2.circlepath"
+        case .updates: "arrow.down.circle"
         }
     }
 }
