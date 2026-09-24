@@ -1,4 +1,5 @@
 import Foundation
+import LampModuleKit
 import SwiftUI
 import WebKit
 
@@ -41,6 +42,7 @@ struct TipTapEditorView: NSViewRepresentable {
     let mediaScopeID: String
     let libraryRootURL: URL
     let isVisible: Bool
+    var mediaReferences: [LampDevotionalMediaReference] = []
     /// Sizes the page to its content instead of the viewport, for hosts that
     /// place the editor inside their own scrolling column rather than giving it
     /// a pane of its own. See `TipTapEditorCoordinator.applyCompactLayout`.
@@ -48,7 +50,10 @@ struct TipTapEditorView: NSViewRepresentable {
     var onCoordinatorReady: (TipTapEditorCoordinator) -> Void
 
     func makeCoordinator() -> TipTapEditorCoordinator {
-        TipTapEditorCoordinator(mediaScopeID: mediaScopeID)
+        TipTapEditorCoordinator(
+            mediaScopeID: mediaScopeID,
+            richMediaIDs: Set(mediaReferences.map(\.id))
+        )
     }
 
     func makeNSView(context: Context) -> WKWebView {
@@ -95,6 +100,7 @@ struct TipTapEditorView: NSViewRepresentable {
 
         coordinator.webView = webView
         coordinator.updateMediaScopeID(mediaScopeID)
+        coordinator.updateRichMediaIDs(Set(mediaReferences.map(\.id)))
         coordinator.onContentChanged = bindingUpdater
         coordinator.usesCompactLayout = compactLayout
         coordinator.setMediaMap(mediaMap)
@@ -125,6 +131,7 @@ struct TipTapEditorView: NSViewRepresentable {
         let coordinator = context.coordinator
         coordinator.hostWantsVisible = isVisible
         coordinator.updateMediaScopeID(mediaScopeID)
+        coordinator.updateRichMediaIDs(Set(mediaReferences.map(\.id)))
         coordinator.onContentChanged = bindingUpdater
         coordinator.setMediaMap(mediaMap)
         coordinator.setFontSize(fontSize)
@@ -187,12 +194,22 @@ struct TipTapEditorView: NSViewRepresentable {
         let directory = libraryRootURL
             .appendingPathComponent("Media/Devotionals", isDirectory: true)
             .appendingPathComponent(mediaScopeID, isDirectory: true)
-        guard let files = try? FileManager.default.contentsOfDirectory(
+        let files = (try? FileManager.default.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles]
-        ) else { return [:] }
-        return Dictionary(uniqueKeysWithValues: files.map { ($0.lastPathComponent, $0.absoluteString) })
+            options: []
+        )) ?? []
+        var map = Dictionary(uniqueKeysWithValues: files.map {
+            ($0.lastPathComponent, $0.absoluteString)
+        })
+        for reference in mediaReferences where
+            LampPortableDevotionalMedia.isSafePathComponent(reference.filename) {
+            let url = directory.appendingPathComponent(reference.filename)
+            if FileManager.default.fileExists(atPath: url.path) {
+                map[reference.id] = url.absoluteString
+            }
+        }
+        return map
     }
 
     /// WKWebView grants local-file access relative to the loaded document. Cache
@@ -252,6 +269,7 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
 
     private(set) var lastKnownMarkdown = ""
     private var mediaScopeID: String
+    private var richMediaIDs: Set<String>
     private var isReady = false
     private var pendingContent: String?
     private var pendingMediaMap: [String: String]?
@@ -271,12 +289,17 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     }
     private var hasPainted = false
 
-    init(mediaScopeID: String) {
+    init(mediaScopeID: String, richMediaIDs: Set<String> = []) {
         self.mediaScopeID = mediaScopeID
+        self.richMediaIDs = richMediaIDs
     }
 
     func updateMediaScopeID(_ mediaScopeID: String) {
         self.mediaScopeID = mediaScopeID
+    }
+
+    func updateRichMediaIDs(_ ids: Set<String>) {
+        richMediaIDs = ids
     }
 
     /// Driven by the page reporting that it has produced a frame. Neither `ready`
@@ -623,17 +646,14 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     """
 
     private func editorMarkdown(from portableMarkdown: String) -> String {
-        portableMarkdown.replacingOccurrences(
-            of: #"lamp-media://[^/)\s]+/"#,
-            with: "media/",
-            options: .regularExpression
-        )
+        LampPortableDevotionalMedia.editorMarkdown(from: portableMarkdown)
     }
 
     private func portableMarkdown(from editorMarkdown: String) -> String {
-        editorMarkdown.replacingOccurrences(
-            of: "](media/",
-            with: "](lamp-media://\(mediaScopeID)/"
+        LampPortableDevotionalMedia.portableMarkdown(
+            from: editorMarkdown,
+            devotionalID: mediaScopeID,
+            richMediaIDs: richMediaIDs
         )
     }
 

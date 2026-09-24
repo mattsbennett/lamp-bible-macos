@@ -1,4 +1,5 @@
 import Foundation
+import LampCore
 import LampBibleMacSupport
 import LampModuleKit
 import SQLite3
@@ -16,6 +17,7 @@ import Testing
         try data.write(to: nested.appendingPathComponent("notes.json"))
 
         let archive = try LampSyncArchive.create(from: source)
+        #expect(archive.formatVersion == LampSyncArchive.currentFormatVersion)
         #expect(archive.entries.map(\.path) == ["Study/Notes/notes.json"])
         let decoded = try LampSyncArchive.decode(compressedData: archive.compressedData())
         #expect(decoded.entries.first?.data == data)
@@ -125,6 +127,21 @@ import Testing
         )
 
         #expect(documents.map(\.moduleID) == ["morning", "evening", "outline"])
+        let chosen = LampSyncModuleFiles.preferredPathsByIdentity(
+            documents.map { .init(identity: $0.syncIdentity, path: "Devotionals/devotionals.json") }
+                + [.init(identity: "morning", path: "Devotionals/morning.lamp")]
+        )
+        #expect(chosen["morning"] == "Devotionals/morning.lamp")
+        #expect(chosen["evening"] == "Devotionals/devotionals.json")
+        #expect(chosen["outline"] == "Devotionals/devotionals.json")
+        let afterArchive = LampSyncModuleFiles.preferredPathsByIdentity(
+            documents.map { .init(identity: $0.syncIdentity, path: "Devotionals/devotionals.json") }
+                + [.init(
+                    identity: "morning", path: "Devotionals/morning.lamp",
+                    isSuperseded: true
+                )]
+        )
+        #expect(afterArchive["morning"] == "Devotionals/devotionals.json")
         for document in documents {
             let root = try #require(
                 JSONSerialization.jsonObject(with: document.data) as? [String: Any]
@@ -159,6 +176,13 @@ import Testing
             fallbackModuleID: "notes"
         )
         #expect(noteDocuments.map(\.moduleID) == ["notes-1", "notes-43"])
+        #expect(noteDocuments.map(\.syncIdentity) == ["notes", "notes"])
+        let chosenNotes = LampSyncModuleFiles.preferredPathsByIdentity(
+            noteDocuments.map {
+                .init(identity: $0.syncIdentity, path: "Notes/notes.json")
+            } + [.init(identity: "notes", path: "Notes/notes.lamp")]
+        )
+        #expect(chosenNotes["notes"] == "Notes/notes.lamp")
         let firstNote = try #require(
             JSONSerialization.jsonObject(with: noteDocuments[0].data) as? [String: Any]
         )
@@ -234,6 +258,7 @@ import Testing
         )
 
         let backup = root.appendingPathComponent("Backup", isDirectory: true)
+        try LampWorkspaceSync.prepareLibraryForSync(at: sourceLibrary)
         try LampWorkspaceSync.exportPortableWorkspaces(from: sourceLibrary, to: backup)
         let portableWorkspace = backup.appendingPathComponent(
             "Workspaces/Devotionals/talk-123",
@@ -368,6 +393,62 @@ import Testing
         #expect(try String(contentsOf: localTied, encoding: .utf8) == "zeta")
     }
 
+    @Test func stagedWorkspaceImportLeavesLiveLibraryUntouchedAfterLateFailure() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-staged-workspace-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let liveRoot = root.appendingPathComponent("Library", isDirectory: true)
+        let library = LampLibrary(rootURL: liveRoot)
+        let liveWorkspace = liveRoot.appendingPathComponent(
+            "AgentWorkspaces/Devotionals/talk-123", isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: liveWorkspace, withIntermediateDirectories: true
+        )
+        let localFile = liveWorkspace.appendingPathComponent("local.md")
+        try Data("local document".utf8).write(to: localFile)
+
+        let backupWorkspace = root.appendingPathComponent(
+            "Backup/Workspaces/Devotionals/talk-123", isDirectory: true
+        )
+        let backupDocuments = backupWorkspace.appendingPathComponent("Documents", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: backupDocuments, withIntermediateDirectories: true
+        )
+        try Data("incoming document".utf8).write(
+            to: backupDocuments.appendingPathComponent("remote.md")
+        )
+        let selection = backupWorkspace.appendingPathComponent("EnabledSkills.json")
+        try Data("damaged selection".utf8).write(to: selection)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(3_600)],
+            ofItemAtPath: selection.path
+        )
+
+        let backup = root.appendingPathComponent("Backup", isDirectory: true)
+        await #expect(throws: DecodingError.self) {
+            try await library.withStagedChanges { staged in
+                try LampWorkspaceSync.importPortableWorkspaces(
+                    from: backup, into: staged.rootURL
+                )
+            }
+        }
+        #expect(try Data(contentsOf: localFile) == Data("local document".utf8))
+        #expect(!FileManager.default.fileExists(
+            atPath: liveWorkspace.appendingPathComponent("remote.md").path
+        ))
+
+        try FileManager.default.removeItem(at: selection)
+        try await library.withStagedChanges { staged in
+            try LampWorkspaceSync.importPortableWorkspaces(
+                from: backup, into: staged.rootURL
+            )
+        }
+        #expect(try Data(contentsOf: localFile) == Data("local document".utf8))
+        #expect(try Data(contentsOf: liveWorkspace.appendingPathComponent("remote.md"))
+            == Data("incoming document".utf8))
+    }
+
     @Test func importsLegacyPerWorkspaceSkillsIntoTheSharedCatalog() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("lamp-legacy-skills-\(UUID().uuidString)", isDirectory: true)
@@ -439,6 +520,32 @@ import Testing
         #expect(try await client.download(filename: "lamp-bible.lampsync") == payload)
 
         TestURLProtocol.handler = { request in
+            let url = try #require(request.url)
+            if request.httpMethod == "GET" {
+                return (HTTPURLResponse(
+                    url: url, statusCode: 200, httpVersion: nil,
+                    headerFields: ["ETag": "\"archive-v1\""]
+                )!, payload)
+            }
+            #expect(request.httpMethod == "PUT")
+            #expect(request.value(forHTTPHeaderField: "If-Match") == "\"archive-v1\"")
+            return (HTTPURLResponse(
+                url: url, statusCode: 412, httpVersion: nil, headerFields: nil
+            )!, Data())
+        }
+        let remote = try #require(try await client.read(path: "lamp-bible.lampsync"))
+        #expect(remote.revision == "\"archive-v1\"")
+        do {
+            _ = try await client.write(
+                payload, to: "lamp-bible.lampsync",
+                condition: .ifRevision(try #require(remote.revision))
+            )
+            Issue.record("Expected the stale archive write to fail")
+        } catch LampSyncError.remoteChanged {
+            // The archive changed between the read and write.
+        }
+
+        TestURLProtocol.handler = { request in
             #expect(request.httpMethod == "PROPFIND")
             #expect(request.url?.absoluteString == "https://dav.example.com/sync/Notes/")
             let body = Data(#"""
@@ -447,6 +554,10 @@ import Testing
                   <d:response><d:href>/sync/Notes/</d:href></d:response>
                   <d:response><d:href>/sync/Notes/notes.lamp</d:href></d:response>
                   <d:response><d:href>/sync/Notes/My%20Study.lamp</d:href></d:response>
+                  <d:response><d:href>/sync/Notes/readme.txt</d:href></d:response>
+                  <d:response><d:href>/sync/Notes/folder.lamp/</d:href>
+                    <d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat>
+                  </d:response>
                 </d:multistatus>
                 """#.utf8)
             return (HTTPURLResponse(
@@ -456,7 +567,7 @@ import Testing
                 headerFields: nil
             )!, body)
         }
-        #expect(try await client.listFilenames(directory: "Notes") == ["notes.lamp", "My Study.lamp"])
+        #expect(try await client.listModuleFilenames(directory: "Notes") == ["notes.lamp", "My Study.lamp"])
 
         TestURLProtocol.handler = { request in
             #expect(request.url?.path == "/sync/Notes/notes.lamp")

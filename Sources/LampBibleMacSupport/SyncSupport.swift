@@ -1,101 +1,8 @@
 import Foundation
 import LampModuleKit
-import SQLite3
 
-public struct LampSyncArchive: Codable, Equatable, Sendable {
-    public struct Entry: Codable, Equatable, Sendable {
-        public let path: String
-        public let data: Data
-        public let modifiedAt: Date
-
-        public init(path: String, data: Data, modifiedAt: Date) {
-            self.path = path
-            self.data = data
-            self.modifiedAt = modifiedAt
-        }
-    }
-
-    public let formatVersion: Int
-    public let entries: [Entry]
-
-    public init(formatVersion: Int = 1, entries: [Entry]) {
-        self.formatVersion = formatVersion
-        self.entries = entries
-    }
-
-    public static func create(
-        from directory: URL,
-        fileManager: FileManager = .default
-    ) throws -> LampSyncArchive {
-        guard let enumerator = fileManager.enumerator(
-            at: directory,
-            includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) else { return LampSyncArchive(entries: []) }
-        let prefix = directory.standardizedFileURL.path + "/"
-        let entries = try enumerator.compactMap { item -> Entry? in
-            guard let url = item as? URL else { return nil }
-            let values = try url.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey])
-            guard values.isRegularFile == true else { return nil }
-            let standardizedPath = url.standardizedFileURL.path
-            guard standardizedPath.hasPrefix(prefix) else { throw LampSyncError.unsafeArchivePath }
-            return Entry(
-                path: String(standardizedPath.dropFirst(prefix.count)),
-                data: try Data(contentsOf: url),
-                modifiedAt: values.contentModificationDate ?? Date()
-            )
-        }
-        return LampSyncArchive(entries: entries.sorted { $0.path < $1.path })
-    }
-
-    public func compressedData() throws -> Data {
-        let data = try JSONEncoder().encode(self)
-        return try (data as NSData).compressed(using: .zlib) as Data
-    }
-
-    public static func decode(compressedData: Data) throws -> LampSyncArchive {
-        let data = try (compressedData as NSData).decompressed(using: .zlib) as Data
-        let archive = try JSONDecoder().decode(LampSyncArchive.self, from: data)
-        guard archive.formatVersion == 1 else { throw LampSyncError.unsupportedArchiveVersion }
-        return archive
-    }
-
-    public func extract(
-        to directory: URL,
-        fileManager: FileManager = .default
-    ) throws {
-        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        let root = directory.standardizedFileURL.path + "/"
-        for entry in entries {
-            guard !entry.path.hasPrefix("/"),
-                  !entry.path.split(separator: "/").contains("..") else {
-                throw LampSyncError.unsafeArchivePath
-            }
-            let destination = directory.appendingPathComponent(entry.path).standardizedFileURL
-            guard destination.path.hasPrefix(root) else { throw LampSyncError.unsafeArchivePath }
-            try fileManager.createDirectory(
-                at: destination.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            try entry.data.write(to: destination, options: .atomic)
-            try fileManager.setAttributes(
-                [.modificationDate: entry.modifiedAt],
-                ofItemAtPath: destination.path
-            )
-        }
-    }
-}
-
-public enum LampFolderSync {
-    public static func merge(
-        from source: URL,
-        into destination: URL,
-        fileManager: FileManager = .default
-    ) throws {
-        let archive = try LampSyncArchive.create(from: source, fileManager: fileManager)
-        try archive.extract(to: destination, fileManager: fileManager)
-    }
-}
+/// Preserve the support module's public archive name while the codec lives in core.
+public typealias LampSyncArchive = LampModuleKit.LampSyncArchive
 
 /// Copies the user-authored portion of devotional agent workspaces into and out
 /// of a portable backup. Custom skills are synchronized once as a shared catalog,
@@ -103,7 +10,7 @@ public enum LampFolderSync {
 /// provider configuration, provider skill copies, and the primary draft are
 /// deliberately rebuilt from their canonical sources on each Mac.
 public enum LampWorkspaceSync {
-    public static let portableDirectoryName = "Workspaces"
+    public static let portableDirectoryName = LampPortableBackupLayout.workspacesDirectory
 
     private static let agentWorkspacesPath = ["AgentWorkspaces", "Devotionals"]
     private static let portableWorkspacesPath = [portableDirectoryName, "Devotionals"]
@@ -115,16 +22,23 @@ public enum LampWorkspaceSync {
     ]
     private static let bundledSkillNames: Set<String> = ["build-lamp-deck"]
 
-    public static func exportPortableWorkspaces(
-        from libraryRoot: URL,
-        to backupRoot: URL,
+    /// Run legacy workspace migration during the local pull transaction so
+    /// exporting the prepared library does not change the live workspace.
+    public static func prepareLibraryForSync(
+        at libraryRoot: URL,
         fileManager: FileManager = .default
     ) throws {
         try WorkspaceSkillStore.migrateAllWorkspaces(
             in: libraryRoot,
             fileManager: fileManager
         )
+    }
 
+    public static func exportPortableWorkspaces(
+        from libraryRoot: URL,
+        to backupRoot: URL,
+        fileManager: FileManager = .default
+    ) throws {
         let portableRoot = backupRoot
             .appendingPathComponent(portableDirectoryName, isDirectory: true)
         let catalogRoot = WorkspaceSkillStore.catalogDirectory(in: libraryRoot)
@@ -192,10 +106,7 @@ public enum LampWorkspaceSync {
     ) throws {
         // Preserve and catalog any pre-centralization local skills before
         // applying an incoming workspace selection.
-        try WorkspaceSkillStore.migrateAllWorkspaces(
-            in: libraryRoot,
-            fileManager: fileManager
-        )
+        try prepareLibraryForSync(at: libraryRoot, fileManager: fileManager)
 
         let portableRoot = backupRoot
             .appendingPathComponent(portableDirectoryName, isDirectory: true)
@@ -492,15 +403,12 @@ public enum LampWorkspaceSync {
         with sourceData: Data,
         sourceDate: Date?
     ) -> Bool {
-        guard destinationData != sourceData else { return false }
-        let destinationDate = destinationDate ?? .distantPast
-        let sourceDate = sourceDate ?? .distantPast
-        let difference = sourceDate.timeIntervalSince(destinationDate)
-        if abs(difference) > 0.001 { return difference > 0 }
-
-        // Timestamp precision varies by sync provider. A stable byte ordering
-        // makes equal-time conflicts converge instead of oscillating forever.
-        return destinationData.lexicographicallyPrecedes(sourceData)
+        LampSyncMerge.shouldReplaceFile(
+            currentData: destinationData,
+            currentDate: destinationDate,
+            incomingData: sourceData,
+            incomingDate: sourceDate
+        )
     }
 
     private static func ensureSafeDestination(
@@ -539,10 +447,10 @@ public struct LampWebDAVCredentials: Equatable, Sendable {
     }
 }
 
-public struct LampWebDAVClient: Sendable {
+public struct LampWebDAVClient: Sendable, LampSyncRemoteStore {
     public let baseURL: URL
     public let credentials: LampWebDAVCredentials?
-    private let session: URLSession
+    private let storage: LampWebDAVStorage
 
     public init(
         baseURL: URL,
@@ -551,589 +459,107 @@ public struct LampWebDAVClient: Sendable {
     ) {
         self.baseURL = baseURL
         self.credentials = credentials
-        self.session = session ?? Self.makeSession()
+        self.storage = LampWebDAVStorage(
+            baseURL: baseURL,
+            credentials: credentials.map {
+                .init(username: $0.username, password: $0.password)
+            },
+            session: session
+        )
     }
 
     public func download(filename: String) async throws -> Data? {
-        let request = try makeRequest(method: "GET", filename: filename)
-        return try await data(for: request)
+        try validateFilename(filename)
+        return try await mapped { try await storage.download(filename) }
     }
 
     public func download(relativePath: String) async throws -> Data? {
-        let request = try makeRequest(method: "GET", relativePath: relativePath)
-        return try await data(for: request)
+        try await mapped { try await storage.download(relativePath) }
     }
 
-    private func data(for request: URLRequest) async throws -> Data? {
-        let (data, response) = try await session.data(for: request)
-        guard let response = response as? HTTPURLResponse else { throw LampSyncError.invalidResponse }
-        if response.statusCode == 404 { return nil }
-        guard (200..<300).contains(response.statusCode) else {
-            throw LampSyncError.httpStatus(response.statusCode)
-        }
-        return data
+    public func read(path: String) async throws -> LampSyncRemoteFile? {
+        try await mapped { try await storage.read(path: path) }
+    }
+
+    public func list(directory: String) async throws -> [LampSyncRemoteEntry]? {
+        try await mapped { try await storage.list(directory: directory) }
+    }
+
+    public func revision(path: String) async throws -> String? {
+        try await mapped { try await storage.revision(path: path) }
+    }
+
+    public func write(
+        _ data: Data,
+        to path: String,
+        condition: LampSyncWriteCondition
+    ) async throws -> String? {
+        try await mapped { try await storage.write(data, to: path, condition: condition) }
     }
 
     public func upload(_ data: Data, filename: String) async throws {
-        var request = try makeRequest(method: "PUT", filename: filename)
-        try await upload(data, using: &request)
+        try validateFilename(filename)
+        try await mapped { try await storage.upload(data, to: filename) }
     }
 
     public func upload(_ data: Data, relativePath: String) async throws {
-        var request = try makeRequest(method: "PUT", relativePath: relativePath)
-        try await upload(data, using: &request)
-    }
-
-    private func upload(_ data: Data, using request: inout URLRequest) async throws {
-        request.httpBody = data
-        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
-        let (_, response) = try await session.data(for: request)
-        guard let response = response as? HTTPURLResponse else { throw LampSyncError.invalidResponse }
-        guard (200..<300).contains(response.statusCode) else {
-            throw LampSyncError.httpStatus(response.statusCode)
-        }
+        try await mapped { try await storage.upload(data, to: relativePath) }
     }
 
     public func createDirectory(_ directory: String) async throws {
-        var request = try makeRequest(
-            method: "MKCOL",
-            relativePath: directory.hasSuffix("/") ? directory : directory + "/"
-        )
-        request.setValue("0", forHTTPHeaderField: "Content-Length")
-        let (_, response) = try await session.data(for: request)
-        guard let response = response as? HTTPURLResponse else { throw LampSyncError.invalidResponse }
-        guard (200..<300).contains(response.statusCode) || response.statusCode == 405 else {
-            throw LampSyncError.httpStatus(response.statusCode)
-        }
+        let path = directory.hasSuffix("/") ? directory : directory + "/"
+        try await mapped { try await storage.createDirectory(path) }
     }
 
-    public func listFilenames(directory: String) async throws -> [String] {
-        let path = directory.hasSuffix("/") ? directory : directory + "/"
-        var request = try makeRequest(method: "PROPFIND", relativePath: path)
-        request.setValue("1", forHTTPHeaderField: "Depth")
-        request.setValue("application/xml", forHTTPHeaderField: "Content-Type")
-        request.httpBody = Data(#"<?xml version="1.0" encoding="UTF-8"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/></d:prop></d:propfind>"#.utf8)
-        let (data, response) = try await session.data(for: request)
-        guard let response = response as? HTTPURLResponse else { throw LampSyncError.invalidResponse }
-        if response.statusCode == 404 { return [] }
-        guard (200..<300).contains(response.statusCode) else {
-            throw LampSyncError.httpStatus(response.statusCode)
-        }
-        let parser = LampWebDAVHrefParser(data: data)
-        return try parser.filenames().filter { $0 != directory.trimmingCharacters(in: CharacterSet(charactersIn: "/")) }
+    public func listModuleFilenames(directory: String) async throws -> [String] {
+        let items = try await LampSyncModuleFolder.list(in: self, directory: directory)
+        var seen = Set<String>()
+        return items.compactMap { seen.insert($0.name).inserted ? $0.name : nil }
     }
 
     public func makeRequest(method: String, filename: String) throws -> URLRequest {
+        try validateFilename(filename)
+        do {
+            return try storage.makeRequest(method: method, path: filename)
+        } catch LampWebDAVStorage.StorageError.invalidPath {
+            throw LampSyncError.unsafeArchivePath
+        }
+    }
+
+    private func validateFilename(_ filename: String) throws {
         guard !filename.contains("/"), !filename.contains("..") else {
             throw LampSyncError.unsafeArchivePath
         }
-        return try makeRequest(method: method, relativePath: filename)
     }
 
-    private func makeRequest(method: String, relativePath: String) throws -> URLRequest {
-        let components = relativePath.split(separator: "/", omittingEmptySubsequences: true)
-        guard !components.isEmpty,
-              components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
-            throw LampSyncError.unsafeArchivePath
-        }
-        var url = baseURL
-        for component in components {
-            url.appendPathComponent(String(component))
-        }
-        if relativePath.hasSuffix("/"), !url.path.hasSuffix("/"),
-           var urlComponents = URLComponents(url: url, resolvingAgainstBaseURL: false) {
-            urlComponents.path += "/"
-            if let directoryURL = urlComponents.url { url = directoryURL }
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = method
-        request.timeoutInterval = 60
-        if let credentials {
-            let token = Data("\(credentials.username):\(credentials.password)".utf8).base64EncodedString()
-            request.setValue("Basic \(token)", forHTTPHeaderField: "Authorization")
-        }
-        return request
-    }
-
-    private static func makeSession() -> URLSession {
-        // Do not share HTTP auth state with unrelated requests made by the app.
-        // A stale credential in URLSession.shared can replace the explicit Basic
-        // header after a challenge and make corrected WebDAV settings keep
-        // returning 401 until the process is relaunched.
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-        configuration.urlCache = nil
-        configuration.urlCredentialStorage = nil
-        configuration.timeoutIntervalForRequest = 60
-        configuration.timeoutIntervalForResource = 300
-        return URLSession(configuration: configuration)
-    }
-}
-
-private final class LampWebDAVHrefParser: NSObject, XMLParserDelegate {
-    private let data: Data
-    private var isReadingHref = false
-    private var currentHref = ""
-    private var hrefs: [String] = []
-
-    init(data: Data) {
-        self.data = data
-    }
-
-    func filenames() throws -> [String] {
-        let parser = XMLParser(data: data)
-        parser.delegate = self
-        guard parser.parse() else { throw LampSyncError.invalidResponse }
-        var seen = Set<String>()
-        return hrefs.compactMap { href in
-            let decoded = href.removingPercentEncoding ?? href
-            let trimmed = decoded.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            guard let name = trimmed.split(separator: "/").last.map(String.init),
-                  !name.isEmpty,
-                  seen.insert(name).inserted else { return nil }
-            return name
-        }
-    }
-
-    func parser(
-        _ parser: XMLParser,
-        didStartElement elementName: String,
-        namespaceURI: String?,
-        qualifiedName qName: String?,
-        attributes attributeDict: [String: String] = [:]
-    ) {
-        guard (qName ?? elementName).split(separator: ":").last == "href" else { return }
-        isReadingHref = true
-        currentHref = ""
-    }
-
-    func parser(_ parser: XMLParser, foundCharacters string: String) {
-        if isReadingHref { currentHref += string }
-    }
-
-    func parser(
-        _ parser: XMLParser,
-        didEndElement elementName: String,
-        namespaceURI: String?,
-        qualifiedName qName: String?
-    ) {
-        guard (qName ?? elementName).split(separator: ":").last == "href" else { return }
-        isReadingHref = false
-        hrefs.append(currentHref.trimmingCharacters(in: .whitespacesAndNewlines))
-    }
-}
-
-public enum LampWebDAVPersonalArchiveKind: Sendable {
-    case notes
-    case devotionals
-
-    fileprivate var entryTable: String {
-        switch self {
-        case .notes: "note_entries"
-        case .devotionals: "devotional_entries"
-        }
-    }
-}
-
-public enum LampWebDAVPersonalArchiveAdapter {
-    /// The two apps use different IDs for their default editable collections.
-    /// Rewrite the Mac archive's module IDs before publishing it into the iOS
-    /// folder layout so iOS merges the rows into its existing collection.
-    public static func archive(
-        _ compressedData: Data,
-        replacingModuleIDWith moduleID: String,
-        kind: LampWebDAVPersonalArchiveKind,
-        fileManager: FileManager = .default
-    ) throws -> Data {
-        guard !moduleID.isEmpty,
-              !moduleID.contains("/"),
-              !moduleID.contains("\0"),
-              let databaseData = try? (compressedData as NSData).decompressed(using: .zlib) as Data else {
-            throw LampSyncError.archiveConversionFailed
-        }
-        let databaseURL = fileManager.temporaryDirectory
-            .appendingPathComponent("lamp-ios-sync-\(UUID().uuidString)")
-            .appendingPathExtension("sqlite")
-        try databaseData.write(to: databaseURL, options: .atomic)
-        defer {
-            try? fileManager.removeItem(at: databaseURL)
-            try? fileManager.removeItem(atPath: databaseURL.path + "-journal")
-        }
-
-        var database: OpaquePointer?
-        guard sqlite3_open_v2(
-            databaseURL.path,
-            &database,
-            SQLITE_OPEN_READWRITE,
-            nil
-        ) == SQLITE_OK, let database else {
-            if database != nil { sqlite3_close(database) }
-            throw LampSyncError.archiveConversionFailed
-        }
-        defer { sqlite3_close(database) }
-
-        guard sqlite3_exec(database, "BEGIN IMMEDIATE", nil, nil, nil) == SQLITE_OK else {
-            throw LampSyncError.archiveConversionFailed
-        }
+    private func mapped<T>(_ operation: () async throws -> T) async throws -> T {
         do {
-            try updateModuleID(in: database, table: "module_format", column: "module_id", to: moduleID)
-            try updateModuleID(in: database, table: "module_meta", column: "id", to: moduleID)
-            try updateModuleID(in: database, table: kind.entryTable, column: "module_id", to: moduleID)
-            guard sqlite3_exec(database, "COMMIT", nil, nil, nil) == SQLITE_OK else {
-                throw LampSyncError.archiveConversionFailed
-            }
-        } catch {
-            sqlite3_exec(database, "ROLLBACK", nil, nil, nil)
-            throw error
-        }
-
-        let rewrittenData = try Data(contentsOf: databaseURL, options: .mappedIfSafe)
-        guard let compressed = try? (rewrittenData as NSData).compressed(using: .zlib) as Data else {
-            throw LampSyncError.archiveConversionFailed
-        }
-        return compressed
-    }
-
-    public static func highlightSetID(
-        in compressedData: Data,
-        fileManager: FileManager = .default
-    ) throws -> String? {
-        guard let databaseData = try? (compressedData as NSData).decompressed(using: .zlib) as Data else {
-            throw LampSyncError.archiveConversionFailed
-        }
-        let databaseURL = fileManager.temporaryDirectory
-            .appendingPathComponent("lamp-ios-highlight-\(UUID().uuidString)")
-            .appendingPathExtension("sqlite")
-        try databaseData.write(to: databaseURL, options: .atomic)
-        defer { try? fileManager.removeItem(at: databaseURL) }
-
-        var database: OpaquePointer?
-        guard sqlite3_open_v2(
-            databaseURL.path,
-            &database,
-            SQLITE_OPEN_READONLY,
-            nil
-        ) == SQLITE_OK, let database else {
-            if database != nil { sqlite3_close(database) }
-            throw LampSyncError.archiveConversionFailed
-        }
-        defer { sqlite3_close(database) }
-
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(
-            database,
-            "SELECT id FROM highlight_meta LIMIT 1",
-            -1,
-            &statement,
-            nil
-        ) == SQLITE_OK, let statement else { return nil }
-        defer { sqlite3_finalize(statement) }
-        guard sqlite3_step(statement) == SQLITE_ROW,
-              let value = sqlite3_column_text(statement, 0) else { return nil }
-        return String(cString: value)
-    }
-
-    private static func updateModuleID(
-        in database: OpaquePointer,
-        table: String,
-        column: String,
-        to moduleID: String
-    ) throws {
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, "UPDATE \(table) SET \(column) = ?", -1, &statement, nil) == SQLITE_OK,
-              let statement else {
-            throw LampSyncError.archiveConversionFailed
-        }
-        defer { sqlite3_finalize(statement) }
-        let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
-        guard sqlite3_bind_text(statement, 1, moduleID, -1, transient) == SQLITE_OK,
-              sqlite3_step(statement) == SQLITE_DONE else {
-            throw LampSyncError.archiveConversionFailed
+            return try await operation()
+        } catch LampWebDAVStorage.StorageError.invalidPath {
+            throw LampSyncError.unsafeArchivePath
+        } catch LampWebDAVStorage.StorageError.invalidResponse,
+                LampWebDAVStorage.StorageError.invalidXML {
+            throw LampSyncError.invalidResponse
+        } catch LampWebDAVStorage.StorageError.preconditionFailed {
+            throw LampSyncError.remoteChanged
+        } catch LampWebDAVStorage.StorageError.httpStatus(let code) {
+            throw LampSyncError.httpStatus(code)
         }
     }
 }
 
-public struct LampWebDAVModuleJSONDocument: Equatable, Sendable {
-    public let data: Data
-    public let moduleID: String
-
-    public init(data: Data, moduleID: String) {
-        self.data = data
-        self.moduleID = moduleID
-    }
-}
-
-/// Converts the legacy JSON envelopes still written by the iOS app into the
-/// canonical per-module documents consumed by LampModuleKit on macOS.
-public enum LampWebDAVModuleJSONAdapter {
-    public static func documents(
-        from data: Data,
-        kind: LampModuleKind,
-        fallbackModuleID: String
-    ) throws -> [LampWebDAVModuleJSONDocument] {
-        guard var root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw LampSyncError.invalidModuleJSON
-        }
-        let fallbackID = safeIdentifier(fallbackModuleID)
-
-        switch kind {
-        case .devotional:
-            if let entries = root["entries"] as? [Any] {
-                return try entries.enumerated().map { index, value in
-                    guard let entry = value as? [String: Any] else {
-                        throw LampSyncError.invalidModuleJSON
-                    }
-                    return try devotionalDocument(
-                        entry,
-                        fallbackModuleID: "\(fallbackID)-\(index + 1)"
-                    )
-                }
-            }
-            return [try devotionalDocument(root, fallbackModuleID: fallbackID)]
-
-        case .notes:
-            if root["meta"] == nil, let entries = root["entries"] as? [Any] {
-                return try noteDocuments(
-                    entries: entries,
-                    metadata: root,
-                    fallbackModuleID: fallbackID
-                )
-            }
-
-        case .highlights:
-            if root["meta"] == nil, let highlights = root["highlights"] as? [Any] {
-                root = try canonicalHighlights(
-                    root: root,
-                    highlights: highlights,
-                    fallbackModuleID: fallbackID
-                )
-            }
-
-        case .translation, .dictionary, .commentary, .book, .plan, .quiz:
-            break
-        }
-
-        root = canonicalRoot(root, kind: kind, fallbackModuleID: fallbackID)
-        return [LampWebDAVModuleJSONDocument(
-            data: try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys]),
-            moduleID: moduleID(in: root) ?? fallbackID
-        )]
-    }
-
-    private static func devotionalDocument(
-        _ source: [String: Any],
-        fallbackModuleID: String
-    ) throws -> LampWebDAVModuleJSONDocument {
-        var root = source
-        var meta = root["meta"] as? [String: Any] ?? [:]
-        if meta.isEmpty {
-            for key in [
-                "id", "title", "subtitle", "author", "date", "tags", "category",
-                "series", "keyScriptures", "created", "lastModified",
-            ] where root[key] != nil {
-                meta[key] = root[key]
-            }
-        }
-        let identifier = string(meta["id"]) ?? string(root["id"]) ?? fallbackModuleID
-        meta["schemaVersion"] = string(meta["schemaVersion"]) ?? "1.0"
-        meta["id"] = safeIdentifier(identifier)
-        meta["type"] = "devotional"
-        meta["title"] = string(meta["title"])
-            ?? string(root["title"])
-            ?? "Untitled"
-        root["meta"] = meta
-        // The iOS model treats markdownContent as the preferred representation
-        // when both the legacy block tree and Markdown are present.
-        if let markdown = string(root["markdownContent"]), !markdown.isEmpty {
-            root["content"] = markdown
-        }
-        guard root.keys.contains("content") else {
-            throw LampSyncError.invalidModuleJSON
-        }
-        return LampWebDAVModuleJSONDocument(
-            data: try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys]),
-            moduleID: safeIdentifier(identifier)
-        )
-    }
-
-    private static func noteDocuments(
-        entries: [Any],
-        metadata: [String: Any],
-        fallbackModuleID: String
-    ) throws -> [LampWebDAVModuleJSONDocument] {
-        var entriesByBook: [Int: [[String: Any]]] = [:]
-        for value in entries {
-            guard let entry = value as? [String: Any],
-                  let reference = integer(entry["verseId"]),
-                  reference > 0,
-                  reference / 1_000_000 > 0 else { continue }
-            entriesByBook[reference / 1_000_000, default: []].append(entry)
-        }
-
-        return try entriesByBook.keys.sorted().map { bookNumber in
-            let identifier = safeIdentifier("\(fallbackModuleID)-\(bookNumber)")
-            let bookEntries = entriesByBook[bookNumber] ?? []
-            let chapters = Dictionary(grouping: bookEntries) { entry in
-                (integer(entry["verseId"]) ?? 0) / 1_000 % 1_000
-            }.keys.sorted().map { chapterNumber -> [String: Any] in
-                let verses = (Dictionary(grouping: bookEntries) { entry in
-                    (integer(entry["verseId"]) ?? 0) / 1_000 % 1_000
-                }[chapterNumber] ?? []).compactMap { entry -> [String: Any]? in
-                    guard let reference = integer(entry["verseId"]),
-                          let content = entry["content"], isMeaningful(content) else { return nil }
-                    var verse: [String: Any] = ["sv": reference, "commentary": content]
-                    for key in ["title", "lastModified", "footnotes"] where entry[key] != nil {
-                        verse[key] = entry[key]
-                    }
-                    if let verseReferences = entry["verseRefs"] as? [Any] {
-                        let endReferences = verseReferences.compactMap { value -> Int? in
-                            guard let object = value as? [String: Any] else { return nil }
-                            return integer(object["ev"]) ?? integer(object["sv"])
-                        }.filter { $0 >= reference }
-                        if let endReference = endReferences.max(), endReference > reference {
-                            verse["ev"] = endReference
-                        }
-                    }
-                    return verse
-                }
-                return ["chapter": chapterNumber, "verses": verses]
-            }
-            var meta: [String: Any] = [
-                "schemaVersion": "1.0",
-                "id": identifier,
-                "type": "notes",
-                "name": string(metadata["name"]) ?? "Notes",
-            ]
-            for key in ["description", "author"] where metadata[key] != nil {
-                meta[key] = metadata[key]
-            }
-            let root: [String: Any] = [
-                "meta": meta,
-                "book": bookName(bookNumber),
-                "bookNumber": bookNumber,
-                "chapters": chapters,
-            ]
-            return LampWebDAVModuleJSONDocument(
-                data: try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys]),
-                moduleID: identifier
-            )
-        }
-    }
-
-    private static func canonicalHighlights(
-        root: [String: Any],
-        highlights: [Any],
-        fallbackModuleID: String
-    ) throws -> [String: Any] {
-        let grouped = Dictionary(grouping: highlights) { value -> Int in
-            guard let entry = value as? [String: Any] else { return 0 }
-            return integer(entry["ref"]) ?? 0
-        }
-        let verses: [[String: Any]] = grouped.keys.filter { $0 > 0 }.sorted().map { reference in
-            let spans = (grouped[reference] ?? []).compactMap { value -> [String: Any]? in
-                guard let entry = value as? [String: Any],
-                      integer(entry["sc"]) != nil,
-                      integer(entry["ec"]) != nil else { return nil }
-                var span: [String: Any] = [
-                    "sc": integer(entry["sc"])!,
-                    "ec": integer(entry["ec"])!,
-                    "style": integer(entry["style"]) ?? 0,
-                ]
-                if entry["color"] != nil { span["color"] = entry["color"] }
-                return span
-            }
-            return ["ref": reference, "highlights": spans]
-        }
-        let identifier = safeIdentifier(string(root["id"]) ?? fallbackModuleID)
-        var meta: [String: Any] = [
-            "schemaVersion": "1.0",
-            "id": identifier,
-            "type": "highlights",
-            "translationId": string(root["translationId"]) ?? "unknown",
-            "name": string(root["name"]) ?? "Highlights",
-        ]
-        for key in ["description", "created", "lastModified", "themes"] where root[key] != nil {
-            meta[key] = root[key]
-        }
-        return ["meta": meta, "verses": verses]
-    }
-
-    private static func canonicalRoot(
-        _ source: [String: Any],
-        kind: LampModuleKind,
-        fallbackModuleID: String
-    ) -> [String: Any] {
-        var root = source
-        var meta = root["meta"] as? [String: Any] ?? root
-        meta["schemaVersion"] = string(meta["schemaVersion"]) ?? "1.0"
-        if kind != .commentary {
-            meta["id"] = safeIdentifier(string(meta["id"]) ?? fallbackModuleID)
-            meta["type"] = kind.rawValue
-        }
-        if kind == .dictionary, string(meta["name"]) == nil {
-            meta["name"] = fallbackModuleID
-        }
-        root["meta"] = meta
-        return root
-    }
-
-    private static func moduleID(in root: [String: Any]) -> String? {
-        guard let meta = root["meta"] as? [String: Any] else { return nil }
-        return string(meta["id"])
-    }
-
-    private static func safeIdentifier(_ value: String) -> String {
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
-        let identifier = String(value.unicodeScalars.map {
-            allowed.contains($0) ? Character(String($0)) : "-"
-        })
-        return identifier.isEmpty ? "webdav-module" : identifier
-    }
-
-    private static func string(_ value: Any?) -> String? {
-        guard let value = value as? String,
-              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        return value
-    }
-
-    private static func integer(_ value: Any?) -> Int? {
-        if let value = value as? Int { return value }
-        if let value = value as? NSNumber { return value.intValue }
-        if let value = value as? String { return Int(value) }
-        return nil
-    }
-
-    private static func isMeaningful(_ value: Any?) -> Bool {
-        guard let value, !(value is NSNull) else { return false }
-        if let value = value as? String {
-            return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }
-        if let value = value as? [Any] { return !value.isEmpty }
-        if let value = value as? [String: Any] { return !value.isEmpty }
-        return true
-    }
-
-    private static func bookName(_ number: Int) -> String {
-        let names = [
-            "Gen", "Exod", "Lev", "Num", "Deut", "Josh", "Judg", "Ruth",
-            "1Sam", "2Sam", "1Kgs", "2Kgs", "1Chr", "2Chr", "Ezra", "Neh",
-            "Esth", "Job", "Ps", "Prov", "Eccl", "Song", "Isa", "Jer", "Lam",
-            "Ezek", "Dan", "Hos", "Joel", "Amos", "Obad", "Jonah", "Mic", "Nah",
-            "Hab", "Zeph", "Hag", "Zech", "Mal", "Matt", "Mark", "Luke", "John",
-            "Acts", "Rom", "1Cor", "2Cor", "Gal", "Eph", "Phil", "Col", "1Thess",
-            "2Thess", "1Tim", "2Tim", "Titus", "Phlm", "Heb", "Jas", "1Pet",
-            "2Pet", "1John", "2John", "3John", "Jude", "Rev",
-        ]
-        guard names.indices.contains(number - 1) else { return "Book\(number)" }
-        return names[number - 1]
-    }
-}
+/// Compatibility adapters are shared with iOS through LampModuleKit.
+public typealias LampWebDAVPersonalArchiveKind = LampModuleKit.LampWebDAVPersonalArchiveKind
+public typealias LampWebDAVPersonalArchiveAdapter = LampModuleKit.LampWebDAVPersonalArchiveAdapter
+public typealias LampWebDAVModuleJSONDocument = LampModuleKit.LampWebDAVModuleJSONDocument
+public typealias LampWebDAVModuleJSONAdapter = LampModuleKit.LampWebDAVModuleJSONAdapter
 
 public enum LampSyncError: LocalizedError {
     case unsafeArchivePath
     case unsupportedArchiveVersion
     case invalidResponse
     case httpStatus(Int)
+    case remoteChanged
     case archiveConversionFailed
     case invalidModuleJSON
 
@@ -1143,6 +569,7 @@ public enum LampSyncError: LocalizedError {
         case .unsupportedArchiveVersion: "This Lamp Bible sync archive version is not supported."
         case .invalidResponse: "The sync server returned an invalid response."
         case .httpStatus(let status): "The sync server returned HTTP status \(status)."
+        case .remoteChanged: "The remote library changed while syncing. Sync again to merge it."
         case .archiveConversionFailed: "Lamp Bible could not prepare personal content for cross-device sync."
         case .invalidModuleJSON: "The WebDAV module JSON is not in a supported Lamp Bible format."
         }

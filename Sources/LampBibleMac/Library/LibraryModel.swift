@@ -212,6 +212,15 @@ final class LibraryModel: ObservableObject {
                 withExtension: "zlib"
             )
         )
+        let settingsRecoveryError: Error?
+        do {
+            try LampSyncSettingsCommit.recover(
+                from: resolvedLibrary.rootURL, to: defaults
+            )
+            settingsRecoveryError = nil
+        } catch {
+            settingsRecoveryError = error
+        }
         self.library = resolvedLibrary
         self.lexiconMappingStore = LexiconMappingStore(library: resolvedLibrary)
         self.defaults = defaults
@@ -226,6 +235,7 @@ final class LibraryModel: ObservableObject {
         let storedBook = defaults.integer(forKey: "reader.bookNumber")
         selectedBookNumber = storedBook > 0 ? storedBook : nil
         selectedChapterNumber = max(defaults.integer(forKey: "reader.chapterNumber"), 1)
+        errorMessage = settingsRecoveryError?.localizedDescription
     }
 
     deinit {
@@ -856,7 +866,12 @@ final class LibraryModel: ObservableObject {
 
     private func refreshLibrary() async {
         isRefreshing = true
-        errorMessage = nil
+        do {
+            try LampSyncSettingsCommit.recover(from: library.rootURL, to: defaults)
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
         do {
             modules = try await library.installedModules()
             plans = try await library.readingPlans()

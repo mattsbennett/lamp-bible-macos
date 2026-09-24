@@ -1,4 +1,5 @@
 import LampCore
+import LampModuleKit
 #if canImport(LampBibleMacSupport)
 import LampBibleMacSupport
 #endif
@@ -18,6 +19,8 @@ struct WritingPreviewPane: View {
     let markdown: String
     let footnotes: String
     let libraryRootURL: URL
+    var devotionalID: String? = nil
+    var mediaReferences: [LampDevotionalMediaReference] = []
     @Binding var placement: WritingPreviewPlacement
     /// How far through the writing surface the author has scrolled, when the two
     /// panes are side by side. Nil leaves the preview scrolling independently.
@@ -188,6 +191,8 @@ struct WritingPreviewPane: View {
             DevotionalContentView(
                 markdown: markdown,
                 libraryRootURL: libraryRootURL,
+                devotionalID: devotionalID,
+                mediaReferences: mediaReferences,
                 fontSize: fontSize,
                 lineSpacing: lineSpacing,
                 typeface: typeface,
@@ -202,6 +207,8 @@ struct WritingPreviewPane: View {
                 DevotionalContentView(
                     markdown: footnotes,
                     libraryRootURL: libraryRootURL,
+                    devotionalID: devotionalID,
+                    mediaReferences: mediaReferences,
                     fontSize: max(fontSize - 2, 11),
                     lineSpacing: lineSpacing,
                     typeface: typeface

@@ -4,11 +4,14 @@ import AVFoundation
 import LampBibleMacSupport
 #endif
 import LampCore
+import LampModuleKit
 import SwiftUI
 
 struct DevotionalContentView: View {
     let markdown: String
     let libraryRootURL: URL
+    var devotionalID: String? = nil
+    var mediaReferences: [LampDevotionalMediaReference] = []
     var fontSize: Double = 17
     var lineSpacing: Double = 6
     var typeface: ProseTypeface = .serif
@@ -131,6 +134,31 @@ struct DevotionalContentView: View {
             listBlock(items) { _ in "•" }
         case .numberedList(let items):
             listBlock(items) { "\($0 + 1)." }
+        case .nestedBulletList(let items):
+            nestedListBlock(items, numbered: false)
+        case .nestedNumberedList(let items):
+            nestedListBlock(items, numbered: true)
+        case .table(let headers, let rows):
+            ScrollView(.horizontal) {
+                Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 8) {
+                    GridRow {
+                        ForEach(headers.indices, id: \.self) { index in
+                            renderedText(headers[index]).fontWeight(.semibold)
+                        }
+                    }
+                    Divider().gridCellUnsizedAxes(.horizontal)
+                    ForEach(rows.indices, id: \.self) { rowIndex in
+                        GridRow {
+                            ForEach(rows[rowIndex].indices, id: \.self) { columnIndex in
+                                renderedText(rows[rowIndex][columnIndex])
+                            }
+                        }
+                    }
+                }
+                .font(.system(size: fontSize, design: typeface.design))
+                .padding(12)
+            }
+            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
         case .rule:
             Divider()
         }
@@ -155,6 +183,37 @@ struct DevotionalContentView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func nestedListBlock(
+        _ items: [RenderedListLine], numbered: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            ForEach(items.indices, id: \.self) { index in
+                let item = items[index]
+                HStack(alignment: .firstTextBaseline, spacing: 9) {
+                    Text(numbered ? "\(listOrdinal(at: index, in: items))." : "•")
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                    renderedText(item.text)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .font(.system(size: fontSize, design: typeface.design))
+                .padding(.leading, CGFloat(item.depth) * 24)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func listOrdinal(at index: Int, in items: [RenderedListLine]) -> Int {
+        let depth = items[index].depth
+        var count = 1
+        guard index > 0 else { return count }
+        for prior in stride(from: index - 1, through: 0, by: -1) {
+            if items[prior].depth < depth { break }
+            if items[prior].depth == depth { count += 1 }
+        }
+        return count
     }
 
     /// Headings step down toward the body size rather than using fixed system
@@ -186,12 +245,10 @@ struct DevotionalContentView: View {
     }
 
     private func resolvedURL(_ url: URL) -> URL {
-        guard url.scheme == "lamp-media" else { return url }
-        let devotionalID = url.host ?? ""
-        return libraryRootURL
-            .appendingPathComponent("Media/Devotionals", isDirectory: true)
-            .appendingPathComponent(devotionalID, isDirectory: true)
-            .appendingPathComponent(url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+        LampPortableDevotionalMedia.libraryURL(
+            for: url, rootURL: libraryRootURL,
+            devotionalID: devotionalID, references: mediaReferences
+        )
     }
 
 }
@@ -229,6 +286,9 @@ private enum RenderedProseBlock: Sendable {
     case quote([RenderedProseItem])
     case bulletList([RenderedProseItem])
     case numberedList([RenderedProseItem])
+    case nestedBulletList([RenderedListLine])
+    case nestedNumberedList([RenderedListLine])
+    case table(headers: [RenderedProseItem], rows: [[RenderedProseItem]])
     case rule
 
     init(_ block: DevotionalProseBlock) {
@@ -243,9 +303,28 @@ private enum RenderedProseBlock: Sendable {
             self = .bulletList(items.map(RenderedProseItem.init))
         case .numberedList(let items):
             self = .numberedList(items.map(RenderedProseItem.init))
+        case .nestedBulletList(let items):
+            self = .nestedBulletList(items.map(RenderedListLine.init))
+        case .nestedNumberedList(let items):
+            self = .nestedNumberedList(items.map(RenderedListLine.init))
+        case .table(let headers, let rows):
+            self = .table(
+                headers: headers.map(RenderedProseItem.init),
+                rows: rows.map { $0.map(RenderedProseItem.init) }
+            )
         case .rule:
             self = .rule
         }
+    }
+}
+
+private struct RenderedListLine: Sendable {
+    let depth: Int
+    let text: RenderedProseItem
+
+    init(_ item: DevotionalListLine) {
+        depth = item.depth
+        text = RenderedProseItem(item.text)
     }
 }
 

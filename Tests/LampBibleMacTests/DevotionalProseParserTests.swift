@@ -3,6 +3,42 @@ import Testing
 @testable import LampBibleMacSupport
 
 struct DevotionalProseParserTests {
+    @Test func nestedListsRetainTheirDepth() {
+        let blocks = DevotionalProseParser.parse("""
+        - Parent
+          - Child
+            - Grandchild
+        - Sibling
+        """)
+        #expect(blocks == [.nestedBulletList([
+            DevotionalListLine(depth: 0, text: "Parent"),
+            DevotionalListLine(depth: 1, text: "Child"),
+            DevotionalListLine(depth: 2, text: "Grandchild"),
+            DevotionalListLine(depth: 0, text: "Sibling"),
+        ])])
+    }
+
+    @Test func richDevotionalTablesKeepRowsAndAdjacentProse() {
+        let blocks = DevotionalProseParser.parse("""
+        Before.
+
+        | Name | Verse |
+        | :--- | ---: |
+        | Mary | Luke 1:38 |
+        | Paul | Acts 9:15 |
+
+        After.
+        """)
+
+        #expect(blocks == [
+            .paragraph("Before."),
+            .table(headers: ["Name", "Verse"], rows: [
+                ["Mary", "Luke 1:38"], ["Paul", "Acts 9:15"],
+            ]),
+            .paragraph("After."),
+        ])
+    }
+
     @Test func blankLinesSeparateParagraphs() {
         let blocks = DevotionalProseParser.parse("""
         First paragraph.

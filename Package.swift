@@ -60,7 +60,10 @@ let package = Package(
         ),
         .testTarget(
             name: "LampBibleMacTests",
-            dependencies: ["LampBibleMacSupport"]
+            dependencies: [
+                "LampBibleMacSupport",
+                .product(name: "LampCore", package: "lamp-bible-core"),
+            ]
         ),
         .testTarget(
             name: "LampMCPServerTests",

@@ -538,8 +538,10 @@ struct DevotionalsView: View {
                 Divider()
 
                 DevotionalContentView(
-                    markdown: devotional.content,
+                    markdown: devotional.displayMarkdown,
                     libraryRootURL: model.library.rootURL,
+                    devotionalID: devotional.id,
+                    mediaReferences: devotional.mediaReferences,
                     fontSize: devotionalFontSize,
                     lineSpacing: devotionalLineSpacing,
                     typeface: devotionalTypeface,
@@ -557,6 +559,8 @@ struct DevotionalsView: View {
                         DevotionalContentView(
                             markdown: footnotes,
                             libraryRootURL: model.library.rootURL,
+                            devotionalID: devotional.id,
+                            mediaReferences: devotional.mediaReferences,
                             fontSize: max(devotionalFontSize - 2, 11),
                             lineSpacing: devotionalLineSpacing,
                             typeface: devotionalTypeface
@@ -616,7 +620,7 @@ struct DevotionalsView: View {
         if let date = devotional.date, !date.isEmpty {
             parts.append(formattedDate(date))
         }
-        let statistics = WritingStatistics.measuring(markdown: devotional.content)
+        let statistics = WritingStatistics.measuring(markdown: devotional.displayMarkdown)
         if statistics.wordCount > 0 {
             parts.append(statistics.readingTimeDescription)
         }
@@ -627,7 +631,7 @@ struct DevotionalsView: View {
     /// are written to a length, and "how long is this" is part of choosing what
     /// to read next.
     private func detailMetadata(_ devotional: LampDevotional) -> some View {
-        let statistics = WritingStatistics.measuring(markdown: devotional.content)
+        let statistics = WritingStatistics.measuring(markdown: devotional.displayMarkdown)
         return WrappingRow(spacing: 12) {
             if let author = devotional.author, !author.isEmpty {
                 Label(author, systemImage: "person")
@@ -891,8 +895,10 @@ struct DevotionalPresentationView: View {
                     Divider()
                     ScrollView {
                         DevotionalContentView(
-                            markdown: devotional.content,
+                            markdown: devotional.displayMarkdown,
                             libraryRootURL: model.library.rootURL,
+                            devotionalID: devotional.id,
+                            mediaReferences: devotional.mediaReferences,
                             fontSize: devotionalFontSize + 5
                         )
                         .frame(maxWidth: 920, alignment: .leading)

@@ -1,5 +1,7 @@
 import AppKit
+import AVFoundation
 import LampCore
+import LampModuleKit
 #if canImport(LampBibleMacSupport)
 import LampBibleMacSupport
 #endif
@@ -322,6 +324,10 @@ struct DevotionalEditorView: View {
     @State private var seriesOrder = 0
     @State private var summary = ""
     @State private var content = ""
+    @State private var originalContentJSON: String?
+    @State private var originalPlainContent = ""
+    @State private var originalProjectedMarkdown = ""
+    @State private var mediaJSON: String?
     @State private var footnotes = ""
     @State private var keyScriptures: [LampScriptureLink] = []
 
@@ -345,7 +351,15 @@ struct DevotionalEditorView: View {
             title, subtitle, author, date, tags, category, seriesName,
             String(seriesOrder), summary, content, footnotes,
             keyScriptures.map(\.id).joined(separator: "|"),
+            mediaJSON ?? "",
         ]
+    }
+
+    private var mediaReferences: [LampDevotionalMediaReference] {
+        guard let mediaJSON else { return [] }
+        return (try? JSONDecoder().decode(
+            [LampDevotionalMediaReference].self, from: Data(mediaJSON.utf8)
+        )) ?? []
     }
 
     private var isDirty: Bool {
@@ -752,6 +766,7 @@ struct DevotionalEditorView: View {
                 mediaScopeID: identifier,
                 libraryRootURL: model.library.rootURL,
                 isVisible: editorMode == .visual,
+                mediaReferences: mediaReferences,
                 onCoordinatorReady: { coordinator in
                     tipTapCoordinator = coordinator
                     visualEditorIsReady = true
@@ -947,6 +962,8 @@ struct DevotionalEditorView: View {
             markdown: activeWorkspaceDocument?.text ?? previewContent,
             footnotes: isEditingPrimaryDocument ? footnotes : "",
             libraryRootURL: model.library.rootURL,
+            devotionalID: identifier,
+            mediaReferences: mediaReferences,
             placement: previewPlacementBinding,
             // The visual surface is a web view whose scrolling this side cannot
             // see, so only the Markdown surface offers a position to follow.
@@ -1447,17 +1464,27 @@ struct DevotionalEditorView: View {
                 let isImage = UTType(filenameExtension: storedURL.pathExtension)?
                     .conforms(to: .image) == true
                 let label = storedURL.deletingPathExtension().lastPathComponent
-                let portableURL = "lamp-media://\(identifier)/\(storedURL.lastPathComponent)"
+                if !isEditingPrimaryDocument {
+                    let legacyURL = "lamp-media://\(identifier)/\(storedURL.lastPathComponent)"
+                    insert(isImage
+                        ? "![\(label)](\(legacyURL))"
+                        : "[▶︎ \(label)](\(legacyURL))")
+                    return
+                }
+                let reference = try await registerMedia(
+                    at: storedURL, type: isImage ? .image : .audio, label: label
+                )
+                let portableURL = "media/\(reference.id)"
                 if isEditingPrimaryDocument, editorMode == .visual, let coordinator = tipTapCoordinator {
                     if isImage {
                         coordinator.insertImage(
-                            mediaID: storedURL.lastPathComponent,
+                            mediaID: reference.id,
                             caption: label,
                             localURL: storedURL
                         )
                     } else {
                         coordinator.insertAudio(
-                            mediaID: storedURL.lastPathComponent,
+                            mediaID: reference.id,
                             caption: "▶︎ \(label)"
                         )
                     }
@@ -1473,15 +1500,62 @@ struct DevotionalEditorView: View {
     }
 
     private func insertStoredAudio(_ storedURL: URL) {
-        let label = storedURL.deletingPathExtension().lastPathComponent
-        if isEditingPrimaryDocument, editorMode == .visual, let coordinator = tipTapCoordinator {
-            coordinator.insertAudio(
-                mediaID: storedURL.lastPathComponent,
-                caption: "▶︎ \(label)"
-            )
-        } else {
-            insert("[▶︎ \(label)](lamp-media://\(identifier)/\(storedURL.lastPathComponent))")
+        Task {
+            do {
+                let label = storedURL.deletingPathExtension().lastPathComponent
+                if !isEditingPrimaryDocument {
+                    insert("[▶︎ \(label)](lamp-media://\(identifier)/\(storedURL.lastPathComponent))")
+                    return
+                }
+                let reference = try await registerMedia(
+                    at: storedURL, type: .audio, label: label
+                )
+                if isEditingPrimaryDocument, editorMode == .visual,
+                   let coordinator = tipTapCoordinator {
+                    coordinator.insertAudio(
+                        mediaID: reference.id, caption: "▶︎ \(label)"
+                    )
+                } else {
+                    insert("[▶︎ \(label)](media/\(reference.id))")
+                }
+            } catch {
+                saveState = .failed(error.localizedDescription)
+            }
         }
+    }
+
+    private func registerMedia(
+        at url: URL,
+        type: LampDevotionalMediaType,
+        label: String
+    ) async throws -> LampDevotionalMediaReference {
+        let filename = url.lastPathComponent
+        let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize
+        let dimensions: (width: Int, height: Int)?
+        if type == .image, let image = NSImage(contentsOf: url),
+           let bitmap = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+            dimensions = (bitmap.width, bitmap.height)
+        } else {
+            dimensions = nil
+        }
+        let duration: Double?
+        if type == .audio,
+           let time = try? await AVURLAsset(url: url).load(.duration) {
+            let seconds = CMTimeGetSeconds(time)
+            duration = seconds.isFinite && seconds >= 0 ? seconds : nil
+        } else {
+            duration = nil
+        }
+        let reference = LampDevotionalMediaReference(
+            type: type, filename: filename,
+            mimeType: UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
+                ?? "application/octet-stream",
+            size: size, width: dimensions?.width, height: dimensions?.height,
+            duration: duration, alt: type == .image ? label : nil
+        )
+        mediaJSON = try LampPortableDevotionalMedia.appending(reference, to: mediaJSON)
+        tipTapCoordinator?.updateRichMediaIDs(Set(mediaReferences.map(\.id)))
+        return reference
     }
 
     // MARK: - Persistence
@@ -1877,6 +1951,10 @@ struct DevotionalEditorView: View {
         guard let devotionalID = request.devotionalID,
               let devotional = model.devotionals.first(where: { $0.id == devotionalID }) else {
             date = Self.today
+            mediaJSON = nil
+            originalContentJSON = nil
+            originalPlainContent = ""
+            originalProjectedMarkdown = ""
             savedFields = editedFields
             hasLoaded = true
             return
@@ -1894,8 +1972,12 @@ struct DevotionalEditorView: View {
         seriesName = devotional.seriesName ?? ""
         seriesOrder = devotional.seriesOrder ?? 0
         summary = devotional.summary ?? ""
-        content = devotional.content
-        previewContent = devotional.content
+        content = devotional.displayMarkdown
+        originalContentJSON = devotional.contentJSON
+        originalPlainContent = devotional.content
+        originalProjectedMarkdown = devotional.displayMarkdown
+        mediaJSON = devotional.mediaJSON
+        previewContent = devotional.displayMarkdown
         footnotes = devotional.footnotes ?? ""
         keyScriptures = devotional.keyScriptures
         saveState = .idle
@@ -1907,6 +1989,27 @@ struct DevotionalEditorView: View {
         guard hasSavableContent, saveState != .saving else { return }
         let submitted = editedFields
         let previouslySavedContent = savedFields.indices.contains(9) ? savedFields[9] : ""
+        let bodyChanged = content != originalProjectedMarkdown
+        let contentJSON: String?
+        let plainContent: String
+        if bodyChanged, let originalContentJSON,
+           LampPortableDevotionalMedia.plainMarkdown(from: originalContentJSON) == nil {
+            do {
+                contentJSON = try LampPortableDevotionalContent.replacingMarkdown(
+                    content, in: originalContentJSON
+                )
+                plainContent = contentJSON.flatMap(LampPortableDevotionalContent.plainText) ?? ""
+            } catch {
+                saveState = .failed(error.localizedDescription)
+                return
+            }
+        } else if bodyChanged {
+            contentJSON = nil
+            plainContent = content
+        } else {
+            contentJSON = originalContentJSON
+            plainContent = originalContentJSON == nil ? content : originalPlainContent
+        }
         let devotional = LampDevotional(
             id: identifier,
             moduleID: "personal-devotionals",
@@ -1924,8 +2027,10 @@ struct DevotionalEditorView: View {
                 ? nil : seriesOrder,
             keyScriptures: keyScriptures,
             summary: summary,
-            content: content,
+            content: plainContent,
+            contentJSON: contentJSON,
             footnotes: footnotes,
+            mediaJSON: mediaJSON,
             created: createdDate ?? Date(),
             lastModified: Date(),
             isEditable: true
@@ -1935,6 +2040,9 @@ struct DevotionalEditorView: View {
             do {
                 let saved = try await model.savePersonalDevotional(devotional)
                 createdDate = saved.created
+                originalContentJSON = saved.contentJSON
+                originalPlainContent = saved.content
+                originalProjectedMarkdown = submitted[9]
                 // The library supplies a useful display title for body-only
                 // drafts. Adopt it only if the user did not type a title while
                 // this save was in flight.

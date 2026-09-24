@@ -29,7 +29,7 @@ final class LibrarySyncController: ObservableObject {
 
     private let defaults: UserDefaults
     private let fileManager: FileManager
-    private var hasAutomaticallySynced = false
+    private let automaticSync = LampSyncOnce()
 
     init(defaults: UserDefaults = .standard, fileManager: FileManager = .default) {
         self.defaults = defaults
@@ -95,15 +95,23 @@ final class LibrarySyncController: ObservableObject {
     }
 
     func syncAutomaticallyIfNeeded(library: LampLibrary) async {
-        guard !hasAutomaticallySynced,
+        guard !isSyncing,
               defaults.bool(forKey: "sync.automatic"),
               provider != .off else { return }
-        hasAutomaticallySynced = true
-        await sync(library: library)
+        do {
+            try await automaticSync.run {
+                guard await self.sync(library: library) else {
+                    throw AutomaticSyncError.failed
+                }
+            }
+        } catch {
+            // Keep the gate open; sync(library:) reports operational errors.
+        }
     }
 
-    func sync(library: LampLibrary) async {
-        guard !isSyncing else { return }
+    @discardableResult
+    func sync(library: LampLibrary) async -> Bool {
+        guard !isSyncing else { return false }
         isSyncing = true
         errorMessage = nil
         statusMessage = "Preparing sync…"
@@ -112,6 +120,9 @@ final class LibrarySyncController: ObservableObject {
         do {
             try fileManager.createDirectory(at: workspace, withIntermediateDirectories: false)
             defer { try? fileManager.removeItem(at: workspace) }
+            try LampSyncSettingsCommit.recover(
+                from: library.rootURL, to: defaults, fileManager: fileManager
+            )
             let incoming = workspace.appendingPathComponent("Incoming", isDirectory: true)
             let outgoing = workspace.appendingPathComponent("Outgoing", isDirectory: true)
 
@@ -120,28 +131,103 @@ final class LibrarySyncController: ObservableObject {
                 throw LibrarySyncError.providerNotConfigured
             case .folder:
                 let folder = try resolveFolderURL()
+                let preferenceSource = "folder:\(folder.standardizedFileURL.path)"
+                var preferenceLedgerToPublish: LampSharedPreferenceLedger?
+                var observedFolder: LampSyncArchive?
                 let hasScope = folder.startAccessingSecurityScopedResource()
                 defer { if hasScope { folder.stopAccessingSecurityScopedResource() } }
-                if fileManager.fileExists(atPath: folder.appendingPathComponent("manifest.json").path) {
-                    statusMessage = "Merging changes from \(folder.lastPathComponent)…"
-                    try LampFolderSync.merge(from: folder, into: incoming)
-                    _ = try await library.importPortableBackup(from: incoming)
-                    importSettings(from: incoming)
-                    try LampWorkspaceSync.importPortableWorkspaces(
-                        from: incoming,
-                        into: library.rootURL,
-                        fileManager: fileManager
-                    )
-                }
-                statusMessage = "Publishing library…"
-                _ = try await library.exportPortableBackup(to: outgoing)
-                exportSettings(to: outgoing)
-                try LampWorkspaceSync.exportPortableWorkspaces(
-                    from: library.rootURL,
-                    to: outgoing,
-                    fileManager: fileManager
+                try await LampSyncEngine.run(
+                    pullAndMerge: {
+                        let observed: LampSyncArchive
+                        do {
+                            observed = try await LampSyncFolderPublisher.capture(
+                                from: folder, fileManager: self.fileManager
+                            )
+                        } catch LampSyncFolderPublisher.FolderError.incompletePublication {
+                            self.statusMessage = "Recovering interrupted folder sync…"
+                            observed = try await LampSyncFolderPublisher.recoverIncompletePublication(
+                                from: folder, fileManager: self.fileManager
+                            )
+                        }
+                        observedFolder = observed
+                        if observed.entries.contains(where: {
+                            $0.path == LampPortableBackupLayout.manifestPath
+                        }) {
+                            self.statusMessage = "Merging changes from \(folder.lastPathComponent)…"
+                            try observed.extract(to: incoming, fileManager: self.fileManager)
+                            let stagedSettings = try self.beginStagedSettings()
+                            defer { stagedSettings.discard() }
+                            try await library.withStagedChanges { stagedLibrary in
+                                _ = try await stagedLibrary.importPortableBackup(from: incoming)
+                                preferenceLedgerToPublish = try self.importSettingsAndMergePreferences(
+                                    from: incoming, source: preferenceSource,
+                                    targetDefaults: stagedSettings.defaults,
+                                    storedIn: stagedSettings.domainName
+                                )
+                                try LampWorkspaceSync.importPortableWorkspaces(
+                                    from: incoming, into: stagedLibrary.rootURL,
+                                    fileManager: self.fileManager
+                                )
+                                try self.ensureSettingsUnchanged(stagedSettings)
+                                try self.stageSettingsCommit(
+                                    stagedSettings, highlightMapping: nil,
+                                    in: stagedLibrary.rootURL
+                                )
+                            }
+                            try LampSyncSettingsCommit.recover(
+                                from: library.rootURL, to: self.defaults,
+                                fileManager: self.fileManager
+                            )
+                        } else {
+                            try await library.withStagedChanges { stagedLibrary in
+                                try LampWorkspaceSync.prepareLibraryForSync(
+                                    at: stagedLibrary.rootURL, fileManager: self.fileManager
+                                )
+                            }
+                        }
+                    },
+                    publish: {
+                        self.statusMessage = "Publishing library…"
+                        _ = try await library.exportPortableBackup(to: outgoing)
+                        try self.exportSettings(to: outgoing)
+                        if preferenceLedgerToPublish == nil {
+                            preferenceLedgerToPublish = try self.mergePreferenceLedger(
+                                remote: nil,
+                                source: preferenceSource
+                            )
+                        }
+                        if let preferenceLedgerToPublish {
+                            try self.exportPreferenceLedger(preferenceLedgerToPublish, to: outgoing)
+                        }
+                        try LampWorkspaceSync.exportPortableWorkspaces(
+                            from: library.rootURL,
+                            to: outgoing,
+                            fileManager: self.fileManager
+                        )
+                        guard let observedFolder else {
+                            throw LampSyncFolderPublisher.FolderError.unreadable(folder.path)
+                        }
+                        let archive = try LampSyncArchive.create(
+                            from: outgoing, fileManager: self.fileManager
+                        )
+                        try await LampSyncFolderPublisher.publish(
+                            archive,
+                            to: folder,
+                            replacing: observedFolder,
+                            fileManager: self.fileManager
+                        )
+                        if let preferenceLedgerToPublish {
+                            try self.rememberPreferenceLedger(
+                                preferenceLedgerToPublish,
+                                source: preferenceSource
+                            )
+                        }
+                    },
+                    complete: {
+                        self.defaults.set(Date(), forKey: "sync.lastCompleted")
+                        self.statusMessage = "Synced \(Date().formatted(date: .abbreviated, time: .shortened))"
+                    }
                 )
-                try LampFolderSync.merge(from: outgoing, into: folder)
             case .webDAV:
                 guard let url = URL(string: endpoint), url.scheme?.hasPrefix("http") == true else {
                     throw LibrarySyncError.invalidWebDAVURL
@@ -150,93 +236,187 @@ final class LibrarySyncController: ObservableObject {
                 let credentials = username.isEmpty && storedPassword.isEmpty
                     ? nil : LampWebDAVCredentials(username: username, password: storedPassword)
                 let client = LampWebDAVClient(baseURL: url, credentials: credentials)
+                let preferenceSource = "webdav:\(url.absoluteString)"
+                var preferenceLedgerToPublish: LampSharedPreferenceLedger?
                 var iOSImportSummary = IOSWebDAVImportSummary()
-                statusMessage = "Downloading WebDAV library…"
-                if let data = try await client.download(filename: "lamp-bible.lampsync") {
-                    do {
-                        let archive = try LampSyncArchive.decode(compressedData: data)
-                        try archive.extract(to: incoming)
-                        iOSImportSummary.failures.append(contentsOf:
-                            normalizeArchivedDevotionalJSON(in: incoming)
-                        )
-                        do {
-                            _ = try await library.importPortableBackup(from: incoming)
-                        } catch {
-                            // A stale or partially incompatible Mac archive must not
-                            // prevent the canonical iOS folders from being scanned.
-                            iOSImportSummary.failures.append(
-                                "lamp-bible.lampsync (\(error.localizedDescription))"
+                var archiveSnapshot: LampSyncArchiveRemote.Snapshot?
+                var remoteCompatibilityManifest: LampCompatibilityManifest?
+                try await LampSyncEngine.run(
+                    pullAndMerge: {
+                        statusMessage = "Downloading WebDAV library…"
+                        let stagedSettings = try beginStagedSettings()
+                        defer { stagedSettings.discard() }
+                        try await library.withStagedChanges { stagedLibrary in
+                            try LampWorkspaceSync.prepareLibraryForSync(
+                                at: stagedLibrary.rootURL, fileManager: fileManager
+                            )
+                            do {
+                                archiveSnapshot = try await LampSyncArchiveRemote.read(from: client)
+                                if let archiveSnapshot {
+                                    do {
+                                        _ = try archiveSnapshot.writeCondition
+                                    } catch {
+                                        iOSImportSummary.failures.append(
+                                            "lamp-bible.lampsync (the server did not supply a strong ETag)"
+                                        )
+                                    }
+                                    let archive = archiveSnapshot.archive
+                                    remoteCompatibilityManifest = archiveSnapshot.compatibilityManifest
+                                    try archive.extract(to: incoming)
+                                    iOSImportSummary.failures.append(contentsOf:
+                                        normalizeArchivedDevotionalJSON(in: incoming)
+                                    )
+                                    do {
+                                        _ = try await stagedLibrary.importPortableBackup(from: incoming)
+                                    } catch {
+                                        // Scan the canonical iOS folders even if the archive fails.
+                                        iOSImportSummary.failures.append(
+                                            "lamp-bible.lampsync (\(error.localizedDescription))"
+                                        )
+                                    }
+                                    do {
+                                        preferenceLedgerToPublish = try importSettingsAndMergePreferences(
+                                            from: incoming, source: preferenceSource,
+                                            targetDefaults: stagedSettings.defaults,
+                                            storedIn: stagedSettings.domainName
+                                        )
+                                    } catch {
+                                        iOSImportSummary.failures.append(
+                                            "lamp-bible.lampsync settings (\(error.localizedDescription))"
+                                        )
+                                    }
+                                    do {
+                                        try LampWorkspaceSync.importPortableWorkspaces(
+                                            from: incoming,
+                                            into: stagedLibrary.rootURL,
+                                            fileManager: fileManager
+                                        )
+                                    } catch {
+                                        iOSImportSummary.failures.append(
+                                            "lamp-bible.lampsync workspaces (\(error.localizedDescription))"
+                                        )
+                                    }
+                                }
+                            } catch {
+                                iOSImportSummary.failures.append(
+                                    "lamp-bible.lampsync (\(error.localizedDescription))"
+                                )
+                            }
+                            statusMessage = "Importing iPhone and iPad library…"
+                            iOSImportSummary.merge(try await importIOSWebDAVContent(
+                                using: client, into: workspace,
+                                library: stagedLibrary,
+                                compatibilityManifest: remoteCompatibilityManifest
+                            ))
+                            guard iOSImportSummary.failures.isEmpty else {
+                                throw LibrarySyncError.incompleteRemoteImport(iOSImportSummary.failures)
+                            }
+                            try ensureSettingsUnchanged(stagedSettings)
+                            try stageSettingsCommit(
+                                stagedSettings,
+                                highlightMapping: iOSImportSummary.highlightModuleIDsBySet,
+                                in: stagedLibrary.rootURL
                             )
                         }
-                        importSettings(from: incoming)
-                        do {
-                            try LampWorkspaceSync.importPortableWorkspaces(
-                                from: incoming,
-                                into: library.rootURL,
-                                fileManager: fileManager
-                            )
-                        } catch {
-                            iOSImportSummary.failures.append(
-                                "lamp-bible.lampsync workspaces (\(error.localizedDescription))"
+                        try LampSyncSettingsCommit.recover(
+                            from: library.rootURL, to: defaults, fileManager: fileManager
+                        )
+                    },
+                    publish: {
+                        statusMessage = "Uploading WebDAV library…"
+                        _ = try await library.exportPortableBackup(to: outgoing)
+                        try exportSettings(to: outgoing)
+                        if preferenceLedgerToPublish == nil {
+                            preferenceLedgerToPublish = try mergePreferenceLedger(
+                                remote: nil,
+                                source: preferenceSource
                             )
                         }
-                    } catch {
-                        iOSImportSummary.failures.append(
-                            "lamp-bible.lampsync (\(error.localizedDescription))"
+                        if let preferenceLedgerToPublish {
+                            try exportPreferenceLedger(preferenceLedgerToPublish, to: outgoing)
+                        }
+                        try LampWorkspaceSync.exportPortableWorkspaces(
+                            from: library.rootURL,
+                            to: outgoing,
+                            fileManager: fileManager
                         )
+                        let compatible = try await prepareIOSWebDAVContent(
+                            using: client, from: workspace,
+                            library: library,
+                            imported: iOSImportSummary
+                        )
+                        for file in compatible.files {
+                            let destination = outgoing
+                                .appendingPathComponent(LampPortableBackupLayout.compatibleDirectory)
+                                .appendingPathComponent(file.remotePath)
+                            try fileManager.createDirectory(
+                                at: destination.deletingLastPathComponent(),
+                                withIntermediateDirectories: true
+                            )
+                            try file.data.write(to: destination, options: .atomic)
+                        }
+                        let compatibilityManifest = LampCompatibilityManifest(
+                            files: try compatible.files.map { file in
+                                LampCompatibilityManifest.File(
+                                    path: file.remotePath,
+                                    data: file.data,
+                                    baseRevision: try file.baseRevision()
+                                )
+                            }
+                        )
+                        try JSONEncoder().encode(compatibilityManifest).write(
+                            to: outgoing.appendingPathComponent(
+                                LampPortableBackupLayout.compatibilityManifestPath
+                            ),
+                            options: .atomic
+                        )
+                        let archive = try LampSyncSettingsArchive.preservingRemoteEntry(
+                            in: LampSyncArchive.create(from: outgoing),
+                            from: archiveSnapshot?.archive
+                        )
+                        try await LampSyncArchiveRemote.publish(
+                            archive,
+                            replacing: archiveSnapshot,
+                            in: client
+                        )
+                        if let preferenceLedgerToPublish {
+                            try rememberPreferenceLedger(
+                                preferenceLedgerToPublish,
+                                source: preferenceSource
+                            )
+                        }
+                        statusMessage = "Publishing iPhone and iPad compatible library…"
+                        try await publishIOSWebDAVContent(
+                            using: client,
+                            batch: compatible
+                        )
+                    },
+                    complete: {
+                        defaults.set(Date(), forKey: "sync.lastCompleted")
+                        let date = Date().formatted(date: .abbreviated, time: .shortened)
+                        if iOSImportSummary.downloadedCount > 0 {
+                            statusMessage = "Synced \(date) — downloaded \(iOSImportSummary.downloadedCount) item\(iOSImportSummary.downloadedCount == 1 ? "" : "s")"
+                        } else {
+                            statusMessage = "Synced \(date)"
+                        }
                     }
-                }
-                statusMessage = "Importing iPhone and iPad library…"
-                iOSImportSummary.merge(try await importIOSWebDAVContent(
-                    using: client,
-                    into: workspace,
-                    library: library
-                ))
-                statusMessage = "Uploading WebDAV library…"
-                _ = try await library.exportPortableBackup(to: outgoing)
-                exportSettings(to: outgoing)
-                try LampWorkspaceSync.exportPortableWorkspaces(
-                    from: library.rootURL,
-                    to: outgoing,
-                    fileManager: fileManager
                 )
-                let archive = try LampSyncArchive.create(from: outgoing)
-                try await client.upload(archive.compressedData(), filename: "lamp-bible.lampsync")
-                statusMessage = "Publishing iPhone and iPad compatible library…"
-                try await publishIOSWebDAVContent(
-                    using: client,
-                    from: workspace,
-                    library: library
-                )
-
-                defaults.set(Date(), forKey: "sync.lastCompleted")
-                let date = Date().formatted(date: .abbreviated, time: .shortened)
-                if iOSImportSummary.downloadedCount > 0 {
-                    statusMessage = "Synced \(date) — downloaded \(iOSImportSummary.downloadedCount) item\(iOSImportSummary.downloadedCount == 1 ? "" : "s")"
-                } else {
-                    statusMessage = "Synced \(date)"
-                }
-                if !iOSImportSummary.failures.isEmpty {
-                    let examples = iOSImportSummary.failures.prefix(3).joined(separator: "; ")
-                    errorMessage = "Sync completed, but \(iOSImportSummary.failures.count) WebDAV file\(iOSImportSummary.failures.count == 1 ? "" : "s") could not be imported: \(examples)"
-                }
-                isSyncing = false
-                return
             }
-
-            defaults.set(Date(), forKey: "sync.lastCompleted")
-            statusMessage = "Synced \(Date().formatted(date: .abbreviated, time: .shortened))"
         } catch {
             errorMessage = error.localizedDescription
             statusMessage = nil
+            isSyncing = false
+            return false
         }
         isSyncing = false
+        return true
     }
 
     private func importIOSWebDAVContent(
         using client: LampWebDAVClient,
         into workspace: URL,
-        library: LampLibrary
+        library: LampLibrary,
+        compatibilityManifest: LampCompatibilityManifest?
     ) async throws -> IOSWebDAVImportSummary {
         let importDirectory = workspace.appendingPathComponent("iOS WebDAV", isDirectory: true)
         try fileManager.createDirectory(at: importDirectory, withIntermediateDirectories: true)
@@ -248,134 +428,159 @@ final class LibrarySyncController: ObservableObject {
         for source in IOSWebDAVModuleDirectory.allCases {
             let filenames: [String]
             do {
-                filenames = try await client.listFilenames(directory: source.rawValue)
+                filenames = try await client.listModuleFilenames(directory: source.rawValue)
             } catch {
                 summary.failures.append(
                     "\(source.rawValue) (could not list folder: \(error.localizedDescription))"
                 )
                 continue
             }
-            for filename in filenames where isPortableModule(filename) {
+            var candidates: [IOSWebDAVImportCandidate] = []
+            for filename in filenames.sorted() where LampSyncModuleFiles.moduleID(from: filename) != nil {
+                let remotePath = "\(source.rawValue)/\(filename)"
+                var superseded = false
                 do {
-                    guard let data = try await client.download(
-                        relativePath: "\(source.rawValue)/\(filename)"
-                    ) else { continue }
+                    guard let remote = try await client.read(path: remotePath) else {
+                        throw LampSyncError.invalidResponse
+                    }
+                    do {
+                        summary.writeConditions[remotePath] = try LampSyncConditionalWrite.condition(
+                            for: remote
+                        )
+                    } catch {
+                        summary.writeConditions[remotePath] = .unconditional
+                        summary.failures.append(
+                            "\(remotePath) (the server did not supply a strong ETag)"
+                        )
+                    }
+                    superseded = compatibilityManifest?.supersedes(
+                        path: remotePath,
+                        revision: remote.revision
+                    ) == true
                     let isJSON = filename.lowercased().hasSuffix(".json")
-
-                    switch source {
-                    case .notes, .highlights, .devotionals:
-                        let remoteSetID = source == .highlights && !isJSON
-                            ? try? LampWebDAVPersonalArchiveAdapter.highlightSetID(
-                                in: data,
-                                fileManager: fileManager
+                    if isJSON {
+                        let documents = try LampWebDAVModuleJSONAdapter.documents(
+                            from: remote.data,
+                            kind: source.kind,
+                            fallbackModuleID: remoteModuleStem(filename)
+                        )
+                        candidates.append(contentsOf: documents.map { document in
+                            IOSWebDAVImportCandidate(
+                                filename: filename, remotePath: remotePath,
+                                moduleID: document.moduleID, data: document.data,
+                                syncIdentity: LampSyncModuleFiles.canonicalIdentity(
+                                    document.syncIdentity, isNotes: source == .notes
+                                ),
+                                isJSON: true, superseded: superseded, remoteSetID: nil
+                            )
+                        })
+                    } else {
+                        let data = try compressedModuleData(remote.data, filename: filename)
+                        let descriptor = try LampPortableModuleInspector.inspectRemote(
+                            data: remote.data, filename: filename,
+                            fallbackID: remoteModuleStem(filename),
+                            expectedKind: source.kind, fileManager: fileManager
+                        )
+                        let remoteSetID = source == .highlights
+                            ? try LampWebDAVPersonalArchiveAdapter.highlightSetID(
+                                in: data, fileManager: fileManager
                             )
                             : nil
-                        let documents: [LampWebDAVModuleJSONDocument]
-                        if isJSON {
-                            documents = try LampWebDAVModuleJSONAdapter.documents(
-                                from: data,
-                                kind: source.kind,
-                                fallbackModuleID: remoteModuleStem(filename)
-                            )
-                        } else {
-                            documents = []
-                        }
+                        candidates.append(IOSWebDAVImportCandidate(
+                            filename: filename, remotePath: remotePath,
+                            moduleID: descriptor.id, data: data,
+                            syncIdentity: LampSyncModuleFiles.canonicalIdentity(
+                                descriptor.id, isNotes: source == .notes
+                            ),
+                            isJSON: false, superseded: superseded,
+                            remoteSetID: remoteSetID
+                        ))
+                    }
+                } catch {
+                    if !superseded {
+                        summary.failures.append("\(remotePath) (\(error.localizedDescription))")
+                    }
+                }
+            }
 
+            let selectedIndices = LampSyncModuleFiles.preferredCandidateIndices(
+                candidates.map {
+                    .init(
+                        identity: $0.syncIdentity, path: $0.remotePath,
+                        isSuperseded: $0.superseded
+                    )
+                }
+            )
+            for index in selectedIndices {
+                let candidate = candidates[index]
+                do {
+                    switch source {
+                    case .notes, .highlights, .devotionals:
+                        let localURL = importDirectory
+                            .appendingPathComponent(UUID().uuidString)
+                            .appendingPathExtension(candidate.isJSON ? "json" : "lamp")
+                        try candidate.data.write(to: localURL, options: .atomic)
                         if source == .devotionals {
-                            if isJSON {
-                                for document in documents {
-                                    let localURL = importDirectory
-                                        .appendingPathComponent(UUID().uuidString)
-                                        .appendingPathExtension("json")
-                                    try document.data.write(to: localURL, options: .atomic)
-                                    summary.devotionals += try await library.importPersonalDevotional(
-                                        from: localURL
-                                    ).count
-                                }
-                            } else {
-                                let localURL = importDirectory
-                                    .appendingPathComponent(UUID().uuidString)
-                                    .appendingPathExtension("lamp")
-                                try compressedModuleData(data, filename: filename).write(
-                                    to: localURL,
-                                    options: .atomic
-                                )
-                                summary.devotionals += try await library.importPersonalDevotional(
-                                    from: localURL
-                                ).count
-                            }
-                        } else if isJSON {
-                            for document in documents {
-                                let localURL = importDirectory
-                                    .appendingPathComponent(UUID().uuidString)
-                                    .appendingPathExtension("json")
-                                try document.data.write(to: localURL, options: .atomic)
-                                let result = try await library.importPersonalStudyData(from: localURL)
-                                summary.studyEntries += result.importedCount
-                            }
-                        } else {
-                            let localURL = importDirectory
-                                .appendingPathComponent(UUID().uuidString)
-                                .appendingPathExtension("lamp")
-                            try compressedModuleData(data, filename: filename).write(
-                                to: localURL,
-                                options: .atomic
+                            let incoming = try await library.personalDevotionalCandidates(
+                                from: localURL
                             )
+                            let imported = try await library.importPersonalDevotional(from: localURL)
+                            let incomingIDs = Set(incoming.map(\.id))
+                            let retained = try await library.personalDevotionals()
+                                .filter { incomingIDs.contains($0.id) }
+                            let mediaModuleID = candidate.isJSON
+                                ? remoteModuleStem(candidate.filename)
+                                : candidate.moduleID
+                            try await LampSyncDevotionalMedia.downloadToLibrary(
+                                for: retained, from: mediaModuleID,
+                                into: library.rootURL
+                            ) { path in
+                                guard let file = try await client.read(path: path) else {
+                                    throw LibrarySyncError.incompleteRemoteImport([path])
+                                }
+                                return file.data
+                            }
+                            summary.devotionals += imported.count
+                        } else {
                             let result = try await library.importPersonalStudyData(from: localURL)
                             summary.studyEntries += result.importedCount
                         }
-
-                        if let remoteSetID {
+                        if let remoteSetID = candidate.remoteSetID {
                             highlightModuleIDsBySet[remoteSetID] = safeRemoteIdentifier(
-                                remoteModuleStem(filename)
+                                remoteModuleStem(candidate.filename)
                             )
                         }
 
                     case .translations, .dictionaries, .commentaries, .books, .plans, .quizzes:
-                        if isJSON {
-                            let documents = try LampWebDAVModuleJSONAdapter.documents(
-                                from: data,
-                                kind: source.kind,
-                                fallbackModuleID: remoteModuleStem(filename)
+                        let moduleURL = importDirectory
+                            .appendingPathComponent(safeRemoteIdentifier(candidate.moduleID))
+                            .appendingPathExtension("lamp")
+                        if candidate.isJSON {
+                            _ = try LampModuleCompiler().compile(
+                                data: candidate.data,
+                                sourceFilename: candidate.filename,
+                                destinationURL: moduleURL
                             )
-                            for document in documents {
-                                let moduleURL = importDirectory
-                                    .appendingPathComponent(document.moduleID)
-                                    .appendingPathExtension("lamp")
-                                _ = try LampModuleCompiler().compile(
-                                    data: document.data,
-                                    sourceFilename: filename,
-                                    destinationURL: moduleURL
-                                )
-                                _ = try await library.install(from: moduleURL)
-                                summary.modules += 1
-                            }
                         } else {
-                            let moduleURL = importDirectory
-                                .appendingPathComponent(safeRemoteIdentifier(remoteModuleStem(filename)))
-                                .appendingPathExtension("lamp")
-                            try compressedModuleData(data, filename: filename).write(
-                                to: moduleURL,
-                                options: .atomic
-                            )
-                            _ = try await library.install(from: moduleURL)
-                            summary.modules += 1
+                            try candidate.data.write(to: moduleURL, options: .atomic)
                         }
+                        _ = try await library.install(from: moduleURL)
+                        summary.modules += 1
                     }
                 } catch {
                     summary.failures.append(
-                        "\(source.rawValue)/\(filename) (\(error.localizedDescription))"
+                        "\(candidate.remotePath) (\(error.localizedDescription))"
                     )
                 }
             }
         }
 
-        defaults.set(highlightModuleIDsBySet, forKey: Self.iOSHighlightModuleIDsBySetKey)
+        summary.highlightModuleIDsBySet = highlightModuleIDsBySet
         return summary
     }
 
     private func normalizeArchivedDevotionalJSON(in backupDirectory: URL) -> [String] {
-        let directory = backupDirectory.appendingPathComponent("Devotionals", isDirectory: true)
+        let directory = backupDirectory.appendingPathComponent(LampPortableBackupLayout.devotionalsDirectory, isDirectory: true)
         guard let enumerator = fileManager.enumerator(
             at: directory,
             includingPropertiesForKeys: [.isRegularFileKey],
@@ -416,46 +621,66 @@ final class LibrarySyncController: ObservableObject {
         return failures
     }
 
-    private func publishIOSWebDAVContent(
+    private func prepareIOSWebDAVContent(
         using client: LampWebDAVClient,
         from workspace: URL,
-        library: LampLibrary
-    ) async throws {
+        library: LampLibrary,
+        imported: IOSWebDAVImportSummary
+    ) async throws -> IOSWebDAVExportBatch {
         let exportDirectory = workspace.appendingPathComponent("iOS Exports", isDirectory: true)
         try fileManager.createDirectory(at: exportDirectory, withIntermediateDirectories: true)
+        var files: [IOSWebDAVExportFile] = []
+
+        // Publish media before the module that references it. An unchanged
+        // existing remote file needs no write; a different file at the same
+        // immutable path is a conflict, not an overwrite.
+        let localMedia = try LampSyncDevotionalMedia.outgoingFiles(
+            for: await library.personalDevotionals(),
+            to: "devotionals", from: library.rootURL,
+            fileManager: fileManager
+        )
+        for media in try await LampSyncDevotionalMedia.pendingUploads(
+            localMedia, readRemote: { try await client.read(path: $0) }
+        ) {
+            files.append(IOSWebDAVExportFile(
+                remotePath: media.remotePath, data: media.data,
+                condition: media.condition
+            ))
+        }
 
         for export in [
             (
                 module: LampPersonalModule.notes,
-                directory: "Notes",
+                directory: LampSyncContentKind.notes.rawValue,
                 filename: "notes.lamp",
                 iOSModuleID: "notes",
                 archiveKind: LampWebDAVPersonalArchiveKind.notes
             ),
             (
                 module: LampPersonalModule.writing,
-                directory: "Devotionals",
+                directory: LampSyncContentKind.devotionals.rawValue,
                 filename: "devotionals.lamp",
                 iOSModuleID: "devotionals",
                 archiveKind: LampWebDAVPersonalArchiveKind.devotionals
             ),
         ] {
-            try await client.createDirectory(export.directory)
             let localURL = exportDirectory.appendingPathComponent(export.filename)
             try await library.exportPersonalModule(export.module, format: .lamp, to: localURL)
             let archive = try LampWebDAVPersonalArchiveAdapter.archive(
                 Data(contentsOf: localURL, options: .mappedIfSafe),
                 replacingModuleIDWith: export.iOSModuleID,
                 kind: export.archiveKind,
+                mediaRootURL: library.rootURL,
                 fileManager: fileManager
             )
-            try await client.upload(
-                archive,
-                relativePath: "\(export.directory)/\(export.filename)"
-            )
+            let remotePath = "\(export.directory)/\(export.filename)"
+            files.append(IOSWebDAVExportFile(
+                remotePath: remotePath,
+                data: archive,
+                condition: try imported.writeCondition(for: remotePath)
+            ))
         }
 
-        try await client.createDirectory("Highlights")
         var highlightModuleIDsBySet = defaults.dictionary(
             forKey: Self.iOSHighlightModuleIDsBySetKey
         ) as? [String: String] ?? [:]
@@ -463,33 +688,59 @@ final class LibrarySyncController: ObservableObject {
             let moduleID = safeRemoteIdentifier(
                 highlightModuleIDsBySet[set.id] ?? set.id
             )
-            guard let document = try? await library.personalHighlightsDocument(
-                translationID: set.translationID,
-                moduleID: moduleID,
-                name: set.name,
-                setID: set.id
-            ) else { continue }
+            guard let document = try await LampSyncPersonalExport.highlightsIfPresent({
+                try await library.personalHighlightsDocument(
+                    translationID: set.translationID,
+                    moduleID: moduleID,
+                    name: set.name,
+                    setID: set.id
+                )
+            }) else { continue }
             let localURL = exportDirectory.appendingPathComponent(document.suggestedModuleFilename)
             _ = try LampModuleCompiler().compile(
                 data: document.jsonData,
                 sourceFilename: document.suggestedJSONFilename,
                 destinationURL: localURL
             )
-            try await client.upload(
-                Data(contentsOf: localURL, options: .mappedIfSafe),
-                relativePath: "Highlights/\(document.suggestedModuleFilename)"
-            )
+            let remotePath = "\(LampSyncContentKind.highlights.rawValue)/\(document.suggestedModuleFilename)"
+            files.append(IOSWebDAVExportFile(
+                remotePath: remotePath,
+                data: try Data(contentsOf: localURL, options: .mappedIfSafe),
+                condition: try imported.writeCondition(for: remotePath)
+            ))
             highlightModuleIDsBySet[set.id] = moduleID
         }
-        defaults.set(highlightModuleIDsBySet, forKey: Self.iOSHighlightModuleIDsBySetKey)
+        return IOSWebDAVExportBatch(
+            files: files,
+            highlightModuleIDsBySet: highlightModuleIDsBySet
+        )
     }
 
-    private func isPortableModule(_ filename: String) -> Bool {
-        let lowercased = filename.lowercased()
-        return lowercased.hasSuffix(".lamp")
-            || lowercased.hasSuffix(".db.zlib")
-            || lowercased.hasSuffix(".db")
-            || lowercased.hasSuffix(".json")
+    private func publishIOSWebDAVContent(
+        using client: LampWebDAVClient,
+        batch: IOSWebDAVExportBatch
+    ) async throws {
+        let preparedDirectories = Set(batch.files.map {
+            String($0.remotePath.prefix { $0 != "/" })
+        })
+        try await LampSyncCompatibilityPublisher.publish(
+            batch.files.map {
+                .init(
+                    remotePath: $0.remotePath,
+                    data: $0.data,
+                    condition: $0.condition
+                )
+            },
+            in: client,
+            prepareDirectory: { try await client.createDirectory($0) }
+        )
+        if !preparedDirectories.contains(LampSyncContentKind.highlights.rawValue) {
+            try await client.createDirectory(LampSyncContentKind.highlights.rawValue)
+        }
+        defaults.set(
+            batch.highlightModuleIDsBySet,
+            forKey: Self.iOSHighlightModuleIDsBySetKey
+        )
     }
 
     private func compressedModuleData(_ data: Data, filename: String) throws -> Data {
@@ -501,10 +752,8 @@ final class LibrarySyncController: ObservableObject {
     }
 
     private func remoteModuleStem(_ filename: String) -> String {
-        if filename.lowercased().hasSuffix(".db.zlib") {
-            return String(filename.dropLast(".db.zlib".count))
-        }
-        return URL(fileURLWithPath: filename).deletingPathExtension().lastPathComponent
+        LampSyncModuleFiles.moduleID(from: filename)
+            ?? URL(fileURLWithPath: filename).deletingPathExtension().lastPathComponent
     }
 
     private func safeRemoteIdentifier(_ value: String) -> String {
@@ -540,62 +789,164 @@ final class LibrarySyncController: ObservableObject {
         return url
     }
 
-    private func exportSettings(to directory: URL) {
-        var settings: [String: Any] = [:]
-        for key in Self.syncedSettingKeys {
-            if let value = defaults.object(forKey: key) { settings[key] = value }
+    private func exportSettings(to directory: URL) throws {
+        let data = try LampPortableSettingsCodec.encode(from: defaults)
+        try data.write(
+            to: directory.appendingPathComponent(LampPortableBackupLayout.settingsPath),
+            options: .atomic
+        )
+    }
+
+    private func importSettings(
+        from directory: URL,
+        excluding excludedKeys: Set<String> = [],
+        to targetDefaults: UserDefaults
+    ) throws {
+        let url = directory.appendingPathComponent(LampPortableBackupLayout.settingsPath)
+        guard fileManager.fileExists(atPath: url.path) else { return }
+        try LampPortableSettingsCodec.apply(
+            Data(contentsOf: url),
+            to: targetDefaults,
+            excluding: excludedKeys
+        )
+    }
+
+    private func importSettingsAndMergePreferences(
+        from directory: URL,
+        source: String,
+        targetDefaults: UserDefaults,
+        storedIn domainName: String
+    ) throws -> LampSharedPreferenceLedger {
+        let remote = try readPreferenceLedger(from: directory)
+        let hasSharedHistory = remote != nil || cachedPreferenceLedger(for: source) != nil
+        try importSettings(
+            from: directory,
+            excluding: hasSharedHistory ? LampSharedPreferenceLedger.sharedKeys : [],
+            to: targetDefaults
+        )
+        return try mergePreferenceLedger(
+            remote: remote, source: source,
+            targetDefaults: targetDefaults, storedIn: domainName
+        )
+    }
+
+    private func readPreferenceLedger(from directory: URL) throws -> LampSharedPreferenceLedger? {
+        let url = directory.appendingPathComponent(LampPortableBackupLayout.sharedPreferencesPath)
+        guard fileManager.fileExists(atPath: url.path) else { return nil }
+        return try LampSyncPreferenceState.decode(Data(contentsOf: url))
+    }
+
+    private func mergePreferenceLedger(
+        remote: LampSharedPreferenceLedger?,
+        source: String,
+        targetDefaults: UserDefaults? = nil,
+        storedIn domainName: String? = Bundle.main.bundleIdentifier
+    ) throws -> LampSharedPreferenceLedger {
+        let targetDefaults = targetDefaults ?? defaults
+        let local = try LampSharedPreferenceLedger.explicitValues(
+            from: targetDefaults,
+            storedIn: domainName
+        )
+        let merged = try LampSharedPreferenceLedger.merge(
+            local: local,
+            base: cachedPreferenceLedger(for: source),
+            remote: remote
+        )
+        try merged.apply(to: targetDefaults)
+        return merged
+    }
+
+    private func beginStagedSettings() throws -> StagedSyncSettings {
+        let domainName = "lamp-sync-settings-\(UUID().uuidString)"
+        guard let stagedDefaults = UserDefaults(suiteName: domainName) else {
+            throw LampLibraryError.syncConflict("Could not prepare sync settings.")
         }
-        guard PropertyListSerialization.propertyList(settings, isValidFor: .binary) else { return }
-        if let data = try? PropertyListSerialization.data(
-            fromPropertyList: settings,
-            format: .binary,
-            options: 0
-        ) {
-            try? data.write(to: directory.appendingPathComponent("settings.plist"), options: .atomic)
+        let baseline = LampSyncSettingsCommit.explicitSettings(from: defaults)
+        stagedDefaults.setPersistentDomain(baseline, forName: domainName)
+        return StagedSyncSettings(
+            defaults: stagedDefaults, domainName: domainName, baseline: baseline,
+            highlightMappingBaseline: defaults.dictionary(
+                forKey: Self.iOSHighlightModuleIDsBySetKey
+            ) as? [String: String]
+        )
+    }
+
+    private func ensureSettingsUnchanged(_ staged: StagedSyncSettings) throws {
+        let current = LampSyncSettingsCommit.explicitSettings(from: defaults)
+        guard NSDictionary(dictionary: current).isEqual(to: staged.baseline) else {
+            throw LampLibraryError.syncConflict("Local settings changed during sync import.")
+        }
+        let currentHighlightMapping = defaults.dictionary(
+            forKey: Self.iOSHighlightModuleIDsBySetKey
+        ) as? [String: String]
+        guard (currentHighlightMapping ?? [:]) == (staged.highlightMappingBaseline ?? [:]) else {
+            throw LampLibraryError.syncConflict("Local highlight sync mapping changed during import.")
         }
     }
 
-    private func importSettings(from directory: URL) {
-        let url = directory.appendingPathComponent("settings.plist")
-        guard let data = try? Data(contentsOf: url),
-              let settings = try? PropertyListSerialization.propertyList(from: data, format: nil),
-              let dictionary = settings as? [String: Any] else { return }
-        for key in Self.syncedSettingKeys {
-            if let value = dictionary[key] { defaults.set(value, forKey: key) }
-        }
+    private func stageSettingsCommit(
+        _ staged: StagedSyncSettings,
+        highlightMapping: [String: String]?,
+        in libraryRoot: URL
+    ) throws {
+        let planned = staged.defaults.persistentDomain(forName: staged.domainName) ?? [:]
+        let settingsChanged = !NSDictionary(dictionary: planned).isEqual(to: staged.baseline)
+        let mappingChanged = highlightMapping.map {
+            $0 != (staged.highlightMappingBaseline ?? [:])
+        } ?? false
+        guard settingsChanged || mappingChanged else { return }
+        try LampSyncSettingsCommit.stage(
+            baseline: staged.baseline, planned: planned,
+            highlightMappingBaseline: staged.highlightMappingBaseline,
+            plannedHighlightMapping: highlightMapping,
+            in: libraryRoot, fileManager: fileManager
+        )
     }
 
-    private static let syncedSettingKeys = [
-        "reader.fontSize", "reader.lineSpacing", "reader.typeface", "reader.defaultTranslationID",
-        "reader.readAloud.voice", "reader.readAloud.rate", "reader.readAloud.followAlong",
-        "reader.showStrongsHints", "reader.crossReferences.canonicalOrder",
-        "commentary.fontSize", "commentary.lineSpacing", "commentary.typeface",
-        "studyInspector.greekDictionaryModuleID", "studyInspector.hebrewDictionaryModuleID",
-        "studyInspector.commentaryModuleID",
-        "plans.wordsPerMinute", "plans.externalBibleApp", "plans.reminder.enabled",
-        "plans.reminder.hour", "plans.reminder.minute", "devotional.fontSize",
-        "quiz.defaultAgeGroup", "quiz.alwaysShowAnswers", "quiz.fontSize",
-        "quiz.lineSpacing", "quiz.typeface", "modules.hiddenIDs",
-        "writing.preview.placement", "writing.preview.width", "writing.preview.fontSize",
-        "writing.preview.lineSpacing", "writing.preview.typeface",
-        "writing.preview.followsEditorScrolling", "devotional.editor.fontSize",
-        "devotional.lineSpacing", "devotional.typeface",
-        "writing.sortOrder", "writing.groupBy",
-        "books.fontSize", "books.lineSpacing", "books.typeface", "books.readerState",
-    ]
+    private func exportPreferenceLedger(
+        _ ledger: LampSharedPreferenceLedger,
+        to directory: URL
+    ) throws {
+        let url = directory.appendingPathComponent(LampPortableBackupLayout.sharedPreferencesPath)
+        try fileManager.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try LampSyncPreferenceState.encode(ledger).write(to: url, options: .atomic)
+    }
+
+    private static let preferenceLedgerStateKey = "sync.sharedPreferences.bases"
+
+    private func cachedPreferenceLedger(for source: String) -> LampSharedPreferenceLedger? {
+        LampSyncPreferenceState.cached(
+            for: source, in: defaults, key: Self.preferenceLedgerStateKey
+        )
+    }
+
+    private func rememberPreferenceLedger(
+        _ ledger: LampSharedPreferenceLedger,
+        source: String
+    ) throws {
+        try LampSyncPreferenceState.remember(
+            ledger, for: source, in: defaults, key: Self.preferenceLedgerStateKey
+        )
+    }
 }
 
-private enum IOSWebDAVModuleDirectory: String, CaseIterable {
-    case translations = "Translations"
-    case dictionaries = "Dictionaries"
-    case commentaries = "Commentaries"
-    case books = "Books"
-    case devotionals = "Devotionals"
-    case notes = "Notes"
-    case plans = "Plans"
-    case highlights = "Highlights"
-    case quizzes = "Quizzes"
+private typealias IOSWebDAVModuleDirectory = LampSyncContentKind
 
+private struct StagedSyncSettings {
+    let defaults: UserDefaults
+    let domainName: String
+    let baseline: [String: Any]
+    let highlightMappingBaseline: [String: String]?
+
+    func discard() {
+        defaults.removePersistentDomain(forName: domainName)
+    }
+}
+
+private extension LampSyncContentKind {
     var kind: LampModuleKind {
         switch self {
         case .translations: .translation
@@ -611,11 +962,43 @@ private enum IOSWebDAVModuleDirectory: String, CaseIterable {
     }
 }
 
+private struct IOSWebDAVImportCandidate {
+    let filename: String
+    let remotePath: String
+    let moduleID: String
+    let data: Data
+    let syncIdentity: String
+    let isJSON: Bool
+    let superseded: Bool
+    let remoteSetID: String?
+}
+
+private struct IOSWebDAVExportFile {
+    let remotePath: String
+    let data: Data
+    let condition: LampSyncWriteCondition
+
+    func baseRevision() throws -> String? {
+        switch condition {
+        case .ifAbsent: nil
+        case .ifRevision(let revision): revision
+        case .unconditional: throw LibrarySyncError.missingRemoteRevision(remotePath)
+        }
+    }
+}
+
+private struct IOSWebDAVExportBatch {
+    let files: [IOSWebDAVExportFile]
+    let highlightModuleIDsBySet: [String: String]
+}
+
 private struct IOSWebDAVImportSummary {
     var studyEntries = 0
     var devotionals = 0
     var modules = 0
     var failures: [String] = []
+    var writeConditions: [String: LampSyncWriteCondition] = [:]
+    var highlightModuleIDsBySet: [String: String]?
 
     var personalItemCount: Int { studyEntries + devotionals }
     var downloadedCount: Int { personalItemCount + modules }
@@ -625,19 +1008,41 @@ private struct IOSWebDAVImportSummary {
         devotionals += other.devotionals
         modules += other.modules
         failures.append(contentsOf: other.failures)
+        writeConditions.merge(other.writeConditions) { _, newer in newer }
+        if let mapping = other.highlightModuleIDsBySet {
+            highlightModuleIDsBySet = mapping
+        }
     }
+
+    func writeCondition(for path: String) throws -> LampSyncWriteCondition {
+        let condition = writeConditions[path] ?? .ifAbsent
+        guard condition != .unconditional else {
+            throw LibrarySyncError.missingRemoteRevision(path)
+        }
+        return condition
+    }
+}
+
+private enum AutomaticSyncError: Error {
+    case failed
 }
 
 private enum LibrarySyncError: LocalizedError {
     case providerNotConfigured
     case folderNotConfigured
     case invalidWebDAVURL
+    case incompleteRemoteImport([String])
+    case missingRemoteRevision(String)
 
     var errorDescription: String? {
         switch self {
         case .providerNotConfigured: "Choose a sync provider first."
         case .folderNotConfigured: "Choose an iCloud Drive or local folder for sync."
         case .invalidWebDAVURL: "Enter a valid HTTP or HTTPS WebDAV folder URL."
+        case .incompleteRemoteImport(let failures):
+            "Sync stopped before publishing because \(failures.count) remote item\(failures.count == 1 ? "" : "s") could not be imported: \(failures.prefix(3).joined(separator: "; "))"
+        case .missingRemoteRevision(let path):
+            "Sync stopped because the server did not provide an ETag for \(path)."
         }
     }
 }

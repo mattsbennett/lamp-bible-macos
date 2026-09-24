@@ -489,6 +489,9 @@ struct ReaderSupportTests {
             label: "Prayer",
             url: try #require(URL(string: "lamp-media://dev-1/prayer.m4a"))
         ))
+        #expect(DevotionalMarkdownParser.parse("[Prayer](media/audio-id)") == [
+            .audio(label: "Prayer", url: try #require(URL(string: "media/audio-id"))),
+        ])
     }
 
     @Test func navigationHistoryMovesBackForwardAndBranches() {

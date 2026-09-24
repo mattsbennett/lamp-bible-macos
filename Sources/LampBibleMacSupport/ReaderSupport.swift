@@ -898,7 +898,9 @@ public enum DevotionalMarkdownParser {
     }
 
     private static func isAudioURL(_ url: URL) -> Bool {
-        ["mp3", "m4a", "wav", "aac", "aiff", "caf"].contains(url.pathExtension.lowercased())
+        if url.scheme == nil, url.path.hasPrefix("media/") { return true }
+        return ["mp3", "m4a", "wav", "aac", "aiff", "caf"]
+            .contains(url.pathExtension.lowercased())
     }
 }
 
@@ -916,7 +918,20 @@ public enum DevotionalProseBlock: Equatable, Sendable {
     case quote([String])
     case bulletList([String])
     case numberedList([String])
+    case nestedBulletList([DevotionalListLine])
+    case nestedNumberedList([DevotionalListLine])
+    case table(headers: [String], rows: [[String]])
     case rule
+}
+
+public struct DevotionalListLine: Equatable, Sendable {
+    public let depth: Int
+    public let text: String
+
+    public init(depth: Int, text: String) {
+        self.depth = depth
+        self.text = text
+    }
 }
 
 /// Whether a document's opening heading merely restates the title shown above it.
@@ -948,8 +963,8 @@ public enum DevotionalProseParser {
     public static func parse(_ text: String) -> [DevotionalProseBlock] {
         var blocks: [DevotionalProseBlock] = []
         var paragraphLines: [String] = []
-        var bulletItems: [String] = []
-        var numberedItems: [String] = []
+        var bulletItems: [DevotionalListLine] = []
+        var numberedItems: [DevotionalListLine] = []
         var quoteLines: [String] = []
 
         func flushParagraph() {
@@ -961,12 +976,20 @@ public enum DevotionalProseParser {
         }
 
         func flushBullets() {
-            if !bulletItems.isEmpty { blocks.append(.bulletList(bulletItems)) }
+            if !bulletItems.isEmpty {
+                blocks.append(bulletItems.allSatisfy { $0.depth == 0 }
+                    ? .bulletList(bulletItems.map(\.text))
+                    : .nestedBulletList(bulletItems))
+            }
             bulletItems.removeAll()
         }
 
         func flushNumbered() {
-            if !numberedItems.isEmpty { blocks.append(.numberedList(numberedItems)) }
+            if !numberedItems.isEmpty {
+                blocks.append(numberedItems.allSatisfy { $0.depth == 0 }
+                    ? .numberedList(numberedItems.map(\.text))
+                    : .nestedNumberedList(numberedItems))
+            }
             numberedItems.removeAll()
         }
 
@@ -998,7 +1021,28 @@ public enum DevotionalProseParser {
             if kind != .quote { flushQuote() }
         }
 
-        for rawLine in text.components(separatedBy: .newlines) {
+        let lines = text.components(separatedBy: .newlines)
+        var lineIndex = 0
+        while lineIndex < lines.count {
+            let rawLine = lines[lineIndex]
+            if lineIndex + 1 < lines.count,
+               let headers = tableCells(rawLine),
+               let separators = tableCells(lines[lineIndex + 1]),
+               headers.count == separators.count,
+               separators.allSatisfy({ isTableSeparator($0) }) {
+                flushAll()
+                lineIndex += 2
+                var rows: [[String]] = []
+                while lineIndex < lines.count,
+                      let cells = tableCells(lines[lineIndex]),
+                      cells.count == headers.count {
+                    rows.append(cells)
+                    lineIndex += 1
+                }
+                blocks.append(.table(headers: headers, rows: rows))
+                continue
+            }
+            lineIndex += 1
             let line = rawLine.trimmingCharacters(in: .whitespaces)
 
             if line.isEmpty {
@@ -1032,13 +1076,17 @@ public enum DevotionalProseParser {
 
             if let item = bulletContent(of: line) {
                 flushAll(except: .bullet)
-                bulletItems.append(item)
+                bulletItems.append(DevotionalListLine(
+                    depth: rawLine.prefix { $0 == " " }.count / 2, text: item
+                ))
                 continue
             }
 
             if let item = numberedContent(of: line) {
                 flushAll(except: .numbered)
-                numberedItems.append(item)
+                numberedItems.append(DevotionalListLine(
+                    depth: rawLine.prefix { $0 == " " }.count / 2, text: item
+                ))
                 continue
             }
 
@@ -1048,6 +1096,19 @@ public enum DevotionalProseParser {
 
         flushAll()
         return blocks
+    }
+
+    private static func tableCells(_ line: String) -> [String]? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("|"), trimmed.hasSuffix("|") else { return nil }
+        return trimmed.dropFirst().dropLast().split(
+            separator: "|", omittingEmptySubsequences: false
+        ).map { $0.trimmingCharacters(in: .whitespaces) }
+    }
+
+    private static func isTableSeparator(_ cell: String) -> Bool {
+        let dashes = cell.trimmingCharacters(in: CharacterSet(charactersIn: ":"))
+        return dashes.count >= 3 && dashes.allSatisfy { $0 == "-" }
     }
 
     private enum PendingKind {
