@@ -13,6 +13,12 @@ struct UnifiedSearchView: View {
     @State private var selectedKind: LampModuleKind?
     @State private var selectedModuleID: String?
     @State private var selectedResultID: String?
+    @State private var devotionalDate = ""
+    @State private var devotionalTag = ""
+    @State private var devotionalCategory = ""
+    @State private var bookScope: BookSearchScope = .all
+    @State private var strongsKey = ""
+    @State private var highlightColor = ""
 
     let showImporter: () -> Void
     let openReference: (Int) -> Void
@@ -21,6 +27,16 @@ struct UnifiedSearchView: View {
 
     private var history: [LampSearchHistoryEntry] {
         LampSearchHistoryStore.decode(historyData)
+    }
+
+    private var hasActiveStrongsFilter: Bool {
+        (selectedKind == .translation || selectedKind == .dictionary)
+            && !strongsKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var hasActiveHighlightColor: Bool {
+        selectedKind == .highlights
+            && !highlightColor.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var selectedResult: LampModuleSearchResult? {
@@ -50,12 +66,14 @@ struct UnifiedSearchView: View {
 
     var body: some View {
         Group {
-            if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && !hasActiveStrongsFilter && !hasActiveHighlightColor {
                 searchLanding
             } else if model.isModuleSearching && model.moduleSearchResults.isEmpty {
                 ProgressView("Searching Library…")
             } else if model.moduleSearchResults.isEmpty {
-                ContentUnavailableView.search(text: query)
+                ContentUnavailableView.search(text: query.isEmpty
+                    ? (hasActiveStrongsFilter ? strongsKey : highlightColor) : query)
             } else {
                 HSplitView {
                     resultsList
@@ -76,6 +94,12 @@ struct UnifiedSearchView: View {
             runSearch()
         }
         .onChange(of: selectedModuleID) { _, _ in runSearch() }
+        .onChange(of: devotionalDate) { _, _ in runSearch() }
+        .onChange(of: devotionalTag) { _, _ in runSearch() }
+        .onChange(of: devotionalCategory) { _, _ in runSearch() }
+        .onChange(of: bookScope) { _, _ in runSearch() }
+        .onChange(of: strongsKey) { _, _ in runSearch() }
+        .onChange(of: highlightColor) { _, _ in runSearch() }
         .onChange(of: model.moduleSearchResults) { _, results in
             if !results.contains(where: { $0.id == selectedResultID }) {
                 selectedResultID = results.first?.id
@@ -146,43 +170,60 @@ struct UnifiedSearchView: View {
     }
 
     private var resultsList: some View {
-        List(selection: $selectedResultID) {
-            ForEach(model.moduleSearchResults) { result in
-                VStack(alignment: .leading, spacing: 7) {
-                    HStack(spacing: 8) {
-                        Image(systemName: icon(for: result.kind))
-                            .foregroundStyle(.tint)
-                        Text(result.title)
-                            .font(.headline)
-                            .lineLimit(2)
-                        Spacer()
-                        Text(result.kind.displayName)
-                            .font(.caption.weight(.medium))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(.quaternary, in: Capsule())
-                    }
-                    Text(result.moduleName)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text(result.snippet)
-                        .lineLimit(3)
-                        .foregroundStyle(.primary)
+        VStack(spacing: 0) {
+            if selectedKind == .devotional {
+                HStack(spacing: 8) {
+                    TextField("Date (YYYY-MM-DD or MM-DD)", text: $devotionalDate)
+                        .frame(width: 170)
+                    TextField("Tag", text: $devotionalTag)
+                        .frame(width: 110)
+                    TextField("Category", text: $devotionalCategory)
+                        .frame(width: 110)
                 }
-                .padding(.vertical, 6)
-                .tag(Optional(result.id))
-                .contextMenu {
-                    if let reference = result.startReference {
-                        Button("Open \(result.referenceDescription ?? "Reference")") {
-                            openReference(reference)
+                .textFieldStyle(.roundedBorder)
+                .padding(10)
+            }
+            List(selection: $selectedResultID) {
+                ForEach(model.moduleSearchResults) { result in
+                    VStack(alignment: .leading, spacing: 7) {
+                        HStack(spacing: 8) {
+                            Image(systemName: icon(for: result.kind))
+                                .foregroundStyle(.tint)
+                            if let highlightColor = color(for: result.highlightColor) {
+                                Circle().fill(highlightColor).frame(width: 10, height: 10)
+                            }
+                            Text(result.title)
+                                .font(.headline)
+                                .lineLimit(2)
+                            Spacer()
+                            Text(result.kind.displayName)
+                                .font(.caption.weight(.medium))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(.quaternary, in: Capsule())
                         }
+                        Text(result.moduleName)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        snippetText(result.snippet)
+                            .lineLimit(3)
+                            .foregroundStyle(.primary)
                     }
-                    Button("Copy Result") { copy(result) }
+                    .padding(.vertical, 6)
+                    .tag(Optional(result.id))
+                    .contextMenu {
+                        if let reference = result.startReference {
+                            Button("Open \(result.referenceDescription ?? "Reference")") {
+                                openReference(reference)
+                            }
+                        }
+                        Button("Copy Result") { copy(result) }
+                    }
                 }
             }
+            .listStyle(.inset)
         }
         .frame(minWidth: 340, idealWidth: 440)
-        .listStyle(.inset)
     }
 
     private func resultDetail(_ result: LampModuleSearchResult) -> some View {
@@ -210,7 +251,7 @@ struct UnifiedSearchView: View {
 
                 Divider()
 
-                Text(result.snippet)
+                snippetText(result.snippet)
                     .font(result.kind == .translation ? .system(.body, design: .serif) : .body)
                     .lineSpacing(5)
                     .textSelection(.enabled)
@@ -267,10 +308,56 @@ struct UnifiedSearchView: View {
             }
             .frame(minWidth: 170)
         }
+
+        if selectedKind == .translation || selectedKind == .highlights {
+            ToolbarItem {
+                Picker("Books", selection: $bookScope) {
+                    ForEach(BookSearchScope.allCases, id: \.self) { scope in
+                        Text(scope.rawValue).tag(scope)
+                    }
+                }
+                .frame(minWidth: 140)
+            }
+        }
+
+        if selectedKind == .translation || selectedKind == .dictionary {
+            ToolbarItem {
+                TextField("Strong's key", text: $strongsKey)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 130)
+            }
+        }
+
+        if selectedKind == .highlights {
+            ToolbarItem {
+                TextField("Highlight color", text: $highlightColor)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 140)
+            }
+        }
     }
 
     private func runSearch() {
-        model.searchModules(query, kind: selectedKind, moduleID: selectedModuleID)
+        let date = devotionalDate.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tag = devotionalTag.trimmingCharacters(in: .whitespacesAndNewlines)
+        let category = devotionalCategory.trimmingCharacters(in: .whitespacesAndNewlines)
+        let criteria = selectedKind == .devotional
+            ? LampDevotionalSearchCriteria(
+                date: date.count == 10 ? date : nil,
+                monthDay: date.count == 5 ? date : nil,
+                tags: tag.isEmpty ? nil : [tag],
+                categories: category.isEmpty ? nil : [category]
+            )
+            : LampDevotionalSearchCriteria()
+        model.searchModules(
+            query, kind: selectedKind, moduleID: selectedModuleID,
+            bookRange: (selectedKind == .translation || selectedKind == .highlights)
+                ? bookScope.range : nil,
+            strongsKey: (selectedKind == .translation || selectedKind == .dictionary)
+                ? strongsKey : nil,
+            highlightColors: hasActiveHighlightColor ? [highlightColor] : nil,
+            devotionalCriteria: criteria
+        )
     }
 
     private func saveSearch() {
@@ -300,6 +387,28 @@ struct UnifiedSearchView: View {
         NSPasteboard.general.setString(text, forType: .string)
     }
 
+    private func snippetText(_ source: String) -> Text {
+        var remaining = source[...]
+        var rendered = Text("")
+        while let opening = remaining.range(of: "<mark>"),
+              let closing = remaining[opening.upperBound...].range(of: "</mark>") {
+            rendered = rendered + Text(String(remaining[..<opening.lowerBound]))
+            rendered = rendered + Text(String(remaining[opening.upperBound..<closing.lowerBound]))
+                .bold().foregroundColor(.accentColor)
+            remaining = remaining[closing.upperBound...]
+        }
+        return rendered + Text(String(remaining))
+    }
+
+    private func color(for hex: String?) -> Color? {
+        guard let hex, hex.count == 6, let value = Int(hex, radix: 16) else { return nil }
+        return Color(
+            red: Double((value >> 16) & 0xFF) / 255,
+            green: Double((value >> 8) & 0xFF) / 255,
+            blue: Double(value & 0xFF) / 255
+        )
+    }
+
     private func icon(for kind: LampModuleKind) -> String {
         switch kind {
         case .translation: "books.vertical"
@@ -311,6 +420,20 @@ struct UnifiedSearchView: View {
         case .plan: "checklist"
         case .highlights: "highlighter"
         case .quiz: "questionmark.bubble"
+        }
+    }
+}
+
+private enum BookSearchScope: String, CaseIterable {
+    case all = "All Books"
+    case oldTestament = "Old Testament"
+    case newTestament = "New Testament"
+
+    var range: ClosedRange<Int>? {
+        switch self {
+        case .all: nil
+        case .oldTestament: 1...39
+        case .newTestament: 40...66
         }
     }
 }

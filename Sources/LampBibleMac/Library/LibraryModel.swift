@@ -531,11 +531,17 @@ final class LibraryModel: ObservableObject {
     func searchModules(
         _ query: String,
         kind: LampModuleKind? = nil,
-        moduleID: String? = nil
+        moduleID: String? = nil,
+        bookRange: ClosedRange<Int>? = nil,
+        strongsKey: String? = nil,
+        highlightColors: Set<String>? = nil,
+        devotionalCriteria: LampDevotionalSearchCriteria = .init()
     ) {
         moduleSearchTask?.cancel()
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedQuery.isEmpty else {
+        guard !trimmedQuery.isEmpty
+            || strongsKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            || highlightColors?.isEmpty == false else {
             moduleSearchResults = []
             isModuleSearching = false
             return
@@ -544,11 +550,27 @@ final class LibraryModel: ObservableObject {
         moduleSearchTask = Task {
             do {
                 try await Task.sleep(for: .milliseconds(250))
+                let includedModuleIDs: Set<String>?
+                if let moduleID {
+                    includedModuleIDs = [moduleID]
+                } else if hiddenModuleIDs.isEmpty {
+                    includedModuleIDs = nil
+                } else {
+                    let personalSetIDs = Set((try await library.highlightSets()).map(\.id))
+                    includedModuleIDs = Set(modules.filter {
+                        !hiddenModuleIDs.contains($0.id)
+                    }.map(\.id))
+                        .union(["personal-notes", "personal-devotionals"])
+                        .union(personalSetIDs)
+                }
                 let results = try await library.searchModules(
                     query: trimmedQuery,
                     kinds: kind.map { Set([$0]) },
-                    moduleIDs: moduleID.map { Set([$0]) }
-                        ?? Set(modules.filter { !hiddenModuleIDs.contains($0.id) }.map(\.id)),
+                    moduleIDs: includedModuleIDs,
+                    bookRange: bookRange,
+                    strongsKey: strongsKey,
+                    highlightColors: highlightColors,
+                    devotionalCriteria: devotionalCriteria,
                     limit: 250
                 )
                 guard !Task.isCancelled else { return }

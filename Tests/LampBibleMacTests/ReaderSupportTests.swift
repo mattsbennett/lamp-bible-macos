@@ -461,6 +461,13 @@ struct ReaderSupportTests {
         #expect(LampDeepLink(url: try #require(URL(string: "lampbible://books"))) == .section(.books))
         #expect(LampDeepLink(url: try #require(URL(string: "lampbible://books?module=TEST_BOOK&section=chapter-one")))
             == .book(moduleID: "TEST_BOOK", sectionID: "chapter-one"))
+        #expect(LampDeepLink(url: try #require(URL(string: "lampbible://reference/john3:16-18")))
+            == .reader(reference: 43_003_016, translationID: nil))
+        #expect(LampDeepLink(url: try #require(URL(string: "lampbible://reading/43003016/43003018?external=1")))
+            == .reading(reference: 43_003_016, endReference: 43_003_018,
+                        openExternal: true))
+        #expect(LampDeepLink(url: try #require(URL(string: "lampbible://strongs/G1234")))
+            == .strongs("G1234"))
         #expect(LampDeepLink(url: URL(fileURLWithPath: "/tmp/test.lamp"))
             == .moduleFile(URL(fileURLWithPath: "/tmp/test.lamp")))
         #expect(LampDeepLink(url: URL(fileURLWithPath: "/tmp/notes.json"))

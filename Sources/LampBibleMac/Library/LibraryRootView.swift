@@ -84,6 +84,7 @@ struct LibraryRootView: View {
     // reader's selectable text hierarchy underneath the pointer.
     @State private var readerLexicalHoverStore = ReaderLexicalHoverStore()
     @AppStorage("studyInspector.width") private var studyInspectorWidth = StudyInspectorMetrics.defaultWidth
+    @AppStorage("studyInspector.tab") private var selectedStudyTab = "commentary"
 
     private enum ReaderSidebar { case study, chat }
 
@@ -299,6 +300,23 @@ struct LibraryRootView: View {
         switch deepLink {
         case .reader(let reference, let translationID):
             model.openReference(reference, translationID: translationID)
+            selection = .section(.reader)
+        case .reading(let reference, let endReference, let openExternal):
+            if openExternal,
+               let appName = UserDefaults.standard.string(forKey: "plans.externalBibleApp"),
+               let application = ExternalBibleApplication(rawValue: appName),
+               let destination = application.url(
+                   startReference: reference, endReference: endReference
+               ) {
+                NSWorkspace.shared.open(destination)
+            } else {
+                model.openReference(reference, translationID: nil)
+                selection = .section(.reader)
+            }
+        case .strongs(let key):
+            model.requestDictionaryLookup(keys: [key])
+            selectedStudyTab = "dictionary"
+            readerSidebar = .study
             selection = .section(.reader)
         case .book(let moduleID, let sectionID):
             requestedBookID = moduleID

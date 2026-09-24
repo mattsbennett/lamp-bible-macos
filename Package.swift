@@ -26,6 +26,7 @@ let package = Package(
         .target(
             name: "LampBibleMacSupport",
             dependencies: [
+                .product(name: "LampCore", package: "lamp-bible-core"),
                 .product(name: "LampModuleKit", package: "lamp-bible-core"),
             ]
         ),

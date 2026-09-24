@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import LampCore
 
 /// Resolves attributed-string links at a point in supported AppKit selectable
 /// text implementations. Callers can use either `NSTextField` or `NSTextView`.
@@ -787,66 +788,42 @@ public struct ReadingReminderConfiguration: Codable, Equatable, Sendable {
     }
 }
 
-public enum LampDeepLinkSection: String, Codable, Equatable, Sendable {
-    case today
-    case reader
-    case books
-    case plans
-    case devotionals
-    case quizzes
-    case search
-    case modules
-}
+public typealias LampDeepLinkSection = LampApplicationSection
 
 public enum LampDeepLink: Equatable, Sendable {
     case reader(reference: Int, translationID: String?)
+    case reading(reference: Int, endReference: Int?, openExternal: Bool)
+    case strongs(String)
     case book(moduleID: String?, sectionID: String?)
     case section(LampDeepLinkSection)
     case moduleFile(URL)
     case dataFile(URL)
 
     public init?(url: URL) {
-        if url.isFileURL {
-            switch url.pathExtension.lowercased() {
-            case "lamp": self = .moduleFile(url)
-            case "json": self = .dataFile(url)
-            default: return nil
-            }
-            return
-        }
-        guard url.scheme?.lowercased() == "lampbible" else { return nil }
-        let route = (url.host?.isEmpty == false ? url.host : url.pathComponents.dropFirst().first)?
-            .lowercased()
-        guard let route else { return nil }
-        let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-        if route == "read" || route == "reader" {
-            guard let rawReference = components?.queryItems?.first(where: { $0.name == "reference" })?.value,
-                  let reference = Int(rawReference), reference > 0 else {
-                self = .section(.reader)
-                return
-            }
-            let translation = components?.queryItems?.first(where: { $0.name == "translation" })?.value
-            self = .reader(reference: reference, translationID: translation)
-        } else if route == "book" || route == "books" {
-            let moduleID = components?.queryItems?
-                .first(where: { $0.name == "module" })?.value
-                .flatMap(Self.nonempty)
-            let sectionID = components?.queryItems?
-                .first(where: { $0.name == "section" })?.value
-                .flatMap(Self.nonempty)
-            self = moduleID == nil && sectionID == nil
-                ? .section(.books)
-                : .book(moduleID: moduleID, sectionID: sectionID)
-        } else if let section = LampDeepLinkSection(rawValue: route) {
+        guard let link = LampApplicationLink(url: url) else { return nil }
+        switch link {
+        case .verse(let reference, _, let translationID):
+            self = .reader(reference: reference, translationID: translationID)
+        case .reading(let reference, let endReference, let openExternal):
+            self = .reading(
+                reference: reference, endReference: endReference,
+                openExternal: openExternal
+            )
+        case .strongs(let key):
+            self = .strongs(key)
+        case .reader(let reference?, let translationID):
+            self = .reader(reference: reference, translationID: translationID)
+        case .reader:
+            self = .section(.reader)
+        case .book(let moduleID, let sectionID):
+            self = .book(moduleID: moduleID, sectionID: sectionID)
+        case .section(let section):
             self = .section(section)
-        } else {
-            return nil
+        case .moduleFile(let url):
+            self = .moduleFile(url)
+        case .dataFile(let url):
+            self = .dataFile(url)
         }
-    }
-
-    private static func nonempty(_ value: String) -> String? {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 }
 
@@ -1316,69 +1293,7 @@ public enum ReaderTabSessionStore {
     }
 }
 
-public struct ReaderNavigationHistory: Codable, Equatable, Sendable {
-    public private(set) var backStack: [ReaderLocation]
-    public private(set) var current: ReaderLocation?
-    public private(set) var forwardStack: [ReaderLocation]
-    public let capacity: Int
-
-    public init(
-        backStack: [ReaderLocation] = [],
-        current: ReaderLocation? = nil,
-        forwardStack: [ReaderLocation] = [],
-        capacity: Int = 100
-    ) {
-        self.backStack = backStack
-        self.current = current
-        self.forwardStack = forwardStack
-        self.capacity = max(capacity, 1)
-        trimToCapacity()
-    }
-
-    public var canGoBack: Bool { !backStack.isEmpty }
-    public var canGoForward: Bool { !forwardStack.isEmpty }
-
-    public mutating func visit(_ location: ReaderLocation) {
-        guard current != location else { return }
-        if let current { backStack.append(current) }
-        current = location
-        forwardStack = []
-        trimToCapacity()
-    }
-
-    @discardableResult
-    public mutating func goBack() -> ReaderLocation? {
-        guard let destination = backStack.popLast() else { return nil }
-        if let current { forwardStack.append(current) }
-        current = destination
-        trimToCapacity()
-        return destination
-    }
-
-    @discardableResult
-    public mutating func goForward() -> ReaderLocation? {
-        guard let destination = forwardStack.popLast() else { return nil }
-        if let current { backStack.append(current) }
-        current = destination
-        trimToCapacity()
-        return destination
-    }
-
-    public mutating func clear(keeping location: ReaderLocation? = nil) {
-        backStack = []
-        current = location
-        forwardStack = []
-    }
-
-    private mutating func trimToCapacity() {
-        if backStack.count > capacity {
-            backStack.removeFirst(backStack.count - capacity)
-        }
-        if forwardStack.count > capacity {
-            forwardStack.removeFirst(forwardStack.count - capacity)
-        }
-    }
-}
+public typealias ReaderNavigationHistory = LampNavigationStack<ReaderLocation>
 
 public struct LampSearchHistoryEntry: Codable, Equatable, Identifiable, Sendable {
     public var id: String { "\(query.lowercased())|\(kind?.rawValue ?? "all")|\(moduleID ?? "all")" }
@@ -1427,79 +1342,4 @@ public enum LampSearchHistoryStore {
     }
 }
 
-public enum ExternalBibleApplication: String, CaseIterable, Codable, Identifiable, Sendable {
-    case accordance = "Accordance"
-    case eSword = "e-Sword LT"
-    case logos = "Logos"
-    case oliveTree = "Olive Tree"
-    case youVersion = "YouVersion"
-
-    public var id: String { rawValue }
-
-    public func url(startReference: Int, endReference: Int? = nil) -> URL? {
-        let start = BibleReferenceParts(startReference)
-        let end = BibleReferenceParts(endReference ?? startReference)
-        guard Self.bookAbbreviations.indices.contains(start.book - 1),
-              Self.bookAbbreviations.indices.contains(end.book - 1) else { return nil }
-        let startOSIS = Self.bookAbbreviations[start.book - 1]
-        let endOSIS = Self.bookAbbreviations[end.book - 1]
-        let startName = Self.bookNames[start.book - 1]
-            .lowercased().replacingOccurrences(of: " ", with: "")
-        let path: String
-        let root: String
-        switch self {
-        case .accordance:
-            root = "accord://read/"
-            path = "\(startOSIS)_\(start.chapter):\(start.verse)-\(endOSIS)_\(end.chapter):\(end.verse)"
-        case .eSword:
-            root = "e-sword://"
-            path = "\(startName).\(start.chapter):\(start.verse)"
-        case .logos:
-            root = "https://ref.ly/"
-            path = "\(startName)\(start.chapter):\(start.verse)"
-        case .oliveTree:
-            root = "olivetree://bible/"
-            path = "\(start.book).\(start.chapter).\(start.verse)"
-        case .youVersion:
-            root = "youversion://bible?reference="
-            path = start.book == end.book && start.chapter == end.chapter
-                ? "\(startOSIS).\(start.chapter).\(start.verse)-\(end.verse)"
-                : "\(startOSIS).\(start.chapter)"
-        }
-        return URL(string: root + path)
-    }
-
-    private struct BibleReferenceParts {
-        let book: Int
-        let chapter: Int
-        let verse: Int
-
-        init(_ reference: Int) {
-            book = reference / 1_000_000
-            chapter = (reference / 1_000) % 1_000
-            verse = reference % 1_000
-        }
-    }
-
-    private static let bookAbbreviations = [
-        "Gen", "Exod", "Lev", "Num", "Deut", "Josh", "Judg", "Ruth",
-        "1Sam", "2Sam", "1Kgs", "2Kgs", "1Chr", "2Chr", "Ezra", "Neh",
-        "Esth", "Job", "Ps", "Prov", "Eccl", "Song", "Isa", "Jer",
-        "Lam", "Ezek", "Dan", "Hos", "Joel", "Amos", "Obad", "Jonah", "Mic",
-        "Nah", "Hab", "Zeph", "Hag", "Zech", "Mal", "Matt", "Mark", "Luke",
-        "John", "Acts", "Rom", "1Cor", "2Cor", "Gal", "Eph", "Phil",
-        "Col", "1Thess", "2Thess", "1Tim", "2Tim", "Titus", "Phlm",
-        "Heb", "Jas", "1Pet", "2Pet", "1John", "2John", "3John", "Jude", "Rev",
-    ]
-
-    private static let bookNames = [
-        "Genesis", "Exodus", "Leviticus", "Numbers", "Deuteronomy", "Joshua", "Judges", "Ruth",
-        "1 Samuel", "2 Samuel", "1 Kings", "2 Kings", "1 Chronicles", "2 Chronicles", "Ezra", "Nehemiah",
-        "Esther", "Job", "Psalms", "Proverbs", "Ecclesiastes", "Song of Songs", "Isaiah", "Jeremiah",
-        "Lamentations", "Ezekiel", "Daniel", "Hosea", "Joel", "Amos", "Obadiah", "Jonah", "Micah",
-        "Nahum", "Habakkuk", "Zephaniah", "Haggai", "Zechariah", "Malachi", "Matthew", "Mark", "Luke",
-        "John", "Acts", "Romans", "1 Corinthians", "2 Corinthians", "Galatians", "Ephesians", "Philippians",
-        "Colossians", "1 Thessalonians", "2 Thessalonians", "1 Timothy", "2 Timothy", "Titus", "Philemon",
-        "Hebrews", "James", "1 Peter", "2 Peter", "1 John", "2 John", "3 John", "Jude", "Revelation",
-    ]
-}
+public typealias ExternalBibleApplication = LampExternalBibleApplication
