@@ -46,6 +46,8 @@
 		A10000000000000000000025 /* DevotionalAgentWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000024 /* DevotionalAgentWorkspaceView.swift */; };
 		A10000000000000000000026 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = G10000000000000000000005 /* SwiftTerm */; };
 		A10000000000000000000027 /* AgentRevisionSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000025 /* AgentRevisionSupport.swift */; };
+		A10000000000000000000047 /* LampSyncSettingsCommit.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000041 /* LampSyncSettingsCommit.swift */; };
+		A10000000000000000000046 /* AgentChatTranscriptSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000040 /* AgentChatTranscriptSupport.swift */; };
 		A10000000000000000000028 /* AgentMCPConfigurationSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000026 /* AgentMCPConfigurationSupport.swift */; };
 		A10000000000000000000029 /* AgentModuleAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000027 /* AgentModuleAccess.swift */; };
 		A1000000000000000000002A /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000028 /* main.swift */; };
@@ -116,6 +118,8 @@
 		B10000000000000000000023 /* TextSizeMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/TextSizeMenu.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000024 /* DevotionalAgentWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/DevotionalAgentWorkspaceView.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000025 /* AgentRevisionSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/AgentRevisionSupport.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000041 /* LampSyncSettingsCommit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/LampSyncSettingsCommit.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000040 /* AgentChatTranscriptSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/AgentChatTranscriptSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000026 /* AgentMCPConfigurationSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/AgentMCPConfigurationSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000027 /* AgentModuleAccess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/AgentModuleAccess.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000028 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampMCP/main.swift; sourceTree = SOURCE_ROOT; };
@@ -256,6 +260,8 @@
 				B1000000000000000000003A /* WorkspaceSkillSupport.swift */,
 				B1000000000000000000003B /* BookReadingSupport.swift */,
 				B10000000000000000000025 /* AgentRevisionSupport.swift */,
+				B10000000000000000000041 /* LampSyncSettingsCommit.swift */,
+				B10000000000000000000040 /* AgentChatTranscriptSupport.swift */,
 				B10000000000000000000026 /* AgentMCPConfigurationSupport.swift */,
 				B10000000000000000000027 /* AgentModuleAccess.swift */,
 			);
@@ -452,6 +458,8 @@
 				A1000000000000000000003F /* WorkspaceSkillSupport.swift in Sources */,
 				A10000000000000000000040 /* BookReadingSupport.swift in Sources */,
 				A10000000000000000000027 /* AgentRevisionSupport.swift in Sources */,
+				A10000000000000000000047 /* LampSyncSettingsCommit.swift in Sources */,
+				A10000000000000000000046 /* AgentChatTranscriptSupport.swift in Sources */,
 				A10000000000000000000028 /* AgentMCPConfigurationSupport.swift in Sources */,
 				A10000000000000000000029 /* AgentModuleAccess.swift in Sources */,
 				A10000000000000000000011 /* DevotionalEditorView.swift in Sources */,

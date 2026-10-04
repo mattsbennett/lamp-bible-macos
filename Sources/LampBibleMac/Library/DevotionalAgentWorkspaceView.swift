@@ -384,6 +384,14 @@ private enum DevotionalAgentWorkspaceStore {
         try updateInstructions(in: workspace)
         try synchronizeClaudeSkills(in: workspace)
         try mcpConfiguration.writeProviderConfigurations(to: workspace)
+        // Opening a workspace brings its history up to the current policy, so a
+        // backlog from before compaction existed shrinks without waiting for the
+        // next edit or sync. Off the main thread: the first pass over a large
+        // backlog takes a second or more. A failure costs disk space, not data.
+        let workspaceToCompact = workspace
+        DispatchQueue.global(qos: .utility).async {
+            try? DevotionalAgentRevisionStore.compact(in: workspaceToCompact)
+        }
         return workspace
     }
 
@@ -1421,7 +1429,7 @@ struct DevotionalAgentRevisionHistoryView: View {
                                     .background(.quaternary, in: Capsule())
                             }
                             Spacer()
-                            Text(revision.createdAt.formatted(date: .abbreviated, time: .shortened))
+                            Text(revisionTimeDescription(revision))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -1479,7 +1487,22 @@ struct DevotionalAgentRevisionHistoryView: View {
         let change = difference == 0
             ? "No net word-count change"
             : difference > 0 ? "+\(difference) words" : "\(difference) words"
-        return "\(beforeWords) → \(afterWords) words · \(change)"
+        var summary = "\(beforeWords) → \(afterWords) words · \(change)"
+        if let merged = revision.replacedRevisionIDs?.count, merged > 1 {
+            summary += " · \(merged) saves"
+        }
+        return summary
+    }
+
+    /// A merged revision spans an editing session, so it shows when the session
+    /// ran rather than only when it began.
+    private func revisionTimeDescription(_ revision: DevotionalAgentRevision) -> String {
+        let start = revision.createdAt
+        let end = revision.effectiveDate
+        guard revision.replacedRevisionIDs != nil, end.timeIntervalSince(start) >= 60 else {
+            return end.formatted(date: .abbreviated, time: .shortened)
+        }
+        return (start..<end).formatted(date: .abbreviated, time: .shortened)
     }
 
     private func wordCount(_ markdown: String) -> Int {

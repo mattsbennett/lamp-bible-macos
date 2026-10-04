@@ -128,6 +128,11 @@ public enum AgentChatWireParser {
             if object.bool("is_error") == true {
                 if let message = object.string("result"), !message.isEmpty {
                     events.append(.failure(message))
+                } else if let message = (object["errors"] as? [String])?
+                    .first(where: { !$0.isEmpty }) {
+                    // How Claude Code reports a failure that happened before any
+                    // turn ran, such as resuming a session it doesn't have.
+                    events.append(.failure(message))
                 } else {
                     events.append(contentsOf: failureEvents(in: object))
                 }

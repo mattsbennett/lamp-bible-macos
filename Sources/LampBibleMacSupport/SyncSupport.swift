@@ -32,11 +32,20 @@ public enum LampWorkspaceSync {
             in: libraryRoot,
             fileManager: fileManager
         )
+        // Compacted here, inside the staged transaction, so what gets published
+        // is the merged history rather than every autosave since the last sync.
+        for workspace in try childDirectoriesIfPresent(
+            of: appending(agentWorkspacesPath, to: libraryRoot),
+            fileManager: fileManager
+        ) {
+            try DevotionalAgentRevisionStore.compact(in: workspace)
+        }
     }
 
     public static func exportPortableWorkspaces(
         from libraryRoot: URL,
         to backupRoot: URL,
+        installID: String = LampInstallIdentity.current(),
         fileManager: FileManager = .default
     ) throws {
         let portableRoot = backupRoot
@@ -94,6 +103,16 @@ public enum LampWorkspaceSync {
                     .appendingPathComponent("revisions", isDirectory: true),
                 to: portableWorkspace.appendingPathComponent("Revisions", isDirectory: true),
                 allowedExtensions: ["json"],
+                fileManager: fileManager
+            )
+
+            try exportConversations(
+                from: workspace,
+                to: portableWorkspace.appendingPathComponent(
+                    conversationsDirectoryName,
+                    isDirectory: true
+                ),
+                installID: installID,
                 fileManager: fileManager
             )
         }
@@ -206,6 +225,90 @@ public enum LampWorkspaceSync {
                 allowedExtensions: ["json"],
                 fileManager: fileManager
             )
+            // The union merge above brings back any original that another Mac
+            // still holds, even after it was compacted away here. Compacting the
+            // merged set recognises those against the revisions that replaced them.
+            try DevotionalAgentRevisionStore.compact(in: workspace)
+
+            try importConversations(
+                from: portableWorkspace.appendingPathComponent(
+                    conversationsDirectoryName,
+                    isDirectory: true
+                ),
+                into: workspace,
+                fileManager: fileManager
+            )
+        }
+    }
+
+    /// Chat transcripts travel; the providers' own session stores do not. A
+    /// transcript is enough to read a conversation on another Mac and to carry it
+    /// on from a recap, at a few kilobytes rather than the providers' private,
+    /// version-specific files.
+    private static let conversationsDirectoryName = "Conversations"
+
+    private static func exportConversations(
+        from workspace: URL,
+        to destination: URL,
+        installID: String,
+        fileManager: FileManager
+    ) throws {
+        let source = AgentChatTranscriptStore.directory(in: workspace)
+        guard fileManager.fileExists(atPath: source.path) else { return }
+        for url in try childFiles(of: source, fileManager: fileManager)
+        where AgentChatTranscriptStore.isTranscriptFilename(url.lastPathComponent) {
+            // An unreadable transcript stays where it is rather than spreading.
+            guard let transcript = try? AgentChatTranscriptStore.decode(Data(contentsOf: url))
+            else { continue }
+            let target = destination.appendingPathComponent(url.lastPathComponent)
+            try ensureSafeDestination(target, fileManager: fileManager)
+            try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+            // Stamped on the way out, so the other Mac can tell the session is
+            // this one's even if the transcript predates ownership being recorded.
+            try AgentChatTranscriptStore
+                .encode(transcript.attributingSession(toInstall: installID))
+                .write(to: target, options: .atomic)
+        }
+    }
+
+    private static func importConversations(
+        from source: URL,
+        into workspace: URL,
+        fileManager: FileManager
+    ) throws {
+        for incomingURL in try childFilesIfPresent(of: source, fileManager: fileManager)
+        where AgentChatTranscriptStore.isTranscriptFilename(incomingURL.lastPathComponent) {
+            guard let incoming = try? AgentChatTranscriptStore.decode(Data(contentsOf: incomingURL))
+            else { continue }
+            let localURL = AgentChatTranscriptStore.directory(in: workspace)
+                .appendingPathComponent(incomingURL.lastPathComponent)
+
+            let merged: AgentChatTranscript
+            if fileManager.fileExists(atPath: localURL.path) {
+                let values = try localURL.resourceValues(forKeys: [
+                    .isRegularFileKey, .isSymbolicLinkKey,
+                ])
+                guard values.isRegularFile == true, values.isSymbolicLink != true else {
+                    throw LampSyncError.unsafeArchivePath
+                }
+                // Last-writer-wins by modification date would drop whichever side
+                // chatted less recently, so the two copies are reconciled instead.
+                if let local = try? AgentChatTranscriptStore.decode(Data(contentsOf: localURL)) {
+                    merged = AgentChatTranscriptMerge.merge(local: local, incoming: incoming)
+                    guard merged != local else { continue }
+                } else {
+                    merged = incoming
+                }
+            } else {
+                merged = incoming
+            }
+
+            try ensureSafeDestination(localURL, fileManager: fileManager)
+            try fileManager.createDirectory(
+                at: localURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try AgentChatTranscriptStore.encode(merged).write(to: localURL, options: .atomic)
         }
     }
 

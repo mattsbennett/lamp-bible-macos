@@ -615,3 +615,142 @@ private final class TestURLProtocol: URLProtocol, @unchecked Sendable {
 
     override func stopLoading() {}
 }
+
+/// Two libraries standing in for two Macs, exchanging workspaces through a
+/// portable backup the way a sync folder does.
+struct WorkspaceConversationAndHistorySyncTests {
+    private let base = Date(timeIntervalSince1970: 1_800_000_000)
+
+    private func makeRoot() throws -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-conversation-sync-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        return root
+    }
+
+    private func workspace(in library: URL) throws -> URL {
+        let workspace = library.appendingPathComponent(
+            "AgentWorkspaces/Devotionals/talk-123",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        return workspace
+    }
+
+    @Test func conversationsTravelAndTheirSessionsStayWithTheirMac() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let macA = root.appendingPathComponent("Mac A", isDirectory: true)
+        let macB = root.appendingPathComponent("Mac B", isDirectory: true)
+        let backup = root.appendingPathComponent("Backup", isDirectory: true)
+
+        // Written before ownership was recorded, so it carries no install.
+        let transcript = AgentChatTranscript(
+            sessionID: "claude-session",
+            messages: [AgentChatTranscript.Message(role: .user, text: "Tighten the opening", date: base)]
+        )
+        try AgentChatTranscriptStore.save(transcript, providerID: "claude", in: try workspace(in: macA))
+
+        try LampWorkspaceSync.exportPortableWorkspaces(from: macA, to: backup, installID: "mac-a")
+        // The sync archive leaves out hidden paths; the transcript has to be
+        // under a visible name to reach the other Mac at all.
+        let archived = try LampSyncArchive.create(from: backup).entries.map(\.path)
+        #expect(archived.contains("Workspaces/Devotionals/talk-123/Conversations/native-chat-claude.json"))
+
+        _ = try workspace(in: macB)
+        try LampWorkspaceSync.importPortableWorkspaces(from: backup, into: macB)
+
+        let arrived = AgentChatTranscriptStore.load(providerID: "claude", in: try workspace(in: macB))
+        #expect(arrived.messages.map(\.text) == ["Tighten the opening"])
+        #expect(arrived.sessionInstallID == "mac-a")
+        #expect(arrived.resumableSessionID(forInstall: "mac-b") == nil)
+        #expect(arrived.resumableSessionID(forInstall: "mac-a") == "claude-session")
+    }
+
+    @Test func conversationsContinuedOnBothMacsAreReconciledNotOverwritten() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let macA = root.appendingPathComponent("Mac A", isDirectory: true)
+        let macB = root.appendingPathComponent("Mac B", isDirectory: true)
+        let backup = root.appendingPathComponent("Backup", isDirectory: true)
+        let conversation = UUID()
+        let shared = AgentChatTranscript.Message(role: .user, text: "shared", date: base)
+
+        try AgentChatTranscriptStore.save(
+            AgentChatTranscript(
+                conversationID: conversation, sessionID: "a", sessionInstallID: "mac-a",
+                messages: [shared, .init(role: .user, text: "from a", date: base.addingTimeInterval(20))]
+            ),
+            providerID: "codex",
+            in: try workspace(in: macA)
+        )
+        try AgentChatTranscriptStore.save(
+            AgentChatTranscript(
+                conversationID: conversation, sessionID: "b", sessionInstallID: "mac-b",
+                messages: [shared, .init(role: .user, text: "from b", date: base.addingTimeInterval(10))]
+            ),
+            providerID: "codex",
+            in: try workspace(in: macB)
+        )
+
+        try LampWorkspaceSync.exportPortableWorkspaces(from: macA, to: backup, installID: "mac-a")
+        try LampWorkspaceSync.importPortableWorkspaces(from: backup, into: macB)
+
+        let merged = AgentChatTranscriptStore.load(providerID: "codex", in: try workspace(in: macB))
+        #expect(merged.messages.map(\.text) == ["shared", "from b", "from a"])
+        #expect(merged.sessionID == nil)
+    }
+
+    @Test func compactedHistoryStaysCompactedOnBothMacs() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let macA = root.appendingPathComponent("Mac A", isDirectory: true)
+        let macB = root.appendingPathComponent("Mac B", isDirectory: true)
+        let backup = root.appendingPathComponent("Backup", isDirectory: true)
+
+        // Both Macs hold the same keystroke-level history from before
+        // compaction existed — the case that grew one workspace to 32 MB.
+        let originals = (0..<30).map { index in
+            DevotionalAgentRevision(
+                createdAt: base.addingTimeInterval(Double(index) * 5),
+                kind: .userEdit,
+                documentPath: "draft.md",
+                beforeMarkdown: "draft \(index)",
+                afterMarkdown: "draft \(index + 1)"
+            )
+        }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        for library in [macA, macB] {
+            let directory = try workspace(in: library)
+                .appendingPathComponent(".lamp/revisions", isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            for revision in originals {
+                try encoder.encode(revision).write(
+                    to: directory.appendingPathComponent("\(revision.id.uuidString).json")
+                )
+            }
+        }
+
+        // Mac A compacts and publishes; Mac B pulls. The union merge hands Mac B
+        // the merged revision on top of its own thirty originals.
+        try LampWorkspaceSync.prepareLibraryForSync(at: macA)
+        try LampWorkspaceSync.exportPortableWorkspaces(from: macA, to: backup, installID: "mac-a")
+        try LampWorkspaceSync.importPortableWorkspaces(from: backup, into: macB)
+
+        func revisionFiles(_ library: URL) throws -> [URL] {
+            try FileManager.default.contentsOfDirectory(
+                at: try workspace(in: library).appendingPathComponent(".lamp/revisions", isDirectory: true),
+                includingPropertiesForKeys: nil
+            )
+        }
+        #expect(try revisionFiles(macA).count == 1)
+        #expect(try revisionFiles(macB).count == 1)
+        #expect(try revisionFiles(macA).map(\.lastPathComponent) == revisionFiles(macB).map(\.lastPathComponent))
+
+        let history = try DevotionalAgentRevisionStore.revisions(in: try workspace(in: macB))
+        #expect(history.count == 1)
+        #expect(history.first?.beforeMarkdown == "draft 0")
+        #expect(history.first?.afterMarkdown == "draft 30")
+    }
+}
