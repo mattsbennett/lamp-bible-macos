@@ -18,7 +18,11 @@ The UI never constructs a module database directly; all format work is delegated
 
 ### Slide Studio
 
-Slide Studio edits versioned `.lampdeck` JSON documents stored under the library's `Presentations` directory. `LampCore` defines the semantic deck, slide, layout, content-block, theme, source-link, and validation contracts; the Mac app owns the canvas, inspector, autosave, file import/export, and indexed full-screen presenter. Geometry stays in the renderer so human and agent authors describe content roles rather than fragile coordinates.
+Slide Studio edits versioned `.lampdeck` JSON documents stored under the library's `Presentations` directory. `LampCore` defines the semantic deck, slide, layout, content-block, theme, source-link, and validation contracts; the Mac app owns the inspector, autosave, file import/export, and indexed full-screen presenter. Geometry stays in the renderer so human and agent authors describe content roles rather than fragile coordinates.
+
+The renderer itself lives in `LampPresentationUI`, a separate product from `LampCore` because the module CLI and the MCP server link `LampCore` headlessly and must not pull in SwiftUI. Slide Studio's editor and slide list, the full-screen presenter, the iOS deck viewer, and the iOS remote's current/next previews all draw through that one canvas, so a deck cannot look different depending on which screen shows it. Image blocks render as a placeholder everywhere: no platform resolves `assetPath` yet, and deck assets are not synced.
+
+Decks sync between Macs, and out to iPhone and iPad, as individual files under `Workspaces/Presentations` in the portable backup, with deletions recorded in `deleted-decks.json`. `LampPresentationDeckPortableLayout` fixes those paths and `LampPresentationDeckPortablePull` the merge decision, both in `LampCore`, so the Mac's read-write sync and the read-only iOS mirror resolve the same winner. iOS never publishes a deck.
 
 Decks may link to a devotional without being embedded in it, allowing several audience-specific presentations to accompany the same writing. A bundled `build-lamp-deck` workspace skill writes `presentation.lampdeck`; the devotional workspace validates and imports changed artifacts while preserving the MCP server's read-only library boundary.
 

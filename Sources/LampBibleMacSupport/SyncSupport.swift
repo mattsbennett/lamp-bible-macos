@@ -4,8 +4,8 @@ import LampModuleKit
 /// Preserve the support module's public archive name while the codec lives in core.
 public typealias LampSyncArchive = LampModuleKit.LampSyncArchive
 
-/// Copies the user-authored portion of devotional agent workspaces into and out
-/// of a portable backup. Custom skills are synchronized once as a shared catalog,
+/// Copies the user-authored portion of devotional agent workspaces, and
+/// presentation decks, into and out of a portable backup. Custom skills are synchronized once as a shared catalog,
 /// along with each workspace's enabled-skill selection. Generated instructions,
 /// provider configuration, provider skill copies, and the primary draft are
 /// deliberately rebuilt from their canonical sources on each Mac.
@@ -63,6 +63,8 @@ public enum LampWorkspaceSync {
             )
         }
 
+        try LampPresentationDeckSync.exportDecks(from: libraryRoot, to: backupRoot, fileManager: fileManager)
+
         let sourceRoot = appending(agentWorkspacesPath, to: libraryRoot)
         guard fileManager.fileExists(atPath: sourceRoot.path) else { return }
 
@@ -115,6 +117,18 @@ public enum LampWorkspaceSync {
                 installID: installID,
                 fileManager: fileManager
             )
+
+            var fileLedger = WorkspaceFileLedger.load(in: workspace)
+            fileLedger.noteChanges(present: try workspaceFiles(in: workspace, fileManager: fileManager)
+                .mapValues(\.modified))
+            try fileLedger.save(in: workspace)
+            if !fileLedger.isEmpty {
+                // Possibly all that's left of the workspace to send.
+                try fileManager.createDirectory(at: portableWorkspace, withIntermediateDirectories: true)
+                try fileLedger.portable.write(
+                    to: portableWorkspace.appendingPathComponent(WorkspaceFileLedger.portableFilename)
+                )
+            }
         }
     }
 
@@ -141,6 +155,8 @@ public enum LampWorkspaceSync {
             )
         }
 
+        try LampPresentationDeckSync.importDecks(from: backupRoot, into: libraryRoot, fileManager: fileManager)
+
         let sourceRoot = appending(portableWorkspacesPath, to: backupRoot)
         guard fileManager.fileExists(atPath: sourceRoot.path) else { return }
 
@@ -149,9 +165,20 @@ public enum LampWorkspaceSync {
             let workspace = destinationRoot
                 .appendingPathComponent(portableWorkspace.lastPathComponent, isDirectory: true)
 
+            // Deletions made here since the last sync are noted before anything
+            // arrives, or the incoming copies would simply put the files back.
+            var fileLedger = WorkspaceFileLedger.load(in: workspace)
+            fileLedger.noteChanges(present: try workspaceFiles(in: workspace, fileManager: fileManager)
+                .mapValues(\.modified))
+            fileLedger.merge(WorkspaceFileLedger.portable(
+                in: portableWorkspace.appendingPathComponent(WorkspaceFileLedger.portableFilename)
+            ))
+
             let documents = portableWorkspace.appendingPathComponent("Documents", isDirectory: true)
             for document in try childFilesIfPresent(of: documents, fileManager: fileManager)
             where isPortableDocument(document) {
+                let key = WorkspaceFileLedger.documentKey(document.lastPathComponent)
+                if fileLedger.isDeleted(key, modified: modificationTime(of: document)) { continue }
                 try mergeFile(
                     from: document,
                     to: workspace.appendingPathComponent(document.lastPathComponent),
@@ -162,6 +189,9 @@ public enum LampWorkspaceSync {
             try mergeTree(
                 from: portableWorkspace.appendingPathComponent("Context", isDirectory: true),
                 to: workspace.appendingPathComponent("context", isDirectory: true),
+                skipping: { path, modified in
+                    fileLedger.isDeleted(WorkspaceFileLedger.contextKey(path), modified: modified)
+                },
                 fileManager: fileManager
             )
             try WorkspaceContextFileStore.consolidate(
@@ -169,6 +199,20 @@ public enum LampWorkspaceSync {
                 libraryRootURL: libraryRoot,
                 fileManager: fileManager
             )
+            // Deleted elsewhere since this Mac's copy was saved.
+            for (key, file) in try workspaceFiles(in: workspace, fileManager: fileManager)
+            where fileLedger.isDeleted(key, modified: file.modified) {
+                if WorkspaceFileLedger.isContextKey(key) {
+                    try WorkspaceContextFileStore.removeSyncedContextFile(
+                        at: file.url, libraryRootURL: libraryRoot, fileManager: fileManager
+                    )
+                } else {
+                    try fileManager.removeItem(at: file.url)
+                }
+            }
+            fileLedger.recordSynced(try workspaceFiles(in: workspace, fileManager: fileManager)
+                .mapValues(\.modified))
+            try fileLedger.save(in: workspace)
 
             let portableSelection = portableWorkspace.appendingPathComponent("EnabledSkills.json")
             let hasPortableSelection = fileManager.fileExists(atPath: portableSelection.path)
@@ -411,6 +455,7 @@ public enum LampWorkspaceSync {
         from source: URL,
         to destination: URL,
         allowedExtensions: Set<String>? = nil,
+        skipping shouldSkip: ((_ relativePath: String, _ modified: Int64) -> Bool)? = nil,
         fileManager: FileManager
     ) throws {
         guard isSafeDirectory(source),
@@ -433,9 +478,11 @@ public enum LampWorkspaceSync {
                !allowedExtensions.contains(url.pathExtension.lowercased()) { continue }
             let path = url.standardizedFileURL.path
             guard path.hasPrefix(prefix) else { throw LampSyncError.unsafeArchivePath }
+            let relativePath = String(path.dropFirst(prefix.count))
+            if let shouldSkip, shouldSkip(relativePath, modificationTime(of: url)) { continue }
             try mergeFile(
                 from: url,
-                to: destination.appendingPathComponent(String(path.dropFirst(prefix.count))),
+                to: destination.appendingPathComponent(relativePath),
                 fileManager: fileManager
             )
         }
@@ -532,11 +579,158 @@ public enum LampWorkspaceSync {
         }
     }
 
+    private static func modificationTime(of url: URL) -> Int64 {
+        let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        return WorkspaceFileLedger.milliseconds(date ?? .distantPast)
+    }
+
+    /// The workspace's own files that sync carries: top-level documents and
+    /// everything in `context`, keyed as `WorkspaceFileLedger` keys them.
+    static func workspaceFiles(
+        in workspace: URL,
+        fileManager: FileManager
+    ) throws -> [String: (url: URL, modified: Int64)] {
+        var files: [String: (url: URL, modified: Int64)] = [:]
+        for document in try childFilesIfPresent(of: workspace, fileManager: fileManager)
+        where isPortableDocument(document) {
+            files[WorkspaceFileLedger.documentKey(document.lastPathComponent)] =
+                (document, modificationTime(of: document))
+        }
+        let context = workspace.appendingPathComponent("context", isDirectory: true)
+        guard isSafeDirectory(context),
+              let enumerator = fileManager.enumerator(
+                at: context,
+                includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
+                options: [.skipsHiddenFiles]
+              ) else { return files }
+        let prefix = context.standardizedFileURL.path + "/"
+        for case let url as URL in enumerator {
+            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+            if values.isSymbolicLink == true {
+                enumerator.skipDescendants()
+                continue
+            }
+            let path = url.standardizedFileURL.path
+            guard values.isRegularFile == true, path.hasPrefix(prefix) else { continue }
+            files[WorkspaceFileLedger.contextKey(String(path.dropFirst(prefix.count)))] =
+                (url, modificationTime(of: url))
+        }
+        return files
+    }
+
     private static func isSafeDirectory(_ directory: URL) -> Bool {
         guard let values = try? directory.resourceValues(forKeys: [
             .isDirectoryKey, .isSymbolicLinkKey,
         ]) else { return false }
         return values.isDirectory == true && values.isSymbolicLink != true
+    }
+}
+
+/// What sync last saw of a workspace's own files, and which have been deleted
+/// or added since, so that a deletion reaches other Macs instead of being undone
+/// by their copies. Times are milliseconds since 1970.
+///
+/// Workspace files change outside Lamp too — agents and Finder delete them —
+/// so deletions are found by comparing with the last sync rather than recorded
+/// as they happen.
+struct WorkspaceFileLedger: Codable, Equatable {
+    static let portableFilename = "DeletedFiles.json"
+    private static let localFilename = "sync-files.json"
+
+    var formatVersion = 1
+    /// Files present after the last sync, with their modification times. Nil
+    /// until a first sync, which records what's there and nothing more: a Mac
+    /// first syncing after an upgrade must not treat its files as new.
+    var synced: [String: Int64]?
+    var deletedAt: [String: Int64] = [:]
+    /// When context files appeared here. Context files are links to shared
+    /// objects whose modification times are those of whichever copy came
+    /// first, so a file added again could look older than its own deletion.
+    var presentSince: [String: Int64] = [:]
+
+    struct Portable: Codable, Equatable {
+        var formatVersion = 1
+        var deletedAt: [String: Int64]
+        var presentSince: [String: Int64]
+
+        func write(to url: URL) throws {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            try encoder.encode(self).write(to: url, options: .atomic)
+        }
+    }
+
+    static func documentKey(_ filename: String) -> String { "Documents/" + filename }
+    static func contextKey(_ relativePath: String) -> String { "Context/" + relativePath }
+    static func isContextKey(_ key: String) -> Bool { key.hasPrefix("Context/") }
+
+    static func milliseconds(_ date: Date) -> Int64 {
+        Int64((date.timeIntervalSince1970 * 1_000).rounded(.down))
+    }
+
+    var isEmpty: Bool { deletedAt.isEmpty && presentSince.isEmpty }
+    var portable: Portable { Portable(deletedAt: deletedAt, presentSince: presentSince) }
+
+    static func load(in workspace: URL) -> WorkspaceFileLedger {
+        guard let data = try? Data(contentsOf: url(in: workspace)),
+              let ledger = try? JSONDecoder().decode(WorkspaceFileLedger.self, from: data)
+        else { return WorkspaceFileLedger() }
+        return ledger
+    }
+
+    func save(in workspace: URL) throws {
+        let destination = Self.url(in: workspace)
+        try FileManager.default.createDirectory(
+            at: destination.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(self).write(to: destination, options: .atomic)
+    }
+
+    static func portable(in url: URL) -> Portable? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(Portable.self, from: data)
+    }
+
+    private static func url(in workspace: URL) -> URL {
+        AgentChatTranscriptStore.directory(in: workspace).appendingPathComponent(localFilename)
+    }
+
+    /// Compares the files present now with those at the last sync.
+    mutating func noteChanges(present: [String: Int64], now: Date = Date()) {
+        guard let synced else {
+            self.synced = present
+            return
+        }
+        let time = Self.milliseconds(now)
+        for (key, modified) in synced where present[key] == nil {
+            // A document's deletion covers the last version this Mac had, so a
+            // later edit made elsewhere survives it. Context files' times aren't
+            // comparable across Macs, so theirs is when it was noticed.
+            let deleted = Self.isContextKey(key) ? time : modified
+            deletedAt[key] = max(deletedAt[key] ?? .min, deleted)
+        }
+        for key in present.keys where synced[key] == nil && Self.isContextKey(key) {
+            presentSince[key] = max(presentSince[key] ?? .min, time)
+        }
+        self.synced = present
+    }
+
+    mutating func recordSynced(_ present: [String: Int64]) {
+        synced = present
+    }
+
+    mutating func merge(_ portable: Portable?) {
+        guard let portable else { return }
+        deletedAt.merge(portable.deletedAt) { max($0, $1) }
+        presentSince.merge(portable.presentSince) { max($0, $1) }
+    }
+
+    func isDeleted(_ key: String, modified: Int64) -> Bool {
+        guard let deleted = deletedAt[key] else { return false }
+        return deleted >= max(modified, presentSince[key] ?? .min)
     }
 }
 

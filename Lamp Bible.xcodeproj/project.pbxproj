@@ -19,6 +19,7 @@
 		A1000000000000000000000A /* StudioDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000A /* StudioDocument.swift */; };
 		A1000000000000000000000B /* LampCore in Frameworks */ = {isa = PBXBuildFile; productRef = G10000000000000000000002 /* LampCore */; };
 		A1000000000000000000000C /* LampModuleKit in Frameworks */ = {isa = PBXBuildFile; productRef = G10000000000000000000003 /* LampModuleKit */; };
+		A1000000000000000000004A /* LampPresentationUI in Frameworks */ = {isa = PBXBuildFile; productRef = G1000000000000000000000D /* LampPresentationUI */; };
 		A1000000000000000000000D /* DevotionalsAndQuizzesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000C /* DevotionalsAndQuizzesView.swift */; };
 		A1000000000000000000000E /* bundled_modules.db.zlib in Resources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000D /* bundled_modules.db.zlib */; };
 		A1000000000000000000000F /* UnifiedSearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000E /* UnifiedSearchView.swift */; };
@@ -46,6 +47,8 @@
 		A10000000000000000000025 /* DevotionalAgentWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000024 /* DevotionalAgentWorkspaceView.swift */; };
 		A10000000000000000000026 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = G10000000000000000000005 /* SwiftTerm */; };
 		A10000000000000000000027 /* AgentRevisionSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000025 /* AgentRevisionSupport.swift */; };
+		A10000000000000000000049 /* PresentationDeckSyncSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000043 /* PresentationDeckSyncSupport.swift */; };
+		A10000000000000000000048 /* AgentTerminalSessionSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000042 /* AgentTerminalSessionSupport.swift */; };
 		A10000000000000000000047 /* LampSyncSettingsCommit.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000041 /* LampSyncSettingsCommit.swift */; };
 		A10000000000000000000046 /* AgentChatTranscriptSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000040 /* AgentChatTranscriptSupport.swift */; };
 		A10000000000000000000028 /* AgentMCPConfigurationSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000026 /* AgentMCPConfigurationSupport.swift */; };
@@ -118,6 +121,8 @@
 		B10000000000000000000023 /* TextSizeMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/TextSizeMenu.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000024 /* DevotionalAgentWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/DevotionalAgentWorkspaceView.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000025 /* AgentRevisionSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/AgentRevisionSupport.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000043 /* PresentationDeckSyncSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/PresentationDeckSyncSupport.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000042 /* AgentTerminalSessionSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/AgentTerminalSessionSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000041 /* LampSyncSettingsCommit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/LampSyncSettingsCommit.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000040 /* AgentChatTranscriptSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/AgentChatTranscriptSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000026 /* AgentMCPConfigurationSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/AgentMCPConfigurationSupport.swift; sourceTree = SOURCE_ROOT; };
@@ -179,6 +184,7 @@
 			files = (
 				A1000000000000000000000B /* LampCore in Frameworks */,
 				A1000000000000000000000C /* LampModuleKit in Frameworks */,
+				A1000000000000000000004A /* LampPresentationUI in Frameworks */,
 				A10000000000000000000026 /* SwiftTerm in Frameworks */,
 				A1000000000000000000003D /* SwiftyChat in Frameworks */,
 				A10000000000000000000043 /* Sparkle in Frameworks */,
@@ -260,6 +266,8 @@
 				B1000000000000000000003A /* WorkspaceSkillSupport.swift */,
 				B1000000000000000000003B /* BookReadingSupport.swift */,
 				B10000000000000000000025 /* AgentRevisionSupport.swift */,
+				B10000000000000000000043 /* PresentationDeckSyncSupport.swift */,
+				B10000000000000000000042 /* AgentTerminalSessionSupport.swift */,
 				B10000000000000000000041 /* LampSyncSettingsCommit.swift */,
 				B10000000000000000000040 /* AgentChatTranscriptSupport.swift */,
 				B10000000000000000000026 /* AgentMCPConfigurationSupport.swift */,
@@ -321,6 +329,7 @@
 			packageProductDependencies = (
 				G10000000000000000000002 /* LampCore */,
 				G10000000000000000000003 /* LampModuleKit */,
+				G1000000000000000000000D /* LampPresentationUI */,
 				G10000000000000000000005 /* SwiftTerm */,
 				G1000000000000000000000A /* SwiftyChat */,
 				G1000000000000000000000C /* Sparkle */,
@@ -458,6 +467,8 @@
 				A1000000000000000000003F /* WorkspaceSkillSupport.swift in Sources */,
 				A10000000000000000000040 /* BookReadingSupport.swift in Sources */,
 				A10000000000000000000027 /* AgentRevisionSupport.swift in Sources */,
+				A10000000000000000000049 /* PresentationDeckSyncSupport.swift in Sources */,
+				A10000000000000000000048 /* AgentTerminalSessionSupport.swift in Sources */,
 				A10000000000000000000047 /* LampSyncSettingsCommit.swift in Sources */,
 				A10000000000000000000046 /* AgentChatTranscriptSupport.swift in Sources */,
 				A10000000000000000000028 /* AgentMCPConfigurationSupport.swift in Sources */,
@@ -726,6 +737,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = G1000000000000000000000B /* XCRemoteSwiftPackageReference "Sparkle" */;
 			productName = Sparkle;
+		};
+		G1000000000000000000000D /* LampPresentationUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = G10000000000000000000001 /* XCLocalSwiftPackageReference "lamp-bible-core" */;
+			productName = LampPresentationUI;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

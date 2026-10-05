@@ -45,8 +45,6 @@ enum AIProviderCLI: String, CaseIterable, Identifiable {
         }
     }
 
-    var launchCommand: String { "exec \(executable)" }
-
     var loginCommand: String {
         switch self {
         case .codex: "codex login"
@@ -739,6 +737,95 @@ enum DevotionalAgentWorkspaceFiles {
     }
 }
 
+/// What the Terminal pane knows about capturing the running session's turns.
+///
+/// Capture depends on each CLI running the hook it documents. If a release stops
+/// doing that, the conversation silently stops syncing — so the pane says plainly
+/// whether turns are arriving.
+private struct TerminalCaptureState: Equatable {
+    var provider: AIProviderCLI?
+    var launchedAt: Date?
+    var integrationReported = false
+    var capturedMessages = 0
+    var resumedSessionID: String?
+    /// The CLI has run Lamp's integration on this Mac before, so its first-run
+    /// step — trusting Codex's hooks, installing OpenCode's plugin — is done.
+    var integrationKnownToRun = false
+    /// Why the agent may know less of the conversation than the transcript shows.
+    var continuityNotice: String?
+    var notices: [String] = []
+    var processExited = false
+    /// Claude reports its session within a second of starting — but only once
+    /// it has started, after any first-run questions it asks are answered. So a
+    /// long silence is worth explaining, but isn't yet a failure.
+    var claudeHooksOverdue = false
+
+    struct Status {
+        let text: String
+        let systemImage: String
+        let isProblem: Bool
+    }
+
+    mutating func record(_ result: AgentTerminalIngestResult, now: Date) {
+        integrationReported = integrationReported || result.integrationReported
+        capturedMessages += result.absorbedMessageCount
+        notices += result.notices.filter { !notices.contains($0) }
+        if provider == .claude, !integrationReported, let launchedAt,
+           now.timeIntervalSince(launchedAt) > 20 {
+            claudeHooksOverdue = true
+        }
+    }
+
+    func status() -> Status? {
+        guard let provider else { return nil }
+        if let notice = notices.first {
+            return Status(text: notice, systemImage: "exclamationmark.triangle", isProblem: true)
+        }
+        if capturedMessages > 0 {
+            let noun = capturedMessages == 1 ? "message" : "messages"
+            return Status(
+                text: "Saved \(capturedMessages) \(noun) from this session to the synced conversation.",
+                systemImage: "checkmark.circle",
+                isProblem: false
+            )
+        }
+        if integrationReported {
+            return Status(text: "This session’s turns are saved to the synced conversation.", systemImage: "arrow.triangle.2.circlepath", isProblem: false)
+        }
+        switch provider {
+        case .claude:
+            if processExited {
+                return Status(text: "Claude Code didn’t run Lamp’s capture hooks, so this session’s turns weren’t saved.", systemImage: "exclamationmark.triangle", isProblem: true)
+            }
+            if claudeHooksOverdue {
+                return Status(text: "Claude Code hasn’t started the session yet. Answer any question it’s asking; if it has started, Lamp’s capture hooks aren’t running and turns won’t be saved.", systemImage: "questionmark.circle", isProblem: false)
+            }
+            return Status(text: "Connecting to Claude Code…", systemImage: "arrow.triangle.2.circlepath", isProblem: false)
+        case .codex:
+            // Codex reports nothing until the first prompt, so silence before
+            // then isn't a failure. Its hooks run only once the user has trusted
+            // them, which Codex asks about at launch the first time.
+            if processExited {
+                return Status(text: "No turns from this session were saved. If you sent any, Codex didn’t run Lamp’s capture hooks: type /hooks in Codex to review and trust them.", systemImage: "exclamationmark.triangle", isProblem: true)
+            }
+            if integrationKnownToRun {
+                return Status(text: "This session’s turns will be saved to the synced conversation.", systemImage: "arrow.triangle.2.circlepath", isProblem: false)
+            }
+            return Status(text: "The first time, Codex asks you to review Lamp’s capture hooks. Trust them so this session’s turns are saved.", systemImage: "arrow.triangle.2.circlepath", isProblem: false)
+        case .openCode:
+            if processExited {
+                return Status(text: "OpenCode didn’t load Lamp’s capture plugin, so this session’s turns weren’t saved.", systemImage: "exclamationmark.triangle", isProblem: true)
+            }
+            if integrationKnownToRun {
+                return Status(text: "Connecting to OpenCode…", systemImage: "arrow.triangle.2.circlepath", isProblem: false)
+            }
+            // OpenCode installs a plugin's SDK the first time it loads one, which
+            // can take a while; that is not a failure.
+            return Status(text: "Waiting for OpenCode to load Lamp’s plugin (the first launch installs it)…", systemImage: "arrow.triangle.2.circlepath", isProblem: false)
+        }
+    }
+}
+
 struct DevotionalAgentWorkspaceView: View {
     let libraryRootURL: URL
     let bundledModulesArchiveURL: URL?
@@ -764,6 +851,8 @@ struct DevotionalAgentWorkspaceView: View {
     @State private var activeProvider: AIProviderCLI?
     @State private var terminalID = UUID()
     @State private var terminalExitCode: Int32?
+    @State private var terminalCommand = ""
+    @State private var terminalCapture = TerminalCaptureState()
     @State private var showingRevisionHistory = false
     @State private var presentationStatus: String?
 
@@ -1049,13 +1138,23 @@ struct DevotionalAgentWorkspaceView: View {
 
     @ViewBuilder
     private var terminalPane: some View {
-        if let activeProvider, let workspaceURL {
-            EmbeddedAITerminalView(
-                command: activeProvider.launchCommand,
-                workingDirectory: workspaceURL,
-                onExit: { terminalExitCode = $0 }
-            )
-            .id(terminalID)
+        if activeProvider != nil, let workspaceURL {
+            VStack(spacing: 0) {
+                terminalCaptureStatus
+                EmbeddedAITerminalView(
+                    command: terminalCommand,
+                    workingDirectory: workspaceURL,
+                    onExit: { [launch = terminalID] exitCode in
+                        // A terminal replaced by a relaunch still reports its
+                        // own exit; that belongs to the session it ran.
+                        guard launch == terminalID else { return }
+                        terminalExitCode = exitCode
+                        terminalDidExit(exitStatus: exitCode)
+                    },
+                    onDismantle: { [launch = terminalID] in terminalWasTornDown(launch) }
+                )
+                .id(terminalID)
+            }
         } else {
             VStack(spacing: 10) {
                 Image(systemName: "terminal")
@@ -1175,6 +1274,7 @@ struct DevotionalAgentWorkspaceView: View {
             }
             refreshWorkspaceMetadata(in: workspaceURL)
             importPresentationArtifactIfNeeded(in: workspaceURL)
+            collectTerminalTurns(in: workspaceURL)
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -1373,9 +1473,126 @@ struct DevotionalAgentWorkspaceView: View {
         guard let workspaceURL else { return }
         try? DevotionalAgentWorkspaceStore.writeContext(contextDocument, to: workspaceURL)
         synchronizeEditorDraft(draftMarkdown)
+        do {
+            terminalCommand = try prepareTerminalLaunch(of: provider, in: workspaceURL)
+        } catch {
+            errorMessage = "Couldn’t prepare the Terminal session: \(error.localizedDescription)"
+            return
+        }
         activeProvider = provider
         terminalExitCode = nil
         terminalID = UUID()
+    }
+
+    /// Plans a Terminal session that carries on the workspace's conversation —
+    /// the same one Chat shows — and captures its turns so they sync.
+    private func prepareTerminalLaunch(
+        of provider: AIProviderCLI,
+        in workspace: URL
+    ) throws -> String {
+        let prepared = try AgentTerminalLauncher.prepare(
+            providerID: provider.rawValue,
+            executable: provider.executable,
+            workspace: workspace,
+            installID: LampInstallIdentity.current(),
+            // One Lamp-owned folder outside every workspace: OpenCode installs
+            // its SDK beside a plugin on first use, which would otherwise put
+            // tens of megabytes into each devotional's workspace.
+            openCodeConfigDirectory: libraryRootURL.deletingLastPathComponent()
+                .appendingPathComponent("AgentIntegrations", isDirectory: true)
+                .appendingPathComponent("OpenCode", isDirectory: true)
+        )
+        let integrationMemory = AgentTerminalIntegrationMemory.forProvider(provider.wireProvider)
+        // OpenCode will install a freshly written plugin again, which is the
+        // slow first load the guidance is there to explain.
+        if prepared.integrationWrittenAfresh { integrationMemory?.forget() }
+        terminalCapture = TerminalCaptureState(
+            provider: provider,
+            launchedAt: Date(),
+            resumedSessionID: prepared.resumedSessionID,
+            integrationKnownToRun: integrationMemory?.hasRun() ?? false,
+            continuityNotice: prepared.carriesRecap
+                ? "\(provider.shortName) was given a recap of the earlier conversation, whose session can’t be resumed on this Mac."
+                : nil
+        )
+        return prepared.command
+    }
+
+    private func collectTerminalTurns(in workspace: URL) {
+        guard let result = try? AgentTerminalCaptureStore.ingest(
+            workspace: workspace,
+            installID: LampInstallIdentity.current()
+        ) else { return }
+        if result.integrationReported, let provider = terminalCapture.provider {
+            AgentTerminalIntegrationMemory.forProvider(provider.wireProvider)?.recordRun()
+        }
+        var capture = terminalCapture
+        capture.record(result, now: Date())
+        // Assigned only on a real change: this runs several times a second, and
+        // every assignment would redraw the terminal pane.
+        if capture != terminalCapture { terminalCapture = capture }
+    }
+
+    /// A terminal taken off screen takes its CLI with it. Showing it again
+    /// would rerun a launch planned for a session state that has since moved
+    /// on, so the pane goes back to offering a fresh launch.
+    private func terminalWasTornDown(_ launch: UUID) {
+        // A relaunch replaces the view too; only the current launch's view
+        // ending means the session has ended.
+        guard launch == terminalID, activeProvider != nil else { return }
+        if let workspaceURL { collectTerminalTurns(in: workspaceURL) }
+        activeProvider = nil
+        terminalExitCode = nil
+        terminalCapture = TerminalCaptureState()
+    }
+
+    private func terminalDidExit(exitStatus: Int32?) {
+        guard let workspaceURL else { return }
+        collectTerminalTurns(in: workspaceURL)
+        terminalCapture.processExited = true
+
+        guard let provider = activeProvider,
+              let resumed = terminalCapture.resumedSessionID,
+              let launchedAt = terminalCapture.launchedAt,
+              AgentTerminalResumeFailure.indicatesMissingSession(
+                exitStatus: exitStatus,
+                runningFor: Date().timeIntervalSince(launchedAt),
+                capturedMessages: terminalCapture.capturedMessages
+              )
+        else { return }
+        // Pruned, or kept on a Mac this conversation has since left. Started
+        // again without it, the conversation carries on from a recap; that
+        // launch resumes nothing, so this can't repeat.
+        do {
+            try AgentTerminalCaptureStore.forgetSession(resumed, providerID: provider.rawValue, in: workspaceURL)
+        } catch {
+            errorMessage = "Couldn’t start over from a recap: \(error.localizedDescription)"
+            return
+        }
+        launch(provider)
+        terminalCapture.continuityNotice = "The earlier \(provider.shortName) session is no longer available, so this one continues from a recap of the conversation."
+    }
+
+    @ViewBuilder
+    private var terminalCaptureStatus: some View {
+        let status = terminalCapture.status()
+        if status != nil || terminalCapture.continuityNotice != nil {
+            VStack(alignment: .leading, spacing: 3) {
+                if let notice = terminalCapture.continuityNotice {
+                    Label(notice, systemImage: "arrow.triangle.branch")
+                        .foregroundStyle(.secondary)
+                }
+                if let status {
+                    Label(status.text, systemImage: status.systemImage)
+                        .foregroundStyle(status.isProblem ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                }
+            }
+            .font(.caption)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(SwiftUI.Color(nsColor: .controlBackgroundColor))
+        }
     }
 
     private func revealWorkspace() {
@@ -1656,9 +1873,12 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
     let command: String
     let workingDirectory: URL
     let onExit: (Int32?) -> Void
+    /// The view was torn down, ending its process: the pane was hidden, the
+    /// mode switched, or the window closed.
+    var onDismantle: () -> Void = {}
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onExit: onExit)
+        Coordinator(onExit: onExit, onDismantle: onDismantle)
     }
 
     func makeNSView(context: Context) -> LocalProcessTerminalView {
@@ -1673,6 +1893,7 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
         let configuredShell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         let shell = FileManager.default.isExecutableFile(atPath: configuredShell)
             ? configuredShell : "/bin/zsh"
+        let coordinator = context.coordinator
         DispatchQueue.main.async { [weak terminal] in
             guard let terminal else { return }
             terminal.startProcess(
@@ -1680,6 +1901,7 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
                 args: ["-l"],
                 currentDirectory: workingDirectory.path
             )
+            coordinator.watchForExit(of: terminal.process.shellPid)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak terminal] in
                 guard let terminal, terminal.process.running else { return }
                 let bytes = Array((command + "\r").utf8)
@@ -1691,17 +1913,54 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
 
     func updateNSView(_ nsView: LocalProcessTerminalView, context: Context) {
         context.coordinator.onExit = onExit
+        context.coordinator.onDismantle = onDismantle
     }
 
     static func dismantleNSView(_ nsView: LocalProcessTerminalView, coordinator: Coordinator) {
         if nsView.process.running { nsView.terminate() }
+        let onDismantle = coordinator.onDismantle
+        DispatchQueue.main.async { onDismantle() }
     }
 
     final class Coordinator: NSObject, LocalProcessTerminalViewDelegate {
         var onExit: (Int32?) -> Void
+        var onDismantle: () -> Void
+        private var exitSource: DispatchSourceProcess?
+        private var reportedExit = false
 
-        init(onExit: @escaping (Int32?) -> Void) {
+        init(onExit: @escaping (Int32?) -> Void, onDismantle: @escaping () -> Void) {
             self.onExit = onExit
+            self.onDismantle = onDismantle
+        }
+
+        /// SwiftTerm stops watching the process as soon as the terminal reads
+        /// end-of-file, which usually comes before the exit itself — so it
+        /// neither reports the exit nor reaps the process. This watches it
+        /// independently. The source holds this coordinator until the exit is
+        /// reported, so a terminal taken off screen is still reaped.
+        func watchForExit(of pid: pid_t) {
+            guard pid > 0, exitSource == nil else { return }
+            let source = DispatchSource.makeProcessSource(identifier: pid, eventMask: .exit, queue: .main)
+            source.setEventHandler { self.reap(pid) }
+            exitSource = source
+            source.activate()
+            // It may have exited before the watch began.
+            reap(pid)
+        }
+
+        private func reap(_ pid: pid_t) {
+            var status: Int32 = 0
+            // Still running, or already reaped by SwiftTerm, which reports it.
+            guard waitpid(pid, &status, WNOHANG) == pid else { return }
+            reportExit(TerminalWaitStatus.exitStatus(status))
+        }
+
+        private func reportExit(_ status: Int32?) {
+            guard !reportedExit else { return }
+            reportedExit = true
+            exitSource?.cancel()
+            exitSource = nil
+            onExit(status)
         }
 
         func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
@@ -1709,7 +1968,8 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
         func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
 
         func processTerminated(source: TerminalView, exitCode: Int32?) {
-            DispatchQueue.main.async { [weak self] in self?.onExit(exitCode) }
+            let status = exitCode.map(TerminalWaitStatus.exitStatus)
+            DispatchQueue.main.async { [weak self] in self?.reportExit(status) }
         }
     }
 }

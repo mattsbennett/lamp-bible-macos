@@ -1,5 +1,6 @@
 import AppKit
 import LampCore
+import LampPresentationUI
 import SwiftUI
 
 struct SlidePresentationView: View {

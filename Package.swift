@@ -36,6 +36,7 @@ let package = Package(
                 "LampBibleMacSupport",
                 .product(name: "LampCore", package: "lamp-bible-core"),
                 .product(name: "LampModuleKit", package: "lamp-bible-core"),
+                .product(name: "LampPresentationUI", package: "lamp-bible-core"),
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
                 .product(name: "SwiftyChat", package: "SwiftyChat"),
                 .product(name: "Sparkle", package: "Sparkle"),

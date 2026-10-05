@@ -524,7 +524,9 @@ final class LibrarySyncController: ObservableObject {
                             let incoming = try await library.personalDevotionalCandidates(
                                 from: localURL
                             )
-                            let imported = try await library.importPersonalDevotional(from: localURL)
+                            let imported = try await library.importPersonalDevotional(
+                                from: localURL, forSync: true
+                            )
                             let incomingIDs = Set(incoming.map(\.id))
                             let retained = try await library.personalDevotionals()
                                 .filter { incomingIDs.contains($0.id) }
@@ -542,7 +544,9 @@ final class LibrarySyncController: ObservableObject {
                             }
                             summary.devotionals += imported.count
                         } else {
-                            let result = try await library.importPersonalStudyData(from: localURL)
+                            let result = try await library.importPersonalStudyData(
+                                from: localURL, forSync: true
+                            )
                             summary.studyEntries += result.importedCount
                         }
                         if let remoteSetID = candidate.remoteSetID {

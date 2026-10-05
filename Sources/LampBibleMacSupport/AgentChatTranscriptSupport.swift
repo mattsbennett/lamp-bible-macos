@@ -199,13 +199,57 @@ public enum AgentChatTranscriptMerge {
 public enum AgentChatContinuation {
     public static let defaultCharacterBudget = 24_000
 
+    /// A prompt that carries the conversation into a fresh session, for a
+    /// provider that can only be given it as part of the user's message.
     public static func prompt(
         continuing earlier: [AgentChatTranscript.Message],
         with newPrompt: String,
         characterBudget: Int = defaultCharacterBudget
     ) -> String {
         guard !earlier.isEmpty else { return newPrompt }
+        return """
+        \(preamble)
 
+        <earlier_conversation>
+        \(recap(of: earlier, characterBudget: characterBudget))
+        </earlier_conversation>
+
+        The user's new message follows.
+
+        \(newPrompt)
+        """
+    }
+
+    /// The same recap as standing instructions for an interactive session, which
+    /// receives it before the user has typed anything. Nil when there is nothing
+    /// to carry on.
+    public static func sessionInstructions(
+        continuing earlier: [AgentChatTranscript.Message],
+        characterBudget: Int = defaultCharacterBudget
+    ) -> String? {
+        guard !earlier.isEmpty else { return nil }
+        return """
+        \(preamble)
+
+        <earlier_conversation>
+        \(recap(of: earlier, characterBudget: characterBudget))
+        </earlier_conversation>
+
+        The user's next message continues this conversation.
+        """
+    }
+
+    private static let preamble = """
+    You are continuing a conversation that began in an earlier session, which \
+    can't be resumed here. The conversation so far is reproduced below for \
+    context. The workspace files are current, so reread them rather than \
+    relying on any text quoted in it.
+    """
+
+    private static func recap(
+        of earlier: [AgentChatTranscript.Message],
+        characterBudget: Int
+    ) -> String {
         // Newest first: when the budget runs out, the oldest turns are the ones
         // left out, since they matter least to what is being asked now.
         var kept: [String] = []
@@ -235,21 +279,7 @@ public enum AgentChatContinuation {
             let noun = remaining == 1 ? "message" : "messages"
             transcript = "[\(remaining) earlier \(noun) omitted]\n\n" + transcript
         }
-
-        return """
-        You are continuing a conversation that began in an earlier session, which \
-        can't be resumed here. The conversation so far is reproduced below for \
-        context. The workspace files are current, so reread them rather than \
-        relying on any text quoted in it.
-
-        <earlier_conversation>
-        \(transcript)
-        </earlier_conversation>
-
-        The user's new message follows.
-
-        \(newPrompt)
-        """
+        return transcript
     }
 }
 

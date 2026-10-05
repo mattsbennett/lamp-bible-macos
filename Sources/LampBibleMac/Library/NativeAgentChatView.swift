@@ -94,7 +94,12 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             process.currentDirectoryURL = workingDirectory
             process.standardOutput = output
             process.standardError = output
-            process.environment = ProcessInfo.processInfo.environment
+            var environment = ProcessInfo.processInfo.environment
+            // As a shell would. OpenCode takes its project from `PWD`, and
+            // Lamp's own may name another directory entirely — in which case
+            // `opencode run --session` waits forever on a session it can't see.
+            environment["PWD"] = workingDirectory.path
+            process.environment = environment
 
             lock.lock()
             activeProcess = process
@@ -236,6 +241,12 @@ private final class NativeAgentChatModel: ObservableObject {
     private var conversationID: UUID?
     private var conversationStartedAt: Date?
     private var didLoad = false
+    /// The transcript as this chat last read or wrote it. Others write it too —
+    /// sync bringing in another Mac's turns, a Terminal session's captured ones —
+    /// and a difference from this is how their changes are noticed rather than
+    /// overwritten.
+    private var knownTranscript: AgentChatTranscript?
+    private var knownModificationDate: Date?
     private var cancelRequested = false
     private var loadingMessageID: UUID?
 
@@ -254,22 +265,47 @@ private final class NativeAgentChatModel: ObservableObject {
     func load() {
         guard !didLoad else { return }
         didLoad = true
-        let transcript = AgentChatTranscriptStore.load(providerID: provider.rawValue, in: workspace)
+        knownModificationDate = transcriptModificationDate()
+        show(AgentChatTranscriptStore.load(providerID: provider.rawValue, in: workspace))
+    }
+
+    /// Picks up a transcript changed by something other than this chat. Cheap
+    /// when nothing has: only the file's modification date is read.
+    func reloadIfChangedOnDisk() {
+        guard didLoad, !isRunning else { return }
+        let modified = transcriptModificationDate()
+        guard modified != knownModificationDate else { return }
+        knownModificationDate = modified
+        let onDisk = AgentChatTranscriptStore.load(providerID: provider.rawValue, in: workspace)
+        if onDisk != knownTranscript { show(onDisk) }
+    }
+
+    private func show(_ transcript: AgentChatTranscript) {
+        knownTranscript = transcript
         conversationID = transcript.conversationID
         conversationStartedAt = transcript.startedAt
         // A session held by another Mac — or set aside when sync merged in turns
         // it never saw — can't be resumed here. The next message carries the
         // conversation on from a recap instead.
         sessionID = transcript.resumableSessionID(forInstall: installID)
-        messages = transcript.messages.map(makeChatMessage)
-        if transcript.sessionID != nil, sessionID == nil {
-            continuityNotice = "This chat continues from an earlier session that can’t be resumed on this Mac. \(provider.shortName) will be given a recap of the conversation."
-        }
+        let loading = messages.filter { $0.id == loadingMessageID }
+        messages = transcript.messages.map(makeChatMessage) + loading
+        continuityNotice = transcript.sessionID != nil && sessionID == nil
+            ? "This chat continues from an earlier session that can’t be resumed on this Mac. \(provider.shortName) will be given a recap of the conversation."
+            : nil
+    }
+
+    private func transcriptModificationDate() -> Date? {
+        let url = AgentChatTranscriptStore.url(providerID: provider.rawValue, in: workspace)
+        return (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
     }
 
     func send(_ rawPrompt: String, contextualPrompt: String) async {
         let prompt = rawPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty, !isRunning else { return }
+        // Turns from Terminal or another Mac may have arrived since this chat
+        // last looked; the message carries on from them.
+        reloadIfChangedOnDisk()
         errorMessage = nil
         isRunning = true
         cancelRequested = false
@@ -461,15 +497,24 @@ private final class NativeAgentChatModel: ObservableObject {
     }
 
     private func persistTranscript() {
-        let transcript = AgentChatTranscript(
+        var transcript = AgentChatTranscript(
             conversationID: conversationID,
             startedAt: conversationStartedAt,
             sessionID: sessionID,
             sessionInstallID: sessionID == nil ? nil : installID,
             messages: transcriptMessages()
         )
+        let onDisk = AgentChatTranscriptStore.load(providerID: provider.rawValue, in: workspace)
+        if onDisk != knownTranscript {
+            // Changed elsewhere while this reply ran. Merged as sync merges two
+            // Macs' copies, so neither side's turns are lost.
+            transcript = AgentChatTranscriptMerge.merge(local: transcript, incoming: onDisk)
+            show(transcript)
+        }
         do {
             try AgentChatTranscriptStore.save(transcript, providerID: provider.rawValue, in: workspace)
+            knownTranscript = transcript
+            knownModificationDate = transcriptModificationDate()
         } catch {
             errorMessage = "Could not save the chat transcript: \(error.localizedDescription)"
         }
@@ -561,6 +606,12 @@ struct NativeAgentChatView: View {
         .task(id: provider.id) {
             model.load()
             await refreshConnectionState()
+        }
+        .task(id: provider.id) {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                model.reloadIfChangedOnDisk()
+            }
         }
         .onDisappear { model.cancel() }
         .sheet(item: $authenticationProvider, onDismiss: {

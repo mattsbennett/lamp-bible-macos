@@ -247,6 +247,18 @@ public enum WorkspaceContextFileStore {
         )
     }
 
+    /// Removes one context file that sync found deleted elsewhere, pruning its
+    /// shared object once nothing links to it.
+    static func removeSyncedContextFile(
+        at fileURL: URL,
+        libraryRootURL: URL,
+        fileManager: FileManager = .default
+    ) throws {
+        let digests = try regularFileDigests(including: fileURL, fileManager: fileManager)
+        try fileManager.removeItem(at: fileURL)
+        try pruneObjects(withDigests: digests, libraryRootURL: libraryRootURL, fileManager: fileManager)
+    }
+
     /// Replaces standalone context files (for example, files restored from sync)
     /// with links to the library-wide content-addressed object store.
     public static func consolidate(
