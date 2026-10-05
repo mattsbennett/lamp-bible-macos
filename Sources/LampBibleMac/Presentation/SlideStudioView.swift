@@ -187,6 +187,7 @@ struct SlideStudioView: View {
                                     LampPresentationSlideCanvas(
                                         slide: slide,
                                         deck: deckBinding.wrappedValue,
+                                        store: store,
                                         compact: true
                                     )
                                     .aspectRatio(deckBinding.wrappedValue.aspectRatio.ratio, contentMode: .fit)
@@ -255,7 +256,8 @@ struct SlideStudioView: View {
                         if let slide = selectedSlide {
                             LampPresentationSlideCanvas(
                                 slide: slide,
-                                deck: deckBinding.wrappedValue
+                                deck: deckBinding.wrappedValue,
+                                store: store
                             )
                             .aspectRatio(deckBinding.wrappedValue.aspectRatio.ratio, contentMode: .fit)
                             .shadow(color: .black.opacity(0.22), radius: 14, y: 7)
@@ -338,6 +340,7 @@ struct SlideStudioView: View {
                                     updateCitation: { citation in
                                         updateScriptureCitation(citation, after: block.id)
                                     },
+                                    chooseImage: { chooseImage(for: block.id) },
                                     remove: { removeBlock(block.id) }
                                 )
                                 if block.id != slideBinding.blocks.wrappedValue.last?.id {
@@ -552,6 +555,8 @@ struct SlideStudioView: View {
             try LampPresentationDeckSync.recordDeletion(of: deck.id, in: model.library.rootURL)
             try store.delete(id: deck.id)
             decks.removeAll { $0.id == deck.id }
+            // Images the removed deck owned, unless another deck shares them.
+            try? LampPresentationDeckSync.pruneUnreferencedAssets(in: model.library.rootURL)
             if let next = decks.first {
                 applySelection(next)
             } else {
@@ -622,6 +627,48 @@ struct SlideStudioView: View {
         deck?.slides.insert(slide, at: destination)
     }
 
+    /// Copies a chosen image into the library and points the block at it.
+    ///
+    /// The file is copied rather than referenced: a deck travels to other Macs
+    /// and to iPhone and iPad, where a path into this machine's home folder
+    /// would mean nothing. The stored name is generated so two images called
+    /// `photo.jpg` cannot collide in the one flat assets directory.
+    private func chooseImage(for blockID: String) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = "Choose an image to copy into this presentation."
+        guard panel.runModal() == .OK, let source = panel.url else { return }
+
+        guard let slideID = selectedSlide?.id,
+              let slideIndex = deck?.slides.firstIndex(where: { $0.id == slideID }),
+              let blockIndex = deck?.slides[slideIndex].blocks.firstIndex(where: { $0.id == blockID })
+        else { return }
+
+        let extensionName = source.pathExtension.isEmpty ? "img" : source.pathExtension.lowercased()
+        let name = "\(UUID().uuidString.lowercased()).\(extensionName)"
+        let destination = store.assetsDirectoryURL.appendingPathComponent(name)
+        do {
+            try FileManager.default.createDirectory(
+                at: store.assetsDirectoryURL,
+                withIntermediateDirectories: true
+            )
+            try Data(contentsOf: source).write(to: destination, options: .atomic)
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
+
+        deck?.slides[slideIndex].blocks[blockIndex].assetPath =
+            "\(LampPresentationDeckStore.assetsDirectoryName)/\(name)"
+        if deck?.slides[slideIndex].blocks[blockIndex].altText?
+            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+            deck?.slides[slideIndex].blocks[blockIndex].altText =
+                source.deletingPathExtension().lastPathComponent
+        }
+    }
+
     private func addBlock(_ kind: LampPresentationBlockKind) {
         guard let slideID = selectedSlide?.id,
               let index = deck?.slides.firstIndex(where: { $0.id == slideID }) else { return }
@@ -629,7 +676,7 @@ struct SlideStudioView: View {
         if kind == .image {
             block = .init(
                 kind: .image,
-                assetPath: "assets/image.jpg",
+                assetPath: "\(LampPresentationDeckStore.assetsDirectoryName)/image.jpg",
                 altText: "Describe the image"
             )
         } else {
@@ -736,6 +783,7 @@ private extension UTType {
 private struct LampSlideBlockEditor: View {
     @Binding var block: LampPresentationBlock
     let updateCitation: (String) -> Void
+    let chooseImage: () -> Void
     let remove: () -> Void
 
     var body: some View {
@@ -754,10 +802,14 @@ private struct LampSlideBlockEditor: View {
             }
 
             if block.kind == .image {
-                TextField("Asset path", text: Binding(
-                    get: { block.assetPath ?? "" },
-                    set: { block.assetPath = $0 }
-                ))
+                HStack {
+                    TextField("Asset path", text: Binding(
+                        get: { block.assetPath ?? "" },
+                        set: { block.assetPath = $0 }
+                    ))
+                    Button("Choose…", action: chooseImage)
+                        .help("Copy an image into this library and use it here")
+                }
                 TextField("Accessibility description", text: Binding(
                     get: { block.altText ?? "" },
                     set: { block.altText = $0 }

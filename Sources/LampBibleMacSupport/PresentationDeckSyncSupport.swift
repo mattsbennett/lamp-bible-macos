@@ -52,6 +52,11 @@ public enum LampPresentationDeckSync {
         if !deletions.isEmpty {
             try saveDeletions(deletions, in: destination, fileManager: fileManager)
         }
+        try copyAssets(
+            from: assetsDirectory(in: libraryRoot),
+            to: portableAssetsDirectory(in: backupRoot),
+            fileManager: fileManager
+        )
     }
 
     public static func importDecks(
@@ -120,6 +125,42 @@ public enum LampPresentationDeckSync {
         if !deletions.isEmpty {
             try saveDeletions(deletions, in: destination, fileManager: fileManager)
         }
+
+        // Images have no deletion ledger of their own, so they union-merge and
+        // are then kept only for as long as some deck still names them. A
+        // deletion ledger for assets would race the deck that still needs the
+        // file; reachability cannot.
+        try copyAssets(
+            from: portableAssetsDirectory(in: backupRoot),
+            to: assetsDirectory(in: libraryRoot),
+            fileManager: fileManager
+        )
+    }
+
+    /// Removes images no deck in `libraryRoot` references any more.
+    ///
+    /// Called when a deck is deleted rather than on every sync: Slide Studio
+    /// writes a chosen image before the edit that references it is autosaved,
+    /// and a prune in that window would delete a picture the author had just
+    /// added.
+    public static func pruneUnreferencedAssets(
+        in libraryRoot: URL,
+        fileManager: FileManager = .default
+    ) throws {
+        let store = LampPresentationDeckStore(rootURL: libraryRoot)
+        let decks = (try? store.decks()) ?? []
+        let referenced = decks.referencedAssetNames
+        let directory = assetsDirectory(in: libraryRoot)
+        guard isPlainDirectory(directory, fileManager: fileManager) else { return }
+        for url in try fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) where !referenced.contains(url.lastPathComponent) {
+            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
+            else { continue }
+            try fileManager.removeItem(at: url)
+        }
     }
 
     // MARK: - Files
@@ -131,6 +172,55 @@ public enum LampPresentationDeckSync {
 
     private static func decksDirectory(in libraryRoot: URL) -> URL {
         LampPresentationDeckStore(rootURL: libraryRoot).decksDirectoryURL
+    }
+
+    private static func assetsDirectory(in libraryRoot: URL) -> URL {
+        LampPresentationDeckStore(rootURL: libraryRoot).assetsDirectoryURL
+    }
+
+    private static func portableAssetsDirectory(in backupRoot: URL) -> URL {
+        portableDirectory(in: backupRoot)
+            .appendingPathComponent(
+                LampPresentationDeckStore.assetsDirectoryName,
+                isDirectory: true
+            )
+    }
+
+    /// Newest-wins per file, the way workspace documents merge. Nothing here
+    /// deletes: an image only leaves when no deck references it.
+    private static func copyAssets(
+        from source: URL,
+        to destination: URL,
+        fileManager: FileManager
+    ) throws {
+        guard isPlainDirectory(source, fileManager: fileManager) else { return }
+        let keys: [URLResourceKey] = [.isRegularFileKey, .isSymbolicLinkKey, .contentModificationDateKey]
+        for url in try fileManager.contentsOfDirectory(
+            at: source,
+            includingPropertiesForKeys: keys,
+            options: [.skipsHiddenFiles]
+        ) {
+            let values = try url.resourceValues(forKeys: Set(keys))
+            guard values.isRegularFile == true, values.isSymbolicLink != true else { continue }
+            let modified = values.contentModificationDate ?? .distantPast
+            let target = destination.appendingPathComponent(url.lastPathComponent)
+
+            if fileManager.fileExists(atPath: target.path) {
+                let existing = try target.resourceValues(forKeys: Set(keys))
+                guard existing.isSymbolicLink != true else { continue }
+                let existingDate = existing.contentModificationDate ?? .distantPast
+                guard LampSyncMerge.shouldReplaceFile(
+                    currentData: Data(),
+                    currentDate: existingDate,
+                    incomingData: Data(),
+                    incomingDate: modified
+                ) else { continue }
+            }
+
+            try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+            try Data(contentsOf: url).write(to: target, options: .atomic)
+            try fileManager.setAttributes([.modificationDate: modified], ofItemAtPath: target.path)
+        }
     }
 
     private static func portableDirectory(in backupRoot: URL) -> URL {

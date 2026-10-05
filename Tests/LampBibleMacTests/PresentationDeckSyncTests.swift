@@ -187,3 +187,153 @@ struct PresentationDeckSyncTests {
         #expect(try titles(in: macB).isEmpty)
     }
 }
+
+struct PresentationAssetSyncTests {
+    private let base = Date(timeIntervalSince1970: 1_800_000_000)
+
+    private func makeLibrary() throws -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-asset-sync-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        return root
+    }
+
+    private func deck(named title: String, usingAsset name: String?) -> LampPresentationDeck {
+        var deck = LampPresentationDeck.starter(title: title)
+        if let name {
+            deck.slides.append(
+                LampPresentationSlide(
+                    layout: .image,
+                    blocks: [
+                        LampPresentationBlock(
+                            kind: .image,
+                            assetPath: "\(LampPresentationDeckStore.assetsDirectoryName)/\(name)",
+                            altText: "A picture"
+                        ),
+                    ]
+                )
+            )
+        }
+        return deck
+    }
+
+    @discardableResult
+    private func writeAsset(
+        _ name: String,
+        _ contents: String,
+        in library: URL,
+        at offset: TimeInterval = 0
+    ) throws -> URL {
+        let directory = LampPresentationDeckStore(rootURL: library).assetsDirectoryURL
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent(name)
+        try Data(contents.utf8).write(to: url)
+        try FileManager.default.setAttributes(
+            [.modificationDate: base.addingTimeInterval(offset)],
+            ofItemAtPath: url.path
+        )
+        return url
+    }
+
+    private func assetContents(_ name: String, in library: URL) -> String? {
+        let url = LampPresentationDeckStore(rootURL: library).assetsDirectoryURL
+            .appendingPathComponent(name)
+        return (try? Data(contentsOf: url)).map { String(decoding: $0, as: UTF8.self) }
+    }
+
+    @Test("An image reaches the other Mac with its deck")
+    func assetsTravelWithDecks() throws {
+        let macA = try makeLibrary()
+        let macB = try makeLibrary()
+        let backup = try makeLibrary()
+
+        let deck = deck(named: "Pictures", usingAsset: "photo.jpg")
+        try LampPresentationDeckStore(rootURL: macA).save(deck)
+        try writeAsset("photo.jpg", "first", in: macA)
+
+        try LampPresentationDeckSync.exportDecks(from: macA, to: backup)
+        try LampPresentationDeckSync.importDecks(from: backup, into: macB)
+
+        #expect(assetContents("photo.jpg", in: macB) == "first")
+    }
+
+    @Test("The most recently saved copy of an image wins")
+    func newestImageWins() throws {
+        let macA = try makeLibrary()
+        let macB = try makeLibrary()
+        let backup = try makeLibrary()
+
+        let deck = deck(named: "Pictures", usingAsset: "photo.jpg")
+        try LampPresentationDeckStore(rootURL: macA).save(deck)
+        try LampPresentationDeckStore(rootURL: macB).save(deck)
+        try writeAsset("photo.jpg", "newer", in: macA, at: 500)
+        try writeAsset("photo.jpg", "older", in: macB, at: 100)
+
+        try LampPresentationDeckSync.exportDecks(from: macA, to: backup)
+        try LampPresentationDeckSync.importDecks(from: backup, into: macB)
+
+        #expect(assetContents("photo.jpg", in: macB) == "newer")
+    }
+
+    @Test("An older incoming image does not overwrite a newer local one")
+    func olderImageIsRefused() throws {
+        let macA = try makeLibrary()
+        let macB = try makeLibrary()
+        let backup = try makeLibrary()
+
+        let deck = deck(named: "Pictures", usingAsset: "photo.jpg")
+        try LampPresentationDeckStore(rootURL: macA).save(deck)
+        try LampPresentationDeckStore(rootURL: macB).save(deck)
+        try writeAsset("photo.jpg", "older", in: macA, at: 100)
+        try writeAsset("photo.jpg", "newer", in: macB, at: 500)
+
+        try LampPresentationDeckSync.exportDecks(from: macA, to: backup)
+        try LampPresentationDeckSync.importDecks(from: backup, into: macB)
+
+        #expect(assetContents("photo.jpg", in: macB) == "newer")
+    }
+
+    @Test("Sync never deletes an image, so a deck in flight cannot lose its picture")
+    func syncDoesNotDeleteAssets() throws {
+        let macA = try makeLibrary()
+        let macB = try makeLibrary()
+        let backup = try makeLibrary()
+
+        try LampPresentationDeckStore(rootURL: macA).save(deck(named: "Empty", usingAsset: nil))
+        try writeAsset("kept.jpg", "still here", in: macB)
+
+        try LampPresentationDeckSync.exportDecks(from: macA, to: backup)
+        try LampPresentationDeckSync.importDecks(from: backup, into: macB)
+
+        #expect(assetContents("kept.jpg", in: macB) == "still here")
+    }
+
+    @Test("Pruning removes only images no deck references")
+    func pruneKeepsReferencedAssets() throws {
+        let library = try makeLibrary()
+        try LampPresentationDeckStore(rootURL: library).save(deck(named: "Used", usingAsset: "used.jpg"))
+        try writeAsset("used.jpg", "keep", in: library)
+        try writeAsset("orphan.jpg", "drop", in: library)
+
+        try LampPresentationDeckSync.pruneUnreferencedAssets(in: library)
+
+        #expect(assetContents("used.jpg", in: library) == "keep")
+        #expect(assetContents("orphan.jpg", in: library) == nil)
+    }
+
+    @Test("An image shared by two decks survives deleting one of them")
+    func pruneKeepsSharedAssets() throws {
+        let library = try makeLibrary()
+        let store = LampPresentationDeckStore(rootURL: library)
+        try store.save(deck(named: "First", usingAsset: "shared.jpg"))
+        var second = deck(named: "Second", usingAsset: "shared.jpg")
+        second.id = "second-deck"
+        try store.save(second)
+        try writeAsset("shared.jpg", "keep", in: library)
+
+        try store.delete(id: second.id)
+        try LampPresentationDeckSync.pruneUnreferencedAssets(in: library)
+
+        #expect(assetContents("shared.jpg", in: library) == "keep")
+    }
+}

@@ -29,7 +29,11 @@ struct SlidePresentationView: View {
             Color.black.ignoresSafeArea()
 
             if let deck, let currentSlide {
-                LampPresentationSlideCanvas(slide: currentSlide, deck: deck)
+                LampPresentationSlideCanvas(
+                    slide: currentSlide,
+                    deck: deck,
+                    store: LampPresentationDeckStore(rootURL: model.library.rootURL)
+                )
                     .aspectRatio(deck.aspectRatio.ratio, contentMode: .fit)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .opacity(isBlack ? 0 : 1)

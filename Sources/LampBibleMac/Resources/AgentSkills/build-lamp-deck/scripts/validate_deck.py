@@ -32,6 +32,26 @@ BLOCK_KINDS = {
 HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
 
+def safe_asset_path(value):
+    """Mirror Lamp's own check: a relative path that cannot leave the folder.
+
+    A deck travels between machines, so an absolute path, a `..` component, or a
+    hidden or Windows-style path names a file the library does not own and is
+    refused on import.
+    """
+    if not isinstance(value, str):
+        return False
+    value = value.strip()
+    if not value or len(value) > 1024:
+        return False
+    if value[0] in ("/", "~", "\\"):
+        return False
+    if "\\" in value or ":" in value or "\0" in value:
+        return False
+    parts = value.split("/")
+    return all(part and part not in (".", "..") and not part.startswith(".") for part in parts)
+
+
 def nonempty(value: object) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
@@ -153,8 +173,14 @@ def validate(deck: object) -> tuple[list[str], list[str]]:
                     if positive_integer(start_verse) and positive_integer(end_verse) and end_verse < start_verse:
                         errors.append(f"{reference_path}: endVerse must not precede startVerse")
             if kind == "image":
-                if not nonempty(block.get("assetPath")):
+                asset_path = block.get("assetPath")
+                if not nonempty(asset_path):
                     errors.append(f"{block_path}.assetPath: an image path is required")
+                elif not safe_asset_path(asset_path):
+                    errors.append(
+                        f"{block_path}.assetPath: use a relative path inside the "
+                        "presentation folder, such as Assets/photo.jpg"
+                    )
                 if not nonempty(block.get("altText")):
                     warnings.append(f"{block_path}.altText: describe the image for accessibility")
             elif not nonempty(block.get("text")):
