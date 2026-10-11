@@ -44,13 +44,31 @@ Supported layouts:
 | Layout | Intended use |
 | --- | --- |
 | `title` | Opening title and subtitle |
-| `title-and-body` | Heading and one focused idea |
-| `scripture` | Scripture text with citation |
-| `quotation` | Quotation with attribution |
+| `title-and-body` | Heading with body text, optionally beside a picture |
+| `scripture` | Scripture text with citations, optionally beside a picture |
+| `quotation` | Quotation with attribution, optionally beside a picture |
 | `two-column` | Two related or contrasting body blocks |
-| `image` | Image-led slide with optional title and caption |
+| `image` | Image-led slide with optional title, caption, and citations |
 | `closing` | Reflection, response, or closing thought |
 | `blank` | Deliberate free ordering of supported blocks |
+
+### What each layout draws
+
+A `scripture`, `quotation`, or `title-and-body` slide draws **every** quotation
+and body block it is given, and **every** citation block — so a passage of three
+verses belongs on one slide as three blocks, and a source belongs in a
+`citation` block rather than being repeated as a trailing "Source: …" body line.
+Several quotations on one slide are set slightly smaller so they share it.
+
+An `image` block is **not** limited to the `image` layout. Add one to a
+`scripture`, `quotation`, or `title-and-body` slide and the picture is laid
+beside the prose, with a `caption` block beneath it — which is what a cover
+image wants, rather than a separate image slide under a headline. Use the
+`image` layout when the picture itself is the slide.
+
+Two layouts are deliberately sparing and drop what they are not given room for:
+`title` and `closing` draw a title and one subtitle, and `two-column` draws its
+title and the first two `body` blocks. Put anything further on its own slide.
 
 ## Content block
 

@@ -35,6 +35,8 @@ Lamp Bible detects a valid changed artifact and imports it into Slide Studio aut
 - Do not put complete manuscript paragraphs on slides by default.
 - Use semantic layouts and block roles. Do not invent coordinates, font sizes, animations, or unsupported fields.
 - Use an `image` block only when the referenced asset exists in the workspace and provide meaningful `altText`.
+- An image is not confined to the `image` layout: put one on a `scripture`, `quotation`, or `title-and-body` slide and it is laid beside the prose. Reserve the `image` layout for a slide the picture itself carries.
+- Keep a passage together: these layouts draw every quotation and citation block they are given, so there is no need for one verse per slide or a repeated "Source: …" body line.
 - Do not modify `draft.md` unless the user also asked to revise the writing.
 - Do not write directly into Lamp Bible's library or `.lamp/` metadata directory.
 
