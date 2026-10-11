@@ -85,7 +85,7 @@ struct LampBibleCommands: Commands {
                 openWindow(id: "book-reader", value: BookReaderRequest())
             }
 
-            Button("New Devotional") {
+            Button("New Writing") {
                 openWindow(id: "devotional-editor", value: DevotionalEditorRequest())
             }
             .keyboardShortcut("n", modifiers: [.command, .shift])

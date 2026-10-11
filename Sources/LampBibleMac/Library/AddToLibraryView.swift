@@ -181,9 +181,9 @@ struct AddToLibraryView: View {
             title: "Import Personal Content",
             systemImage: "arrow.up.arrow.down.square",
             description: "Bring editable Markdown into My Notes or My Writing, or restore notes and highlights from a structured Lamp Bible export.",
-            distinction: "Markdown (.md) imports editable notes or devotionals. Lamp exports (.json or .lamp) restore structured notes or highlights. None of these install reference-library content.",
+            distinction: "Markdown (.md) imports editable notes or writing. Lamp exports (.json or .lamp) restore structured notes or highlights. None of these install reference-library content.",
             steps: [
-                ("Import editable Markdown.", "Choose whether each .md file contains verse-linked notes or devotional entries."),
+                ("Import editable Markdown.", "Choose whether each .md file contains verse-linked notes or writing entries."),
                 ("Or restore a Lamp export.", "A personal-study .json or .lamp file preserves structured notes or highlights."),
             ]
         ) {
@@ -194,7 +194,7 @@ struct AddToLibraryView: View {
                     }
                     .buttonStyle(.borderedProminent)
 
-                    Button("Import Devotionals from .md…", systemImage: "book.closed") {
+                    Button("Import Writing from .md…", systemImage: "book.closed") {
                         showingDevotionalsMarkdownImporter = true
                     }
                 }

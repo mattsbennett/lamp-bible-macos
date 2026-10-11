@@ -377,7 +377,7 @@ final class LibraryModel: ObservableObject {
                     studyImportMessage = "Imported \(importedCount) Markdown note entr\(importedCount == 1 ? "y" : "ies")."
                 case .devotionals:
                     await refreshLibrary()
-                    studyImportMessage = "Imported \(importedCount) Markdown devotional\(importedCount == 1 ? "" : "s")."
+                    studyImportMessage = "Imported \(importedCount) Markdown writing entr\(importedCount == 1 ? "y" : "ies")."
                 }
             } catch {
                 errorMessage = error.localizedDescription

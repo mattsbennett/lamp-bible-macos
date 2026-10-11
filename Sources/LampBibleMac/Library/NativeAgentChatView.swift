@@ -94,6 +94,10 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             process.currentDirectoryURL = workingDirectory
             process.standardOutput = output
             process.standardError = output
+            // Without this the child inherits Lamp's own stdin, and
+            // `codex exec` announces "Reading additional input from stdin…"
+            // and blocks on it forever — the chat pane spinning with no reply.
+            process.standardInput = FileHandle.nullDevice
             var environment = ProcessInfo.processInfo.environment
             // As a shell would. OpenCode takes its project from `PWD`, and
             // Lamp's own may name another directory entirely — in which case
@@ -130,6 +134,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
         process.arguments = ["-lic", "command -v \(name)"]
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
         try process.run()
         let data = output.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
@@ -228,6 +233,10 @@ private final class NativeAgentChatModel: ObservableObject {
     @Published var messages: [NativeAgentChatMessage] = []
     @Published private(set) var isRunning = false
     @Published private(set) var errorMessage: String?
+    /// Set when a run failed at something only the provider's own interface can
+    /// answer — signing in, or a first-run prompt — so the pane can offer the
+    /// Terminal session rather than just reporting an exit status.
+    @Published private(set) var needsProviderSetup = false
     /// Set while the conversation is being carried on from a recap rather than a
     /// resumed provider session, so it's clear why the agent may know less of it.
     @Published private(set) var continuityNotice: String?
@@ -307,6 +316,7 @@ private final class NativeAgentChatModel: ObservableObject {
         // last looked; the message carries on from them.
         reloadIfChangedOnDisk()
         errorMessage = nil
+        needsProviderSetup = false
         isRunning = true
         cancelRequested = false
         // Resuming a session this Mac holds means the recap is behind us: the
@@ -451,7 +461,11 @@ private final class NativeAgentChatModel: ObservableObject {
                 ?? summary.failure
                 ?? readableCLIError(in: result.output)
                 ?? "\(provider.shortName) exited with status \(result.exitCode)."
-            errorMessage = failure
+            needsProviderSetup = AgentChatSetupRequirement.isIndicated(in: result.output)
+                || AgentChatSetupRequirement.isIndicated(in: failure)
+            errorMessage = needsProviderSetup
+                ? "\(AgentChatSetupRequirement.message(provider: provider.shortName)) \(failure)"
+                : failure
             messages.append(NativeAgentChatMessage(
                 id: UUID(),
                 user: agentUser,
@@ -556,12 +570,24 @@ struct NativeAgentChatView: View {
         VStack(spacing: 0) {
             chatHeader
             if let error = submissionError ?? model.errorMessage {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .textSelection(.enabled)
-                    .padding(10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
+                    if model.needsProviderSetup {
+                        Button("Set Up \(provider.shortName) in Terminal", systemImage: "terminal") {
+                            terminalRequest = AIProviderTerminalRequest(
+                                provider: provider,
+                                title: "Set Up \(provider.name)",
+                                command: provider.executable
+                            )
+                        }
+                        .controlSize(.small)
+                    }
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             if let notice = model.continuityNotice {
                 Label(notice, systemImage: "arrow.triangle.branch")
@@ -698,12 +724,12 @@ struct NativeAgentChatView: View {
                 Image(systemName: "bubble.left.and.bubble.right")
                     .font(.system(size: 34, weight: .light))
                     .foregroundStyle(.secondary)
-                Text(mode.isReadOnly ? "Chat about scripture" : "Ask \(provider.shortName) to help with this devotional")
+                Text(mode.isReadOnly ? "Chat about scripture" : "Ask \(provider.shortName) to help with this writing")
                     .font(.headline)
                     .multilineTextAlignment(.center)
                 Text(mode.isReadOnly
                     ? "Ask about the chapter you’re reading, or mention any passage. Explore your translations, commentaries, dictionaries, and other modules together."
-                    : "The agent can read your context and Lamp modules. Its changes appear in the devotional editor automatically.")
+                    : "The agent can read your context and Lamp modules. Its changes appear in the writing editor automatically.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)

@@ -67,6 +67,45 @@ public enum AgentChatLaunchArguments {
     }
 }
 
+/// A headless provider run can only fail at something the CLI would have asked
+/// about interactively: signing in, or a first-run prompt. Chat can't answer
+/// those, so it recognises them and sends the user to the Terminal session
+/// instead of reporting a bare exit status.
+public enum AgentChatSetupRequirement {
+    /// Phrases the CLIs use when the thing in the way is a prompt, not the request.
+    private static let markers = [
+        "please run /login",
+        "run /login",
+        "not logged in",
+        "not authenticated",
+        "please log in",
+        "please sign in",
+        "authentication_failed",
+        "401 unauthorized",
+        "missing bearer or basic authentication",
+        "no credentials",
+        "credentials not found",
+        "do you trust the files",
+        "not a trusted directory",
+        "trust this folder",
+        "onboarding",
+        "run `codex login`",
+        "run codex login",
+        "run `opencode auth login`",
+    ]
+
+    /// Whether `output` says the provider needs something answered first.
+    public static func isIndicated(in output: String) -> Bool {
+        let normalized = output.lowercased()
+        return markers.contains { normalized.contains($0) }
+    }
+
+    /// What to tell the user, naming the provider as the UI names it.
+    public static func message(provider: String) -> String {
+        "\(provider) needs to be set up before it can answer here. Open the Terminal session to sign in and answer its first-run prompts, then come back to Chat."
+    }
+}
+
 public enum AgentChatWireEvent: Equatable, Sendable {
     case sessionStarted(String)
     case textFragment(String)

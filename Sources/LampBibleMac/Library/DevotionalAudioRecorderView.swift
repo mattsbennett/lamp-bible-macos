@@ -28,7 +28,7 @@ struct DevotionalAudioRecorderView: View {
                     .foregroundStyle(.red)
                     .multilineTextAlignment(.center)
             } else if recorder.recordedURL == nil {
-                Text("Record a prayer, reflection, or spoken devotional attachment.")
+                Text("Record a prayer, reflection, or spoken attachment for this writing.")
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             } else {

@@ -24,12 +24,33 @@ struct LampMCPServerTests {
         )
         let response = try await handler.call(name: "list_modules", arguments: nil)
         #expect(response.isError == false)
-        #expect(response.structuredContent == .array([]))
+        // MCP requires an object here. A bare array makes Claude Code reject
+        // the call as a schema violation, which disabled every Lamp tool.
+        #expect(response.structuredContent == .object(["results": .array([])]))
         guard case .text(let text, _, _) = response.content.first else {
             Issue.record("Expected a text representation")
             return
         }
         #expect(text == "[\n\n]")
+    }
+
+    @Test(arguments: [
+        ("list_modules", [String: Value]()),
+        ("list_reading_plans", [:]),
+        ("list_books", [:]),
+        ("search_library", ["query": .string("grace")]),
+        ("list_quiz_modules", [:]),
+    ])
+    func namesEveryStructuredResultAsAnObject(tool: String, arguments: [String: Value]) async throws {
+        let fixture = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-mcp-shape-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixture, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let handler = LampMCPToolHandler(
+            library: LampAgentLibrary(libraryRootURL: fixture)
+        )
+        let response = try await handler.call(name: tool, arguments: arguments)
+        #expect(response.structuredContent?.objectValue != nil, "\(tool) must answer with an object")
     }
 
     @Test func rejectsUnknownToolsAndMissingArguments() async throws {

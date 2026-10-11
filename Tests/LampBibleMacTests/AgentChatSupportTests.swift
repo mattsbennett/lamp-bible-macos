@@ -56,4 +56,23 @@ struct AgentChatSupportTests {
     @Test func ignoresNonJSONProgressOutput() {
         #expect(AgentChatWireParser.parse("Working…", provider: .codex).isEmpty)
     }
+
+    @Test(arguments: [
+        "Not logged in · Please run /login",
+        "{\"type\":\"error\",\"message\":\"unexpected status 401 Unauthorized: Missing bearer or basic authentication in header\"}",
+        "Do you trust the files in this folder?",
+        "0 credentials found. Run `opencode auth login`.",
+    ])
+    func recognizesOutputThatOnlyAnInteractiveSessionCanAnswer(output: String) {
+        #expect(AgentChatSetupRequirement.isIndicated(in: output))
+    }
+
+    @Test(arguments: [
+        "The model returned an empty response.",
+        "rate limit exceeded; try again in 30 seconds",
+        "Error: ENOENT: no such file or directory, open 'draft.md'",
+    ])
+    func leavesOrdinaryFailuresAlone(output: String) {
+        #expect(!AgentChatSetupRequirement.isIndicated(in: output))
+    }
 }

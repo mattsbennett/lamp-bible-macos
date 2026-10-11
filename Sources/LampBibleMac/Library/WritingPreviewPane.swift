@@ -240,7 +240,7 @@ struct WritingPreviewPane: View {
         ContentUnavailableView {
             Label("Nothing to Preview Yet", systemImage: "text.alignleft")
         } description: {
-            Text("Write in the editor and the rendered devotional appears here.")
+            Text("Write in the editor and your rendered writing appears here.")
         }
         .frame(maxWidth: .infinity, alignment: .center)
         .padding(.vertical, 40)

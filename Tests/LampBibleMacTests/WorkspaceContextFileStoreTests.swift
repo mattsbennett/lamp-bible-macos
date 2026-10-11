@@ -84,6 +84,47 @@ struct WorkspaceContextFileStoreTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: objects.path).count == 1)
     }
 
+    @Test func addsFolderAroundEntriesThatCannotBecomeContext() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+
+        let sourceFolder = fixture.sourceDirectory.appendingPathComponent("Sermon Notes")
+        let nested = sourceFolder.appendingPathComponent("Handouts", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try Data("keep me".utf8).write(to: sourceFolder.appendingPathComponent("outline.md"))
+        try Data("keep me too".utf8).write(to: nested.appendingPathComponent("week-1.md"))
+        // The kind of entry a folder picked from Finder routinely carries.
+        try FileManager.default.createSymbolicLink(
+            at: sourceFolder.appendingPathComponent("elsewhere.md"),
+            withDestinationURL: fixture.sourceDirectory.appendingPathComponent("absent.md")
+        )
+        try FileManager.default.createSymbolicLink(
+            at: nested.appendingPathComponent("linked"),
+            withDestinationURL: fixture.sourceDirectory
+        )
+
+        var skipped: [String] = []
+        let addedFolder = try #require(try WorkspaceContextFileStore.addContextItem(
+            from: sourceFolder,
+            to: fixture.firstWorkspace,
+            libraryRootURL: fixture.libraryRoot,
+            reportingSkipped: { skipped.append($0) }
+        ))
+
+        #expect(addedFolder.lastPathComponent == "Sermon Notes")
+        #expect(try contextChildren(in: fixture.firstWorkspace).count == 1)
+        #expect(FileManager.default.fileExists(
+            atPath: addedFolder.appendingPathComponent("outline.md").path
+        ))
+        #expect(FileManager.default.fileExists(
+            atPath: addedFolder.appendingPathComponent("Handouts/week-1.md").path
+        ))
+        #expect(!FileManager.default.fileExists(
+            atPath: addedFolder.appendingPathComponent("elsewhere.md").path
+        ))
+        #expect(skipped.sorted() == ["Handouts/linked", "elsewhere.md"])
+    }
+
     @Test func consolidatesStandaloneFilesRestoredBySync() throws {
         let fixture = try Fixture()
         defer { fixture.remove() }

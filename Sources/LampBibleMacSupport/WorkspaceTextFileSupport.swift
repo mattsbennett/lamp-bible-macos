@@ -149,12 +149,18 @@ public enum WorkspaceContextFileStore {
 
     /// Adds a file or directory to a workspace's context. An identical top-level
     /// file already in that workspace is reused instead of adding another alias.
+    ///
+    /// A folder is copied as far as it can be: entries that cannot become
+    /// context — symbolic links, aliases to elsewhere, sockets, devices, and
+    /// anything unreadable — are reported through `reportingSkipped` by their
+    /// path relative to the folder rather than failing the whole add.
     @discardableResult
     public static func addContextItem(
         from sourceURL: URL,
         to workspaceURL: URL,
         libraryRootURL: URL,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        reportingSkipped: (String) -> Void = { _ in }
     ) throws -> URL? {
         let contextDirectory = try validatedContextDirectory(
             in: workspaceURL,
@@ -211,8 +217,10 @@ public enum WorkspaceContextFileStore {
             try addDirectoryContents(
                 from: source,
                 to: destination,
+                relativePath: "",
                 libraryRootURL: libraryRootURL,
-                fileManager: fileManager
+                fileManager: fileManager,
+                reportingSkipped: reportingSkipped
             )
         } catch {
             try? fileManager.removeItem(at: destination)
@@ -337,11 +345,17 @@ public enum WorkspaceContextFileStore {
         return context.standardizedFileURL
     }
 
+    /// Copies one level of a chosen folder. A folder picked from Finder routinely
+    /// holds entries that must not become context — symbolic links, aliases,
+    /// cloud placeholders, unreadable files — and dropping the whole folder over
+    /// one of them is worse than adding the rest and saying what was left out.
     private static func addDirectoryContents(
         from source: URL,
         to destination: URL,
+        relativePath: String,
         libraryRootURL: URL,
-        fileManager: FileManager
+        fileManager: FileManager,
+        reportingSkipped: (String) -> Void
     ) throws {
         let children = try fileManager.contentsOfDirectory(
             at: source,
@@ -351,32 +365,45 @@ public enum WorkspaceContextFileStore {
             options: []
         )
         for child in children {
-            let values = try child.resourceValues(forKeys: [
+            let childPath = relativePath.isEmpty
+                ? child.lastPathComponent
+                : relativePath + "/" + child.lastPathComponent
+            guard let values = try? child.resourceValues(forKeys: [
                 .isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey,
-            ])
-            guard values.isSymbolicLink != true else { throw unsafeContextItemError() }
+            ]), values.isSymbolicLink != true else {
+                reportingSkipped(childPath)
+                continue
+            }
             let childDestination = destination.appendingPathComponent(child.lastPathComponent)
-            if values.isDirectory == true {
-                try fileManager.createDirectory(
-                    at: childDestination,
-                    withIntermediateDirectories: false
-                )
-                try addDirectoryContents(
-                    from: child,
-                    to: childDestination,
-                    libraryRootURL: libraryRootURL,
-                    fileManager: fileManager
-                )
-            } else if values.isRegularFile == true {
-                try materialize(
-                    child,
-                    withDigest: contentDigest(of: child),
-                    at: childDestination,
-                    libraryRootURL: libraryRootURL,
-                    fileManager: fileManager
-                )
-            } else {
-                throw unsafeContextItemError()
+            do {
+                if values.isDirectory == true {
+                    try fileManager.createDirectory(
+                        at: childDestination,
+                        withIntermediateDirectories: false
+                    )
+                    try addDirectoryContents(
+                        from: child,
+                        to: childDestination,
+                        relativePath: childPath,
+                        libraryRootURL: libraryRootURL,
+                        fileManager: fileManager,
+                        reportingSkipped: reportingSkipped
+                    )
+                } else if values.isRegularFile == true {
+                    try materialize(
+                        child,
+                        withDigest: contentDigest(of: child),
+                        at: childDestination,
+                        libraryRootURL: libraryRootURL,
+                        fileManager: fileManager
+                    )
+                } else {
+                    reportingSkipped(childPath)
+                }
+            } catch {
+                // An unreadable or unsupported entry loses only itself.
+                try? fileManager.removeItem(at: childDestination)
+                reportingSkipped(childPath)
             }
         }
     }

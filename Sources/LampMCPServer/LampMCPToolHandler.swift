@@ -121,11 +121,23 @@ public actor LampMCPToolHandler {
     private func result<Output: Codable & Sendable>(_ output: Output) throws -> CallTool.Result {
         let data = try encoder.encode(output)
         let text = String(decoding: data, as: UTF8.self)
-        return try CallTool.Result(
+        return CallTool.Result(
             content: [.text(text: text, annotations: nil, _meta: nil)],
-            structuredContent: output,
+            structuredContent: Value?.some(try structuredContent(for: output)),
             isError: false
         )
+    }
+
+    /// MCP requires `structuredContent` to be a JSON *object*. Most Lamp tools
+    /// answer with a list, and sending that list bare makes a client that
+    /// validates the result — Claude Code does — reject every call. A list is
+    /// therefore named rather than dropped, so structured consumers keep it.
+    private func structuredContent<Output: Codable & Sendable>(
+        for output: Output
+    ) throws -> Value {
+        let encoded = try Value(output)
+        if case .object = encoded { return encoded }
+        return .object(["results": encoded])
     }
 
     private func requiredString(

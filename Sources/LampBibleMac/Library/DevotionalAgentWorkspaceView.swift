@@ -153,6 +153,9 @@ enum AIProviderCommandRunner {
                 process.arguments = ["-lic", command]
                 process.standardOutput = pipe
                 process.standardError = pipe
+                // A status command that reads stdin would otherwise hang the
+                // whole connection check on Lamp's own.
+                process.standardInput = FileHandle.nullDevice
                 do {
                     try process.run()
                     let data = pipe.fileHandleForReading.readDataToEndOfFile()
@@ -445,21 +448,28 @@ private enum DevotionalAgentWorkspaceStore {
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
+    /// Returns the entries that could not be copied, named relative to the item
+    /// they came from, so the pane can say what was left out.
+    @discardableResult
     static func addContextFiles(
         _ sources: [URL],
         to workspace: URL,
         libraryRootURL: URL
-    ) throws {
+    ) throws -> [String] {
+        var skipped: [String] = []
         for source in sources {
             let didAccess = source.startAccessingSecurityScopedResource()
             defer { if didAccess { source.stopAccessingSecurityScopedResource() } }
+            let name = source.lastPathComponent
             try WorkspaceContextFileStore.addContextItem(
                 from: source,
                 to: workspace,
-                libraryRootURL: libraryRootURL
+                libraryRootURL: libraryRootURL,
+                reportingSkipped: { skipped.append("\(name)/\($0)") }
             )
         }
         try updateInstructions(in: workspace)
+        return skipped
     }
 
     static func removeContextFile(
@@ -845,6 +855,11 @@ struct DevotionalAgentWorkspaceView: View {
     @State private var lastSyncedDraft: String?
     @State private var revisions: [DevotionalAgentRevision] = []
     @State private var errorMessage: String?
+    /// Kept apart from `errorMessage`: the refresh loop runs every 400ms, so
+    /// clearing one state for both would erase what a failed add just reported
+    /// before anyone could read it.
+    @State private var refreshErrorMessage: String?
+    @State private var contextNote: String?
     @State private var isDropTargeted = false
     @State private var skillEditorRequest: DevotionalAgentSkillEditorRequest?
     @State private var skillPendingDeletion: DevotionalAgentSkill?
@@ -874,7 +889,21 @@ struct DevotionalAgentWorkspaceView: View {
                     contextSection
                     skillsSection
                     if let errorMessage {
-                        Label(errorMessage, systemImage: "exclamationmark.triangle")
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Label(errorMessage, systemImage: "exclamationmark.triangle")
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                                .textSelection(.enabled)
+                            Spacer()
+                            Button("Dismiss", systemImage: "xmark.circle") {
+                                self.errorMessage = nil
+                            }
+                            .labelStyle(.iconOnly)
+                            .buttonStyle(.borderless)
+                        }
+                    }
+                    if let refreshErrorMessage {
+                        Label(refreshErrorMessage, systemImage: "exclamationmark.triangle")
                             .font(.caption)
                             .foregroundStyle(.red)
                     }
@@ -996,7 +1025,7 @@ struct DevotionalAgentWorkspaceView: View {
                 .help("Review or restore agent changes")
             }
             .controlSize(.small)
-            Text("Changes stay synchronized with the devotional editor. Saved and agent edits remain reversible in each Markdown tab’s history.")
+            Text("Changes stay synchronized with the writing editor. Saved and agent edits remain reversible in each Markdown tab’s history.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if let presentationStatus {
@@ -1022,7 +1051,7 @@ struct DevotionalAgentWorkspaceView: View {
                         .font(.title2)
                     Text("Drop source files or folders here")
                         .font(.callout)
-                    Text("Copied into this devotional’s private agent workspace")
+                    Text("Copied into this writing’s private agent workspace")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -1033,6 +1062,11 @@ struct DevotionalAgentWorkspaceView: View {
                 VStack(spacing: 5) {
                     ForEach(contextFiles) { file in contextFileRow(file) }
                 }
+            }
+            if let contextNote {
+                Label(contextNote, systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .padding(8)
@@ -1126,13 +1160,25 @@ struct DevotionalAgentWorkspaceView: View {
         }
     }
 
-    @ViewBuilder
+    /// Both panes stay mounted while a Terminal session is live. Swapping one
+    /// for the other would dismantle the terminal view, and dismantling it
+    /// kills the provider process the user is in the middle of — including the
+    /// first-run prompts they were part way through answering.
     private var sessionPane: some View {
-        if sessionMode == .native, let workspaceURL {
-            NativeAgentChatView(provider: selectedProvider, workspace: workspaceURL)
-                .id("\(selectedProvider.rawValue)|\(workspaceURL.path)")
-        } else {
-            terminalPane
+        ZStack {
+            if activeProvider != nil || sessionMode == .terminal {
+                terminalPane
+                    .opacity(sessionMode == .terminal ? 1 : 0)
+                    .allowsHitTesting(sessionMode == .terminal)
+                    .accessibilityHidden(sessionMode != .terminal)
+                    .disabled(sessionMode != .terminal)
+            }
+            if sessionMode == .native, let workspaceURL {
+                NativeAgentChatView(provider: selectedProvider, workspace: workspaceURL)
+                    .id("\(selectedProvider.rawValue)|\(workspaceURL.path)")
+                    // Covers the terminal kept alive beneath it.
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
     }
 
@@ -1160,7 +1206,7 @@ struct DevotionalAgentWorkspaceView: View {
                 Image(systemName: "terminal")
                     .font(.system(size: 34, weight: .light))
                     .foregroundStyle(.secondary)
-                Text("Launch an agent in this devotional workspace")
+                Text("Launch an agent in this writing’s workspace")
                     .font(.headline)
                 Text("Authentication prompts and permission requests stay inside the provider’s native CLI.")
                     .font(.caption)
@@ -1275,9 +1321,9 @@ struct DevotionalAgentWorkspaceView: View {
             refreshWorkspaceMetadata(in: workspaceURL)
             importPresentationArtifactIfNeeded(in: workspaceURL)
             collectTerminalTurns(in: workspaceURL)
-            errorMessage = nil
+            refreshErrorMessage = nil
         } catch {
-            errorMessage = error.localizedDescription
+            refreshErrorMessage = error.localizedDescription
         }
     }
 
@@ -1387,7 +1433,7 @@ struct DevotionalAgentWorkspaceView: View {
 
     private func chooseContextFiles() {
         let panel = NSOpenPanel()
-        panel.title = "Add Devotional Agent Context"
+        panel.title = "Add Agent Context"
         panel.prompt = "Copy into Workspace"
         panel.allowsMultipleSelection = true
         panel.canChooseFiles = true
@@ -1397,21 +1443,35 @@ struct DevotionalAgentWorkspaceView: View {
     }
 
     private func addContextFiles(_ urls: [URL]) {
-        guard let workspaceURL else { return }
+        guard !urls.isEmpty else { return }
+        guard let workspaceURL else {
+            errorMessage = "The agent workspace is still being prepared. Try again in a moment."
+            return
+        }
+        errorMessage = nil
+        contextNote = nil
         do {
-            try DevotionalAgentWorkspaceStore.addContextFiles(
+            let skipped = try DevotionalAgentWorkspaceStore.addContextFiles(
                 urls,
                 to: workspaceURL,
                 libraryRootURL: libraryRootURL
             )
             refreshWorkspace()
+            if !skipped.isEmpty {
+                let listed = skipped.prefix(4).joined(separator: ", ")
+                contextNote = skipped.count > 4
+                    ? "Skipped \(skipped.count) items that can’t be copied as context, including \(listed)."
+                    : "Skipped \(listed) — links, aliases, and unreadable files can’t be copied as context."
+            }
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = "Couldn’t add that context: \(error.localizedDescription)"
         }
     }
 
     private func removeContextFile(_ file: DevotionalAgentContextFile) {
         guard let workspaceURL else { return }
+        errorMessage = nil
+        contextNote = nil
         do {
             try DevotionalAgentWorkspaceStore.removeContextFile(
                 file,
@@ -1772,7 +1832,7 @@ private struct DevotionalAgentSkillEditor: View {
             )
                 .font(.title2.bold())
             if isReadOnly {
-                Text("This skill ships with Lamp Bible. You can inspect and copy its definition, but it cannot be changed from a devotional workspace.")
+                Text("This skill ships with Lamp Bible. You can inspect and copy its definition, but it cannot be changed from a writing workspace.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 12) {
@@ -1803,7 +1863,7 @@ private struct DevotionalAgentSkillEditor: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } else {
-                Text("Custom skills are stored in your synced Lamp library and can be added to any devotional workspace.")
+                Text("Custom skills are stored in your synced Lamp library and can be added to any writing workspace.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 Form {
@@ -1902,6 +1962,7 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
                 currentDirectory: workingDirectory.path
             )
             coordinator.watchForExit(of: terminal.process.shellPid)
+            coordinator.watchForWheelScrolling(in: terminal)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak terminal] in
                 guard let terminal, terminal.process.running else { return }
                 let bytes = Array((command + "\r").utf8)
@@ -1917,6 +1978,7 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ nsView: LocalProcessTerminalView, coordinator: Coordinator) {
+        coordinator.stopWatchingWheelScrolling()
         if nsView.process.running { nsView.terminate() }
         let onDismantle = coordinator.onDismantle
         DispatchQueue.main.async { onDismantle() }
@@ -1927,10 +1989,121 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
         var onDismantle: () -> Void
         private var exitSource: DispatchSourceProcess?
         private var reportedExit = false
+        private var wheelMonitor: Any?
+        private var isDismantled = false
+        private weak var terminal: LocalProcessTerminalView?
 
         init(onExit: @escaping (Int32?) -> Void, onDismantle: @escaping () -> Void) {
             self.onExit = onExit
             self.onDismantle = onDismantle
+        }
+
+        /// SwiftTerm's own wheel handling moves only its scrollback, and a
+        /// full-screen TUI — which is what `claude`, `codex`, and `opencode`
+        /// are — draws on the alternate buffer, where there is no scrollback to
+        /// move, so the wheel does nothing at all. `scrollWheel` isn't open to
+        /// override from here, so the event is taken before the terminal sees
+        /// it and forwarded the way a real terminal forwards it.
+        func watchForWheelScrolling(in terminal: LocalProcessTerminalView) {
+            // `makeNSView` installs this from an async block, which can land
+            // after a quick teardown; without this the monitor would outlive
+            // the terminal it serves.
+            guard wheelMonitor == nil, !isDismantled else { return }
+            self.terminal = terminal
+            wheelMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+                guard let terminal = self?.terminal,
+                      Self.wheelEvent(event, belongsTo: terminal) else { return event }
+                return Self.forward(event, to: terminal) ? nil : event
+            }
+        }
+
+        func stopWatchingWheelScrolling() {
+            isDismantled = true
+            if let wheelMonitor { NSEvent.removeMonitor(wheelMonitor) }
+            wheelMonitor = nil
+            terminal = nil
+        }
+
+        /// The monitor sees every scroll in the app, so everything that isn't
+        /// the pointer genuinely over this live terminal is handed straight back.
+        private static func wheelEvent(
+            _ event: NSEvent,
+            belongsTo terminal: LocalProcessTerminalView
+        ) -> Bool {
+            guard let window = terminal.window,
+                  event.window === window,
+                  !terminal.isHiddenOrHasHiddenAncestor,
+                  terminal.bounds.contains(terminal.convert(event.locationInWindow, from: nil)),
+                  let hit = window.contentView?.hitTest(event.locationInWindow),
+                  hit === terminal || hit.isDescendant(of: terminal)
+            else { return false }
+            // The normal buffer has real scrollback; SwiftTerm handles that well.
+            return terminal.getTerminal().isCurrentBufferAlternate
+        }
+
+        /// Returns whether the event was consumed.
+        private static func forward(
+            _ event: NSEvent,
+            to view: LocalProcessTerminalView
+        ) -> Bool {
+            let terminal = view.getTerminal()
+            let lines = wheelLines(for: event)
+            guard lines != 0, view.process.running else { return false }
+            let isUp = lines > 0
+
+            if view.allowMouseReporting, terminal.mouseMode != .off {
+                // The Cb wheel codes xterm reports, at the cell under the
+                // pointer, so a TUI with panes scrolls the one pointed at.
+                let cell = self.cell(under: event, in: view, terminal: terminal)
+                for _ in 0..<abs(lines) {
+                    terminal.sendEvent(buttonFlags: isUp ? 64 : 65, x: cell.col, y: cell.row)
+                }
+                return true
+            }
+
+            // xterm's `alternateScroll`: with no mouse reporting the wheel
+            // moves whatever the application moves with the cursor keys.
+            let key: [UInt8] = terminal.applicationCursor
+                ? (isUp ? [0x1B, 0x4F, 0x41] : [0x1B, 0x4F, 0x42])
+                : (isUp ? [0x1B, 0x5B, 0x41] : [0x1B, 0x5B, 0x42])
+            for _ in 0..<abs(lines) { view.process.send(data: key[...]) }
+            return true
+        }
+
+        private static func wheelLines(for event: NSEvent) -> Int {
+            let delta = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.deltaY
+            guard delta != 0 else { return 0 }
+            let magnitude = abs(delta)
+            let lines: Int
+            if event.hasPreciseScrollingDeltas {
+                // Trackpad momentum arrives as a stream of small events; a low
+                // cap per event keeps one flick from flying through everything.
+                lines = max(1, min(5, Int((magnitude / 12).rounded())))
+            } else if magnitude > 9 {
+                lines = 10
+            } else if magnitude > 5 {
+                lines = 5
+            } else if magnitude > 1 {
+                lines = 3
+            } else {
+                lines = 1
+            }
+            return delta > 0 ? lines : -lines
+        }
+
+        private static func cell(
+            under event: NSEvent,
+            in view: NSView,
+            terminal: Terminal
+        ) -> (col: Int, row: Int) {
+            let cols = max(1, terminal.cols)
+            let rows = max(1, terminal.rows)
+            guard view.bounds.width > 0, view.bounds.height > 0 else { return (0, 0) }
+            let point = view.convert(event.locationInWindow, from: nil)
+            let col = Int(point.x / (view.bounds.width / CGFloat(cols)))
+            // AppKit measures from the bottom; terminal rows count from the top.
+            let row = Int((view.bounds.height - point.y) / (view.bounds.height / CGFloat(rows)))
+            return (min(cols - 1, max(0, col)), min(rows - 1, max(0, row)))
         }
 
         /// SwiftTerm stops watching the process as soon as the terminal reads

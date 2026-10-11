@@ -41,7 +41,7 @@ struct LampBibleMacApp: App {
         // A window rather than a sheet so a devotional can be written with the
         // reader open beside it — the scripture being written about is usually the
         // reason for writing.
-        WindowGroup("Devotional", id: "devotional-editor", for: DevotionalEditorRequest.self) { $request in
+        WindowGroup("Writing", id: "devotional-editor", for: DevotionalEditorRequest.self) { $request in
             DevotionalEditorView(request: request ?? DevotionalEditorRequest())
                 .environmentObject(libraryModel)
                 .environmentObject(syncController)
@@ -439,7 +439,7 @@ private struct ReaderSettingsView: View {
                         }
                         .disabled(!agentModuleAccessEnabled)
                         Toggle(
-                            "Include personal devotionals, notes, and highlights",
+                            "Include personal writing, notes, and highlights",
                             isOn: $agentPersonalContentEnabled
                         )
                         .disabled(!agentModuleAccessEnabled)

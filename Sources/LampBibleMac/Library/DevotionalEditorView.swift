@@ -520,7 +520,7 @@ struct DevotionalEditorView: View {
             .clipped()
         }
         .frame(minWidth: 640, minHeight: 540)
-        .navigationTitle(title.isEmpty ? "New Devotional" : title)
+        .navigationTitle(title.isEmpty ? "New Writing" : title)
         .navigationSubtitle(activeSaveStateDescription)
         .toolbar { editorToolbar }
         .task(id: request) {
@@ -875,7 +875,7 @@ struct DevotionalEditorView: View {
                     Button("Media", systemImage: "paperclip") { attachMedia() }
                         .help("Attach an image or audio file")
                     Button("Record", systemImage: "mic") { showingAudioRecorder = true }
-                        .help("Record audio into this devotional")
+                        .help("Record audio into this writing")
                 }
 
                 editorTextSizeControls
@@ -923,7 +923,7 @@ struct DevotionalEditorView: View {
                         Button("Media", systemImage: "paperclip") { attachMedia() }
                             .help("Attach an image or audio file")
                         Button("Record", systemImage: "mic") { showingAudioRecorder = true }
-                            .help("Record audio into this devotional")
+                            .help("Record audio into this writing")
                     }
 
                     editorTextSizeControls
@@ -1237,8 +1237,8 @@ struct DevotionalEditorView: View {
             return document.isDirty ? "Save \(document.title)" : "This file is up to date"
         }
         return hasSavableContent
-            ? "Save this devotional"
-            : "Add devotional content before saving"
+            ? "Save this writing"
+            : "Add content before saving"
     }
 
     private var agentContextDocument: String {
