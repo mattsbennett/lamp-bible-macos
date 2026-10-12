@@ -1454,19 +1454,93 @@ struct DevotionalAgentWorkspaceView: View {
         revisions = (try? DevotionalAgentRevisionStore.revisions(in: workspace)) ?? revisions
     }
 
+    /// Takes a deck the agent wrote, with the images it delivered beside it,
+    /// and records the outcome where the agent can read it.
     private func importPresentationArtifactIfNeeded(in workspace: URL) {
+        let store = LampPresentationDeckStore(rootURL: libraryRootURL)
         do {
             guard let data = try DevotionalAgentWorkspaceStore.changedPresentationData(
                 in: workspace
-            ) else { return }
-            var imported = try LampPresentationDeckStore(rootURL: libraryRootURL).decode(data)
+            ) else {
+                // Nothing to take. Say so once rather than on every poll, so an
+                // agent can tell "Lamp has looked and there is no change" from
+                // "Lamp has not looked yet".
+                let artifact = workspace.appendingPathComponent(
+                    DevotionalAgentWorkspaceStore.presentationFilename
+                )
+                let present = FileManager.default.fileExists(atPath: artifact.path)
+                LampPresentationImportStatusStore.writeIfChanged(
+                    LampPresentationImportStatus(
+                        outcome: present ? .unchanged : .absent,
+                        message: present
+                            ? "No change since the last import."
+                            : "No presentation.lampdeck in this workspace."
+                    ),
+                    in: workspace
+                )
+                return
+            }
+            var imported = try store.decode(data)
             imported.source = LampPresentationSource(kind: .devotional, id: devotionalID)
-            let destination = try LampPresentationDeckStore(rootURL: libraryRootURL).save(imported)
+
+            // Images arrive in an `Assets` folder beside the deck, because the
+            // agent cannot write into the library itself.
+            let assets = try store.importAssets(from: workspace, referencedBy: imported)
+            let identity = LampPresentationImportStatus.slideIdentity(
+                importing: imported,
+                over: try? store.deck(id: imported.id)
+            )
+            let destination = try store.save(imported)
             try DevotionalAgentWorkspaceStore.markPresentationImported(data, in: workspace)
-            presentationStatus = "Imported \(imported.title) into Slide Studio (\(destination.lastPathComponent))."
+
+            let issues = LampPresentationDeckValidator.validate(imported) { assetPath in
+                store.assetURL(forAssetPath: assetPath).map {
+                    FileManager.default.fileExists(atPath: $0.path)
+                } ?? false
+            }
+            let advisory = issues.filter { $0.severity == .warning }
+            presentationStatus = advisory.isEmpty
+                ? "Imported \(imported.title) into Slide Studio (\(destination.lastPathComponent))."
+                : "Imported \(imported.title) into Slide Studio with \(advisory.count) "
+                    + "note\(advisory.count == 1 ? "" : "s") for the agent."
+            LampPresentationImportStatusStore.write(
+                LampPresentationImportStatus(
+                    outcome: .imported,
+                    message: presentationStatus ?? "Imported.",
+                    deckID: imported.id,
+                    deckTitle: imported.title,
+                    slideCount: imported.slides.count,
+                    slideIdentity: identity,
+                    importedAssets: assets.imported,
+                    missingAssets: assets.missing,
+                    issues: issues.map {
+                        .init(
+                            severity: $0.severity == .error ? "error" : "warning",
+                            path: $0.path,
+                            message: $0.message
+                        )
+                    }
+                ),
+                in: workspace
+            )
         } catch {
             presentationStatus = "Deck not imported: \(error.localizedDescription)"
+            LampPresentationImportStatusStore.write(
+                LampPresentationImportStatus(
+                    issues: presentationIssues(in: error),
+                    outcome: .failed,
+                    message: "Deck not imported: \(error.localizedDescription)"
+                ),
+                in: workspace
+            )
         }
+    }
+
+    /// The validator's own account of a refusal, when that is what failed, so
+    /// the agent is told which block to fix rather than only that it failed.
+    private func presentationIssues(in error: Error) -> [LampPresentationDeckIssue] {
+        guard case LampPresentationDeckStoreError.invalidDeck(let issues) = error else { return [] }
+        return issues
     }
 
     private func chooseContextFiles() {

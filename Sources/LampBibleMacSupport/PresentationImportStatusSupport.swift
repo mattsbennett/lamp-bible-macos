@@ -1,0 +1,172 @@
+import Foundation
+import LampCore
+
+/// What happened the last time Lamp looked at a workspace's
+/// `presentation.lampdeck`, written where the agent that wrote the deck can
+/// read it.
+///
+/// Import runs in the app, and its outcome used to appear only in the agent
+/// pane — so an agent had no way to tell whether its deck had been taken, or
+/// why it had not. This file is that answer. Lamp owns it; an agent reads it.
+public struct LampPresentationImportStatus: Codable, Equatable, Sendable {
+    public enum Outcome: String, Codable, Sendable {
+        /// The deck was decoded, validated, and saved into Slide Studio.
+        case imported
+        /// The file has not changed since the last import.
+        case unchanged
+        /// No `presentation.lampdeck` in the workspace.
+        case absent
+        /// The deck could not be read or did not validate; nothing was saved.
+        case failed
+    }
+
+    /// How slide identifiers compared with the deck already in the library.
+    ///
+    /// Rewriting every ID on each generation throws away the link between a
+    /// slide and anything the user did to it, so it is worth reporting.
+    public struct SlideIdentity: Codable, Equatable, Sendable {
+        public var reused: Int
+        public var added: Int
+        public var removed: Int
+
+        public init(reused: Int, added: Int, removed: Int) {
+            self.reused = reused
+            self.added = added
+            self.removed = removed
+        }
+    }
+
+    public struct Issue: Codable, Equatable, Sendable {
+        public var severity: String
+        public var path: String
+        public var message: String
+
+        public init(severity: String, path: String, message: String) {
+            self.severity = severity
+            self.path = path
+            self.message = message
+        }
+    }
+
+    public static let filename = "presentation-import.json"
+
+    public var formatVersion = 1
+    public var outcome: Outcome
+    public var checkedAt: Date
+    public var message: String
+    public var deckID: String?
+    public var deckTitle: String?
+    public var slideCount: Int?
+    public var slideIdentity: SlideIdentity?
+    /// Images found beside the deck and copied into the library.
+    public var importedAssets: [String]
+    /// Images the deck names that are nowhere to be found; these render as
+    /// placeholders.
+    public var missingAssets: [String]
+    /// Everything the validator had to say, warnings included.
+    public var issues: [Issue]
+
+    public init(
+        outcome: Outcome,
+        checkedAt: Date = Date(),
+        message: String,
+        deckID: String? = nil,
+        deckTitle: String? = nil,
+        slideCount: Int? = nil,
+        slideIdentity: SlideIdentity? = nil,
+        importedAssets: [String] = [],
+        missingAssets: [String] = [],
+        issues: [Issue] = []
+    ) {
+        self.outcome = outcome
+        self.checkedAt = checkedAt
+        self.message = message
+        self.deckID = deckID
+        self.deckTitle = deckTitle
+        self.slideCount = slideCount
+        self.slideIdentity = slideIdentity
+        self.importedAssets = importedAssets
+        self.missingAssets = missingAssets
+        self.issues = issues
+    }
+
+    public init(outcome: Outcome, checkedAt: Date = Date(), message: String) {
+        self.init(
+            outcome: outcome,
+            checkedAt: checkedAt,
+            message: message,
+            deckID: nil
+        )
+    }
+}
+
+public extension LampPresentationImportStatus {
+    init(issues: [LampPresentationDeckIssue], outcome: Outcome, message: String) {
+        self.init(
+            outcome: outcome,
+            message: message,
+            issues: issues.map {
+                Issue(
+                    severity: $0.severity == .error ? "error" : "warning",
+                    path: $0.path,
+                    message: $0.message
+                )
+            }
+        )
+    }
+
+    /// Compares a deck about to be saved with the one already in the library.
+    static func slideIdentity(
+        importing deck: LampPresentationDeck,
+        over existing: LampPresentationDeck?
+    ) -> SlideIdentity {
+        let incoming = Set(deck.slides.map(\.id))
+        let previous = Set(existing?.slides.map(\.id) ?? [])
+        return SlideIdentity(
+            reused: incoming.intersection(previous).count,
+            added: incoming.subtracting(previous).count,
+            removed: previous.subtracting(incoming).count
+        )
+    }
+}
+
+public enum LampPresentationImportStatusStore {
+    public static func url(in workspace: URL) -> URL {
+        workspace.appendingPathComponent(LampPresentationImportStatus.filename)
+    }
+
+    /// Writes the status only when it says something new.
+    ///
+    /// Lamp looks at the artifact several times a second, and rewriting an
+    /// unchanged answer that often would churn the workspace and tell the agent
+    /// nothing. `checkedAt` is ignored in the comparison, since it moves every
+    /// time by definition.
+    public static func writeIfChanged(
+        _ status: LampPresentationImportStatus,
+        in workspace: URL
+    ) {
+        if var existing = read(in: workspace) {
+            existing.checkedAt = status.checkedAt
+            guard existing != status else { return }
+        }
+        write(status, in: workspace)
+    }
+
+    /// Writes the status beside the deck it describes. Never throws into the
+    /// import path: a status that cannot be written must not stop a deck that
+    /// otherwise imported fine.
+    public static func write(_ status: LampPresentationImportStatus, in workspace: URL) {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(status) else { return }
+        try? data.write(to: url(in: workspace), options: [.atomic])
+    }
+
+    public static func read(in workspace: URL) -> LampPresentationImportStatus? {
+        guard let data = try? Data(contentsOf: url(in: workspace)) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(LampPresentationImportStatus.self, from: data)
+    }
+}

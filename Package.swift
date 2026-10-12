@@ -58,6 +58,9 @@ let package = Package(
             dependencies: [
                 "LampMCPServer",
                 .product(name: "LampCore", package: "lamp-bible-core"),
+                // `--render-deck` draws slides with the same canvas the apps
+                // use, so a preview cannot disagree with the real thing.
+                .product(name: "LampPresentationUI", package: "lamp-bible-core"),
             ]
         ),
         .testTarget(

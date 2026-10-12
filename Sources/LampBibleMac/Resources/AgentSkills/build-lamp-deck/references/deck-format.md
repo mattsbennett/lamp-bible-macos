@@ -103,6 +103,54 @@ A scripture block may preserve the source chosen in Slide Studio with:
 
 The copied quotation remains in `text`, and its human-readable reference and translation belong in a separate `citation` block. `scriptureReference` is optional for compatibility with manually supplied quotations, but when present it is valid only on a `scripture` block and must describe a same-chapter ascending verse range.
 
+## Scripture references
+
+`bookNumber` is the book's canonical position, 1 (Genesis) to 66 (Revelation);
+`chapterNumber` and `startVerse`/`endVerse` are one-based. These are the same
+numbers that appear in Lamp's verse identifiers, which are
+`bookNumber * 1000000 + chapterNumber * 1000 + verse` — so John 1:1 is book 43,
+chapter 1, verse 1, and the identifier 43001001.
+
+`translationID` is the module ID of an installed translation, not a name you
+choose. Ask the `lamp` MCP server with `list_modules` and use the `id` of a
+module whose `kind` is `translation`. A reference naming a translation the
+library does not have cannot be checked, and the preview says so.
+
+When a scripture block carries a `scriptureReference`, the preview compares the
+block's text with that passage as installed and reports a mismatch. Copy the
+translation's wording exactly, or drop the reference and label the text a
+paraphrase.
+
+## Images
+
+Put image files in an `Assets` folder beside `presentation.lampdeck` and
+reference them as `Assets/name.jpg`. On import Lamp copies the files the deck
+names into the library's presentation assets; files it does not name are left
+alone. Until then the preview reads them from where you put them, so an image
+can be checked before it has been imported.
+
+An image Lamp cannot find renders as a placeholder on every platform rather
+than failing, and both the validator and the preview report it by path.
+
+## Import status
+
+Each time Lamp looks at `presentation.lampdeck` it writes
+`presentation-import.json` beside it. Read it to confirm what happened; do not
+write to it.
+
+| Field | Meaning |
+| --- | --- |
+| `outcome` | `imported`, `unchanged`, `absent`, or `failed` |
+| `message` | The same sentence shown in the agent pane |
+| `deckID`, `deckTitle`, `slideCount` | What was taken |
+| `slideIdentity` | How many slide IDs were `reused`, `added`, and `removed` against the deck already in the library |
+| `importedAssets`, `missingAssets` | Images that arrived, and images the deck names that are nowhere to be found |
+| `issues` | Everything the validator said, warnings included |
+
+A `slideIdentity` showing no reuse means every slide ID was rewritten, which
+discards the link between a slide and anything the user has done to it. When
+revising a deck, keep the IDs of slides that survive.
+
 ## Revision stability
 
 When editing an existing deck:

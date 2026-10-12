@@ -31,6 +31,97 @@ BLOCK_KINDS = {
 }
 HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
+# What each layout actually draws. This mirrors `LampPresentationSlidePlan` in
+# LampCore, which the renderer itself draws from; the two must agree, or this
+# script will approve a slide the app then shows differently.
+#
+# A value is the set of block kinds drawn, with how many of each. `None` means
+# every block of that kind is drawn.
+LAYOUT_CAPACITY: dict[str, dict[str, int | None]] = {
+    "title": {"title": 1, "subtitle": 1, "body": 1},
+    "closing": {"title": 1, "subtitle": 1, "body": 1},
+    "title-and-body": {
+        "title": 1, "subtitle": None, "body": None, "scripture": None,
+        "quotation": None, "citation": None, "image": 1, "caption": 1,
+    },
+    "scripture": {
+        "scripture": None, "quotation": None, "body": None,
+        "citation": None, "image": 1, "caption": 1,
+    },
+    "quotation": {
+        "scripture": None, "quotation": None, "body": None,
+        "citation": None, "image": 1, "caption": 1,
+    },
+    "two-column": {"title": 1, "body": 2},
+    "image": {"title": 1, "image": 1, "caption": 1, "citation": None},
+    "blank": {
+        "title": None, "subtitle": None, "body": None, "scripture": None,
+        "quotation": None, "citation": None, "image": 1, "caption": 1,
+    },
+}
+# `title` and `closing` draw one line under the heading, from either kind.
+SHARED_SUBTITLE_SLOT = {"title", "closing"}
+# Past this much text a slide is shrinking its own type to fit. Halved when an
+# image takes the other half of the slide.
+CROWDING_CEILING = 900
+
+
+def relative_luminance(value: str) -> float | None:
+    if not HEX_COLOR.match(value or ""):
+        return None
+    rgb = int(value[1:], 16)
+    channels = []
+    for shift in (16, 8, 0):
+        channel = ((rgb >> shift) & 0xFF) / 255
+        channels.append(
+            channel / 12.92 if channel <= 0.03928 else ((channel + 0.055) / 1.055) ** 2.4
+        )
+    return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+
+
+def contrast_ratio(first: str, second: str) -> float | None:
+    a, b = relative_luminance(first), relative_luminance(second)
+    if a is None or b is None:
+        return None
+    return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+
+
+def undrawn_blocks(layout: str, blocks: list) -> list[tuple[int, str]]:
+    """Indexes and kinds of blocks this layout will not draw."""
+    capacity = LAYOUT_CAPACITY.get(layout)
+    if capacity is None:
+        return []
+    used: dict[str, int] = {}
+    subtitle_slot_taken = False
+    undrawn: list[tuple[int, str]] = []
+    for index, block in enumerate(blocks):
+        if not isinstance(block, dict):
+            continue
+        kind = block.get("kind")
+        if kind not in capacity:
+            undrawn.append((index, str(kind)))
+            continue
+        if layout in SHARED_SUBTITLE_SLOT and kind in {"subtitle", "body"}:
+            if subtitle_slot_taken:
+                undrawn.append((index, str(kind)))
+            subtitle_slot_taken = True
+            continue
+        limit = capacity[kind]
+        if limit is None:
+            continue
+        used[kind] = used.get(kind, 0) + 1
+        if used[kind] > limit:
+            undrawn.append((index, str(kind)))
+    # A caption belongs to a picture; without one it is never drawn.
+    if layout != "image" and not any(
+        isinstance(b, dict) and b.get("kind") == "image" for b in blocks
+    ):
+        for index, block in enumerate(blocks):
+            if isinstance(block, dict) and block.get("kind") == "caption":
+                if (index, "caption") not in undrawn:
+                    undrawn.append((index, "caption"))
+    return sorted(set(undrawn))
+
 
 def safe_asset_path(value):
     """Mirror Lamp's own check: a relative path that cannot leave the folder.
@@ -60,7 +151,7 @@ def positive_integer(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
-def validate(deck: object) -> tuple[list[str], list[str]]:
+def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str], list[str]]:
     errors: list[str] = []
     warnings: list[str] = []
 
@@ -98,6 +189,14 @@ def validate(deck: object) -> tuple[list[str], list[str]]:
             value = theme.get(key)
             if not isinstance(value, str) or HEX_COLOR.fullmatch(value) is None:
                 errors.append(f"theme.{key}: expected #RRGGBB")
+        background = theme.get("backgroundColor", "")
+        for key, floor in (("foregroundColor", 4.5), ("accentColor", 3.0)):
+            ratio = contrast_ratio(theme.get(key, ""), background)
+            if ratio is not None and ratio < floor:
+                warnings.append(
+                    f"theme.{key}: contrasts with the background at only {ratio:.1f}:1; "
+                    f"aim for {floor:.1f}:1 or more"
+                )
 
     slides = deck.get("slides")
     if not isinstance(slides, list) or not slides:
@@ -191,6 +290,48 @@ def validate(deck: object) -> tuple[list[str], list[str]]:
             if kind == "body" and isinstance(text, str) and len(text) > 700:
                 warnings.append(f"{block_path}.text: body may be too dense")
 
+        # Images the deck names but nobody delivered. They render as
+        # placeholders rather than failing, so this is a warning.
+        if isinstance(blocks, list) and deck_directory is not None:
+            for index, block in enumerate(blocks):
+                if not isinstance(block, dict) or block.get("kind") != "image":
+                    continue
+                asset = block.get("assetPath")
+                if not isinstance(asset, str) or not safe_asset_path(asset):
+                    continue
+                if not (deck_directory / asset).is_file():
+                    warnings.append(
+                        f"{path}.blocks[{index}].assetPath: no file at {asset!r}; "
+                        "the slide renders a placeholder until the image is delivered "
+                        "beside the deck"
+                    )
+
+        # Blocks the layout will never draw. Saying nothing here is what sent
+        # deck authors to read the renderer to find out why a slide was bare.
+        if isinstance(blocks, list):
+            for index, kind in undrawn_blocks(slide.get("layout", ""), blocks):
+                warnings.append(
+                    f"{path}.blocks[{index}]: a {slide.get('layout')} slide does not draw "
+                    f"{kind} content; move it to another slide or change the layout"
+                )
+
+            drawn_text = sum(
+                len(block.get("text", ""))
+                for block in blocks
+                if isinstance(block, dict)
+                and block.get("kind") in {"body", "scripture", "quotation", "citation"}
+            )
+            has_image = any(
+                isinstance(block, dict) and block.get("kind") == "image" for block in blocks
+            )
+            ceiling = CROWDING_CEILING // 2 if has_image else CROWDING_CEILING
+            if drawn_text > ceiling:
+                where = "the half of this slide left by its image" if has_image else "this slide"
+                warnings.append(
+                    f"{path}.blocks: about {drawn_text} characters of text for {where}; "
+                    "text shrinks to fit before it is clipped, so split this across slides"
+                )
+
     return errors, warnings
 
 
@@ -205,7 +346,7 @@ def main() -> int:
         print(f"ERROR {path}: {error}", file=sys.stderr)
         return 1
 
-    errors, warnings = validate(document)
+    errors, warnings = validate(document, deck_directory=path.resolve().parent)
     for warning in warnings:
         print(f"WARNING {warning}")
     for error in errors:
