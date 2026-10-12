@@ -2103,6 +2103,7 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
             )
             coordinator.watchForExit(of: terminal.process.shellPid)
             coordinator.watchForWheelScrolling(in: terminal)
+            coordinator.watchForNewlineKeys(in: terminal)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak terminal] in
                 guard let terminal, terminal.process.running else { return }
                 let bytes = Array((command + "\r").utf8)
@@ -2130,6 +2131,7 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
         private var exitSource: DispatchSourceProcess?
         private var reportedExit = false
         private var wheelMonitor: Any?
+        private var newlineMonitor: Any?
         private var isDismantled = false
         private weak var terminal: LocalProcessTerminalView?
 
@@ -2161,7 +2163,51 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
             isDismantled = true
             if let wheelMonitor { NSEvent.removeMonitor(wheelMonitor) }
             wheelMonitor = nil
+            if let newlineMonitor { NSEvent.removeMonitor(newlineMonitor) }
+            newlineMonitor = nil
             terminal = nil
+        }
+
+        /// Makes Shift-Return insert a line rather than submit one.
+        ///
+        /// A terminal sends the same carriage return for Return with or without
+        /// Shift, so a provider's prompt sees one key and submits — losing a
+        /// half-written paragraph. Real terminals are configured to send
+        /// ESC-Return for Shift-Return, which `claude`, `codex`, and `opencode`
+        /// all read as "newline, don't send"; Lamp's embedded terminal has no
+        /// settings for someone to configure, so it does it here.
+        func watchForNewlineKeys(in terminal: LocalProcessTerminalView) {
+            guard newlineMonitor == nil, !isDismantled else { return }
+            self.terminal = terminal
+            newlineMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let terminal = self?.terminal,
+                      Self.keyEvent(event, belongsTo: terminal),
+                      event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .shift,
+                      Self.isReturn(event),
+                      terminal.process.running
+                else { return event }
+                // ESC then CR: meta-Return, as a configured terminal sends it.
+                terminal.process.send(data: [0x1B, 0x0D][...])
+                return nil
+            }
+        }
+
+        /// Whether the keystroke was aimed at this terminal.
+        private static func keyEvent(
+            _ event: NSEvent,
+            belongsTo terminal: LocalProcessTerminalView
+        ) -> Bool {
+            guard let window = terminal.window,
+                  event.window === window,
+                  !terminal.isHiddenOrHasHiddenAncestor,
+                  let responder = window.firstResponder as? NSView
+            else { return false }
+            return responder === terminal || responder.isDescendant(of: terminal)
+        }
+
+        private static func isReturn(_ event: NSEvent) -> Bool {
+            // 36 is Return, 76 the keypad's.
+            event.keyCode == 36 || event.keyCode == 76
         }
 
         /// The monitor sees every scroll in the app, so everything that isn't

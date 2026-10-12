@@ -53,6 +53,8 @@ Lamp Bible detects a valid changed artifact and imports it into Slide Studio aut
 - Use semantic layouts and block roles. Do not invent coordinates, font sizes, animations, or unsupported fields.
 - Use an `image` block only when the referenced asset exists in the workspace and provide meaningful `altText`.
 - An image is not confined to the `image` layout: put one on a `scripture`, `quotation`, or `title-and-body` slide and it is laid beside the prose. Reserve the `image` layout for a slide the picture itself carries.
+- Put each citation block directly after the quotation it attributes. Passages from different places are separate quotations, each with its own citation; two passages from the same place are one quotation joined with an ellipsis.
+- Do not type outer quotation marks, or an ellipsis at the start or end, in a quotation or scripture block — Lamp adds them from the block's role. Do type an ellipsis where you leave words out in the middle.
 - Keep a passage together: these layouts draw every quotation and citation block they are given, so there is no need for one verse per slide or a repeated "Source: …" body line.
 - For a talk, set `speakerNotesSource` to `manuscript` and give each spoken slide a `notesAnchor`. Do not paste the manuscript into `speakerNotes` yourself: Lamp derives it, and keeps deriving it when the writing is edited later.
 - Do not modify `draft.md` unless the user also asked to revise the writing.

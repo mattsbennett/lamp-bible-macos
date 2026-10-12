@@ -127,6 +127,30 @@ struct DeckValidatorAgreementTests {
             ],
             speakerNotesSource: .manuscript
         ),
+        // Several passages sharing one attribution.
+        LampPresentationDeck(title: "Pooled", slides: [
+            .init(layout: .scripture, blocks: [
+                .init(kind: .scripture, text: "then the LORD God formed the man of dust"),
+                .init(kind: .scripture, text: "The first man was from the earth"),
+                .init(kind: .citation, text: "Genesis 2:7; 1 Corinthians 15:47"),
+            ]),
+        ]),
+        // Quotation marks the author typed, which Lamp would double.
+        LampPresentationDeck(title: "Typed marks", slides: [
+            .init(layout: .quotation, blocks: [
+                .init(kind: .quotation, text: "\u{201C}A whole sentence.\u{201D}"),
+                .init(kind: .citation, text: "A source"),
+            ]),
+        ]),
+        // Each passage attributed on its own: nothing to say.
+        LampPresentationDeck(title: "Paired", slides: [
+            .init(layout: .scripture, blocks: [
+                .init(kind: .scripture, text: "then the LORD God formed the man of dust"),
+                .init(kind: .citation, text: "Genesis 2:7"),
+                .init(kind: .scripture, text: "The first man was from the earth"),
+                .init(kind: .citation, text: "1 Corinthians 15:47"),
+            ]),
+        ]),
         // Nothing to say about a well-formed deck.
         LampPresentationDeck(title: "Clean", slides: [
             .init(layout: .titleAndBody, blocks: [

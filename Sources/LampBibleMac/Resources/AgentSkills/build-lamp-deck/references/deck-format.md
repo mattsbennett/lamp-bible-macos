@@ -103,6 +103,42 @@ A scripture block may preserve the source chosen in Slide Studio with:
 
 The copied quotation remains in `text`, and its human-readable reference and translation belong in a separate `citation` block. `scriptureReference` is optional for compatibility with manually supplied quotations, but when present it is valid only on a `scripture` block and must describe a same-chapter ascending verse range.
 
+## Quotations
+
+Lamp sets a quotation rather than expecting you to. On `quotation`, `scripture`
+and `title-and-body` slides, each `quotation` and `scripture` block is drawn:
+
+- wrapped in “curly” quotation marks;
+- opening with an ellipsis when the excerpt starts mid-sentence, which is judged
+  by a lowercase first letter;
+- closing with an ellipsis when it stops mid-sentence, replacing a trailing
+  comma, semicolon, colon or dash;
+- with any quotation marks inside stepped down to ‘single’ ones.
+
+So type the words and nothing else. An ellipsis you type in the *middle*, where
+words are left out, is kept. The stored text never changes — only what is drawn
+— so a listener using VoiceOver hears the words as written.
+
+The one case the rule cannot see is an excerpt beginning mid-sentence with a
+capitalised word, such as a name. Type the leading ellipsis yourself there; a
+typed one is left alone.
+
+To draw a block exactly as stored — poetry, or a deck that wants bare scripture:
+
+```json
+"typography": "verbatim"
+```
+
+`body`, `caption` and `citation` blocks, and two-column bodies, are never
+touched: there you type what you mean.
+
+### One citation per quotation
+
+A citation closes the passage above it. Two passages from two places are two
+quotations, each with its own citation directly after it, and each is drawn with
+its own accent rule. Two passages from the same place are one quotation, joined
+with an ellipsis, with a single citation.
+
 ## Scripture references
 
 `bookNumber` is the book's canonical position, 1 (Genesis) to 66 (Revelation);

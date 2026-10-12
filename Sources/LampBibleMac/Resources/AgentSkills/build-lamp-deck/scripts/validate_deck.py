@@ -68,6 +68,36 @@ SPEAKER_NOTES_SOURCES = {"authored", "manuscript"}
 MANUSCRIPT_CHECKS = {"skip"}
 # Notes can only follow writing Lamp holds.
 MANUSCRIPT_SOURCE_KINDS = {"devotional", "writing"}
+TYPOGRAPHY = {"verbatim"}
+# Lamp sets quotations on these layouts, so it adds the marks itself.
+QUOTE_TYPOGRAPHY_LAYOUTS = {"quotation", "scripture", "title-and-body"}
+QUOTE_MARKS = {'"', "\u201c", "\u201d"}
+
+
+def has_typed_outer_quotation_marks(text: str) -> bool:
+    trimmed = (text or "").strip()
+    if len(trimmed) < 2 or trimmed[0] not in QUOTE_MARKS or trimmed[-1] not in QUOTE_MARKS:
+        return False
+    # Marks at both ends with another between them belong to the text.
+    return not any(ch in QUOTE_MARKS for ch in trimmed[1:-1])
+
+
+def quote_groups(blocks: list) -> list[tuple[int, int]]:
+    """(quotations, citations) per group, reading the slide in order."""
+    groups: list[tuple[int, int]] = []
+    pending = 0
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        kind = block.get("kind")
+        if kind in {"quotation", "scripture", "body"}:
+            pending += 1
+        elif kind == "citation":
+            groups.append((pending, 1))
+            pending = 0
+    if pending:
+        groups.append((pending, 0))
+    return groups
 
 
 def relative_luminance(value: str) -> float | None:
@@ -322,6 +352,19 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
                 warnings.append(f"{block_path}.text: title may be too long")
             if kind == "body" and isinstance(text, str) and len(text) > 700:
                 warnings.append(f"{block_path}.text: body may be too dense")
+            typography = block.get("typography")
+            if typography is not None and typography not in TYPOGRAPHY:
+                errors.append(f"{block_path}.typography: expected 'verbatim'")
+            if (
+                kind in {"quotation", "scripture"}
+                and typography != "verbatim"
+                and slide.get("layout") in QUOTE_TYPOGRAPHY_LAYOUTS
+                and isinstance(text, str)
+                and has_typed_outer_quotation_marks(text)
+            ):
+                warnings.append(
+                    f"{block_path}.text: Lamp adds the quotation marks; remove these"
+                )
             check = block.get("manuscriptCheck")
             if check is not None:
                 if check not in MANUSCRIPT_CHECKS:
@@ -356,6 +399,16 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
                     f"{path}.blocks[{index}]: a {slide.get('layout')} slide does not draw "
                     f"{kind} content; move it to another slide or change the layout"
                 )
+
+            # Several passages sharing one attribution read as one passage with
+            # a list of sources under it.
+            if slide.get("layout") in QUOTE_TYPOGRAPHY_LAYOUTS:
+                groups = [g for g in quote_groups(blocks) if g[0] > 0]
+                if len(groups) == 1 and groups[0][0] > 1 and groups[0][1] == 1:
+                    warnings.append(
+                        f"{path}.blocks: {groups[0][0]} quotations share one citation; "
+                        "give each its own, directly after it"
+                    )
 
             drawn_text = sum(
                 len(block.get("text", ""))
