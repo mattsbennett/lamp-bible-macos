@@ -103,6 +103,9 @@ public struct LampPresentationImportStatus: Codable, Equatable, Sendable {
         public var slideIdentity: SlideIdentity?
         public var importedAssets: [String]
         public var missingAssets: [String]
+        /// How the notes were arrived at, which is as much a part of the import
+        /// as the slide identity.
+        public var speakerNotes: SpeakerNotes?
 
         public init(
             at: Date,
@@ -111,7 +114,8 @@ public struct LampPresentationImportStatus: Codable, Equatable, Sendable {
             slideCount: Int?,
             slideIdentity: SlideIdentity?,
             importedAssets: [String],
-            missingAssets: [String]
+            missingAssets: [String],
+            speakerNotes: SpeakerNotes? = nil
         ) {
             self.at = at
             self.deckID = deckID
@@ -120,6 +124,7 @@ public struct LampPresentationImportStatus: Codable, Equatable, Sendable {
             self.slideIdentity = slideIdentity
             self.importedAssets = importedAssets
             self.missingAssets = missingAssets
+            self.speakerNotes = speakerNotes
         }
     }
 
@@ -148,6 +153,7 @@ public struct LampPresentationImportStatus: Codable, Equatable, Sendable {
         self.missingAssets = missingAssets
         self.issues = issues
         self.speakerNotes = speakerNotes
+        // Built from the fields above, so this must follow them.
         self.lastImport = lastImport
             ?? (outcome == .imported
                 ? Completed(
@@ -157,7 +163,8 @@ public struct LampPresentationImportStatus: Codable, Equatable, Sendable {
                     slideCount: slideCount,
                     slideIdentity: slideIdentity,
                     importedAssets: importedAssets,
-                    missingAssets: missingAssets
+                    missingAssets: missingAssets,
+                    speakerNotes: speakerNotes
                 )
                 : nil)
     }
@@ -221,6 +228,8 @@ public enum LampPresentationImportStatusStore {
         if let existing = read(in: workspace) {
             // A later check must not erase the import it followed.
             if status.lastImport == nil { status.lastImport = existing.lastImport }
+            // Nothing changed means the notes are still however they were made.
+            if status.speakerNotes == nil { status.speakerNotes = existing.speakerNotes }
             var compared = existing
             compared.checkedAt = status.checkedAt
             guard compared != status else { return }

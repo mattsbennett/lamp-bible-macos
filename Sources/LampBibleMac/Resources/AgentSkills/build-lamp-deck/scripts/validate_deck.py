@@ -83,14 +83,18 @@ def has_typed_outer_quotation_marks(text: str) -> bool:
 
 
 def quote_groups(blocks: list) -> list[tuple[int, int]]:
-    """(quotations, citations) per group, reading the slide in order."""
+    """(quotations, citations) per group, reading the slide in order.
+
+    Only quoted matter counts. A slide with a bulleted list, one quotation and
+    its citation has one thing quoted, not two.
+    """
     groups: list[tuple[int, int]] = []
     pending = 0
     for block in blocks:
         if not isinstance(block, dict):
             continue
         kind = block.get("kind")
-        if kind in {"quotation", "scripture", "body"}:
+        if kind in {"quotation", "scripture"}:
             pending += 1
         elif kind == "citation":
             groups.append((pending, 1))

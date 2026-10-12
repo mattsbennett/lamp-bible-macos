@@ -151,6 +151,15 @@ struct DeckValidatorAgreementTests {
                 .init(kind: .citation, text: "1 Corinthians 15:47"),
             ]),
         ]),
+        // A list beside one quotation: one thing quoted, not two.
+        LampPresentationDeck(title: "List and quote", slides: [
+            .init(layout: .titleAndBody, blocks: [
+                .init(kind: .title, text: "The three dials"),
+                .init(kind: .body, text: "Capacity\nAttention\nRestraint", listStyle: .unordered),
+                .init(kind: .quotation, text: "A single quoted sentence from somewhere."),
+                .init(kind: .citation, text: "A source"),
+            ]),
+        ]),
         // Nothing to say about a well-formed deck.
         LampPresentationDeck(title: "Clean", slides: [
             .init(layout: .titleAndBody, blocks: [

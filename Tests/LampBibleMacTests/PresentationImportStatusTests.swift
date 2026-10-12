@@ -165,4 +165,36 @@ struct PresentationImportStatusTests {
         // What is in Slide Studio right now is still the earlier import.
         #expect(read.lastImport?.deckTitle == "Two Ways")
     }
+
+    @Test func keepsTheSpeakerNotesSummaryThroughLaterChecks() throws {
+        let directory = try workspace()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        LampPresentationImportStatusStore.writeIfChanged(
+            .init(
+                outcome: .imported,
+                message: "Imported.",
+                deckID: "deck-1",
+                deckTitle: "Two Dials",
+                slideCount: 74,
+                speakerNotes: .init(
+                    source: "manuscript",
+                    resolved: 73,
+                    stale: 0,
+                    problems: []
+                )
+            ),
+            in: directory
+        )
+        LampPresentationImportStatusStore.writeIfChanged(
+            .init(outcome: .unchanged, message: "No change since the last import."),
+            in: directory
+        )
+
+        let read = try #require(LampPresentationImportStatusStore.read(in: directory))
+        // How the notes were arrived at is as much a part of the import as the
+        // slide identity, and must survive the same way.
+        #expect(read.lastImport?.speakerNotes?.resolved == 73)
+        #expect(read.speakerNotes?.resolved == 73)
+    }
 }
