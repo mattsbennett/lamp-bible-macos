@@ -54,6 +54,7 @@
 		A10000000000000000000028 /* AgentMCPConfigurationSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000026 /* AgentMCPConfigurationSupport.swift */; };
 		A10000000000000000000029 /* AgentModuleAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000027 /* AgentModuleAccess.swift */; };
 		A1000000000000000000002A /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000028 /* main.swift */; };
+		A100000000000000000000F1 /* DeckPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000F1 /* DeckPreview.swift */; };
 		A1000000000000000000002B /* LampMCPToolCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000029 /* LampMCPToolCatalog.swift */; };
 		A1000000000000000000002C /* LampMCPToolHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000002A /* LampMCPToolHandler.swift */; };
 		A1000000000000000000002D /* LampMCPServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000002B /* LampMCPServer.swift */; };
@@ -72,6 +73,7 @@
 		A1000000000000000000003A /* WrappingRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000036 /* WrappingRow.swift */; };
 		A1000000000000000000003B /* NativeAgentChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000037 /* NativeAgentChatView.swift */; };
 		A1000000000000000000003C /* AgentChatSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000038 /* AgentChatSupport.swift */; };
+		A100000000000000000000F2 /* PresentationImportStatusSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000F2 /* PresentationImportStatusSupport.swift */; };
 		A1000000000000000000003D /* SwiftyChat in Frameworks */ = {isa = PBXBuildFile; productRef = G1000000000000000000000A /* SwiftyChat */; };
 		A1000000000000000000003E /* WorkspaceTextFileSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000039 /* WorkspaceTextFileSupport.swift */; };
 		A1000000000000000000003F /* WorkspaceSkillSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000003A /* WorkspaceSkillSupport.swift */; };
@@ -128,6 +130,7 @@
 		B10000000000000000000026 /* AgentMCPConfigurationSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/AgentMCPConfigurationSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000027 /* AgentModuleAccess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/AgentModuleAccess.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000028 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampMCP/main.swift; sourceTree = SOURCE_ROOT; };
+		B100000000000000000000F1 /* DeckPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampMCP/DeckPreview.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000029 /* LampMCPToolCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampMCPServer/LampMCPToolCatalog.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000002A /* LampMCPToolHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampMCPServer/LampMCPToolHandler.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000002B /* LampMCPServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampMCPServer/LampMCPServer.swift; sourceTree = SOURCE_ROOT; };
@@ -144,6 +147,7 @@
 		B10000000000000000000036 /* WrappingRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/WrappingRow.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000037 /* NativeAgentChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/NativeAgentChatView.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000038 /* AgentChatSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/AgentChatSupport.swift; sourceTree = SOURCE_ROOT; };
+		B100000000000000000000F2 /* PresentationImportStatusSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/PresentationImportStatusSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000039 /* WorkspaceTextFileSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/WorkspaceTextFileSupport.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000003A /* WorkspaceSkillSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/WorkspaceSkillSupport.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000003B /* BookReadingSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/BookReadingSupport.swift; sourceTree = SOURCE_ROOT; };
@@ -260,6 +264,7 @@
 				B10000000000000000000024 /* DevotionalAgentWorkspaceView.swift */,
 				B10000000000000000000037 /* NativeAgentChatView.swift */,
 				B10000000000000000000038 /* AgentChatSupport.swift */,
+				B100000000000000000000F2 /* PresentationImportStatusSupport.swift */,
 				B1000000000000000000003D /* ReaderChatSidebarView.swift */,
 				B1000000000000000000003C /* ReaderChatSupport.swift */,
 				B10000000000000000000039 /* WorkspaceTextFileSupport.swift */,
@@ -301,6 +306,7 @@
 			isa = PBXGroup;
 			children = (
 				B10000000000000000000028 /* main.swift */,
+				B100000000000000000000F1 /* DeckPreview.swift */,
 				B10000000000000000000029 /* LampMCPToolCatalog.swift */,
 				B1000000000000000000002A /* LampMCPToolHandler.swift */,
 				B1000000000000000000002B /* LampMCPServer.swift */,
@@ -353,6 +359,7 @@
 			packageProductDependencies = (
 				G10000000000000000000008 /* LampCore */,
 				G10000000000000000000007 /* MCP */,
+				G100000000000000000000F3 /* LampPresentationUI */,
 			);
 			productName = "lamp-mcp";
 			productReference = B1000000000000000000002C /* lamp-mcp */;
@@ -461,6 +468,7 @@
 				A10000000000000000000025 /* DevotionalAgentWorkspaceView.swift in Sources */,
 				A1000000000000000000003B /* NativeAgentChatView.swift in Sources */,
 				A1000000000000000000003C /* AgentChatSupport.swift in Sources */,
+				A100000000000000000000F2 /* PresentationImportStatusSupport.swift in Sources */,
 				A10000000000000000000042 /* ReaderChatSidebarView.swift in Sources */,
 				A10000000000000000000041 /* ReaderChatSupport.swift in Sources */,
 				A1000000000000000000003E /* WorkspaceTextFileSupport.swift in Sources */,
@@ -486,6 +494,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1000000000000000000002A /* main.swift in Sources */,
+				A100000000000000000000F1 /* DeckPreview.swift in Sources */,
 				A1000000000000000000002B /* LampMCPToolCatalog.swift in Sources */,
 				A1000000000000000000002C /* LampMCPToolHandler.swift in Sources */,
 				A1000000000000000000002D /* LampMCPServer.swift in Sources */,
@@ -739,6 +748,11 @@
 			productName = Sparkle;
 		};
 		G1000000000000000000000D /* LampPresentationUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = G10000000000000000000001 /* XCLocalSwiftPackageReference "lamp-bible-core" */;
+			productName = LampPresentationUI;
+		};
+		G100000000000000000000F3 /* LampPresentationUI */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = G10000000000000000000001 /* XCLocalSwiftPackageReference "lamp-bible-core" */;
 			productName = LampPresentationUI;
