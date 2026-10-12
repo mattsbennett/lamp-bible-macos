@@ -1483,6 +1483,11 @@ struct DevotionalAgentWorkspaceView: View {
             var imported = try store.decode(data)
             imported.source = LampPresentationSource(kind: .devotional, id: devotionalID)
 
+            // Notes that follow the manuscript are derived here, against the
+            // writing Lamp already holds, so they are right even when no agent
+            // ran the build command.
+            let notesSummary = resolveManuscriptNotes(in: &imported)
+
             // Images arrive in an `Assets` folder beside the deck, because the
             // agent cannot write into the library itself.
             let assets = try store.importAssets(from: workspace, referencedBy: imported)
@@ -1503,7 +1508,7 @@ struct DevotionalAgentWorkspaceView: View {
                 ? "Imported \(imported.title) into Slide Studio (\(destination.lastPathComponent))."
                 : "Imported \(imported.title) into Slide Studio with \(advisory.count) "
                     + "note\(advisory.count == 1 ? "" : "s") for the agent."
-            LampPresentationImportStatusStore.write(
+            LampPresentationImportStatusStore.writeIfChanged(
                 LampPresentationImportStatus(
                     outcome: .imported,
                     message: presentationStatus ?? "Imported.",
@@ -1519,13 +1524,14 @@ struct DevotionalAgentWorkspaceView: View {
                             path: $0.path,
                             message: $0.message
                         )
-                    }
+                    },
+                    speakerNotes: notesSummary
                 ),
                 in: workspace
             )
         } catch {
             presentationStatus = "Deck not imported: \(error.localizedDescription)"
-            LampPresentationImportStatusStore.write(
+            LampPresentationImportStatusStore.writeIfChanged(
                 LampPresentationImportStatus(
                     issues: presentationIssues(in: error),
                     outcome: .failed,
@@ -1534,6 +1540,28 @@ struct DevotionalAgentWorkspaceView: View {
                 in: workspace
             )
         }
+    }
+
+    /// Derives a manuscript-following deck's notes from the writing, in place.
+    ///
+    /// This is the half a build script cannot do: the notes follow the prose
+    /// whenever it changes, with nobody running anything.
+    private func resolveManuscriptNotes(
+        in deck: inout LampPresentationDeck
+    ) -> LampPresentationImportStatus.SpeakerNotes? {
+        guard deck.followsManuscript else { return nil }
+        let resolution = LampPresentationManuscriptNotes.resolve(
+            deck: deck,
+            manuscript: draftMarkdown
+        )
+        deck = LampPresentationManuscriptNotes.applying(resolution, to: deck)
+        let anchored = deck.slides.count { ($0.notesAnchor ?? "").isEmpty == false }
+        return .init(
+            source: LampPresentationSpeakerNotesSource.manuscript.rawValue,
+            resolved: resolution.notesBySlideID.count,
+            stale: anchored - resolution.notesBySlideID.count,
+            problems: resolution.problems.map(\.message)
+        )
     }
 
     /// The validator's own account of a refusal, when that is what failed, so

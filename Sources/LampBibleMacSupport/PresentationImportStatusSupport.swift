@@ -65,6 +65,63 @@ public struct LampPresentationImportStatus: Codable, Equatable, Sendable {
     public var missingAssets: [String]
     /// Everything the validator had to say, warnings included.
     public var issues: [Issue]
+    /// How the deck's speaker notes were arrived at, when they follow the
+    /// writing rather than being typed on each slide.
+    public struct SpeakerNotes: Codable, Equatable, Sendable {
+        public var source: String
+        /// Slides whose anchor was found and whose notes are current.
+        public var resolved: Int
+        /// Slides keeping older notes because their anchor is no longer in the
+        /// manuscript.
+        public var stale: Int
+        public var problems: [String]
+
+        public init(source: String, resolved: Int, stale: Int, problems: [String]) {
+            self.source = source
+            self.resolved = resolved
+            self.stale = stale
+            self.problems = problems
+        }
+    }
+
+    public var speakerNotes: SpeakerNotes?
+
+    /// The last time a deck was actually taken, kept through every later check.
+    ///
+    /// `outcome` describes the most recent look at the artifact, and Lamp looks
+    /// several times a second — so within a second of an import the outcome is
+    /// `unchanged` again. Without this, the slide identity and asset lists from
+    /// the import that just happened were gone before anyone could read them.
+    public var lastImport: Completed?
+
+    /// What an import did, detached from whichever check is current.
+    public struct Completed: Codable, Equatable, Sendable {
+        public var at: Date
+        public var deckID: String?
+        public var deckTitle: String?
+        public var slideCount: Int?
+        public var slideIdentity: SlideIdentity?
+        public var importedAssets: [String]
+        public var missingAssets: [String]
+
+        public init(
+            at: Date,
+            deckID: String?,
+            deckTitle: String?,
+            slideCount: Int?,
+            slideIdentity: SlideIdentity?,
+            importedAssets: [String],
+            missingAssets: [String]
+        ) {
+            self.at = at
+            self.deckID = deckID
+            self.deckTitle = deckTitle
+            self.slideCount = slideCount
+            self.slideIdentity = slideIdentity
+            self.importedAssets = importedAssets
+            self.missingAssets = missingAssets
+        }
+    }
 
     public init(
         outcome: Outcome,
@@ -76,7 +133,9 @@ public struct LampPresentationImportStatus: Codable, Equatable, Sendable {
         slideIdentity: SlideIdentity? = nil,
         importedAssets: [String] = [],
         missingAssets: [String] = [],
-        issues: [Issue] = []
+        issues: [Issue] = [],
+        lastImport: Completed? = nil,
+        speakerNotes: SpeakerNotes? = nil
     ) {
         self.outcome = outcome
         self.checkedAt = checkedAt
@@ -88,6 +147,19 @@ public struct LampPresentationImportStatus: Codable, Equatable, Sendable {
         self.importedAssets = importedAssets
         self.missingAssets = missingAssets
         self.issues = issues
+        self.speakerNotes = speakerNotes
+        self.lastImport = lastImport
+            ?? (outcome == .imported
+                ? Completed(
+                    at: checkedAt,
+                    deckID: deckID,
+                    deckTitle: deckTitle,
+                    slideCount: slideCount,
+                    slideIdentity: slideIdentity,
+                    importedAssets: importedAssets,
+                    missingAssets: missingAssets
+                )
+                : nil)
     }
 
     public init(outcome: Outcome, checkedAt: Date = Date(), message: String) {
@@ -145,9 +217,13 @@ public enum LampPresentationImportStatusStore {
         _ status: LampPresentationImportStatus,
         in workspace: URL
     ) {
-        if var existing = read(in: workspace) {
-            existing.checkedAt = status.checkedAt
-            guard existing != status else { return }
+        var status = status
+        if let existing = read(in: workspace) {
+            // A later check must not erase the import it followed.
+            if status.lastImport == nil { status.lastImport = existing.lastImport }
+            var compared = existing
+            compared.checkedAt = status.checkedAt
+            guard compared != status else { return }
         }
         write(status, in: workspace)
     }

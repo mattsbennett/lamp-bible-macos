@@ -13,6 +13,10 @@ struct LampMCPCommand {
     static func main() async {
         do {
             let options = try Options(arguments: Array(CommandLine.arguments.dropFirst()))
+            if let deckURL = options.buildDeckURL {
+                try buildDeck(deckURL, options: options)
+                return
+            }
             if let deckURL = options.renderDeckURL {
                 try await renderDeck(deckURL, options: options)
                 return
@@ -51,6 +55,22 @@ struct LampMCPCommand {
         }
     }
 
+    /// Derives what a deck can derive — its speaker notes and any missing
+    /// identifiers — and says what it could not.
+    private static func buildDeck(_ deckURL: URL, options: Options) throws {
+        let report = try LampDeckBuild.build(
+            deckURL: deckURL,
+            manuscriptURL: options.manuscriptURL
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        FileHandle.standardOutput.write(try encoder.encode(report))
+        FileHandle.standardOutput.write(Data("\n".utf8))
+        // A broken anchor is the one failure worth a non-zero status: it means
+        // a slide's notes are no longer the manuscript's.
+        if !report.resolved { exit(1) }
+    }
+
     /// Draws a deck's slides to PNGs and prints what the drawing showed.
     @MainActor
     private static func renderDeck(_ deckURL: URL, options: Options) async throws {
@@ -60,6 +80,7 @@ struct LampMCPCommand {
                 ?? deckURL.deletingLastPathComponent()
                     .appendingPathComponent("presentation-preview", isDirectory: true),
             libraryRoot: options.libraryRootURL,
+            manuscriptURL: options.manuscriptURL,
             slideNumbers: options.slideNumbers,
             width: options.renderWidth
         )
@@ -86,6 +107,8 @@ private struct Options {
     let policyURL: URL?
     let healthCheck: Bool
     let renderDeckURL: URL?
+    let buildDeckURL: URL?
+    let manuscriptURL: URL?
     let outputURL: URL?
     let slideNumbers: [Int]?
     let renderWidth: Double
@@ -96,6 +119,8 @@ private struct Options {
         var policyURL: URL?
         var healthCheck = false
         var renderDeckURL: URL?
+        var buildDeckURL: URL?
+        var manuscriptURL: URL?
         var outputURL: URL?
         var slideNumbers: [Int]?
         var renderWidth = 1_600.0
@@ -121,6 +146,14 @@ private struct Options {
                 index += 1
                 guard arguments.indices.contains(index) else { throw OptionError.missingValue(argument) }
                 renderDeckURL = URL(fileURLWithPath: arguments[index])
+            case "--build-deck":
+                index += 1
+                guard arguments.indices.contains(index) else { throw OptionError.missingValue(argument) }
+                buildDeckURL = URL(fileURLWithPath: arguments[index])
+            case "--manuscript":
+                index += 1
+                guard arguments.indices.contains(index) else { throw OptionError.missingValue(argument) }
+                manuscriptURL = URL(fileURLWithPath: arguments[index])
             case "--output":
                 index += 1
                 guard arguments.indices.contains(index) else { throw OptionError.missingValue(argument) }
@@ -151,7 +184,7 @@ private struct Options {
         }
         // Rendering a deck reads the deck and the images beside it, so it needs
         // no library; every other mode serves one.
-        if renderDeckURL == nil && libraryRootURL == nil {
+        if renderDeckURL == nil && buildDeckURL == nil && libraryRootURL == nil {
             throw OptionError.missingLibraryRoot
         }
         self.libraryRootURL = libraryRootURL
@@ -159,6 +192,8 @@ private struct Options {
         self.policyURL = policyURL
         self.healthCheck = healthCheck
         self.renderDeckURL = renderDeckURL
+        self.buildDeckURL = buildDeckURL
+        self.manuscriptURL = manuscriptURL
         self.outputURL = outputURL
         self.slideNumbers = slideNumbers
         self.renderWidth = renderWidth
@@ -175,7 +210,8 @@ private enum OptionError: Error, LocalizedError {
     var errorDescription: String? {
         let usage = """
         Usage: lamp-mcp --library-root PATH [--bundled-modules-archive PATH] [--policy PATH] [--health-check]
-               lamp-mcp --render-deck PATH [--output DIR] [--slides 1,3,5] [--width 1600] [--library-root PATH]
+               lamp-mcp --render-deck PATH [--output DIR] [--slides 1,3,5] [--width 1600] [--library-root PATH] [--manuscript PATH]
+               lamp-mcp --build-deck PATH --manuscript PATH
         """
         switch self {
         case .help: return usage

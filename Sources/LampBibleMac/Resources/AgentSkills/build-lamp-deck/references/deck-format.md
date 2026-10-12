@@ -132,6 +132,67 @@ can be checked before it has been imported.
 An image Lamp cannot find renders as a placeholder on every platform rather
 than failing, and both the validator and the preview report it by path.
 
+## Speaker notes from the manuscript
+
+A talk has two artifacts that must agree: the writing and the deck. Pasting the
+prose into `speakerNotes` by hand goes stale at the first edit and nothing
+notices. Instead, let Lamp derive the notes.
+
+Set on the deck:
+
+```json
+"speakerNotesSource": "manuscript"
+```
+
+`authored` — the default when the field is absent — keeps today's behaviour, in
+which `speakerNotes` is whatever you wrote. `manuscript` means Lamp splits the
+writing the deck is linked to across its slides, and re-splits it whenever the
+prose changes, with no agent running.
+
+Set on each spoken slide:
+
+```json
+"notesAnchor": "The first dial is capacity"
+```
+
+The opening words of the passage spoken over that slide. Its notes run from
+there to the next anchored slide's phrase. A slide with no anchor is silent and
+its passage stays with the slide before it, which is how a title slide carries
+no notes.
+
+Anchors are searched in slide order, each from where the last one ended, so a
+phrase only has to be unique after the previous one. Matching ignores how
+whitespace is wrapped and treats straight and curly quotation marks alike.
+
+| If | Then |
+| --- | --- |
+| A paragraph is reworded, anchor intact | The notes update on that slide |
+| An anchor phrase is reworded | The slide keeps its last notes and is reported; its passage reads on under the previous slide |
+| A phrase appears twice | The first after the cursor wins, and a longer phrase is suggested |
+| Slides are reordered past their passages | Reported, because anchors are never searched backwards |
+
+`speakerNotes` stays in the file as the resolved result, so the presenter view,
+the remote and every export keep reading exactly what they read now.
+
+Run `lamp-mcp --build-deck presentation.lampdeck --manuscript draft.md` to fill
+them in. It also gives a UUID to any slide or block whose `id` is missing, so a
+slide can be added without inventing identifiers.
+
+### Quotations checked against the prose
+
+Every `quotation` block, and every `scripture` block with no
+`scriptureReference`, is checked against the manuscript; a fragment of 15
+characters or more that no longer appears there is reported on its slide. Text
+is split at ellipses first, so an elided quotation is checked in halves. A
+scripture block that names its reference is left to the stronger check against
+the installed translation.
+
+For a slide that deliberately shows fuller text than the prose quotes:
+
+```json
+"manuscriptCheck": "skip"
+```
+
 ## Import status
 
 Each time Lamp looks at `presentation.lampdeck` it writes
@@ -146,6 +207,8 @@ write to it.
 | `slideIdentity` | How many slide IDs were `reused`, `added`, and `removed` against the deck already in the library |
 | `importedAssets`, `missingAssets` | Images that arrived, and images the deck names that are nowhere to be found |
 | `issues` | Everything the validator said, warnings included |
+| `speakerNotes` | When notes follow the manuscript: how many slides `resolved`, how many are `stale`, and any `problems` |
+| `lastImport` | The last import that actually happened, kept through later checks that found nothing new |
 
 A `slideIdentity` showing no reuse means every slide ID was rewritten, which
 discards the link between a slide and anything the user has done to it. When

@@ -820,7 +820,28 @@ final class LibraryModel: ObservableObject {
     func savePersonalDevotional(_ devotional: LampDevotional) async throws -> LampDevotional {
         let saved = try await library.savePersonalDevotional(devotional)
         devotionals = try await library.devotionals()
+        refreshManuscriptNotes(for: saved)
         return saved
+    }
+
+    /// Re-splits the writing across any deck whose notes follow it.
+    ///
+    /// Every save comes through here — the editor, an agent's edit picked up
+    /// from the workspace, a sync merge — which is the point: a speaker's notes
+    /// keep up with the prose without anyone running anything. A deck whose
+    /// notes are authored is untouched.
+    private func refreshManuscriptNotes(for devotional: LampDevotional) {
+        let store = LampPresentationDeckStore(rootURL: library.rootURL)
+        guard let decks = try? store.decks() else { return }
+        let manuscript = devotional.displayMarkdown
+        for deck in decks where deck.followsManuscript && deck.source?.id == devotional.id {
+            let resolved = LampPresentationManuscriptNotes.applying(
+                LampPresentationManuscriptNotes.resolve(deck: deck, manuscript: manuscript),
+                to: deck
+            )
+            guard resolved != deck else { continue }
+            try? store.save(resolved)
+        }
     }
 
     func deletePersonalDevotional(id: String) async throws {

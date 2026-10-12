@@ -48,6 +48,7 @@ enum LampDeckPreview {
         deckURL: URL,
         outputDirectory: URL,
         libraryRoot: URL?,
+        manuscriptURL: URL?,
         slideNumbers: [Int]?,
         width: Double
     ) async throws -> Report {
@@ -73,6 +74,35 @@ enum LampDeckPreview {
                   FileManager.default.fileExists(atPath: inLibrary.path)
             else { return nil }
             return inLibrary
+        }
+
+        // Read-only here: `--build-deck` writes notes, this only reports on
+        // them, so looking at a deck never changes it.
+        let manuscript = manuscriptURL.flatMap { try? String(contentsOf: $0, encoding: .utf8) }
+        var notesProblems: [String: [String]] = [:]
+        var deckProblems: [String] = []
+        if deck.followsManuscript, let manuscript {
+            let resolution = LampPresentationManuscriptNotes.resolve(
+                deck: deck,
+                manuscript: manuscript
+            )
+            for problem in resolution.problems {
+                if let slideID = problem.slideID {
+                    notesProblems[slideID, default: []].append(problem.message)
+                } else {
+                    deckProblems.append(problem.message)
+                }
+            }
+            for stale in LampPresentationManuscriptNotes.staleQuotations(
+                in: deck,
+                manuscript: manuscript
+            ) {
+                notesProblems[stale.slideID, default: []].append(stale.message)
+            }
+        } else if deck.followsManuscript {
+            deckProblems.append(
+                "This deck's notes follow the manuscript; pass --manuscript to check them."
+            )
         }
 
         let wanted = slideNumbers.map(Set.init)
@@ -116,6 +146,7 @@ enum LampDeckPreview {
                     + "\(ignored.kind.rawValue) content.")
             }
             notes.append(contentsOf: await scriptureNotes(for: slide, libraryRoot: libraryRoot))
+            notes.append(contentsOf: notesProblems[slide.id] ?? [])
             reports.append(SlideReport(
                 index: number,
                 id: slide.id,
@@ -139,6 +170,7 @@ enum LampDeckPreview {
             issues: LampPresentationDeckValidator.validate(deck) { assetPath in
                 resolve(.init(kind: .image, assetPath: assetPath)) != nil
             }.map { "\($0.severity == .error ? "error" : "warning") \($0.path): \($0.message)" }
+                + deckProblems.map { "warning speakerNotes: \($0)" }
         )
     }
 

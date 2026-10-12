@@ -20,15 +20,23 @@ Create or revise `presentation.lampdeck` in the current devotional workspace. Tr
    ```
 
 6. Fix every reported error. Review warnings and retain them only when the content genuinely requires the extra density.
-7. Look at the slides. The validator cannot see a layout, and most layout mistakes are invisible until something is drawn:
+7. Derive what Lamp can derive. For a talk, this fills in the speaker notes and gives any new slide or block a UUID:
+
+   ```sh
+   "$HELPER" --build-deck presentation.lampdeck --manuscript draft.md
+   ```
+
+   It exits non-zero when an anchor is no longer in the manuscript, and names the slide. Running it twice changes nothing.
+8. Look at the slides. The validator cannot see a layout, and most layout mistakes are invisible until something is drawn:
 
    ```sh
    HELPER=$(python3 -c "import json;print(json.load(open('.mcp.json'))['mcpServers']['lamp']['command'])")
-   "$HELPER" --render-deck presentation.lampdeck --output presentation-preview      --library-root "$(python3 -c "import json;a=json.load(open('.mcp.json'))['mcpServers']['lamp']['args'];print(a[a.index('--library-root')+1])")"
+   "$HELPER" --render-deck presentation.lampdeck --output presentation-preview      --library-root "$(python3 -c "import json;a=json.load(open('.mcp.json'))['mcpServers']['lamp']['args'];print(a[a.index('--library-root')+1])")" \
+     --manuscript draft.md
    ```
 
    This writes one PNG per slide and prints a report. View the PNGs. Act on every `note`: a block the layout will not draw, text shrunk to fit, content running off the slide, and — when a scripture block carries a `scriptureReference` and `--library-root` is given — a quotation that does not match the installed translation. Add `--slides 3,7` to redraw just the ones you changed.
-8. Read `presentation-import.json` to confirm Lamp took the deck. Lamp writes it each time it looks at the artifact.
+9. Read `presentation-import.json` to confirm Lamp took the deck. Lamp writes it each time it looks at the artifact.
 
 Lamp Bible detects a valid changed artifact and imports it into Slide Studio automatically.
 
@@ -46,6 +54,7 @@ Lamp Bible detects a valid changed artifact and imports it into Slide Studio aut
 - Use an `image` block only when the referenced asset exists in the workspace and provide meaningful `altText`.
 - An image is not confined to the `image` layout: put one on a `scripture`, `quotation`, or `title-and-body` slide and it is laid beside the prose. Reserve the `image` layout for a slide the picture itself carries.
 - Keep a passage together: these layouts draw every quotation and citation block they are given, so there is no need for one verse per slide or a repeated "Source: …" body line.
+- For a talk, set `speakerNotesSource` to `manuscript` and give each spoken slide a `notesAnchor`. Do not paste the manuscript into `speakerNotes` yourself: Lamp derives it, and keeps deriving it when the writing is edited later.
 - Do not modify `draft.md` unless the user also asked to revise the writing.
 - Deliver images in an `Assets` folder beside `presentation.lampdeck`, and reference them as `Assets/name.jpg`. Lamp copies the ones the deck names into the library on import; do not write into the library yourself.
 - Treat `presentation-import.json` as Lamp's to write and yours to read.

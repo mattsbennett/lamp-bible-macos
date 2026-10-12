@@ -368,20 +368,128 @@ struct SlideStudioView: View {
     private var speakerNotesEditor: some View {
         if let slideBinding = bindingToSelectedSlide {
             VStack(alignment: .leading, spacing: 6) {
-                Label("Presenter Notes", systemImage: "person.crop.rectangle.badge.plus")
-                    .font(.headline)
-                TextEditor(text: slideBinding.speakerNotes)
-                    .font(.body)
-                    .scrollContentBackground(.hidden)
-                    .padding(6)
-                    .background(.background, in: RoundedRectangle(cornerRadius: 7))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 7)
-                            .stroke(Color.secondary.opacity(0.2))
-                    }
+                HStack {
+                    Label("Presenter Notes", systemImage: "person.crop.rectangle.badge.plus")
+                        .font(.headline)
+                    Spacer()
+                    Toggle("Follow the writing", isOn: followsManuscriptBinding)
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .font(.caption)
+                        .disabled(manuscript == nil)
+                        .help(manuscript == nil
+                            ? "Link this deck to a writing to derive its notes from it."
+                            : "Split the writing across the slides instead of typing notes.")
+                }
+
+                if deck?.followsManuscript == true {
+                    manuscriptNotes(for: slideBinding)
+                } else {
+                    TextEditor(text: slideBinding.speakerNotes)
+                        .font(.body)
+                        .scrollContentBackground(.hidden)
+                        .padding(6)
+                        .background(.background, in: RoundedRectangle(cornerRadius: 7))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 7)
+                                .stroke(Color.secondary.opacity(0.2))
+                        }
+                }
             }
             .padding(12)
         }
+    }
+
+    /// In manuscript mode the notes are derived, so the anchor is the only
+    /// thing to edit and the passage is shown as it will be spoken.
+    @ViewBuilder
+    private func manuscriptNotes(
+        for slideBinding: Binding<LampPresentationSlide>
+    ) -> some View {
+        let anchorFound = resolution?.notesBySlideID[slideBinding.wrappedValue.id] != nil
+        let hasAnchor = !(slideBinding.wrappedValue.notesAnchor ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                TextField(
+                    "Begins at…",
+                    text: Binding(
+                        get: { slideBinding.wrappedValue.notesAnchor ?? "" },
+                        set: { anchor in
+                            slideBinding.wrappedValue.notesAnchor =
+                                anchor.isEmpty ? nil : anchor
+                            // Re-split as the phrase is typed, so the passage
+                            // below is always what this anchor actually claims.
+                            resolveNotesFromManuscript()
+                        }
+                    )
+                )
+                .textFieldStyle(.roundedBorder)
+                .font(.callout)
+                if hasAnchor && !anchorFound {
+                    // The last good notes stay on screen beneath this.
+                    Label("Not in the writing", systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .help("This phrase is no longer in the writing. The notes below "
+                            + "are the last that resolved.")
+                }
+            }
+            ScrollView {
+                Text(slideBinding.wrappedValue.speakerNotes.isEmpty
+                    ? "This slide is silent. Give it an opening phrase to speak over it."
+                    : slideBinding.wrappedValue.speakerNotes)
+                    .font(.body)
+                    .foregroundStyle(
+                        slideBinding.wrappedValue.speakerNotes.isEmpty ? .secondary : .primary
+                    )
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(6)
+            }
+            .background(.background, in: RoundedRectangle(cornerRadius: 7))
+            .overlay {
+                RoundedRectangle(cornerRadius: 7)
+                    .stroke(Color.secondary.opacity(0.2))
+            }
+        }
+    }
+
+    /// The writing this deck is linked to, when there is one.
+    private var manuscript: String? {
+        guard let source = deck?.source,
+              source.kind == .devotional || source.kind == .writing,
+              let devotional = model.devotionals.first(where: { $0.id == source.id })
+        else { return nil }
+        return devotional.displayMarkdown
+    }
+
+    private var resolution: LampPresentationManuscriptNotes.Resolution? {
+        guard let deck, deck.followsManuscript, let manuscript else { return nil }
+        return LampPresentationManuscriptNotes.resolve(deck: deck, manuscript: manuscript)
+    }
+
+    private var followsManuscriptBinding: Binding<Bool> {
+        Binding(
+            get: { deck?.followsManuscript == true },
+            set: { follows in
+                guard var current = deck else { return }
+                // Turning this off keeps whatever is on screen as authored
+                // notes, so nothing a speaker was relying on disappears.
+                current.speakerNotesSource = follows ? .manuscript : .authored
+                deck = current
+                if follows { resolveNotesFromManuscript() }
+            }
+        )
+    }
+
+    /// Re-splits the writing across the slides.
+    private func resolveNotesFromManuscript() {
+        guard let current = deck, current.followsManuscript, let manuscript else { return }
+        deck = LampPresentationManuscriptNotes.applying(
+            LampPresentationManuscriptNotes.resolve(deck: current, manuscript: manuscript),
+            to: current
+        )
     }
 
     private var validationBar: some View {

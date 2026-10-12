@@ -87,6 +87,46 @@ struct DeckValidatorAgreementTests {
                 ),
             ]),
         ]),
+        // Notes promised from a manuscript that no slide anchors.
+        LampPresentationDeck(
+            title: "Unanchored",
+            source: .init(kind: .devotional, id: "abc"),
+            slides: [
+                .init(layout: .titleAndBody, blocks: [
+                    .init(kind: .title, text: "Heading"),
+                    .init(kind: .body, text: "Body"),
+                ]),
+            ],
+            speakerNotesSource: .manuscript
+        ),
+        // Notes following a source that holds no prose.
+        LampPresentationDeck(
+            title: "Wrong source",
+            source: .init(kind: .scripture, id: "john"),
+            slides: [
+                .init(
+                    layout: .titleAndBody,
+                    blocks: [.init(kind: .body, text: "Body")],
+                    notesAnchor: "Somewhere"
+                ),
+            ],
+            speakerNotesSource: .manuscript
+        ),
+        // A skip marker on content nobody checks.
+        LampPresentationDeck(
+            title: "Pointless skip",
+            source: .init(kind: .devotional, id: "abc"),
+            slides: [
+                .init(
+                    layout: .titleAndBody,
+                    blocks: [
+                        .init(kind: .body, text: "Body", manuscriptCheck: .skip),
+                    ],
+                    notesAnchor: "Somewhere"
+                ),
+            ],
+            speakerNotesSource: .manuscript
+        ),
         // Nothing to say about a well-formed deck.
         LampPresentationDeck(title: "Clean", slides: [
             .init(layout: .titleAndBody, blocks: [

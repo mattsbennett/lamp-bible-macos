@@ -112,4 +112,57 @@ struct PresentationImportStatusTests {
         )
         #expect(LampPresentationImportStatusStore.read(in: directory)?.outcome == .failed)
     }
+
+    @Test func keepsTheLastRealImportThroughLaterChecks() throws {
+        let directory = try workspace()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        LampPresentationImportStatusStore.writeIfChanged(
+            .init(
+                outcome: .imported,
+                message: "Imported Two Ways into Slide Studio.",
+                deckID: "deck-1",
+                deckTitle: "Two Ways",
+                slideCount: 74,
+                slideIdentity: .init(reused: 70, added: 4, removed: 0),
+                importedAssets: ["Assets/cover.png"],
+                missingAssets: []
+            ),
+            in: directory
+        )
+
+        // Lamp looks again within the second and finds nothing new. The import
+        // that just happened used to be gone before anyone could read it.
+        LampPresentationImportStatusStore.writeIfChanged(
+            .init(outcome: .unchanged, message: "No change since the last import."),
+            in: directory
+        )
+
+        let read = try #require(LampPresentationImportStatusStore.read(in: directory))
+        #expect(read.outcome == .unchanged)
+        let completed = try #require(read.lastImport)
+        #expect(completed.deckTitle == "Two Ways")
+        #expect(completed.slideCount == 74)
+        #expect(completed.slideIdentity == .init(reused: 70, added: 4, removed: 0))
+        #expect(completed.importedAssets == ["Assets/cover.png"])
+    }
+
+    @Test func keepsTheLastRealImportThroughAFailure() throws {
+        let directory = try workspace()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        LampPresentationImportStatusStore.writeIfChanged(
+            .init(outcome: .imported, message: "Imported.", deckID: "deck-1", deckTitle: "Two Ways"),
+            in: directory
+        )
+        LampPresentationImportStatusStore.writeIfChanged(
+            .init(outcome: .failed, message: "Deck not imported: bad JSON."),
+            in: directory
+        )
+
+        let read = try #require(LampPresentationImportStatusStore.read(in: directory))
+        #expect(read.outcome == .failed)
+        // What is in Slide Studio right now is still the earlier import.
+        #expect(read.lastImport?.deckTitle == "Two Ways")
+    }
 }

@@ -64,6 +64,10 @@ SHARED_SUBTITLE_SLOT = {"title", "closing"}
 # Past this much text a slide is shrinking its own type to fit. Halved when an
 # image takes the other half of the slide.
 CROWDING_CEILING = 900
+SPEAKER_NOTES_SOURCES = {"authored", "manuscript"}
+MANUSCRIPT_CHECKS = {"skip"}
+# Notes can only follow writing Lamp holds.
+MANUSCRIPT_SOURCE_KINDS = {"devotional", "writing"}
 
 
 def relative_luminance(value: str) -> float | None:
@@ -198,6 +202,26 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
                     f"aim for {floor:.1f}:1 or more"
                 )
 
+    notes_source = deck.get("speakerNotesSource")
+    follows_manuscript = notes_source == "manuscript"
+    if notes_source is not None and notes_source not in SPEAKER_NOTES_SOURCES:
+        errors.append(
+            "speakerNotesSource: expected 'authored' or 'manuscript'"
+        )
+    if follows_manuscript:
+        source = deck.get("source")
+        kind = source.get("kind") if isinstance(source, dict) else None
+        if kind is None:
+            warnings.append(
+                "speakerNotesSource: notes follow the manuscript but this deck is "
+                "linked to no writing"
+            )
+        elif kind not in MANUSCRIPT_SOURCE_KINDS:
+            warnings.append(
+                f"speakerNotesSource: notes can only follow a devotional or writing "
+                f"source, and this deck's is {kind!r}"
+            )
+
     slides = deck.get("slides")
     if not isinstance(slides, list) or not slides:
         errors.append("slides: at least one slide is required")
@@ -224,6 +248,15 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
             warnings.append(f"{path}.speakerNotes: exceeds 5,000 characters")
         if not isinstance(slide.get("isHidden"), bool):
             errors.append(f"{path}.isHidden: expected true or false")
+        anchor = slide.get("notesAnchor")
+        if anchor is not None and not isinstance(anchor, str):
+            errors.append(f"{path}.notesAnchor: expected a string")
+        elif isinstance(anchor, str) and not anchor.strip():
+            errors.append(f"{path}.notesAnchor: cannot be empty; omit it instead")
+        elif isinstance(anchor, str) and not follows_manuscript:
+            warnings.append(
+                f"{path}.notesAnchor: ignored unless speakerNotesSource is 'manuscript'"
+            )
 
         blocks = slide.get("blocks")
         if not isinstance(blocks, list):
@@ -289,6 +322,15 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
                 warnings.append(f"{block_path}.text: title may be too long")
             if kind == "body" and isinstance(text, str) and len(text) > 700:
                 warnings.append(f"{block_path}.text: body may be too dense")
+            check = block.get("manuscriptCheck")
+            if check is not None:
+                if check not in MANUSCRIPT_CHECKS:
+                    errors.append(f"{block_path}.manuscriptCheck: expected 'skip'")
+                elif kind not in {"quotation", "scripture"}:
+                    warnings.append(
+                        f"{block_path}.manuscriptCheck: only quotation and scripture "
+                        "content is checked against the manuscript, so this has no effect"
+                    )
 
         # Images the deck names but nobody delivered. They render as
         # placeholders rather than failing, so this is a warning.
@@ -347,6 +389,20 @@ def main() -> int:
         return 1
 
     errors, warnings = validate(document, deck_directory=path.resolve().parent)
+    if document.get("speakerNotesSource") == "manuscript" and not any(
+        isinstance(slide, dict) and (slide.get("notesAnchor") or "").strip()
+        for slide in document.get("slides", [])
+        if isinstance(slide, dict)
+    ):
+        warnings.append(
+            "slides: notes follow the manuscript but no slide says where its passage "
+            "begins; give each spoken slide a notesAnchor"
+        )
+    if document.get("speakerNotesSource") == "manuscript":
+        print(
+            "NOTE anchors are resolved against the manuscript by "
+            "`lamp-mcp --build-deck`, which this script cannot do."
+        )
     for warning in warnings:
         print(f"WARNING {warning}")
     for error in errors:
