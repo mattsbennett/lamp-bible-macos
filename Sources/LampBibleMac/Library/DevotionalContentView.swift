@@ -490,6 +490,74 @@ struct CodeBlockView: View {
         .system(size: max(fontSize - 2, 11), design: .monospaced)
     }
 
+    private var isDiff: Bool {
+        language?.lowercased() == "diff" || language?.lowercased() == "patch"
+    }
+
+    /// The code with its parts coloured. The spans are the code, so this can
+    /// only change how it looks, never what it says.
+    private var highlighted: AttributedString {
+        var result = AttributedString()
+        for span in LampCodeHighlighter.spans(
+            in: code,
+            language: .init(info: language)
+        ) {
+            var piece = AttributedString(span.text)
+            piece.foregroundColor = Self.color(for: span.token)
+            result.append(piece)
+        }
+        return result
+    }
+
+    private static func color(for token: LampCodeHighlighter.Token) -> Color {
+        switch token {
+        case .keyword: Color(nsColor: .systemPink)
+        case .string: Color(nsColor: .systemRed)
+        case .comment: Color(nsColor: .systemGreen)
+        case .number: Color(nsColor: .systemBlue)
+        case .plain: Color(nsColor: .labelColor)
+        }
+    }
+
+    /// A diff reads line by line, each tinted by what happened to it.
+    ///
+    /// The `+` and `-` stay on screen: colour alone would leave the change
+    /// invisible to anyone who cannot distinguish red from green.
+    private var diffBody: some View {
+        let rows = LampDiffHighlighter.rows(in: code)
+        return VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                Text(row.text.isEmpty ? " " : row.text)
+                    .font(monospaced)
+                    .foregroundStyle(Self.foreground(for: row.kind))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: true, vertical: true)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Self.background(for: row.kind))
+            }
+        }
+        .padding(.vertical, 8)
+    }
+
+    private static func foreground(for kind: LampDiffHighlighter.Line) -> Color {
+        switch kind {
+        case .added: Color(nsColor: .systemGreen)
+        case .removed: Color(nsColor: .systemRed)
+        case .meta: .secondary
+        case .context: Color(nsColor: .labelColor)
+        }
+    }
+
+    private static func background(for kind: LampDiffHighlighter.Line) -> Color {
+        switch kind {
+        case .added: Color(nsColor: .systemGreen).opacity(0.12)
+        case .removed: Color(nsColor: .systemRed).opacity(0.12)
+        case .meta, .context: .clear
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
@@ -522,11 +590,15 @@ struct CodeBlockView: View {
             Divider()
 
             ScrollView(.horizontal, showsIndicators: true) {
-                Text(code)
-                    .font(monospaced)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: true, vertical: true)
-                    .padding(10)
+                if isDiff {
+                    diffBody
+                } else {
+                    Text(highlighted)
+                        .font(monospaced)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: true, vertical: true)
+                        .padding(10)
+                }
             }
         }
         .background(

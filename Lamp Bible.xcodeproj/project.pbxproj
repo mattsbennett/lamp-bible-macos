@@ -74,6 +74,7 @@
 		A1000000000000000000003A /* WrappingRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000036 /* WrappingRow.swift */; };
 		A1000000000000000000003B /* NativeAgentChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000037 /* NativeAgentChatView.swift */; };
 		A1000000000000000000003C /* AgentChatSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000038 /* AgentChatSupport.swift */; };
+		A100000000000000000000F6 /* CodeHighlightSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000F6 /* CodeHighlightSupport.swift */; };
 		A100000000000000000000F5 /* AgentMarkdownMessageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000F5 /* AgentMarkdownMessageView.swift */; };
 		A100000000000000000000F2 /* PresentationImportStatusSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000F2 /* PresentationImportStatusSupport.swift */; };
 		A1000000000000000000003D /* SwiftyChat in Frameworks */ = {isa = PBXBuildFile; productRef = G1000000000000000000000A /* SwiftyChat */; };
@@ -150,6 +151,7 @@
 		B10000000000000000000036 /* WrappingRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/WrappingRow.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000037 /* NativeAgentChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/NativeAgentChatView.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000038 /* AgentChatSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/AgentChatSupport.swift; sourceTree = SOURCE_ROOT; };
+		B100000000000000000000F6 /* CodeHighlightSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/CodeHighlightSupport.swift; sourceTree = SOURCE_ROOT; };
 		B100000000000000000000F5 /* AgentMarkdownMessageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/AgentMarkdownMessageView.swift; sourceTree = SOURCE_ROOT; };
 		B100000000000000000000F2 /* PresentationImportStatusSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/PresentationImportStatusSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000039 /* WorkspaceTextFileSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/WorkspaceTextFileSupport.swift; sourceTree = SOURCE_ROOT; };
@@ -268,6 +270,7 @@
 				B10000000000000000000024 /* DevotionalAgentWorkspaceView.swift */,
 				B10000000000000000000037 /* NativeAgentChatView.swift */,
 				B10000000000000000000038 /* AgentChatSupport.swift */,
+				B100000000000000000000F6 /* CodeHighlightSupport.swift */,
 				B100000000000000000000F5 /* AgentMarkdownMessageView.swift */,
 				B100000000000000000000F2 /* PresentationImportStatusSupport.swift */,
 				B1000000000000000000003D /* ReaderChatSidebarView.swift */,
@@ -474,6 +477,7 @@
 				A10000000000000000000025 /* DevotionalAgentWorkspaceView.swift in Sources */,
 				A1000000000000000000003B /* NativeAgentChatView.swift in Sources */,
 				A1000000000000000000003C /* AgentChatSupport.swift in Sources */,
+				A100000000000000000000F6 /* CodeHighlightSupport.swift in Sources */,
 				A100000000000000000000F5 /* AgentMarkdownMessageView.swift in Sources */,
 				A100000000000000000000F2 /* PresentationImportStatusSupport.swift in Sources */,
 				A10000000000000000000042 /* ReaderChatSidebarView.swift in Sources */,
