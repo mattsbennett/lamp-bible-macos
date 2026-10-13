@@ -551,11 +551,7 @@ struct CodeBlockView: View {
     }
 
     private static func background(for kind: LampDiffHighlighter.Line) -> Color {
-        switch kind {
-        case .added: Color(nsColor: .systemGreen).opacity(0.12)
-        case .removed: Color(nsColor: .systemRed).opacity(0.12)
-        case .meta, .context: .clear
-        }
+        LampChatSurface.diffRow(kind)
     }
 
     var body: some View {
@@ -586,6 +582,7 @@ struct CodeBlockView: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
+            .background(LampChatSurface.codePanelHeader)
 
             Divider()
 
@@ -603,11 +600,12 @@ struct CodeBlockView: View {
         }
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(Color(nsColor: .textBackgroundColor).opacity(0.6))
+                .fill(LampChatSurface.codePanel)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.secondary.opacity(0.25))
+                .stroke(LampChatSurface.codePanelBorder)
         )
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }

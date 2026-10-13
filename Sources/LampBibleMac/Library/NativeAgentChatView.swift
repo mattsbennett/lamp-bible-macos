@@ -658,7 +658,7 @@ struct NativeAgentChatView: View {
                                     bottomTrailingRadius: 14,
                                     topTrailingRadius: 14
                                 )
-                                .fill(SwiftUI.Color(nsColor: .controlBackgroundColor))
+                                .fill(LampChatSurface.agentBubble)
                             )
                             .overlay(
                                 UnevenRoundedRectangle(
@@ -667,7 +667,7 @@ struct NativeAgentChatView: View {
                                     bottomTrailingRadius: 14,
                                     topTrailingRadius: 14
                                 )
-                                .stroke(.secondary.opacity(0.16))
+                                .stroke(LampChatSurface.agentBubbleBorder)
                             )
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 12)
@@ -680,7 +680,7 @@ struct NativeAgentChatView: View {
                 }
             }
         }
-        .background(SwiftUI.Color(nsColor: .textBackgroundColor))
+        .background(LampChatSurface.conversation)
         .task(id: provider.id) {
             model.load()
             await refreshConnectionState()
@@ -806,19 +806,23 @@ struct NativeAgentChatView: View {
             incomingTextStyle: TextCellStyle(
                 textStyle: CommonTextStyle(textColor: .primary, font: .body),
                 textPadding: 12,
-                cellBackgroundColor: SwiftUI.Color(nsColor: .controlBackgroundColor),
+                cellBackgroundColor: LampChatSurface.agentBubble,
                 cellCornerRadius: 14,
-                cellBorderColor: .secondary.opacity(0.16),
+                cellBorderColor: LampChatSurface.agentBubbleBorder,
                 cellBorderWidth: 1,
                 cellShadowRadius: 0,
                 cellRoundedCorners: [.topRight, .bottomRight, .bottomLeft]
             ),
             outgoingTextStyle: TextCellStyle(
-                textStyle: CommonTextStyle(textColor: .white, font: .body),
+                // Tinted rather than filled: a saturated bubble beside a muted
+                // code panel reads as two different designs, and white on
+                // accent is the one text here that cannot be themed.
+                textStyle: CommonTextStyle(textColor: .primary, font: .body),
                 textPadding: 12,
-                cellBackgroundColor: .accentColor,
+                cellBackgroundColor: LampChatSurface.personBubble,
                 cellCornerRadius: 14,
-                cellBorderWidth: 0,
+                cellBorderColor: LampChatSurface.personBubbleBorder,
+                cellBorderWidth: 1,
                 cellShadowRadius: 0,
                 cellRoundedCorners: [.topLeft, .bottomRight, .bottomLeft]
             ),
