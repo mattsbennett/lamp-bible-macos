@@ -281,4 +281,113 @@ struct DevotionalProseParserTests {
             .paragraph("The substance is what is finally weighed."),
         ])
     }
+
+    // MARK: - Fenced code
+
+    @Test func keepsAFencedBlockExactlyAsWritten() {
+        let blocks = DevotionalProseParser.parse("""
+        Before.
+
+        ```swift
+        func greet() {
+            print("hello")
+        }
+        ```
+
+        After.
+        """)
+        #expect(blocks.count == 3)
+        guard case .codeBlock(let language, let code) = blocks[1] else {
+            Issue.record("expected a code block, got \(blocks[1])")
+            return
+        }
+        #expect(language == "swift")
+        // Indentation and line breaks are the content here, not formatting.
+        #expect(code == "func greet() {\n    print(\"hello\")\n}")
+    }
+
+    @Test func suspendsEveryOtherRuleInsideAFence() {
+        let blocks = DevotionalProseParser.parse("""
+        ```
+        # not a heading
+        - not a bullet
+        > not a quote
+        ---
+        | not | a table |
+        ```
+        """)
+        #expect(blocks.count == 1)
+        guard case .codeBlock(let language, let code) = blocks[0] else {
+            Issue.record("expected one code block, got \(blocks)")
+            return
+        }
+        #expect(language == nil)
+        #expect(code.contains("# not a heading"))
+        #expect(code.contains("- not a bullet"))
+        #expect(code.contains("---"))
+    }
+
+    @Test func readsADiffFenceAsCode() {
+        let blocks = DevotionalProseParser.parse("""
+        ```diff
+        -let a = 1
+        +let a = 2
+        ```
+        """)
+        guard case .codeBlock(let language, let code) = blocks.first else {
+            Issue.record("expected a code block, got \(blocks)")
+            return
+        }
+        #expect(language == "diff")
+        // The leading markers belong to the diff, not to a list.
+        #expect(code == "-let a = 1\n+let a = 2")
+    }
+
+    @Test func closesAFenceOnlyOnItsOwnMarker() {
+        // A tilde fence is not closed by backticks, and a longer fence needs a
+        // closing run at least as long.
+        let blocks = DevotionalProseParser.parse("""
+        ~~~
+        ```
+        still inside
+        ~~~
+        """)
+        #expect(blocks.count == 1)
+        guard case .codeBlock(_, let code) = blocks[0] else {
+            Issue.record("expected one code block, got \(blocks)")
+            return
+        }
+        #expect(code == "```\nstill inside")
+    }
+
+    @Test func runsAnUnterminatedFenceToTheEnd() {
+        let blocks = DevotionalProseParser.parse("""
+        Before.
+
+        ```
+        never closed
+        """)
+        #expect(blocks.count == 2)
+        guard case .codeBlock(_, let code) = blocks[1] else {
+            Issue.record("expected a trailing code block, got \(blocks)")
+            return
+        }
+        #expect(code == "never closed")
+    }
+
+    @Test func leavesProseWithoutFencesAlone() {
+        // The addition must not change how anything else parses.
+        let blocks = DevotionalProseParser.parse("""
+        # Heading
+
+        A paragraph with `inline code` in it.
+
+        - one
+        - two
+        """)
+        #expect(blocks.count == 3)
+        if case .codeBlock = blocks[1] {
+            Issue.record("inline code is not a fenced block")
+        }
+    }
 }

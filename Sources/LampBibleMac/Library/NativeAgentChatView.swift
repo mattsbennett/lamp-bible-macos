@@ -161,6 +161,16 @@ private struct NativeAgentChatUser: ChatUser {
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
 }
 
+/// An agent's reply, carried whole so the bubble can render it as Markdown and
+/// the transcript can still read back what was said.
+///
+/// SwiftyChat's `.text` kind holds a plain `String`, which is why a reply full
+/// of fenced code and lists arrived on screen as characters. `.custom` carries
+/// this instead, and the cell registered below draws it.
+struct AgentMessageContent {
+    let markdown: String
+}
+
 private struct NativeAgentChatMessage: ChatMessage {
     let id: UUID
     let user: NativeAgentChatUser
@@ -452,7 +462,7 @@ private final class NativeAgentChatModel: ObservableObject {
             messages.append(NativeAgentChatMessage(
                 id: UUID(),
                 user: agentUser,
-                messageKind: .text(summary.response),
+                messageKind: .custom(AgentMessageContent(markdown: summary.response)),
                 isSender: false,
                 date: Date()
             ))
@@ -469,7 +479,9 @@ private final class NativeAgentChatModel: ObservableObject {
             messages.append(NativeAgentChatMessage(
                 id: UUID(),
                 user: agentUser,
-                messageKind: .text("I couldn’t complete that request. \(failure)"),
+                messageKind: .custom(AgentMessageContent(
+                    markdown: "I couldn’t complete that request. \(failure)"
+                )),
                 isSender: false,
                 date: Date()
             ))
@@ -492,7 +504,10 @@ private final class NativeAgentChatModel: ObservableObject {
         return NativeAgentChatMessage(
             id: message.id,
             user: isSender ? person : agentUser,
-            messageKind: .text(message.text),
+            // The person typed theirs; the agent wrote Markdown.
+            messageKind: isSender
+                ? .text(message.text)
+                : .custom(AgentMessageContent(markdown: message.text)),
             isSender: isSender,
             date: message.date
         )
@@ -500,7 +515,17 @@ private final class NativeAgentChatModel: ObservableObject {
 
     private func transcriptMessages() -> [AgentChatTranscript.Message] {
         messages.compactMap { message in
-            guard case .text(let text) = message.messageKind else { return nil }
+            // Both kinds carry the words; only the drawing differs.
+            let text: String
+            switch message.messageKind {
+            case .text(let value):
+                text = value
+            case .custom(let payload):
+                guard let content = payload as? AgentMessageContent else { return nil }
+                text = content.markdown
+            default:
+                return nil
+            }
             return AgentChatTranscript.Message(
                 id: message.id,
                 role: message.isSender ? .user : .assistant,
@@ -620,6 +645,33 @@ struct NativeAgentChatView: View {
                         }
                     }
                     .disabled(!canSend || model.isRunning || connectionState != .connected)
+                }
+                .registerCustomCell { payload in
+                    if let content = payload as? AgentMessageContent {
+                        AgentMarkdownMessageView(markdown: content.markdown)
+                            .padding(12)
+                            .frame(maxWidth: 620, alignment: .leading)
+                            .background(
+                                UnevenRoundedRectangle(
+                                    topLeadingRadius: 0,
+                                    bottomLeadingRadius: 14,
+                                    bottomTrailingRadius: 14,
+                                    topTrailingRadius: 14
+                                )
+                                .fill(SwiftUI.Color(nsColor: .controlBackgroundColor))
+                            )
+                            .overlay(
+                                UnevenRoundedRectangle(
+                                    topLeadingRadius: 0,
+                                    bottomLeadingRadius: 14,
+                                    bottomTrailingRadius: 14,
+                                    topTrailingRadius: 14
+                                )
+                                .stroke(.secondary.opacity(0.16))
+                            )
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 12)
+                    }
                 }
                 .environment(\.chatStyle, chatStyle)
 

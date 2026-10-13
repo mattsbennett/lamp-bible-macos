@@ -159,6 +159,8 @@ struct DevotionalContentView: View {
                 .padding(12)
             }
             .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
+        case .codeBlock(let language, let code):
+            CodeBlockView(language: language, code: code, fontSize: fontSize)
         case .rule:
             Divider()
         }
@@ -289,6 +291,8 @@ private enum RenderedProseBlock: Sendable {
     case nestedBulletList([RenderedListLine])
     case nestedNumberedList([RenderedListLine])
     case table(headers: [RenderedProseItem], rows: [[RenderedProseItem]])
+    /// Kept verbatim: no inline markdown is resolved inside a fence.
+    case codeBlock(language: String?, code: String)
     case rule
 
     init(_ block: DevotionalProseBlock) {
@@ -312,6 +316,8 @@ private enum RenderedProseBlock: Sendable {
                 headers: headers.map(RenderedProseItem.init),
                 rows: rows.map { $0.map(RenderedProseItem.init) }
             )
+        case .codeBlock(let language, let code):
+            self = .codeBlock(language: language, code: code)
         case .rule:
             self = .rule
         }
@@ -466,4 +472,70 @@ private struct PresentedDevotionalImage: Identifiable {
     let id = UUID()
     let image: NSImage
     let caption: String
+}
+
+/// A fenced block of code, set the way code wants to be read: monospaced, on a
+/// panel of its own, wrapping nothing and scrolling sideways instead.
+///
+/// Wrapping code at a bubble's width makes it unreadable, and silently losing
+/// the end of a line is worse than a scrollbar.
+struct CodeBlockView: View {
+    let language: String?
+    let code: String
+    var fontSize: Double = 15
+
+    @State private var didCopy = false
+
+    private var monospaced: Font {
+        .system(size: max(fontSize - 2, 11), design: .monospaced)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                if let language, !language.isEmpty {
+                    Text(language)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(code, forType: .string)
+                    didCopy = true
+                    // Long enough to read, short enough not to linger.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { didCopy = false }
+                } label: {
+                    Label(
+                        didCopy ? "Copied" : "Copy",
+                        systemImage: didCopy ? "checkmark" : "doc.on.doc"
+                    )
+                    .font(.caption2)
+                    .labelStyle(.titleAndIcon)
+                }
+                .buttonStyle(.borderless)
+                .help("Copy this block")
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+
+            Divider()
+
+            ScrollView(.horizontal, showsIndicators: true) {
+                Text(code)
+                    .font(monospaced)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: true, vertical: true)
+                    .padding(10)
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color(nsColor: .textBackgroundColor).opacity(0.6))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.secondary.opacity(0.25))
+        )
+    }
 }

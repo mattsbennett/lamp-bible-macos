@@ -898,6 +898,9 @@ public enum DevotionalProseBlock: Equatable, Sendable {
     case nestedBulletList([DevotionalListLine])
     case nestedNumberedList([DevotionalListLine])
     case table(headers: [String], rows: [[String]])
+    /// A fenced block, kept exactly as written: its whitespace and line breaks
+    /// are the content. `language` is the fence's info string, when it has one.
+    case codeBlock(language: String?, code: String)
     case rule
 }
 
@@ -937,6 +940,35 @@ public enum DevotionalHeadingMatch {
 }
 
 public enum DevotionalProseParser {
+    /// An opening fence: how it was drawn, and what it says the code is.
+    private struct Fence {
+        let marker: Character
+        let length: Int
+        let language: String?
+    }
+
+    private static func fenceOpening(_ line: String) -> Fence? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard let marker = trimmed.first, marker == "`" || marker == "~" else { return nil }
+        let length = trimmed.prefix { $0 == marker }.count
+        guard length >= 3 else { return nil }
+        let info = trimmed.dropFirst(length).trimmingCharacters(in: .whitespaces)
+        // A backtick fence's info string cannot itself contain a backtick.
+        if marker == "`", info.contains("`") { return nil }
+        return Fence(
+            marker: marker,
+            length: length,
+            language: info.isEmpty ? nil : info
+        )
+    }
+
+    /// A closing fence is the same character, at least as long, and says nothing.
+    private static func isFenceClosing(_ line: String, fence: Fence) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.allSatisfy({ $0 == fence.marker }) else { return false }
+        return trimmed.count >= fence.length
+    }
+
     public static func parse(_ text: String) -> [DevotionalProseBlock] {
         var blocks: [DevotionalProseBlock] = []
         var paragraphLines: [String] = []
@@ -1002,6 +1034,27 @@ public enum DevotionalProseParser {
         var lineIndex = 0
         while lineIndex < lines.count {
             let rawLine = lines[lineIndex]
+
+            // A fence suspends every other rule: inside it a `#` is a comment
+            // and a `-` is a minus sign, not a heading or a bullet.
+            if let fence = fenceOpening(rawLine) {
+                flushAll()
+                lineIndex += 1
+                var code: [String] = []
+                while lineIndex < lines.count, !isFenceClosing(lines[lineIndex], fence: fence) {
+                    code.append(lines[lineIndex])
+                    lineIndex += 1
+                }
+                // An unterminated fence runs to the end of the text, which is
+                // what a reader sees in every Markdown renderer.
+                if lineIndex < lines.count { lineIndex += 1 }
+                blocks.append(.codeBlock(
+                    language: fence.language,
+                    code: code.joined(separator: "\n")
+                ))
+                continue
+            }
+
             if lineIndex + 1 < lines.count,
                let headers = tableCells(rawLine),
                let separators = tableCells(lines[lineIndex + 1]),

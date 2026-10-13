@@ -51,4 +51,35 @@ struct XcodeProjectSourcesTests {
             "these are in the Xcode project but not on disk: \(listed.subtracting(onDisk).sorted())"
         )
     }
+
+    /// Xcode compiles the support sources straight into the app target, so
+    /// inside the app `LampBibleMacSupport` is not a module and importing it
+    /// unconditionally fails dependency scanning — while `swift build`, which
+    /// does build it as a module, passes. Hence the `#if canImport` guard every
+    /// app source uses, and hence this.
+    @Test func everyAppSourceGuardsItsSupportImport() throws {
+        let app = repositoryRoot
+            .appendingPathComponent("Sources/LampBibleMac", isDirectory: true)
+        let walker = FileManager.default.enumerator(
+            at: app,
+            includingPropertiesForKeys: [.isRegularFileKey]
+        )
+        var unguarded: [String] = []
+        while let url = walker?.nextObject() as? URL {
+            guard url.pathExtension == "swift" else { continue }
+            let lines = try String(contentsOf: url, encoding: .utf8)
+                .components(separatedBy: .newlines)
+            for (index, line) in lines.enumerated()
+            where line.trimmingCharacters(in: .whitespaces) == "import LampBibleMacSupport" {
+                let guarded = lines[..<index].reversed().prefix(3).contains {
+                    $0.contains("#if canImport(LampBibleMacSupport)")
+                }
+                if !guarded { unguarded.append(url.lastPathComponent) }
+            }
+        }
+        #expect(
+            unguarded.isEmpty,
+            "wrap the import in #if canImport(LampBibleMacSupport): \(unguarded.sorted())"
+        )
+    }
 }
