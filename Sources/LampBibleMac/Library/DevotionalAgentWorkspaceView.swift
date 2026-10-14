@@ -886,6 +886,9 @@ struct DevotionalAgentWorkspaceView: View {
     @AppStorage("devotional.agent.provider") private var providerID = AIProviderCLI.codex.rawValue
     @AppStorage("devotional.agent.sessionMode") private var sessionModeID = AgentSessionDisplayMode.native.rawValue
     @State private var workspaceURL: URL?
+    /// Whether the chat pane is waiting on a reply. It stays mounted while it
+    /// is, so changing mode doesn't stop the run.
+    @State private var chatIsReplying = false
     @State private var contextFiles: [DevotionalAgentContextFile] = []
     @State private var skills: [DevotionalAgentSkill] = []
     @State private var librarySkills: [DevotionalAgentSkill] = []
@@ -1198,10 +1201,13 @@ struct DevotionalAgentWorkspaceView: View {
         }
     }
 
-    /// Both panes stay mounted while a Terminal session is live. Swapping one
-    /// for the other would dismantle the terminal view, and dismantling it
+    /// Either pane stays mounted while its session is live, because taking one
+    /// off screen ends what is running in it. Dismantling the terminal view
     /// kills the provider process the user is in the middle of — including the
-    /// first-run prompts they were part way through answering.
+    /// first-run prompts they were part way through answering. Dismantling the
+    /// chat view stops the reply it is waiting on, which looked like the
+    /// provider failing: switching to Terminal to see how a long reply was
+    /// getting on was what ended it.
     private var sessionPane: some View {
         ZStack {
             if activeProvider != nil || sessionMode == .terminal {
@@ -1211,11 +1217,19 @@ struct DevotionalAgentWorkspaceView: View {
                     .accessibilityHidden(sessionMode != .terminal)
                     .disabled(sessionMode != .terminal)
             }
-            if sessionMode == .native, let workspaceURL {
-                NativeAgentChatView(provider: selectedProvider, workspace: workspaceURL)
-                    .id("\(selectedProvider.rawValue)|\(workspaceURL.path)")
-                    // Covers the terminal kept alive beneath it.
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if sessionMode == .native || chatIsReplying, let workspaceURL {
+                NativeAgentChatView(
+                    provider: selectedProvider,
+                    workspace: workspaceURL,
+                    onRunningChanged: { chatIsReplying = $0 }
+                )
+                .id("\(selectedProvider.rawValue)|\(workspaceURL.path)")
+                // Covers the terminal kept alive beneath it.
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .opacity(sessionMode == .native ? 1 : 0)
+                .allowsHitTesting(sessionMode == .native)
+                .accessibilityHidden(sessionMode != .native)
+                .disabled(sessionMode != .native)
             }
         }
     }

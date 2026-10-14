@@ -250,6 +250,10 @@ private final class NativeAgentChatModel: ObservableObject {
     /// Set while the conversation is being carried on from a recap rather than a
     /// resumed provider session, so it's clear why the agent may know less of it.
     @Published private(set) var continuityNotice: String?
+    /// Set when a reply ended because it was stopped rather than because
+    /// anything went wrong, so the pane can say so without the language — or
+    /// the colour — of a failure.
+    @Published private(set) var stoppedNotice: String?
 
     let provider: AIProviderCLI
     private let workspace: URL
@@ -327,6 +331,7 @@ private final class NativeAgentChatModel: ObservableObject {
         reloadIfChangedOnDisk()
         errorMessage = nil
         needsProviderSetup = false
+        stoppedNotice = nil
         isRunning = true
         cancelRequested = false
         // Resuming a session this Mac holds means the recap is behind us: the
@@ -449,54 +454,68 @@ private final class NativeAgentChatModel: ObservableObject {
         }
         loadingMessageID = nil
 
+        let wasStopped = cancelRequested
+        cancelRequested = false
         let summary = AgentChatRunSummary.summarize(
             output: result.output,
             provider: provider.wireProvider
         )
+        let disposition = AgentChatRunDisposition.of(
+            output: result.output,
+            exitCode: result.exitCode,
+            launchError: result.launchError,
+            wasStopped: wasStopped,
+            provider: provider.wireProvider,
+            providerName: provider.shortName
+        )
 
-        if result.exitCode == 0, result.launchError == nil {
-            sessionID = summary.sessionID ?? outcome.resumedSessionID ?? outcome.proposedSessionID
+        // A stopped run keeps its session too. The provider recorded the
+        // prompt before it was stopped, so the next message resumes from
+        // there; if it was stopped before getting that far, resuming fails in
+        // the one way this already recovers from — carrying on from a recap.
+        if result.exitCode == 0 || wasStopped, result.launchError == nil {
+            sessionID = summary.sessionID
+                ?? outcome.resumedSessionID
+                ?? outcome.proposedSessionID
+                ?? (wasStopped ? sessionID : nil)
         }
 
-        if !summary.response.isEmpty {
-            messages.append(NativeAgentChatMessage(
-                id: UUID(),
-                user: agentUser,
-                messageKind: .custom(AgentMessageContent(markdown: summary.response)),
-                isSender: false,
-                date: Date()
-            ))
-        } else if result.exitCode != 0 || result.launchError != nil || summary.failure != nil {
-            let failure = result.launchError
-                ?? summary.failure
-                ?? readableCLIError(in: result.output)
-                ?? "\(provider.shortName) exited with status \(result.exitCode)."
+        switch disposition {
+        case .replied(let reply):
+            appendAgentMarkdown(reply)
+        case .stopped(let partialReply):
+            if !partialReply.isEmpty { appendAgentMarkdown(partialReply) }
+            stoppedNotice = partialReply.isEmpty
+                ? "That reply was stopped. \(provider.shortName) still has the conversation, so your next message carries on from it."
+                : "That reply was stopped partway through."
+        case .failed(let failure):
             needsProviderSetup = AgentChatSetupRequirement.isIndicated(in: result.output)
                 || AgentChatSetupRequirement.isIndicated(in: failure)
             errorMessage = needsProviderSetup
                 ? "\(AgentChatSetupRequirement.message(provider: provider.shortName)) \(failure)"
                 : failure
+            appendAgentMarkdown("I couldn\u{2019}t complete that request. \(failure)")
+        case .silent(let notice):
+            errorMessage = notice
             messages.append(NativeAgentChatMessage(
                 id: UUID(),
                 user: agentUser,
-                messageKind: .custom(AgentMessageContent(
-                    markdown: "I couldn’t complete that request. \(failure)"
-                )),
-                isSender: false,
-                date: Date()
-            ))
-        } else {
-            let failure = "\(provider.shortName) finished without returning a message."
-            errorMessage = failure
-            messages.append(NativeAgentChatMessage(
-                id: UUID(),
-                user: agentUser,
-                messageKind: .text(failure),
+                messageKind: .text(notice),
                 isSender: false,
                 date: Date()
             ))
         }
         persistTranscript()
+    }
+
+    private func appendAgentMarkdown(_ markdown: String) {
+        messages.append(NativeAgentChatMessage(
+            id: UUID(),
+            user: agentUser,
+            messageKind: .custom(AgentMessageContent(markdown: markdown)),
+            isSender: false,
+            date: Date()
+        ))
     }
 
     private func makeChatMessage(_ message: AgentChatTranscript.Message) -> NativeAgentChatMessage {
@@ -565,6 +584,9 @@ struct NativeAgentChatView: View {
     let mode: AgentChatMode
     let canSend: Bool
     let preparePrompt: (String) throws -> String
+    /// Reports whether a reply is in flight. A container that can take this
+    /// view off screen needs to know: tearing it down stops the run.
+    let onRunningChanged: (Bool) -> Void
 
     @StateObject private var model: NativeAgentChatModel
     @State private var draft = ""
@@ -580,12 +602,14 @@ struct NativeAgentChatView: View {
         workspace: URL,
         mode: AgentChatMode = .writing,
         canSend: Bool = true,
-        preparePrompt: @escaping (String) throws -> String = { $0 }
+        preparePrompt: @escaping (String) throws -> String = { $0 },
+        onRunningChanged: @escaping (Bool) -> Void = { _ in }
     ) {
         self.provider = provider
         self.mode = mode
         self.canSend = canSend
         self.preparePrompt = preparePrompt
+        self.onRunningChanged = onRunningChanged
         _model = StateObject(wrappedValue: NativeAgentChatModel(
             provider: provider, workspace: workspace, mode: mode
         ))
@@ -616,6 +640,14 @@ struct NativeAgentChatView: View {
             }
             if let notice = model.continuityNotice {
                 Label(notice, systemImage: "arrow.triangle.branch")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if let notice = model.stoppedNotice {
+                Label(notice, systemImage: "stop.circle")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 10)
@@ -691,7 +723,13 @@ struct NativeAgentChatView: View {
                 model.reloadIfChangedOnDisk()
             }
         }
-        .onDisappear { model.cancel() }
+        .onChange(of: model.isRunning, initial: true) { _, running in
+            onRunningChanged(running)
+        }
+        .onDisappear {
+            model.cancel()
+            onRunningChanged(false)
+        }
         .sheet(item: $authenticationProvider, onDismiss: {
             Task { await refreshConnectionState() }
         }) { provider in
@@ -928,17 +966,5 @@ struct AIProviderBrowserAuthenticationView: View {
 }
 
 private func readableCLIError(in output: String) -> String? {
-    let ansiPattern = #"\u{001B}\[[0-?]*[ -/]*[@-~]"#
-    let cleaned = output.replacingOccurrences(
-        of: ansiPattern,
-        with: "",
-        options: .regularExpression
-    )
-    let lines = cleaned.split(whereSeparator: \.isNewline).map(String.init)
-    let humanLines = lines.filter { line in
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        return !trimmed.isEmpty && !trimmed.hasPrefix("{")
-    }
-    guard !humanLines.isEmpty else { return nil }
-    return humanLines.suffix(4).joined(separator: "\n")
+    AgentChatRunDisposition.readableCLIError(in: output)
 }

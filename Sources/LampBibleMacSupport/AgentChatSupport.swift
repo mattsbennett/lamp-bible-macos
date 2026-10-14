@@ -220,3 +220,63 @@ private extension Dictionary where Key == String, Value == Any {
     func bool(_ key: String) -> Bool? { self[key] as? Bool }
     func dictionary(_ key: String) -> [String: Any]? { self[key] as? [String: Any] }
 }
+
+/// What a finished provider run amounts to, and so what the chat pane should
+/// show for it.
+///
+/// A stopped run is kept apart from a failed one on purpose. Stopping a CLI
+/// means terminating it, and the providers exit 143 when terminated — so a run
+/// the user stopped, or that Lamp stopped by taking the pane off screen,
+/// arrives here looking exactly like a crash. Describing it as one ("Claude
+/// exited with status 143") blames the provider for something it didn't do.
+public enum AgentChatRunDisposition: Equatable, Sendable {
+    /// The run answered.
+    case replied(String)
+    /// The run was stopped. Carries whatever had arrived before it was.
+    case stopped(partialReply: String)
+    /// The run failed, with a description fit to show.
+    case failed(String)
+    /// The run ended successfully but said nothing.
+    case silent(String)
+
+    public static func of(
+        output: String,
+        exitCode: Int32,
+        launchError: String?,
+        wasStopped: Bool,
+        provider: AgentChatWireProvider,
+        providerName: String
+    ) -> AgentChatRunDisposition {
+        let summary = AgentChatRunSummary.summarize(output: output, provider: provider)
+        // Checked before anything else: a stopped run's exit status and its
+        // truncated output describe the stop, not the request.
+        if wasStopped { return .stopped(partialReply: summary.response) }
+        if !summary.response.isEmpty { return .replied(summary.response) }
+        if exitCode != 0 || launchError != nil || summary.failure != nil {
+            let failure = launchError
+                ?? summary.failure
+                ?? readableCLIError(in: output)
+                ?? "\(providerName) exited with status \(exitCode)."
+            return .failed(failure)
+        }
+        return .silent("\(providerName) finished without returning a message.")
+    }
+
+    /// The last few human-readable lines of a CLI's output — what it printed
+    /// that wasn't part of its JSON event stream.
+    public static func readableCLIError(in output: String) -> String? {
+        let ansiPattern = #"\u{001B}\[[0-?]*[ -/]*[@-~]"#
+        let cleaned = output.replacingOccurrences(
+            of: ansiPattern,
+            with: "",
+            options: .regularExpression
+        )
+        let lines = cleaned.split(whereSeparator: \.isNewline).map(String.init)
+        let humanLines = lines.filter { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return !trimmed.isEmpty && !trimmed.hasPrefix("{")
+        }
+        guard !humanLines.isEmpty else { return nil }
+        return humanLines.suffix(4).joined(separator: "\n")
+    }
+}
