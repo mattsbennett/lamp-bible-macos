@@ -33,6 +33,9 @@ struct SlideStudioView: View {
     @State private var deck: LampPresentationDeck?
     @State private var savedDeck: LampPresentationDeck?
     @State private var selectedSlideID: String?
+    /// Whether the slide list has the keyboard. Arrow keys step between slides
+    /// only while it does, so they still move the caret in the editors.
+    @FocusState private var slideListFocused: Bool
     @State private var saveTask: Task<Void, Never>?
     @State private var statusMessage = ""
     @State private var errorMessage: String?
@@ -176,11 +179,13 @@ struct SlideStudioView: View {
 
             Divider()
 
+            ScrollViewReader { scroller in
             ScrollView {
                 LazyVStack(spacing: 10) {
                     ForEach(Array(deckBinding.slides.wrappedValue.enumerated()), id: \.element.id) { index, slide in
                         Button {
                             selectedSlideID = slide.id
+                            slideListFocused = true
                         } label: {
                             VStack(alignment: .leading, spacing: 6) {
                                 ZStack(alignment: .topTrailing) {
@@ -216,6 +221,7 @@ struct SlideStudioView: View {
                             }
                         }
                         .buttonStyle(.plain)
+                        .id(slide.id)
                         .contextMenu {
                             Button("Duplicate") { duplicateSlide(slide.id) }
                             Button(slide.isHidden ? "Show Slide" : "Hide Slide") {
@@ -228,6 +234,20 @@ struct SlideStudioView: View {
                     }
                 }
                 .padding(12)
+            }
+            .focusable()
+            .focused($slideListFocused)
+            .onMoveCommand { direction in
+                switch direction {
+                case .up, .left: selectSlide(by: -1)
+                case .down, .right: selectSlide(by: 1)
+                @unknown default: break
+                }
+            }
+            .onChange(of: selectedSlideID) { _, id in
+                guard let id else { return }
+                withAnimation(.easeOut(duration: 0.15)) { scroller.scrollTo(id, anchor: .center) }
+            }
             }
 
             Divider()
@@ -402,17 +422,28 @@ struct SlideStudioView: View {
 
     /// In manuscript mode the notes are derived, so the anchor is the only
     /// thing to edit and the passage is shown as it will be spoken.
+    ///
+    /// The anchor is the phrase the notes begin at, so it is always the first
+    /// words of the passage below it. Shown as a field of its own above them it
+    /// read as a title for each note — a title that was only the note's own
+    /// opening sentence. It is a lookup phrase, so it is labelled as one and
+    /// kept small, and the words it matched are tinted where they occur in the
+    /// passage: the repetition then reads as a mark on the join rather than a
+    /// heading.
     @ViewBuilder
     private func manuscriptNotes(
         for slideBinding: Binding<LampPresentationSlide>
     ) -> some View {
         let anchorFound = resolution?.notesBySlideID[slideBinding.wrappedValue.id] != nil
-        let hasAnchor = !(slideBinding.wrappedValue.notesAnchor ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let anchor = (slideBinding.wrappedValue.notesAnchor ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasAnchor = !anchor.isEmpty
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
+                Text("Begins at")
+                    .foregroundStyle(.secondary)
                 TextField(
-                    "Begins at…",
+                    "the first words this slide is spoken over",
                     text: Binding(
                         get: { slideBinding.wrappedValue.notesAnchor ?? "" },
                         set: { anchor in
@@ -424,28 +455,27 @@ struct SlideStudioView: View {
                         }
                     )
                 )
-                .textFieldStyle(.roundedBorder)
-                .font(.callout)
+                .textFieldStyle(.plain)
+                .foregroundStyle(hasAnchor && !anchorFound ? Color.orange : .secondary)
                 if hasAnchor && !anchorFound {
                     // The last good notes stay on screen beneath this.
                     Label("Not in the writing", systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption)
+                        .labelStyle(.iconOnly)
                         .foregroundStyle(.orange)
                         .help("This phrase is no longer in the writing. The notes below "
                             + "are the last that resolved.")
                 }
             }
+            .font(.caption)
             ScrollView {
-                Text(slideBinding.wrappedValue.speakerNotes.isEmpty
-                    ? "This slide is silent. Give it an opening phrase to speak over it."
-                    : slideBinding.wrappedValue.speakerNotes)
-                    .font(.body)
-                    .foregroundStyle(
-                        slideBinding.wrappedValue.speakerNotes.isEmpty ? .secondary : .primary
-                    )
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(6)
+                notesPassage(
+                    slideBinding.wrappedValue.speakerNotes,
+                    openingAt: anchorFound ? anchor : ""
+                )
+                .font(.body)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(6)
             }
             .background(.background, in: RoundedRectangle(cornerRadius: 7))
             .overlay {
@@ -715,6 +745,33 @@ struct SlideStudioView: View {
     private func toggleHidden(_ slideID: String) {
         guard let index = deck?.slides.firstIndex(where: { $0.id == slideID }) else { return }
         deck?.slides[index].isHidden.toggle()
+    }
+
+    /// The notes, with the phrase they were found by tinted where it opens
+    /// them. Nothing is tinted when the anchor no longer matches, because then
+    /// the passage below is the last one that resolved and does not begin with
+    /// what the field now says.
+    private func notesPassage(_ notes: String, openingAt opening: String) -> Text {
+        guard !notes.isEmpty else {
+            return Text("This slide is silent. Give it an opening phrase to speak over it.")
+                .foregroundColor(.secondary)
+        }
+        guard !opening.isEmpty, notes.hasPrefix(opening) else { return Text(notes) }
+        return Text(opening).foregroundColor(.accentColor)
+            + Text(notes.dropFirst(opening.count))
+    }
+
+    /// Steps the selection through the deck. Arrow keys reach every slide the
+    /// navigator shows, hidden ones included: they are still in the deck, and
+    /// skipping them would make the list disagree with the keyboard.
+    private func selectSlide(by offset: Int) {
+        guard let slides = deck?.slides else { return }
+        guard let next = LampSlideSelection.stepping(
+            from: selectedSlideID,
+            by: offset,
+            through: slides.map(\.id)
+        ) else { return }
+        selectedSlideID = next
     }
 
     private func canMoveSlide(by offset: Int) -> Bool {
