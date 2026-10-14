@@ -147,20 +147,8 @@ public enum LampPresentationDeckSync {
         in libraryRoot: URL,
         fileManager: FileManager = .default
     ) throws {
-        let store = LampPresentationDeckStore(rootURL: libraryRoot)
-        let decks = (try? store.decks()) ?? []
-        let referenced = decks.referencedAssetNames
-        let directory = assetsDirectory(in: libraryRoot)
-        guard isPlainDirectory(directory, fileManager: fileManager) else { return }
-        for url in try fileManager.contentsOfDirectory(
-            at: directory,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) where !referenced.contains(url.lastPathComponent) {
-            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
-            else { continue }
-            try fileManager.removeItem(at: url)
-        }
+        try LampPresentationDeckStore(rootURL: libraryRoot)
+            .pruneUnreferencedAssets(fileManager: fileManager)
     }
 
     // MARK: - Files
@@ -194,32 +182,17 @@ public enum LampPresentationDeckSync {
         fileManager: FileManager
     ) throws {
         guard isPlainDirectory(source, fileManager: fileManager) else { return }
-        let keys: [URLResourceKey] = [.isRegularFileKey, .isSymbolicLinkKey, .contentModificationDateKey]
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .isSymbolicLinkKey, .contentModificationDateKey]
         for url in try fileManager.contentsOfDirectory(
-            at: source,
-            includingPropertiesForKeys: keys,
-            options: [.skipsHiddenFiles]
+            at: source, includingPropertiesForKeys: Array(keys), options: [.skipsHiddenFiles]
         ) {
-            let values = try url.resourceValues(forKeys: Set(keys))
+            let values = try url.resourceValues(forKeys: keys)
             guard values.isRegularFile == true, values.isSymbolicLink != true else { continue }
-            let modified = values.contentModificationDate ?? .distantPast
-            let target = destination.appendingPathComponent(url.lastPathComponent)
-
-            if fileManager.fileExists(atPath: target.path) {
-                let existing = try target.resourceValues(forKeys: Set(keys))
-                guard existing.isSymbolicLink != true else { continue }
-                let existingDate = existing.contentModificationDate ?? .distantPast
-                guard LampSyncMerge.shouldReplaceFile(
-                    currentData: Data(),
-                    currentDate: existingDate,
-                    incomingData: Data(),
-                    incomingDate: modified
-                ) else { continue }
-            }
-
-            try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
-            try Data(contentsOf: url).write(to: target, options: .atomic)
-            try fileManager.setAttributes([.modificationDate: modified], ofItemAtPath: target.path)
+            let incoming = LampPresentationAssetRevision(
+                name: url.lastPathComponent, data: try Data(contentsOf: url),
+                modifiedAt: values.contentModificationDate ?? .distantPast
+            )
+            try LampPresentationAssetFiles.merge([incoming], into: destination, fileManager: fileManager)
         }
     }
 

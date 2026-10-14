@@ -87,12 +87,4 @@ struct WorkspacePollingFreshnessTests {
         #expect(body.contains("DevotionalAgentWorkspaceStore.readDraft"))
     }
 
-    /// `prepareWorkspace` runs as the task's first statement, before anything
-    /// can have gone stale, so it is the one place the property is still the
-    /// right thing to read. Kept here so the list above is understood as
-    /// deliberate rather than incomplete.
-    @Test func preparingTheWorkspaceMayStillReadIt() throws {
-        let body = try body(of: "prepareWorkspace", in: try source)
-        #expect(body.contains("draftMarkdown"))
-    }
 }

@@ -189,6 +189,24 @@ struct PresentationDeckSyncTests {
 }
 
 struct PresentationAssetSyncTests {
+    @Test func tiedImageEditsConvergeAcrossTheMacSyncAdapter() throws {
+        let first = try makeLibrary(), second = try makeLibrary(), backup = try makeLibrary()
+        defer {
+            for root in [first, second, backup] { try? FileManager.default.removeItem(at: root) }
+        }
+        let subject = deck(named: "Pictures", usingAsset: "photo.jpg")
+        try LampPresentationDeckStore(rootURL: first).save(subject)
+        try LampPresentationDeckStore(rootURL: second).save(subject)
+        try writeAsset("photo.jpg", "alpha", in: first)
+        try writeAsset("photo.jpg", "zeta", in: second)
+        try LampPresentationDeckSync.exportDecks(from: second, to: backup)
+        try LampPresentationDeckSync.importDecks(from: backup, into: first)
+        #expect(assetContents("photo.jpg", in: first) == "zeta")
+        try LampPresentationDeckSync.exportDecks(from: first, to: backup)
+        try LampPresentationDeckSync.importDecks(from: backup, into: second)
+        #expect(assetContents("photo.jpg", in: second) == "zeta")
+    }
+
     private let base = Date(timeIntervalSince1970: 1_800_000_000)
 
     private func makeLibrary() throws -> URL {

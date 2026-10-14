@@ -342,70 +342,7 @@ public enum ScripturePreviewContextResolver {
     }
 }
 
-public enum StrongsKey {
-    /// Keys that encode source-language grammar without representing an English
-    /// word. SWORD/OSIS aligners sometimes attach these to the following object,
-    /// which otherwise makes a visible English phrase open an unrelated entry.
-    private static let untranslatedEnglishMarkers: Set<String> = ["H853"]
-
-    /// Strong's keys are written `H7225`, `h07225` or bare `7225` depending on who
-    /// compiled the dictionary, and some carry a disambiguating letter (`G3588a`).
-    /// Normalizing puts case and zero-padding aside so two spellings of the same
-    /// key compare equal.
-    public static func normalized(_ key: String) -> String {
-        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-        guard !trimmed.isEmpty else { return "" }
-        let prefix = trimmed.first.map { $0 == "H" || $0 == "G" ? String($0) : "" } ?? ""
-        let rest = trimmed.dropFirst(prefix.count)
-        let digits = rest.prefix { $0.isNumber }
-        guard !digits.isEmpty else { return trimmed }
-        let suffix = rest.dropFirst(digits.count)
-        let unpadded = String(digits.drop { $0 == "0" })
-        return prefix + (unpadded.isEmpty ? "0" : unpadded) + suffix
-    }
-
-    /// Whether two keys name the same lexicon entry. A dictionary that stores bare
-    /// numbers still matches a prefixed key, since the alternative is showing the
-    /// reader nothing at all.
-    public static func matches(_ lhs: String, _ rhs: String) -> Bool {
-        let left = normalized(lhs)
-        let right = normalized(rhs)
-        guard !left.isEmpty, !right.isEmpty else { return false }
-        if left == right { return true }
-        let leftPrefixed = left.first == "H" || left.first == "G"
-        let rightPrefixed = right.first == "H" || right.first == "G"
-        guard leftPrefixed != rightPrefixed else { return false }
-        return left.drop { $0 == "H" || $0 == "G" } == right.drop { $0 == "H" || $0 == "G" }
-    }
-
-    /// Whether a loaded translation passage contains Strong's annotations. The
-    /// reader uses this to avoid offering lexical hover details for translations
-    /// that have no lexical metadata to inspect.
-    public static func hasAnnotations<S: Sequence>(_ rawKeys: S) -> Bool
-    where S.Element == String? {
-        rawKeys.contains { rawKey in
-            rawKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-        }
-    }
-
-    /// Produces key targets suitable for clicking English translation text. This
-    /// also expands legacy comma/space-delimited values and removes duplicates.
-    public static func readerLookupKeys(_ rawKeys: [String]) -> [String] {
-        var seen = Set<String>()
-        return rawKeys
-            .flatMap {
-                $0.split(whereSeparator: { character in
-                    character == "," || character == ";" || character == "|" || character.isWhitespace
-                })
-            }
-            .map { normalized(String($0)) }
-            .filter {
-                !$0.isEmpty
-                    && !untranslatedEnglishMarkers.contains($0)
-                    && seen.insert($0).inserted
-            }
-    }
-}
+public typealias StrongsKey = LampStrongsKey
 
 public struct ReadAloudItem: Codable, Equatable, Identifiable, Sendable {
     public let reference: Int
@@ -760,17 +697,7 @@ public enum ReaderPoetryLayout {
     }
 }
 
-public enum ReadingTimeEstimator {
-    public static func minutes(wordCount: Int, wordsPerMinute: Int) -> Int {
-        guard wordCount > 0 else { return 0 }
-        return max(Int(ceil(Double(wordCount) / Double(max(wordsPerMinute, 1)))), 1)
-    }
-
-    public static func description(wordCount: Int, wordsPerMinute: Int) -> String {
-        let minutes = minutes(wordCount: wordCount, wordsPerMinute: wordsPerMinute)
-        return minutes == 1 ? "1 min" : "\(minutes) min"
-    }
-}
+public typealias ReadingTimeEstimator = LampReadingTimeEstimator
 
 public struct ReadingReminderConfiguration: Codable, Equatable, Sendable {
     public var isEnabled: Bool

@@ -45,35 +45,6 @@ struct ReaderSupportTests {
         #expect(ScriptureAnnotationLink(url: try #require(URL(string: "https://example.com"))) == nil)
     }
 
-    @Test func strongsKeysCompareAcrossSpellings() {
-        #expect(StrongsKey.normalized(" h07225 ") == "H7225")
-        #expect(StrongsKey.normalized("G3588a") == "G3588A")
-        #expect(StrongsKey.normalized("0776") == "776")
-
-        #expect(StrongsKey.matches("H7225", "h07225"))
-        #expect(StrongsKey.matches("G3056", "G3056"))
-        // A dictionary that stores bare numbers still answers a prefixed key.
-        #expect(StrongsKey.matches("H776", "0776"))
-
-        #expect(!StrongsKey.matches("H7225", "H7226"))
-        // Same number, different language: never the same entry.
-        #expect(!StrongsKey.matches("H3056", "G3056"))
-        #expect(!StrongsKey.matches("G3588a", "G3588b"))
-        #expect(!StrongsKey.matches("", "H7225"))
-    }
-
-    @Test func readerLookupKeysDropUntranslatedMarkersAndExpandLegacyLists() {
-        #expect(StrongsKey.readerLookupKeys(["H853"]) == [])
-        #expect(StrongsKey.readerLookupKeys(["H853", "H1254"]) == ["H1254"])
-        #expect(StrongsKey.readerLookupKeys(["H0853,H01254", "H1254"]) == ["H1254"])
-        #expect(StrongsKey.readerLookupKeys(["G3056 G3588a"]) == ["G3056", "G3588A"])
-    }
-
-    @Test func instantDetailsRequireStrongsAnnotations() {
-        #expect(!StrongsKey.hasAnnotations([nil, "", "   "]))
-        #expect(StrongsKey.hasAnnotations([nil, " H7225 "]))
-    }
-
     @Test func readerLinkActivationCoalescesNativeAndFallbackCallbacks() throws {
         let first = try #require(URL(string: "lamp-lexicon://lookup?key=H1254&reference=1001001"))
         let second = try #require(URL(string: "lamp-lexicon://lookup?key=H776&reference=1001001"))
@@ -443,10 +414,7 @@ struct ReaderSupportTests {
         #expect(restored.selectedTab?.location == previousLocation)
     }
 
-    @Test func estimatesReadingTimeAndNormalizesReminderTime() {
-        #expect(ReadingTimeEstimator.minutes(wordCount: 451, wordsPerMinute: 225) == 3)
-        #expect(ReadingTimeEstimator.description(wordCount: 100, wordsPerMinute: 225) == "1 min")
-        #expect(ReadingTimeEstimator.description(wordCount: 0, wordsPerMinute: 225) == "0 min")
+    @Test func normalizesReminderTime() {
 
         let reminder = ReadingReminderConfiguration(isEnabled: true, hour: 26, minute: -2)
         #expect(reminder.hour == 23)

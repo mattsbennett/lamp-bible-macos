@@ -1097,8 +1097,10 @@ final class LibraryModel: ObservableObject {
     }
 
     private func visibleModules(kind: LampModuleKind) -> [LampInstalledModule] {
-        return modules
-            .filter { $0.kind == kind && !hiddenModuleIDs.contains($0.id) }
-            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        LampModuleSelection.visible(
+            modules.filter { $0.kind == kind }
+                .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending },
+            hiddenIDs: hiddenModuleIDs, id: \.id
+        )
     }
 }
