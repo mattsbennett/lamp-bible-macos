@@ -47,7 +47,7 @@ Supported layouts:
 | `title-and-body` | Heading with body text, optionally beside a picture |
 | `scripture` | Scripture text with citations, optionally beside a picture |
 | `quotation` | Quotation with attribution, optionally beside a picture |
-| `two-column` | Two related or contrasting body blocks |
+| `two-column` | Two related or contrasting columns, each with an optional heading and citation |
 | `image` | Image-led slide with optional title, caption, and citations |
 | `closing` | Reflection, response, or closing thought |
 | `blank` | Deliberate free ordering of supported blocks |
@@ -66,9 +66,43 @@ beside the prose, with a `caption` block beneath it — which is what a cover
 image wants, rather than a separate image slide under a headline. Use the
 `image` layout when the picture itself is the slide.
 
-Two layouts are deliberately sparing and drop what they are not given room for:
-`title` and `closing` draw a title and one subtitle, and `two-column` draws its
-title and the first two `body` blocks. Put anything further on its own slide.
+`title` and `closing` are deliberately sparing: they draw a title and one
+subtitle, and drop anything further. Put it on its own slide.
+
+### Two columns
+
+A `two-column` slide draws its title and two columns. Each column is, in order:
+
+- an optional `subtitle`, drawn as the column's heading in a heavier weight;
+- its prose: `body`, `scripture` or `quotation` blocks;
+- an optional `citation`, drawn under the column in the accent colour.
+
+```json
+"blocks": [
+  { "id": "…", "kind": "title", "text": "Ecclesiastes 7:25 and 7:29" },
+  { "id": "…", "kind": "subtitle", "text": "The Preacher’s search" },
+  { "id": "…", "kind": "scripture", "text": "to seek wisdom and the scheme of things" },
+  { "id": "…", "kind": "citation", "text": "Ecclesiastes 7:25 (ESV)" },
+  { "id": "…", "kind": "subtitle", "text": "Mankind’s search" },
+  { "id": "…", "kind": "scripture", "text": "they have sought out many schemes." },
+  { "id": "…", "kind": "citation", "text": "Ecclesiastes 7:29 (ESV)" }
+]
+```
+
+A `subtitle` opens a column, and the prose after it belongs to that column
+until a citation closes it or the next subtitle opens another. Without
+subtitles, each prose block is a column of its own. Do not type a heading or a
+reference as the first or last line of a `body` block: it is drawn as body text
+like the lines around it. A third column, and a citation that does not directly
+follow a column's prose, are not drawn and are reported.
+
+### Type size
+
+Lamp chooses the size of a slide's prose from how much the slide carries. A
+slide with two short lines is set large; a slide with six is set smaller; and
+everything on one slide shares one size. There is nothing to set and nothing to
+pad: do not add words, split a point across lines, or merge slides to change the
+size of the type.
 
 ## Content block
 
@@ -105,8 +139,9 @@ The copied quotation remains in `text`, and its human-readable reference and tra
 
 ## Quotations
 
-Lamp sets a quotation rather than expecting you to. On `quotation`, `scripture`
-and `title-and-body` slides, each `quotation` and `scripture` block is drawn:
+Lamp sets a quotation rather than expecting you to. On `quotation`, `scripture`,
+`title-and-body` and `two-column` slides, each `quotation` and `scripture` block
+is drawn:
 
 - wrapped in “curly” quotation marks;
 - opening with an ellipsis when the excerpt starts mid-sentence, which is judged
@@ -129,8 +164,8 @@ To draw a block exactly as stored — poetry, or a deck that wants bare scriptur
 "typography": "verbatim"
 ```
 
-`body`, `caption` and `citation` blocks, and two-column bodies, are never
-touched: there you type what you mean.
+`body`, `caption` and `citation` blocks are never touched: there you type what
+you mean. A `quotation` or `scripture` block in a column is set like any other.
 
 ### One citation per quotation
 

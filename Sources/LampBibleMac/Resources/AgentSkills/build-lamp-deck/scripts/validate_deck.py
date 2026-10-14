@@ -52,7 +52,8 @@ LAYOUT_CAPACITY: dict[str, dict[str, int | None]] = {
         "scripture": None, "quotation": None, "body": None,
         "citation": None, "image": 1, "caption": 1,
     },
-    "two-column": {"title": 1, "body": 2},
+    # Columns are grouped rather than counted; see `undrawn_in_columns`.
+    "two-column": {},
     "image": {"title": 1, "image": 1, "caption": 1, "citation": None},
     "blank": {
         "title": None, "subtitle": None, "body": None, "scripture": None,
@@ -70,7 +71,10 @@ MANUSCRIPT_CHECKS = {"skip"}
 MANUSCRIPT_SOURCE_KINDS = {"devotional", "writing"}
 TYPOGRAPHY = {"verbatim"}
 # Lamp sets quotations on these layouts, so it adds the marks itself.
-QUOTE_TYPOGRAPHY_LAYOUTS = {"quotation", "scripture", "title-and-body"}
+QUOTE_TYPOGRAPHY_LAYOUTS = {"quotation", "scripture", "title-and-body", "two-column"}
+# Layouts that read their prose as passages, each closed by its citation.
+QUOTE_GROUP_LAYOUTS = {"quotation", "scripture", "title-and-body"}
+COLUMN_PROSE = {"body", "scripture", "quotation"}
 QUOTE_MARKS = {'"', "\u201c", "\u201d"}
 
 
@@ -124,8 +128,48 @@ def contrast_ratio(first: str, second: str) -> float | None:
     return (max(a, b) + 0.05) / (min(a, b) + 0.05)
 
 
+def undrawn_in_columns(blocks: list) -> list[tuple[int, str]]:
+    """Mirror of Lamp's two-column reading.
+
+    A `subtitle` opens a column and names it; the prose after it is that
+    column's, until a citation closes it or the next subtitle opens another.
+    With no subtitles, every prose block is a column of its own. A citation
+    attributes the column it follows. Only the first two columns are drawn.
+    """
+    kinds = [b.get("kind") if isinstance(b, dict) else None for b in blocks]
+    uses_headings = "subtitle" in kinds
+    columns: list[dict] = []
+    undrawn: list[tuple[int, str]] = []
+    title_taken = False
+    for index, kind in enumerate(kinds):
+        if kind is None:
+            continue
+        if kind == "title":
+            if title_taken:
+                undrawn.append((index, kind))
+            title_taken = True
+        elif kind == "subtitle":
+            columns.append({"indexes": [index], "prose": 0, "cited": False})
+        elif kind in COLUMN_PROSE:
+            if uses_headings and columns and not columns[-1]["cited"]:
+                columns[-1]["indexes"].append(index)
+                columns[-1]["prose"] += 1
+            else:
+                columns.append({"indexes": [index], "prose": 1, "cited": False})
+        elif kind == "citation" and columns and columns[-1]["prose"] and not columns[-1]["cited"]:
+            columns[-1]["indexes"].append(index)
+            columns[-1]["cited"] = True
+        else:
+            undrawn.append((index, str(kind)))
+    for column in columns[2:]:
+        undrawn.extend((index, str(kinds[index])) for index in column["indexes"])
+    return sorted(set(undrawn))
+
+
 def undrawn_blocks(layout: str, blocks: list) -> list[tuple[int, str]]:
     """Indexes and kinds of blocks this layout will not draw."""
+    if layout == "two-column":
+        return undrawn_in_columns(blocks)
     capacity = LAYOUT_CAPACITY.get(layout)
     if capacity is None:
         return []
@@ -406,7 +450,7 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
 
             # Several passages sharing one attribution read as one passage with
             # a list of sources under it.
-            if slide.get("layout") in QUOTE_TYPOGRAPHY_LAYOUTS:
+            if slide.get("layout") in QUOTE_GROUP_LAYOUTS:
                 groups = [g for g in quote_groups(blocks) if g[0] > 0]
                 if len(groups) == 1 and groups[0][0] > 1 and groups[0][1] == 1:
                     warnings.append(

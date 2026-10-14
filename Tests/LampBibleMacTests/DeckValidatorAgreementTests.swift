@@ -78,6 +78,30 @@ struct DeckValidatorAgreementTests {
                 .init(kind: .caption, text: "Stranded"),
             ]),
         ]),
+        // Headed columns with their citations, then what two columns cannot
+        // hold: a third column, and a citation with nothing to attribute.
+        LampPresentationDeck(title: "Columns", slides: [
+            .init(layout: .twoColumn, blocks: [
+                .init(kind: .title, text: "Two searches"),
+                .init(kind: .subtitle, text: "The Preacher"),
+                .init(kind: .scripture, text: "to seek wisdom and the scheme of things"),
+                .init(kind: .citation, text: "Ecclesiastes 7:25"),
+                .init(kind: .subtitle, text: "Mankind"),
+                .init(kind: .scripture, text: "they have sought out many schemes."),
+                .init(kind: .citation, text: "Ecclesiastes 7:29"),
+            ]),
+            .init(layout: .twoColumn, blocks: [
+                .init(kind: .citation, text: "Stranded"),
+                .init(kind: .subtitle, text: "One"),
+                .init(kind: .body, text: "First"),
+                .init(kind: .subtitle, text: "Two"),
+                .init(kind: .body, text: "Second"),
+                .init(kind: .citation, text: "Its source"),
+                .init(kind: .citation, text: "A second source"),
+                .init(kind: .subtitle, text: "Three"),
+                .init(kind: .body, text: "Third"),
+            ]),
+        ]),
         // A slide carrying more than it can show.
         LampPresentationDeck(title: "Crowded", slides: [
             .init(layout: .quotation, blocks: [
