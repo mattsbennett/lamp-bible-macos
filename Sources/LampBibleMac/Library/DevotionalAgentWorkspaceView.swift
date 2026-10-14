@@ -1500,7 +1500,7 @@ struct DevotionalAgentWorkspaceView: View {
             // Notes that follow the manuscript are derived here, against the
             // writing Lamp already holds, so they are right even when no agent
             // ran the build command.
-            let notesSummary = resolveManuscriptNotes(in: &imported)
+            let notesSummary = resolveManuscriptNotes(in: &imported, from: workspace)
 
             // Images arrive in an `Assets` folder beside the deck, because the
             // agent cannot write into the library itself.
@@ -1561,12 +1561,13 @@ struct DevotionalAgentWorkspaceView: View {
     /// This is the half a build script cannot do: the notes follow the prose
     /// whenever it changes, with nobody running anything.
     private func resolveManuscriptNotes(
-        in deck: inout LampPresentationDeck
+        in deck: inout LampPresentationDeck,
+        from workspace: URL
     ) -> LampPresentationImportStatus.SpeakerNotes? {
         guard deck.followsManuscript else { return nil }
         let resolution = LampPresentationManuscriptNotes.resolve(
             deck: deck,
-            manuscript: draftMarkdown
+            manuscript: manuscript(in: workspace)
         )
         deck = LampPresentationManuscriptNotes.applying(resolution, to: deck)
         let anchored = deck.slides.count { ($0.notesAnchor ?? "").isEmpty == false }
@@ -1576,6 +1577,26 @@ struct DevotionalAgentWorkspaceView: View {
             stale: anchored - resolution.notesBySlideID.count,
             problems: resolution.problems.map(\.message)
         )
+    }
+
+    /// The prose a manuscript-following deck's notes are resolved against.
+    ///
+    /// Read from the workspace rather than from `draftMarkdown`, which goes
+    /// stale: the import runs inside the long-lived polling task started by
+    /// `.task(id:)`, and that closure holds the view struct as it was when the
+    /// pane opened. `@State` reads through it stay live because they go via
+    /// SwiftUI's storage, but a plain `let` keeps whatever it was given —
+    /// forever. Resolving against it silently rewrote a deck's notes from a
+    /// draft the writing had moved on from, and only a relaunch cleared it.
+    ///
+    /// `draft.md` is where the editor and the agent meet: the editor writes it
+    /// on every change, and the agent's own edits are read back from it. The
+    /// `@State` copies are the fallback for the brief moment before the
+    /// workspace has one.
+    private func manuscript(in workspace: URL) -> String {
+        (try? DevotionalAgentWorkspaceStore.readDraft(from: workspace))
+            ?? lastSyncedDraft
+            ?? workspaceDraft
     }
 
     /// The validator's own account of a refusal, when that is what failed, so
