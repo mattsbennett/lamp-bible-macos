@@ -136,6 +136,114 @@ public enum WorkspaceTextFileStore {
         }
         try contents.write(to: fileURL, atomically: true, encoding: .utf8)
     }
+
+    // MARK: - Opening a file by hand
+
+    /// Where `url` sits inside the workspace, or nil if it sits outside it.
+    ///
+    /// Both sides are resolved first, so a path that leaves the workspace
+    /// through a symbolic link or `..` is recognised as outside it however it
+    /// is spelled.
+    public static func relativePath(of url: URL, in workspaceURL: URL) -> String? {
+        let workspace = workspaceURL.standardizedFileURL.resolvingSymlinksInPath()
+        let file = url.standardizedFileURL.resolvingSymlinksInPath()
+        let workspaceComponents = workspace.pathComponents
+        let fileComponents = file.pathComponents
+        guard fileComponents.count > workspaceComponents.count,
+              Array(fileComponents.prefix(workspaceComponents.count)) == workspaceComponents
+        else { return nil }
+        return fileComponents.dropFirst(workspaceComponents.count).joined(separator: "/")
+    }
+
+    /// Opens any readable text file inside the workspace, at any depth.
+    ///
+    /// The document tabs list only the writing's companions on purpose —
+    /// infrastructure, context and skills would bury them — but anything in the
+    /// workspace can be opened deliberately, which is what this is for. The
+    /// limits that remain are the ones that protect the editor rather than tidy
+    /// it: inside the workspace, a real file, and text rather than bytes.
+    public static func openableSnapshot(
+        at url: URL,
+        in workspaceURL: URL
+    ) throws -> WorkspaceTextFileSnapshot {
+        guard relativePath(of: url, in: workspaceURL) != nil else {
+            throw CocoaError(.fileReadNoPermission, userInfo: [
+                NSLocalizedDescriptionKey: "Only files inside this writing's workspace can be opened here.",
+            ])
+        }
+        let values = try url.resourceValues(forKeys: [.isRegularFileKey])
+        guard values.isRegularFile == true else {
+            throw CocoaError(.fileReadUnknown, userInfo: [
+                NSLocalizedDescriptionKey: "\(url.lastPathComponent) is not a file.",
+            ])
+        }
+        guard let contents = try? String(contentsOf: url, encoding: .utf8),
+              !contents.unicodeScalars.contains(where: { $0.value == 0 }) else {
+            throw CocoaError(.fileReadInapplicableStringEncoding, userInfo: [
+                NSLocalizedDescriptionKey: "\(url.lastPathComponent) is not a text file, so it can't be edited here.",
+            ])
+        }
+        return WorkspaceTextFileSnapshot(url: url, contents: contents)
+    }
+
+    /// Saves a file opened that way, back where it came from.
+    public static func writeOpened(
+        _ contents: String,
+        to fileURL: URL,
+        in workspaceURL: URL
+    ) throws {
+        guard relativePath(of: fileURL, in: workspaceURL) != nil else {
+            throw CocoaError(.fileWriteNoPermission, userInfo: [
+                NSLocalizedDescriptionKey: "Only files inside this writing's workspace can be saved here.",
+            ])
+        }
+        try contents.write(to: fileURL, atomically: true, encoding: .utf8)
+    }
+}
+
+/// A human label for a workspace file, so a tab beside "Main Prose" reads the
+/// same way rather than as a raw filename.
+public enum WorkspaceDocumentTitle {
+    /// `outline.md` becomes "Outline", `deck-format.md` "Deck Format".
+    ///
+    /// A word that already carries a capital is left exactly as typed, so
+    /// `README.md` and `DEVOTIONAL_CONTEXT.md` are not retitled into something
+    /// their author did not write.
+    public static func formatted(_ path: String) -> String {
+        let filename = (path as NSString).lastPathComponent
+        // A dotfile's name is its identity — `.mcp.json` means something that
+        // "Mcp" does not — so it is shown as written.
+        guard !filename.hasPrefix(".") else { return filename }
+        let stem = (filename as NSString).deletingPathExtension
+        let source = stem.isEmpty ? filename : stem
+        let words = source
+            .split(whereSeparator: { $0 == "-" || $0 == "_" || $0 == "." || $0.isWhitespace })
+            .map(String.init)
+        guard !words.isEmpty else { return filename }
+        return words.map { word in
+            word.contains(where: \.isUppercase) ? word : word.capitalized
+        }.joined(separator: " ")
+    }
+
+    /// Titles for several files at once, keyed by the path each was given.
+    ///
+    /// Two files can format to one title — `deck/notes.md` and `notes.md`, or
+    /// `outline.md` beside `outline.txt`. Where that happens the whole path is
+    /// used for every file that collided, because a tab bar in which two tabs
+    /// read alike is worse than one that reads less prettily.
+    public static func titles(for paths: [String]) -> [String: String] {
+        var byTitle: [String: [String]] = [:]
+        for path in paths {
+            byTitle[formatted(path), default: []].append(path)
+        }
+        var result: [String: String] = [:]
+        for (title, paths) in byTitle {
+            for path in paths {
+                result[path] = paths.count == 1 ? title : path
+            }
+        }
+        return result
+    }
 }
 
 /// Stores workspace context as content-addressed, read-only files. Every unique

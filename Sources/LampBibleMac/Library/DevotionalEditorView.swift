@@ -26,15 +26,38 @@ private enum DevotionalSaveState: Equatable {
 
 private struct DevotionalWorkspaceEditorDocument: Identifiable, Equatable {
     let url: URL
+    /// Where the file sits inside the workspace. This is the document's
+    /// identity — a file opened by hand can live in a subdirectory, where its
+    /// name alone would not tell it apart from another of the same name — and
+    /// it is also the path its revisions are recorded under, which for the
+    /// top-level files that have always been listed is the filename as before.
+    let relativePath: String
     var text: String
     var persistedText: String
     var selection = NSRange(location: 0, length: 0)
     var externalText: String?
     var wasRemovedExternally = false
     var errorMessage: String?
+    /// Whether this file was opened by hand rather than listed automatically.
+    /// The listing covers the writing's companions only, so a hand-opened file
+    /// is refreshed from its own URL and is not missing when absent from it.
+    let isHandOpened: Bool
 
-    var id: String { url.lastPathComponent }
-    var title: String { url.lastPathComponent }
+    init(
+        url: URL,
+        relativePath: String? = nil,
+        text: String,
+        persistedText: String,
+        isHandOpened: Bool = false
+    ) {
+        self.url = url
+        self.relativePath = relativePath ?? url.lastPathComponent
+        self.text = text
+        self.persistedText = persistedText
+        self.isHandOpened = isHandOpened
+    }
+
+    var id: String { relativePath }
     var previewTitle: String { url.deletingPathExtension().lastPathComponent }
     var isDirty: Bool { text != persistedText }
     var hasExternalConflict: Bool { externalText != nil || wasRemovedExternally }
@@ -303,6 +326,9 @@ struct DevotionalEditorView: View {
     @State private var selectedWorkspaceDocumentID: String?
     @State private var workspaceIsAvailable = false
     @State private var workspaceDocumentsInitialized = false
+    /// Why the last attempt to open a workspace file failed. Not a document's
+    /// own error, because the file never became one.
+    @State private var workspaceDocumentError: String?
     @State private var revisionHistoryRequest: DevotionalRevisionHistoryRequest?
     @State private var showingNewWorkspaceDocument = false
 
@@ -619,10 +645,11 @@ struct DevotionalEditorView: View {
                     ForEach(workspaceDocuments) { document in
                         documentTab(
                             id: document.id,
-                            title: document.title,
-                            systemImage: "doc.plaintext",
+                            title: title(of: document),
+                            systemImage: document.isHandOpened ? "doc" : "doc.plaintext",
                             isDirty: document.isDirty,
-                            hasConflict: document.hasExternalConflict
+                            hasConflict: document.hasExternalConflict,
+                            canClose: document.isHandOpened
                         )
                     }
                 }
@@ -641,6 +668,14 @@ struct DevotionalEditorView: View {
                 .labelStyle(.iconOnly)
                 .buttonStyle(.borderless)
                 .help("Create a companion Markdown file")
+
+                Button("Open Workspace File", systemImage: "folder.badge.plus") {
+                    openWorkspaceFile()
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+                .disabled(!workspaceIsAvailable)
+                .help("Open any file from this writing's workspace")
 
                 Button("Reveal Workspace", systemImage: "folder") {
                     NSWorkspace.shared.activateFileViewerSelecting([workspaceURL])
@@ -661,7 +696,8 @@ struct DevotionalEditorView: View {
         title: String,
         systemImage: String,
         isDirty: Bool,
-        hasConflict: Bool
+        hasConflict: Bool,
+        canClose: Bool = false
     ) -> some View {
         let isSelected = selectedWorkspaceDocumentID == id
         return Button {
@@ -694,9 +730,32 @@ struct DevotionalEditorView: View {
         }
         .buttonStyle(.plain)
         .help(title)
+        .contextMenu {
+            if canClose, let id {
+                // Only files opened by hand can be closed. The rest follow the
+                // workspace listing, so closing one would mean nothing: the
+                // next refresh would bring it straight back.
+                Button("Close") { closeWorkspaceDocument(id) }
+                    .disabled(isDirty)
+                    .help(isDirty ? "Save this file before closing it" : "")
+            }
+        }
+    }
+
+    /// Takes a hand-opened file back off the tab bar. Its contents are left
+    /// exactly as they are on disk.
+    private func closeWorkspaceDocument(_ id: String) {
+        guard let index = workspaceDocuments.firstIndex(where: {
+            $0.id == id && $0.isHandOpened && !$0.isDirty
+        }) else { return }
+        workspaceDocuments.remove(at: index)
+        if selectedWorkspaceDocumentID == id {
+            selectWorkspaceDocument(nil)
+        }
     }
 
     private func selectWorkspaceDocument(_ id: String?) {
+        workspaceDocumentError = nil
         guard selectedWorkspaceDocumentID != id else { return }
         if isEditingPrimaryDocument, editorMode == .visual, let coordinator = tipTapCoordinator {
             coordinator.getContent { latestMarkdown in
@@ -1210,6 +1269,7 @@ struct DevotionalEditorView: View {
     }
 
     private var activeSaveStateDescription: String {
+        if let workspaceDocumentError { return "Issue — \(workspaceDocumentError)" }
         guard let document = activeWorkspaceDocument else { return saveStateDescription }
         if document.wasRemovedExternally {
             return "Conflict — this file was removed outside Lamp"
@@ -1231,10 +1291,22 @@ struct DevotionalEditorView: View {
         return hasSavableContent && isDirty && saveState != .saving
     }
 
+    /// Tab labels for the open companions, read the way "Main Prose" reads
+    /// rather than as raw filenames. Computed over all of them at once because
+    /// two files can format to one title, and then both show their paths.
+    private var workspaceDocumentTitles: [String: String] {
+        WorkspaceDocumentTitle.titles(for: workspaceDocuments.map(\.relativePath))
+    }
+
+    private func title(of document: DevotionalWorkspaceEditorDocument) -> String {
+        workspaceDocumentTitles[document.relativePath]
+            ?? WorkspaceDocumentTitle.formatted(document.relativePath)
+    }
+
     private var activeSaveHelp: String {
         if let document = activeWorkspaceDocument {
             if document.hasExternalConflict { return "Resolve this file conflict before saving" }
-            return document.isDirty ? "Save \(document.title)" : "This file is up to date"
+            return document.isDirty ? "Save \(title(of: document))" : "This file is up to date"
         }
         return hasSavableContent
             ? "Save this writing"
@@ -1591,7 +1663,7 @@ struct DevotionalEditorView: View {
                     persistedText: snapshot.contents
                 ))
                 workspaceDocuments.sort {
-                    $0.title.localizedStandardCompare($1.title) == .orderedAscending
+                    $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending
                 }
             }
             workspaceIsAvailable = true
@@ -1616,7 +1688,7 @@ struct DevotionalEditorView: View {
             revisionHistoryRequest = DevotionalRevisionHistoryRequest(
                 documentID: activeWorkspaceDocument?.id,
                 documentPath: documentPath,
-                documentTitle: activeWorkspaceDocument?.title ?? "Main Prose",
+                documentTitle: activeWorkspaceDocument.map(title(of:)) ?? "Main Prose",
                 revisions: try DevotionalAgentRevisionStore.revisions(
                     in: workspaceURL,
                     documentPath: documentPath
@@ -1668,6 +1740,59 @@ struct DevotionalEditorView: View {
         } catch {
             saveState = .failed(error.localizedDescription)
         }
+    }
+
+    private func workspaceRelativePath(of url: URL) -> String? {
+        WorkspaceTextFileStore.relativePath(of: url, in: workspaceURL)
+    }
+
+    /// Opens any text file in the workspace, at any depth.
+    ///
+    /// The tabs list the writing's companions automatically; infrastructure,
+    /// context and skills are left out so they don't bury them. That is a
+    /// reason not to list a file, not a reason to refuse to open it, so
+    /// anything in the workspace can be opened deliberately from here.
+    private func openWorkspaceFile() {
+        let panel = NSOpenPanel()
+        panel.title = "Open Workspace File"
+        panel.message = "Choose a file from this writing's workspace."
+        panel.prompt = "Open"
+        panel.directoryURL = workspaceURL
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.treatsFilePackagesAsDirectories = true
+        guard panel.runModal() == .OK else { return }
+
+        var opened: String?
+        workspaceDocumentError = nil
+        for url in panel.urls {
+            do {
+                let snapshot = try WorkspaceTextFileStore.openableSnapshot(
+                    at: url,
+                    in: workspaceURL
+                )
+                guard let path = workspaceRelativePath(of: snapshot.url) else { continue }
+                if let existing = workspaceDocuments.first(where: { $0.id == path }) {
+                    opened = existing.id
+                    continue
+                }
+                workspaceDocuments.append(DevotionalWorkspaceEditorDocument(
+                    url: snapshot.url,
+                    relativePath: path,
+                    text: snapshot.contents,
+                    persistedText: snapshot.contents,
+                    isHandOpened: true
+                ))
+                opened = path
+            } catch {
+                workspaceDocumentError = error.localizedDescription
+            }
+        }
+        workspaceDocuments.sort {
+            $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending
+        }
+        if let opened { selectWorkspaceDocument(opened) }
     }
 
     private func supportsRevisionHistory(_ url: URL) -> Bool {
@@ -1737,7 +1862,7 @@ struct DevotionalEditorView: View {
                 }
             }
 
-            try WorkspaceTextFileStore.write(
+            try WorkspaceTextFileStore.writeOpened(
                 submittedText,
                 to: fileURL,
                 in: workspaceURL
@@ -1865,10 +1990,23 @@ struct DevotionalEditorView: View {
                     "CLAUDE.md",
                 ]
             )
-            let snapshotIDs = Set(snapshots.map(\.id))
+            // A hand-opened file is not in the listing, so it brings its own
+            // snapshot; without one the loop below would call it deleted.
+            let listedPaths = Set(snapshots.compactMap { workspaceRelativePath(of: $0.url) })
+            let reopened = workspaceDocuments
+                .filter { $0.isHandOpened && !listedPaths.contains($0.relativePath) }
+                .compactMap { document in
+                    try? WorkspaceTextFileStore.openableSnapshot(
+                        at: document.url,
+                        in: workspaceURL
+                    )
+                }
+            let allSnapshots = snapshots + reopened
+            let snapshotIDs = Set(allSnapshots.compactMap { workspaceRelativePath(of: $0.url) })
 
-            for snapshot in snapshots {
-                if let index = workspaceDocuments.firstIndex(where: { $0.id == snapshot.id }) {
+            for snapshot in allSnapshots {
+                let path = workspaceRelativePath(of: snapshot.url) ?? snapshot.id
+                if let index = workspaceDocuments.firstIndex(where: { $0.id == path }) {
                     let document = workspaceDocuments[index]
                     if snapshot.contents == document.persistedText {
                         workspaceDocuments[index].wasRemovedExternally = false
@@ -1902,6 +2040,7 @@ struct DevotionalEditorView: View {
                 } else {
                     var document = DevotionalWorkspaceEditorDocument(
                         url: snapshot.url,
+                        relativePath: path,
                         text: snapshot.contents,
                         persistedText: snapshot.contents
                     )
@@ -1909,7 +2048,7 @@ struct DevotionalEditorView: View {
                         do {
                             try recordWorkspaceRevision(
                                 kind: .agentEdit,
-                                documentPath: snapshot.id,
+                                documentPath: path,
                                 before: "",
                                 after: snapshot.contents
                             )
@@ -1929,7 +2068,7 @@ struct DevotionalEditorView: View {
                 workspaceDocuments[index].errorMessage = nil
             }
             workspaceDocuments.sort {
-                $0.title.localizedStandardCompare($1.title) == .orderedAscending
+                $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending
             }
             workspaceDocumentsInitialized = true
         } catch {
