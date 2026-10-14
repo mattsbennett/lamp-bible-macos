@@ -2138,7 +2138,7 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
             )
             coordinator.watchForExit(of: terminal.process.shellPid)
             coordinator.watchForWheelScrolling(in: terminal)
-            coordinator.watchForNewlineKeys(in: terminal)
+            coordinator.watchForEditingKeys(in: terminal)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak terminal] in
                 guard let terminal, terminal.process.running else { return }
                 let bytes = Array((command + "\r").utf8)
@@ -2166,7 +2166,7 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
         private var exitSource: DispatchSourceProcess?
         private var reportedExit = false
         private var wheelMonitor: Any?
-        private var newlineMonitor: Any?
+        private var editingKeyMonitor: Any?
         private var isDismantled = false
         private weak var terminal: LocalProcessTerminalView?
 
@@ -2198,33 +2198,41 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
             isDismantled = true
             if let wheelMonitor { NSEvent.removeMonitor(wheelMonitor) }
             wheelMonitor = nil
-            if let newlineMonitor { NSEvent.removeMonitor(newlineMonitor) }
-            newlineMonitor = nil
+            if let editingKeyMonitor { NSEvent.removeMonitor(editingKeyMonitor) }
+            editingKeyMonitor = nil
             terminal = nil
         }
 
-        /// Makes Shift-Return insert a line rather than submit one.
+        /// Sends the keystrokes the terminal view gets wrong or ignores.
         ///
-        /// A terminal sends the same carriage return for Return with or without
-        /// Shift, so a provider's prompt sees one key and submits — losing a
-        /// half-written paragraph. Real terminals are configured to send
-        /// ESC-Return for Shift-Return, which `claude`, `codex`, and `opencode`
-        /// all read as "newline, don't send"; Lamp's embedded terminal has no
-        /// settings for someone to configure, so it does it here.
-        func watchForNewlineKeys(in terminal: LocalProcessTerminalView) {
-            guard newlineMonitor == nil, !isDismantled else { return }
+        /// Lamp's embedded terminal has no settings for someone to configure,
+        /// so the handful of Mac editing keys SwiftTerm leaves unserved are
+        /// served here. `LampTerminalKeyMap` says which, and why each one.
+        func watchForEditingKeys(in terminal: LocalProcessTerminalView) {
+            guard editingKeyMonitor == nil, !isDismantled else { return }
             self.terminal = terminal
-            newlineMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            editingKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 guard let terminal = self?.terminal,
                       Self.keyEvent(event, belongsTo: terminal),
-                      event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .shift,
-                      Self.isReturn(event),
-                      terminal.process.running
+                      terminal.process.running,
+                      let bytes = LampTerminalKeyMap.bytes(for: Self.chord(for: event))
                 else { return event }
-                // ESC then CR: meta-Return, as a configured terminal sends it.
-                terminal.process.send(data: [0x1B, 0x0D][...])
+                terminal.process.send(data: bytes[...])
                 return nil
             }
+        }
+
+        /// The modifiers macOS reports, less the ones that say nothing about
+        /// intent: Caps Lock, and the Fn that Home and End are typed with.
+        private static func chord(for event: NSEvent) -> LampTerminalKeyChord {
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            return LampTerminalKeyChord(
+                keyCode: event.keyCode,
+                command: flags.contains(.command),
+                option: flags.contains(.option),
+                control: flags.contains(.control),
+                shift: flags.contains(.shift)
+            )
         }
 
         /// Whether the keystroke was aimed at this terminal.
@@ -2238,11 +2246,6 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
                   let responder = window.firstResponder as? NSView
             else { return false }
             return responder === terminal || responder.isDescendant(of: terminal)
-        }
-
-        private static func isReturn(_ event: NSEvent) -> Bool {
-            // 36 is Return, 76 the keypad's.
-            event.keyCode == 36 || event.keyCode == 76
         }
 
         /// The monitor sees every scroll in the app, so everything that isn't
