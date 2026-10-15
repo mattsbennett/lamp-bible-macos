@@ -412,8 +412,20 @@ struct DevotionalEditorView: View {
         activeWorkspaceDocument?.text ?? content
     }
 
+    /// Whether the open document can be written visually: the writing itself
+    /// or any Markdown file beside it. A plain text file isn't Markdown, so it
+    /// stays in the Markdown editor, which keeps it exactly as written.
+    private var activeDocumentSupportsVisual: Bool {
+        guard let document = activeWorkspaceDocument else { return true }
+        return WorkspaceTextFileStore.isMarkdown(document.url)
+    }
+
+    private var isEditingVisually: Bool {
+        activeDocumentSupportsVisual && editorMode == .visual
+    }
+
     private var activeEditorMode: DevotionalEditorMode {
-        isEditingPrimaryDocument ? editorMode : .markdown
+        activeDocumentSupportsVisual ? editorMode : .markdown
     }
 
     private var activeRevisionDocumentPath: String? {
@@ -757,14 +769,7 @@ struct DevotionalEditorView: View {
     private func selectWorkspaceDocument(_ id: String?) {
         workspaceDocumentError = nil
         guard selectedWorkspaceDocumentID != id else { return }
-        if isEditingPrimaryDocument, editorMode == .visual, let coordinator = tipTapCoordinator {
-            coordinator.getContent { latestMarkdown in
-                DispatchQueue.main.async {
-                    content = latestMarkdown
-                    previewContent = latestMarkdown
-                }
-            }
-        }
+        collectVisualEditorText()
         selectedWorkspaceDocumentID = id
         editorScrollFraction = nil
     }
@@ -799,9 +804,13 @@ struct DevotionalEditorView: View {
 
     @ViewBuilder
     private var editorPane: some View {
-        if isEditingPrimaryDocument {
+        if activeDocumentSupportsVisual {
             ZStack {
                 visualEditorPane
+                    // Each document gets an editor of its own: giving one editor
+                    // new text adds it to that editor's undo history, where Undo
+                    // would bring back the document that was there before.
+                    .id(selectedWorkspaceDocumentID ?? "")
                 if editorMode == .markdown {
                     markdownEditorPane
                 }
@@ -820,7 +829,7 @@ struct DevotionalEditorView: View {
                 Divider()
             }
             TipTapEditorView(
-                markdownContent: $content,
+                markdownContent: activeTextBinding,
                 fontSize: editorFontSize,
                 mediaScopeID: identifier,
                 libraryRootURL: model.library.rootURL,
@@ -842,6 +851,9 @@ struct DevotionalEditorView: View {
         // invisible.
         .background(Color(nsColor: .windowBackgroundColor))
         .onDisappear {
+            // Its replacement, for another document, reports in once it has
+            // loaded; until then nothing should reach this one's text through it.
+            tipTapCoordinator = nil
             visualEditorIsReady = false
             tipTapSelection = TipTapSelectionState()
         }
@@ -1169,12 +1181,12 @@ struct DevotionalEditorView: View {
             .pickerStyle(.segmented)
             .labelsHidden()
             .fixedSize(horizontal: true, vertical: false)
-            .disabled(!isEditingPrimaryDocument)
-            .help(isEditingPrimaryDocument
+            .disabled(!activeDocumentSupportsVisual)
+            .help(activeDocumentSupportsVisual
                 ? previewPlacement == .full
                     ? "Choose a writing surface to return to writing"
                     : "Choose the writing surface"
-                : "Supporting documents use the Markdown editor")
+                : "Plain text files use the Markdown editor")
         }
 
         ToolbarItem {
@@ -1371,7 +1383,7 @@ struct DevotionalEditorView: View {
         Binding(
             get: { previewPlacement == .full ? nil : activeEditorMode },
             set: { newMode in
-                guard let newMode, isEditingPrimaryDocument else { return }
+                guard let newMode, activeDocumentSupportsVisual else { return }
                 // Choosing a surface means "show me that", so make room for it.
                 if previewPlacement == .full { previewPlacementBinding.wrappedValue = .split }
                 switchEditorMode(to: newMode)
@@ -1384,24 +1396,44 @@ struct DevotionalEditorView: View {
     }
 
     private func switchEditorMode(to newMode: DevotionalEditorMode) {
-        guard isEditingPrimaryDocument, newMode != editorMode else { return }
+        guard activeDocumentSupportsVisual, newMode != editorMode else { return }
+        collectVisualEditorText()
+        editorMode = newMode
+        // Leaving the Markdown surface leaves its scroll position behind with it.
+        editorScrollFraction = nil
+    }
 
-        if editorMode == .visual, let coordinator = tipTapCoordinator {
-            let contentBeforeSwitch = content
-            coordinator.getContent { latestMarkdown in
+    /// Brings the visual editor's latest text into the document it is editing,
+    /// before leaving it for the Markdown editor or another document. The editor
+    /// reports what is typed only after a pause, so it has to be asked.
+    private func collectVisualEditorText() {
+        guard isEditingVisually, let coordinator = tipTapCoordinator else { return }
+        let textBefore = activeTextBinding.wrappedValue
+        // Only an edit is taken, so a document that was only looked at isn't
+        // rewritten in the editor's style — or stripped of what it can't show.
+        guard let documentID = selectedWorkspaceDocumentID else {
+            coordinator.getEditedContent { latestMarkdown in
                 DispatchQueue.main.async {
                     // Do not overwrite an edit made immediately after switching
                     // into the Markdown surface.
-                    if content == contentBeforeSwitch {
+                    if let latestMarkdown, content == textBefore {
                         content = latestMarkdown
                         previewContent = latestMarkdown
                     }
                 }
             }
+            return
         }
-        editorMode = newMode
-        // Leaving the Markdown surface leaves its scroll position behind with it.
-        editorScrollFraction = nil
+        coordinator.getEditedContent { latestMarkdown in
+            DispatchQueue.main.async {
+                guard let latestMarkdown,
+                      let index = workspaceDocuments.firstIndex(where: { $0.id == documentID }),
+                      workspaceDocuments[index].text == textBefore
+                else { return }
+                workspaceDocuments[index].text = latestMarkdown
+                workspaceDocuments[index].errorMessage = nil
+            }
+        }
     }
 
     /// Brings the preview up to the current draft immediately. The visual surface
@@ -1413,7 +1445,8 @@ struct DevotionalEditorView: View {
             return
         }
         previewContent = content
-        coordinator.getContent { latestMarkdown in
+        coordinator.getEditedContent { latestMarkdown in
+            guard let latestMarkdown else { return }
             DispatchQueue.main.async {
                 content = latestMarkdown
                 previewContent = latestMarkdown
@@ -1507,7 +1540,7 @@ struct DevotionalEditorView: View {
         guard let reference = model.selectedVerseReference else { return }
         let description = LampBibleReferenceFormatter.describeRange(from: reference, to: reference)
         let url = "lampbible://read?reference=\(reference)"
-        if isEditingPrimaryDocument, editorMode == .visual, let coordinator = tipTapCoordinator {
+        if isEditingVisually, let coordinator = tipTapCoordinator {
             coordinator.getSelectedText { selectedText in
                 if selectedText.isEmpty {
                     coordinator.insertTextLink(label: description, url: url)
@@ -1537,7 +1570,19 @@ struct DevotionalEditorView: View {
                     .conforms(to: .image) == true
                 let label = storedURL.deletingPathExtension().lastPathComponent
                 if !isEditingPrimaryDocument {
-                    let legacyURL = "lamp-media://\(identifier)/\(storedURL.lastPathComponent)"
+                    // Only the writing keeps a list of its media, so a file
+                    // beside it links the stored file by name. The visual
+                    // editor writes a media ID it doesn't know as that link.
+                    let filename = storedURL.lastPathComponent
+                    if isEditingVisually, let coordinator = tipTapCoordinator {
+                        if isImage {
+                            coordinator.insertImage(mediaID: filename, caption: label, localURL: storedURL)
+                        } else {
+                            coordinator.insertAudio(mediaID: filename, caption: "▶︎ \(label)")
+                        }
+                        return
+                    }
+                    let legacyURL = "lamp-media://\(identifier)/\(filename)"
                     insert(isImage
                         ? "![\(label)](\(legacyURL))"
                         : "[▶︎ \(label)](\(legacyURL))")
@@ -1576,7 +1621,12 @@ struct DevotionalEditorView: View {
             do {
                 let label = storedURL.deletingPathExtension().lastPathComponent
                 if !isEditingPrimaryDocument {
-                    insert("[▶︎ \(label)](lamp-media://\(identifier)/\(storedURL.lastPathComponent))")
+                    let filename = storedURL.lastPathComponent
+                    if isEditingVisually, let coordinator = tipTapCoordinator {
+                        coordinator.insertAudio(mediaID: filename, caption: "▶︎ \(label)")
+                    } else {
+                        insert("[▶︎ \(label)](lamp-media://\(identifier)/\(filename))")
+                    }
                     return
                 }
                 let reference = try await registerMedia(

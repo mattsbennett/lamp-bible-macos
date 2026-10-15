@@ -272,6 +272,10 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     private var richMediaIDs: Set<String>
     private var isReady = false
     private var pendingContent: String?
+    /// The editor's own Markdown for the text it was last given, before any edit.
+    private var markdownAsLoaded: String?
+    /// Whether the text has been edited since the editor was last given text.
+    private var hasEdits = false
     private var pendingMediaMap: [String: String]?
     private var pendingFontSize: Double?
     private var pendingTheme: Bool?
@@ -384,6 +388,12 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         case "contentChanged":
             guard let editorMarkdown = body["markdown"] as? String else { return }
             let markdown = portableMarkdown(from: editorMarkdown)
+            // Soon after it is given text, the editor reports its own restyling
+            // of it — list markers, escapes, spacing — as a change. Until
+            // something is edited, that isn't one, and taking it would rewrite
+            // a document that was only opened.
+            if !hasEdits, markdown == markdownAsLoaded { return }
+            hasEdits = true
             lastKnownMarkdown = markdown
             onContentChanged?(markdown)
 
@@ -459,15 +469,22 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
 
     func setContent(_ markdown: String) {
         lastKnownMarkdown = markdown
+        markdownAsLoaded = nil
+        hasEdits = false
         guard isReady else {
             pendingContent = markdown
             return
         }
         evaluate("window.editorAPI.setContent(\(Self.javascriptString(editorMarkdown(from: markdown))))")
+        // Read straight back, before there is any edit to read.
+        evaluate("window.editorAPI.getContent()") { [weak self] result in
+            guard let self, let editorMarkdown = result as? String else { return }
+            self.markdownAsLoaded = self.portableMarkdown(from: editorMarkdown)
+        }
     }
 
     func getContent(completion: @escaping (String) -> Void) {
-        guard webView != nil else {
+        guard webView != nil, isReady else {
             completion(lastKnownMarkdown)
             return
         }
@@ -476,7 +493,42 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
                 completion("")
                 return
             }
-            let markdown = self.portableMarkdown(from: result as? String ?? "")
+            // A script that failed has no answer, which is not an empty document.
+            guard let editorMarkdown = result as? String else {
+                completion(self.lastKnownMarkdown)
+                return
+            }
+            let markdown = self.portableMarkdown(from: editorMarkdown)
+            self.lastKnownMarkdown = markdown
+            completion(markdown)
+        }
+    }
+
+    /// The editor's text if it has been edited since it was last given text,
+    /// or nil if not. The editor writes Markdown in its own style, so its text
+    /// differing from what it was given doesn't by itself mean an edit; this
+    /// lets a document that was only looked at stay exactly as it was written.
+    func getEditedContent(completion: @escaping (String?) -> Void) {
+        guard webView != nil, isReady else {
+            completion(hasEdits ? lastKnownMarkdown : nil)
+            return
+        }
+        evaluate("window.editorAPI.getContent()") { [weak self] result in
+            guard let self else {
+                completion(nil)
+                return
+            }
+            guard let editorMarkdown = result as? String else {
+                completion(self.hasEdits ? self.lastKnownMarkdown : nil)
+                return
+            }
+            let markdown = self.portableMarkdown(from: editorMarkdown)
+            if !self.hasEdits, markdown == self.markdownAsLoaded {
+                completion(nil)
+                return
+            }
+            // Typed since the editor last reported, which it does after a pause.
+            self.hasEdits = true
             self.lastKnownMarkdown = markdown
             completion(markdown)
         }

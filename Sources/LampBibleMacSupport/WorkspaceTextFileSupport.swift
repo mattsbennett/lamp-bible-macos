@@ -24,6 +24,11 @@ public enum WorkspaceTextFileStore {
         "agents", "claude", "devotional_context", "draft",
     ]
 
+    /// Whether the file is Markdown rather than plain text.
+    public static func isMarkdown(_ url: URL) -> Bool {
+        markdownExtensions.contains(url.pathExtension.lowercased())
+    }
+
     /// Normalizes a user-entered top-level Markdown filename. An omitted
     /// extension becomes `.md`; explicit non-Markdown extensions are rejected.
     public static func normalizedMarkdownFilename(_ proposedName: String) -> String? {

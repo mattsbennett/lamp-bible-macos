@@ -171,12 +171,117 @@ struct AgentMessageContent {
     let markdown: String
 }
 
+/// What the person typed. Lamp draws it rather than SwiftyChat, whose text cell
+/// can't be selected.
+struct PersonMessageContent {
+    let text: String
+}
+
 private struct NativeAgentChatMessage: ChatMessage {
     let id: UUID
     let user: NativeAgentChatUser
     let messageKind: ChatMessageKind
     let isSender: Bool
     let date: Date
+
+    /// The message as written: Markdown for the agent's replies.
+    var text: String? {
+        switch messageKind {
+        case .text(let value):
+            value
+        case .custom(let payload):
+            (payload as? AgentMessageContent)?.markdown ?? (payload as? PersonMessageContent)?.text
+        default:
+            nil
+        }
+    }
+}
+
+private enum MessageClipboard {
+    static func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+}
+
+/// Puts a copy button on a message while the pointer is over it.
+///
+/// A message's text can be selected, but a reply's code sits in panels of its
+/// own, and selecting copies what is shown rather than the Markdown written.
+/// Copying the whole message needs a control of its own, and a right-click menu
+/// alone would hide it — on the text itself, the menu is the text's.
+///
+/// The button sits on the bubble's corner, clear of the text: a reply's prose
+/// is an AppKit text view, which takes any click on it before SwiftUI drawn
+/// over it can, and a reply that opens with code has the code's own button
+/// in that corner.
+private struct CopyableMessage: ViewModifier {
+    let text: String
+    @State private var isHoveringMessage = false
+    @State private var isHoveringButton = false
+    @State private var didCopy = false
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { isHoveringMessage = $0 }
+            .overlay(alignment: .topTrailing) {
+                if isHoveringMessage || isHoveringButton || didCopy {
+                    Button {
+                        MessageClipboard.copy(text)
+                        didCopy = true
+                        Task {
+                            try? await Task.sleep(for: .seconds(1.5))
+                            didCopy = false
+                        }
+                    } label: {
+                        Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
+                            .font(.caption.weight(.semibold))
+                            .frame(width: 24, height: 22)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(.separator))
+                    .help(didCopy ? "Copied" : "Copy message")
+                    .accessibilityLabel("Copy message")
+                    .onHover { isHoveringButton = $0 }
+                    // Its lower edge meets the top of the text, inside the
+                    // bubble's 12-point padding.
+                    .offset(x: 10, y: -10)
+                }
+            }
+            .accessibilityAction(named: "Copy message") { MessageClipboard.copy(text) }
+    }
+}
+
+/// The person's message, styled as SwiftyChat styles outgoing text but
+/// selectable.
+private struct PersonMessageView: View {
+    let text: String
+
+    private var bubble: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(
+            topLeadingRadius: 14,
+            bottomLeadingRadius: 14,
+            bottomTrailingRadius: 14,
+            topTrailingRadius: 0
+        )
+    }
+
+    var body: some View {
+        Text(text)
+            .textSelection(.enabled)
+            .foregroundStyle(.primary)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(12)
+            .background(bubble.fill(LampChatSurface.personBubble))
+            .overlay(bubble.stroke(LampChatSurface.personBubbleBorder))
+            .modifier(CopyableMessage(text: text))
+            .frame(maxWidth: 620, alignment: .trailing)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .padding(.horizontal, 12)
+    }
 }
 
 private struct NativeAgentChatInputView: View {
@@ -348,7 +453,7 @@ private final class NativeAgentChatModel: ObservableObject {
         let userMessage = NativeAgentChatMessage(
             id: UUID(),
             user: person,
-            messageKind: .text(prompt),
+            messageKind: .custom(PersonMessageContent(text: prompt)),
             isSender: true,
             date: Date()
         )
@@ -497,13 +602,7 @@ private final class NativeAgentChatModel: ObservableObject {
             appendAgentMarkdown("I couldn\u{2019}t complete that request. \(failure)")
         case .silent(let notice):
             errorMessage = notice
-            messages.append(NativeAgentChatMessage(
-                id: UUID(),
-                user: agentUser,
-                messageKind: .text(notice),
-                isSender: false,
-                date: Date()
-            ))
+            appendAgentMarkdown(notice)
         }
         persistTranscript()
     }
@@ -525,7 +624,7 @@ private final class NativeAgentChatModel: ObservableObject {
             user: isSender ? person : agentUser,
             // The person typed theirs; the agent wrote Markdown.
             messageKind: isSender
-                ? .text(message.text)
+                ? .custom(PersonMessageContent(text: message.text))
                 : .custom(AgentMessageContent(markdown: message.text)),
             isSender: isSender,
             date: message.date
@@ -534,17 +633,8 @@ private final class NativeAgentChatModel: ObservableObject {
 
     private func transcriptMessages() -> [AgentChatTranscript.Message] {
         messages.compactMap { message in
-            // Both kinds carry the words; only the drawing differs.
-            let text: String
-            switch message.messageKind {
-            case .text(let value):
-                text = value
-            case .custom(let payload):
-                guard let content = payload as? AgentMessageContent else { return nil }
-                text = content.markdown
-            default:
-                return nil
-            }
+            // Every kind carries the words; only the drawing differs.
+            guard let text = message.text else { return nil }
             return AgentChatTranscript.Message(
                 id: message.id,
                 role: message.isSender ? .user : .assistant,
@@ -678,8 +768,19 @@ struct NativeAgentChatView: View {
                     }
                     .disabled(!canSend || model.isRunning || connectionState != .connected)
                 }
+                // SwiftyChat gives every message its own right-click menu,
+                // which hides the one selected text would have.
+                .messageCellContextMenu { message in
+                    if let text = message.text {
+                        Button("Copy Message", systemImage: "doc.on.doc") {
+                            MessageClipboard.copy(text)
+                        }
+                    }
+                }
                 .registerCustomCell { payload in
-                    if let content = payload as? AgentMessageContent {
+                    if let content = payload as? PersonMessageContent {
+                        PersonMessageView(text: content.text)
+                    } else if let content = payload as? AgentMessageContent {
                         AgentMarkdownMessageView(markdown: content.markdown)
                             .padding(12)
                             .frame(maxWidth: 620, alignment: .leading)
@@ -701,6 +802,7 @@ struct NativeAgentChatView: View {
                                 )
                                 .stroke(LampChatSurface.agentBubbleBorder)
                             )
+                            .modifier(CopyableMessage(text: content.markdown))
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 12)
                     }

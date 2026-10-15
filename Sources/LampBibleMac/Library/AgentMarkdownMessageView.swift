@@ -13,122 +13,115 @@ import SwiftUI
 /// the writing. This shares the parser the devotional reader uses, so a heading
 /// here and a heading there are the same heading; only the presentation differs,
 /// because prose on a page and a reply in a bubble want different typography.
+///
+/// The prose between code blocks is one text view, so a selection can run from
+/// one paragraph, list or table into the next. Code keeps its own panel.
 struct AgentMarkdownMessageView: View {
     let markdown: String
-    /// Agent text sits on the window background, the person's on the accent, so
-    /// the colour has to come from whoever placed the bubble.
-    var foreground: Color = .primary
-
-    private var blocks: [DevotionalProseBlock] {
-        DevotionalProseParser.parse(markdown)
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                blockView(block)
+            ForEach(Array(AgentProseText.segments(of: markdown).enumerated()), id: \.offset) { _, segment in
+                switch segment {
+                case .prose(let blocks):
+                    SelectableProseView(blocks: blocks)
+                case .code(let language, let code):
+                    CodeBlockView(language: language, code: code)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
+}
 
-    @ViewBuilder
-    private func blockView(_ block: DevotionalProseBlock) -> some View {
-        switch block {
-        case .heading(let level, let text):
-            inline(text)
-                .font(.system(size: headingSize(level), weight: .semibold))
-        case .paragraph(let text):
-            inline(text)
-        case .quote(let paragraphs):
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(Array(paragraphs.enumerated()), id: \.offset) { _, paragraph in
-                    inline(paragraph)
-                }
-            }
-            .padding(.leading, 10)
-            .overlay(alignment: .leading) {
-                Rectangle()
-                    .fill(foreground.opacity(0.3))
-                    .frame(width: 3)
-            }
-        case .bulletList(let items):
-            list(items.map { (nil, $0) })
-        case .numberedList(let items):
-            list(items.enumerated().map { ("\($0.offset + 1).", $0.element) })
-        case .nestedBulletList(let lines):
-            list(lines.map { (nil, $0.text) }, depths: lines.map(\.depth))
-        case .nestedNumberedList(let lines):
-            list(lines.map { (nil, $0.text) }, depths: lines.map(\.depth))
-        case .table(let headers, let rows):
-            table(headers: headers, rows: rows)
-        case .codeBlock(let language, let code):
-            CodeBlockView(language: language, code: code)
-        case .rule:
-            Divider()
-        }
+/// Prose shown in an AppKit text view, which — unlike separate SwiftUI texts —
+/// selects across everything it holds.
+private struct SelectableProseView: NSViewRepresentable {
+    let blocks: [DevotionalProseBlock]
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSTextView {
+        // TextKit 1: quotes and tables are text blocks, which TextKit 2 doesn't draw.
+        let textView = ProseTextView(usingTextLayoutManager: false)
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isRichText = true
+        textView.drawsBackground = false
+        textView.textContainerInset = .zero
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.widthTracksTextView = true
+        textView.isVerticallyResizable = false
+        textView.isHorizontallyResizable = false
+        textView.linkTextAttributes = [
+            .foregroundColor: NSColor.linkColor,
+            .underlineStyle: NSUnderlineStyle.single.rawValue,
+            .cursor: NSCursor.pointingHand,
+        ]
+        textView.delegate = context.coordinator
+        textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return textView
     }
 
-    private func list(
-        _ items: [(String?, String)],
-        depths: [Int]? = nil
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            ForEach(Array(items.enumerated()), id: \.offset) { index, item in
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(item.0 ?? "•")
-                        .monospacedDigit()
-                        .foregroundStyle(foreground.opacity(0.7))
-                    inline(item.1)
-                }
-                .padding(.leading, CGFloat(depths?[index] ?? 0) * 14)
-            }
-        }
+    func updateNSView(_ textView: NSTextView, context: Context) {
+        context.coordinator.openURL = context.environment.openURL
+        guard context.coordinator.blocks != blocks else { return }
+        context.coordinator.blocks = blocks
+        textView.textStorage?.setAttributedString(AgentProseText.attributedString(for: blocks))
     }
 
-    private func table(headers: [String], rows: [[String]]) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            tableRow(headers, isHeader: true)
-            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                Divider()
-                tableRow(row, isHeader: false)
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView textView: NSTextView, context: Context) -> CGSize? {
+        guard let container = textView.textContainer,
+              let layoutManager = textView.layoutManager
+        else { return nil }
+        // Without a width on offer, the bubble's own limit, less its padding.
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? 596
+        // Measuring lays the text out at the width on offer; afterwards it goes
+        // back to the view's own width, which may not change to match.
+        defer {
+            if textView.frame.width > 0 {
+                container.containerSize = NSSize(width: textView.frame.width, height: .greatestFiniteMagnitude)
             }
         }
-        .padding(8)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(foreground.opacity(0.06))
+        container.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
+        layoutManager.ensureLayout(for: container)
+        let used = layoutManager.usedRect(for: container)
+        return CGSize(
+            width: proposal.width == nil ? ceil(used.width) : width,
+            height: ceil(used.height)
         )
     }
 
-    private func tableRow(_ cells: [String], isHeader: Bool) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
-                inline(cell)
-                    .font(isHeader ? .body.weight(.semibold) : .body)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var blocks: [DevotionalProseBlock]?
+        var openURL: OpenURLAction?
+
+        /// Links open as they did when replies were SwiftUI text, through the
+        /// app's handler, so Lamp's own links stay in Lamp.
+        func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+            let url = (link as? URL) ?? (link as? String).flatMap(URL.init(string:))
+            guard let url, let openURL else { return false }
+            openURL(url)
+            return true
         }
     }
+}
 
-    /// Emphasis, links and inline code, resolved by Foundation rather than by
-    /// hand. A line that will not parse is shown as it was written.
-    private func inline(_ source: String) -> some View {
-        let attributed = (try? AttributedString(
-            markdown: source,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        )) ?? AttributedString(source)
-        return Text(attributed)
-            .textSelection(.enabled)
-            .foregroundStyle(foreground)
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
+/// Copies a table as rows of tab-separated cells, and without the lines that
+/// only space blocks apart. Rich text keeps the table as a table.
+private final class ProseTextView: NSTextView {
+    /// Copying asks for plain text by its legacy name.
+    private static let plainTextTypes: Set<NSPasteboard.PasteboardType> = [
+        .string, NSPasteboard.PasteboardType("NSStringPboardType"),
+    ]
 
-    private func headingSize(_ level: Int) -> CGFloat {
-        switch level {
-        case 1: 20
-        case 2: 18
-        default: 16
+    override func writeSelection(to pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        guard Self.plainTextTypes.contains(type), let textStorage else {
+            return super.writeSelection(to: pboard, type: type)
         }
+        let text = selectedRanges
+            .map { AgentProseText.plainText(of: textStorage, in: $0.rangeValue) }
+            .joined(separator: "\n")
+        return pboard.setString(text, forType: type)
     }
 }
