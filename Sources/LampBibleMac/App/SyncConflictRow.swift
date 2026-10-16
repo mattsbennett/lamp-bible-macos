@@ -59,14 +59,16 @@ struct SyncConflictRow: View {
         }
     }
 
-    /// Identical text on both sides means the two versions differ somewhere a
-    /// preview does not reach — a title, a date, a key scripture — so say that
-    /// rather than show two panes that look the same.
+    /// Name what actually disagrees. Two panes of prose invite someone to read
+    /// for a difference that may be a date or a tag, and when the words really
+    /// are identical there is nothing to find by reading at all.
     private var changedDescription: String {
         if conflict.differsBeyondBody {
-            return "Both versions read the same here; they differ in their details. Keeping one drops the other’s."
+            return "Both versions read the same; they differ in \(conflict.differenceSummary). "
+                + "Keeping one drops the other’s."
         }
-        return "Changed in both places at \(conflict.detected.formatted(date: .abbreviated, time: .shortened))."
+        return "They differ in \(conflict.differenceSummary), found "
+            + "\(conflict.detected.formatted(date: .abbreviated, time: .shortened))."
     }
 
     private func version(_ label: String, _ preview: String) -> some View {
