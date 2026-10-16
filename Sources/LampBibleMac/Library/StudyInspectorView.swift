@@ -51,6 +51,14 @@ struct StudyInspectorView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
+                // Flexible, or the whole column draws at the width this picker
+                // would *like* to be. Four spelled-out labels want 465pt; the
+                // column is 410pt by default, and a frameless segmented picker
+                // reports that preference as its ideal width, which the stack
+                // above adopts and paints over the reader. It compresses to
+                // 364pt perfectly well when told to — the flexible frame is what
+                // makes the column's width the proposal it answers.
+                .frame(maxWidth: .infinity)
 
                 Button {
                     scrollLink.isLinked.toggle()

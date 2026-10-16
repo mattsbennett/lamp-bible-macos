@@ -737,7 +737,11 @@ private struct LampSplashView: View {
 /// floating panel rather than a column of the window.
 private enum StudyInspectorMetrics {
     static let defaultWidth = 410.0
-    static let minimumWidth = 330.0
+    /// Narrow enough to leave the reader its page, wide enough for the study
+    /// column's own tab bar: four segments and the scroll-link button will not
+    /// compress below 364pt, and a column narrower than that is one its chrome
+    /// spills out of.
+    static let minimumWidth = 364.0
     static let maximumWidth = 580.0
 
     /// How long the column takes to arrive or leave.
