@@ -138,6 +138,17 @@ struct StudyInspectorView: View {
     }
 }
 
+enum StudyPaneMetrics {
+    /// The inset every study pane begins at, whatever it is showing.
+    ///
+    /// One number for all four panes and all of their states, because a pane
+    /// spends a moment loading before it has anything to show: if the spinner
+    /// and the entries it becomes start at different heights, the pane lurches
+    /// as each lookup lands. Panes that use `VerseAnchoredScrollView` reach this
+    /// through that view; the dictionary applies it to its own scroll views.
+    static let contentInset: CGFloat = 16
+}
+
 private extension View {
     /// Pins a study pane's empty or loading state to the top of the column.
     ///
@@ -148,9 +159,10 @@ private extension View {
     /// to act on.
     func studyPaneState() -> some View {
         fixedSize(horizontal: false, vertical: true)
-            // Top-aligned, but not jammed against the divider above it.
-            .padding(.top, 28)
-            .padding(.horizontal, 16)
+            // Level with the first line of a loaded pane, so a state that stands
+            // in for content hands over to it without anything moving.
+            .padding(.top, StudyPaneMetrics.contentInset)
+            .padding(.horizontal, StudyPaneMetrics.contentInset)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 }
@@ -1162,8 +1174,7 @@ private struct DictionaryInspectorView: View {
                             }
                         }
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
+                    .padding(StudyPaneMetrics.contentInset)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
@@ -1189,8 +1200,7 @@ private struct DictionaryInspectorView: View {
                         dictionaryResult(result)
                     }
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
+                .padding(StudyPaneMetrics.contentInset)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }

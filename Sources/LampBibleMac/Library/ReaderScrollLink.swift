@@ -161,7 +161,11 @@ struct VerseAnchoredScrollView<Content: View>: View {
                         .accessibilityHidden(true)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding()
+                // Named rather than the default `.padding()`, which happens to
+                // be the same 16pt: the study panes' loading and empty states
+                // line up with this number, and a silent change to it would
+                // reintroduce the lurch they were aligned to remove.
+                .padding(StudyPaneMetrics.contentInset)
             }
             .onScrollTargetVisibilityChange(idType: Int.self) { visible in
                 // The scroll view first lays out at its first item, even when it
