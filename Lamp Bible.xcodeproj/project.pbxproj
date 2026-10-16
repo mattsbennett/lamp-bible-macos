@@ -88,6 +88,7 @@
 		A10000000000000000000042 /* ReaderChatSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000003D /* ReaderChatSidebarView.swift */; };
 		A10000000000000000000043 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = G1000000000000000000000C /* Sparkle */; };
 		A10000000000000000000044 /* SoftwareUpdater.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000003E /* SoftwareUpdater.swift */; };
+		A1000000000000000000004B /* SyncConflictRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000045 /* SyncConflictRow.swift */; };
 		A10000000000000000000045 /* Third Party Licenses in Resources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000003F /* Third Party Licenses */; };
 /* End PBXBuildFile section */
 
@@ -166,6 +167,7 @@
 		B1000000000000000000003C /* ReaderChatSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/ReaderChatSupport.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000003D /* ReaderChatSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/ReaderChatSidebarView.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000003E /* SoftwareUpdater.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/App/SoftwareUpdater.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000045 /* SyncConflictRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/App/SyncConflictRow.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000003F /* Third Party Licenses */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "Resources/Third Party Licenses"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
@@ -238,6 +240,7 @@
 				B10000000000000000000017 /* LampMenuBarView.swift */,
 				B10000000000000000000015 /* LibrarySyncController.swift */,
 				B1000000000000000000003E /* SoftwareUpdater.swift */,
+				B10000000000000000000045 /* SyncConflictRow.swift */,
 				B10000000000000000000003 /* LibraryModel.swift */,
 				B10000000000000000000004 /* LibraryRootView.swift */,
 				B1000000000000000000002E /* AddToLibraryView.swift */,
@@ -452,6 +455,7 @@
 				A10000000000000000000018 /* LampMenuBarView.swift in Sources */,
 				A10000000000000000000016 /* LibrarySyncController.swift in Sources */,
 				A10000000000000000000044 /* SoftwareUpdater.swift in Sources */,
+				A1000000000000000000004B /* SyncConflictRow.swift in Sources */,
 				A10000000000000000000002 /* LampBibleMacApp.swift in Sources */,
 				A10000000000000000000003 /* LibraryModel.swift in Sources */,
 				A10000000000000000000004 /* LibraryRootView.swift in Sources */,

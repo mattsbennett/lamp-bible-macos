@@ -26,6 +26,9 @@ final class LibrarySyncController: ObservableObject {
     @Published private(set) var isSyncing = false
     @Published private(set) var statusMessage: String?
     @Published private(set) var errorMessage: String?
+    /// Writings two devices changed at the same moment, waiting for someone to
+    /// say which version they meant. Sync keeps this Mac's copy until then.
+    @Published private(set) var conflicts: [LampSyncConflict] = []
 
     private let defaults: UserDefaults
     private let fileManager: FileManager
@@ -406,10 +409,45 @@ final class LibrarySyncController: ObservableObject {
             errorMessage = error.localizedDescription
             statusMessage = nil
             isSyncing = false
+            await refreshConflicts(library: library)
             return false
         }
         isSyncing = false
+        await refreshConflicts(library: library)
         return true
+    }
+
+    /// Re-read what is waiting to be decided. Cheap, and the list changes
+    /// underneath the settings pane whenever a run brings a new disagreement
+    /// home or the writing behind an old one is deleted.
+    func refreshConflicts(library: LampLibrary) async {
+        conflicts = (try? await library.pendingSyncConflicts()) ?? []
+    }
+
+    /// Keep one version. The kept copy is dated later than both, so the next
+    /// run publishes it and the other device stops offering its own.
+    func resolve(
+        _ conflict: LampSyncConflict,
+        keeping side: LampSyncConflict.Side,
+        library: LampLibrary
+    ) async {
+        do {
+            _ = try await library.resolveSyncConflict(id: conflict.id, keeping: side)
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        await refreshConflicts(library: library)
+    }
+
+    /// Stop asking, and leave this Mac's copy as it is.
+    func dismiss(_ conflict: LampSyncConflict, library: LampLibrary) async {
+        do {
+            try await library.discardSyncConflict(id: conflict.id)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        await refreshConflicts(library: library)
     }
 
     private func importIOSWebDAVContent(

@@ -591,6 +591,30 @@ private struct ReaderSettingsView: View {
                                 .foregroundStyle(.red)
                         }
                     }
+
+                    if !syncController.conflicts.isEmpty {
+                        Section("Needs Your Decision") {
+                            Text(syncController.conflicts.count == 1
+                                ? "One writing was changed on two devices at the same moment, so sync cannot tell which came later. Your copy is the one being kept until you choose."
+                                : "\(syncController.conflicts.count) writings were changed on two devices at the same moment, so sync cannot tell which came later. Your copies are the ones being kept until you choose.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            ForEach(syncController.conflicts) { conflict in
+                                SyncConflictRow(conflict: conflict) { side in
+                                    Task {
+                                        await syncController.resolve(
+                                            conflict, keeping: side, library: model.library
+                                        )
+                                        model.refresh()
+                                    }
+                                } dismiss: {
+                                    Task {
+                                        await syncController.dismiss(conflict, library: model.library)
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             .formStyle(.grouped)
@@ -605,6 +629,9 @@ private struct ReaderSettingsView: View {
             webDAVEndpoint = syncController.endpoint
             webDAVUsername = syncController.username
         }
+        // A conflict outlives the run that found it, so the pane has to ask
+        // rather than wait to be told.
+        .task { await syncController.refreshConflicts(library: model.library) }
     }
 
     private var appVersion: String {
