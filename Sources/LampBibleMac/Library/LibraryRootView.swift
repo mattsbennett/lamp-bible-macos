@@ -735,7 +735,7 @@ private struct LampSplashView: View {
 /// Square-cornered and flush to the top of the reader area: it sits below the tab
 /// bar rather than against the titlebar, so rounded corners would read as a
 /// floating panel rather than a column of the window.
-private enum StudyInspectorMetrics {
+enum StudyInspectorMetrics {
     static let defaultWidth = 410.0
     /// Narrow enough to leave the reader its page, wide enough for the study
     /// column's own tab bar: four segments and the scroll-link button will not

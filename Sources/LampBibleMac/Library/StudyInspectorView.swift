@@ -31,8 +31,32 @@ struct StudyInspectorView: View {
     @EnvironmentObject private var scrollLink: ReaderScrollLink
     @Binding var isPresented: Bool
     @AppStorage("studyInspector.tab") private var selectedTab = "commentary"
+    /// The same number the column itself is laid out at, so the tab bar can be
+    /// told its width rather than asked for one.
+    @AppStorage("studyInspector.width") private var columnWidth = StudyInspectorMetrics.defaultWidth
     @State private var dictionaryQuery = ""
     @State private var dictionaryLookup: DictionaryLookup?
+
+    /// The scroll-link button, sized rather than measured, so the width left for
+    /// the tab picker is arithmetic instead of a negotiation.
+    private static let scrollLinkButtonWidth: CGFloat = 16
+
+    /// What the segmented picker is given, as opposed to what it would ask for.
+    ///
+    /// Four spelled-out labels have an intrinsic width of 465pt. A hosted
+    /// `NSSegmentedControl` reports that intrinsic width to SwiftUI even when it
+    /// is proposed less, and the stack above adopts it, so the whole pane — tab
+    /// bar, search field, entries and all — drew wider than the column and spilled
+    /// over the reader. It only showed once a pane had real content in it, because
+    /// that is what triggers the pass where the control's intrinsic size wins.
+    /// A definite frame leaves nothing to win: the control is 364pt or wider,
+    /// which every allowed column width can hold.
+    private var tabPickerWidth: CGFloat {
+        StudyInspectorMetrics.clamped(columnWidth)
+            - StudyPaneMetrics.contentInset * 2   // the row's own padding
+            - 10                                  // the gap before the button
+            - Self.scrollLinkButtonWidth
+    }
 
     /// The dictionary answers a query, not a verse, so there is nothing for it to
     /// keep in step with the reader.
@@ -51,9 +75,7 @@ struct StudyInspectorView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                // Flexible, or the whole column draws at the width this picker
-                // would *like* to be.
-                .frame(maxWidth: .infinity)
+                .frame(width: tabPickerWidth)
 
                 Button {
                     scrollLink.isLinked.toggle()
@@ -65,10 +87,11 @@ struct StudyInspectorView: View {
                 }
                 .labelStyle(.iconOnly)
                 .buttonStyle(.borderless)
+                .frame(width: Self.scrollLinkButtonWidth)
                 .disabled(!tabSupportsScrollLink)
                 .help(scrollLinkHelp)
             }
-            .padding()
+            .padding(StudyPaneMetrics.contentInset)
 
             Divider()
 
