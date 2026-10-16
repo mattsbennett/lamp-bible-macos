@@ -1,4 +1,5 @@
 import Foundation
+import LampCore
 import LampModuleKit
 
 /// Preserve the support module's public archive name while the codec lives in core.
@@ -870,5 +871,28 @@ public enum LampSyncError: LocalizedError {
         case .archiveConversionFailed: "Lamp Bible could not prepare personal content for cross-device sync."
         case .invalidModuleJSON: "The WebDAV module JSON is not in a supported Lamp Bible format."
         }
+    }
+}
+
+/// What the Sync pane says above the list of decisions waiting.
+///
+/// Counted by kind rather than lumped together: "2 notes" tells someone where
+/// to look in a way "2 items" does not.
+public enum SyncConflictSummary {
+    public static func text(for conflicts: [LampSyncConflict]) -> String {
+        guard !conflicts.isEmpty else { return "" }
+        let notes = conflicts.filter { $0.kind == .note }.count
+        let writings = conflicts.count - notes
+        var phrases: [String] = []
+        if writings > 0 { phrases.append(writings == 1 ? "one writing" : "\(writings) writings") }
+        if notes > 0 { phrases.append(notes == 1 ? "one note" : "\(notes) notes") }
+        let subject = phrases.joined(separator: " and ")
+        let capitalised = subject.prefix(1).uppercased() + subject.dropFirst()
+        let verb = conflicts.count == 1 ? "was" : "were"
+        let kept = conflicts.count == 1
+            ? "Your copy is the one being kept"
+            : "Your copies are the ones being kept"
+        return "\(capitalised) \(verb) changed on two devices at the same moment, "
+            + "so sync cannot tell which came later. \(kept) until you choose."
     }
 }

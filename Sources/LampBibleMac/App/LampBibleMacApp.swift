@@ -594,9 +594,7 @@ private struct ReaderSettingsView: View {
 
                     if !syncController.conflicts.isEmpty {
                         Section("Needs Your Decision") {
-                            Text(syncController.conflicts.count == 1
-                                ? "One writing was changed on two devices at the same moment, so sync cannot tell which came later. Your copy is the one being kept until you choose."
-                                : "\(syncController.conflicts.count) writings were changed on two devices at the same moment, so sync cannot tell which came later. Your copies are the ones being kept until you choose.")
+                            Text(SyncConflictSummary.text(for: syncController.conflicts))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             ForEach(syncController.conflicts) { conflict in

@@ -1,7 +1,7 @@
 import LampCore
 import SwiftUI
 
-/// One writing that two devices changed at the same moment, with both versions
+/// One record that two devices changed at the same moment, with both versions
 /// side by side and a choice to make.
 ///
 /// Both are shown rather than summarised, because the modification times are
@@ -27,7 +27,7 @@ struct SyncConflictRow: View {
                 .font(.callout)
             }
 
-            Text(changedDescription)
+            Text("\(whatItIs) · \(changedDescription)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -48,6 +48,15 @@ struct SyncConflictRow: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    /// Notes outnumber writings and rarely carry a title, so the heading is
+    /// often the verse itself; this line says which it is either way.
+    private var whatItIs: String {
+        switch conflict.kind {
+        case .devotional: "Writing"
+        case .note: conflict.subtitle.map { "Note on \($0)" } ?? "Note"
+        }
     }
 
     /// Identical text on both sides means the two versions differ somewhere a
