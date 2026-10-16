@@ -52,12 +52,7 @@ struct StudyInspectorView: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 // Flexible, or the whole column draws at the width this picker
-                // would *like* to be. Four spelled-out labels want 465pt; the
-                // column is 410pt by default, and a frameless segmented picker
-                // reports that preference as its ideal width, which the stack
-                // above adopts and paints over the reader. It compresses to
-                // 364pt perfectly well when told to — the flexible frame is what
-                // makes the column's width the proposal it answers.
+                // would *like* to be.
                 .frame(maxWidth: .infinity)
 
                 Button {
@@ -135,6 +130,23 @@ struct StudyInspectorView: View {
         dictionaryLookup = DictionaryLookup(keys: request.keys, word: request.word)
         selectedTab = "dictionary"
         model.consumeDictionaryLookupRequest(request)
+    }
+}
+
+/// Content that is still the last answer while a newer one is on its way.
+///
+/// Dimmed rather than removed: emptying the pane to a spinner and refilling it
+/// is the lurch itself, and a reader who clicked a second word would rather see
+/// the first word's entries fade for a moment than watch the column blank. Not
+/// animated — these are hosted text views, and fading a column of them every
+/// frame costs an offscreen buffer per frame for no gain.
+private struct SupersededContent: ViewModifier {
+    let isSuperseded: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(isSuperseded ? 0.4 : 1)
+            .allowsHitTesting(!isSuperseded)
     }
 }
 
@@ -964,8 +976,12 @@ private struct DictionaryInspectorView: View {
     @State private var moduleID: String?
     @State private var results: [LampDictionaryResult] = []
     @State private var sections: [DictionaryKeySection] = []
-    @State private var isSearching = false
     @State private var errorMessage: String?
+    /// The lookup `sections` belongs to, which is not always the one being asked
+    /// for: a lookup in flight leaves the last answered one on screen rather than
+    /// emptying the pane, so the word, its keys and its entries stay put until
+    /// there is something to put in their place.
+    @State private var displayedLookup: DictionaryLookup?
     /// The key text this view put in the field on the user's behalf. Typing is
     /// meant to abandon the lookup, and seeding the field is not typing.
     @State private var seededQuery: String?
@@ -1045,8 +1061,8 @@ private struct DictionaryInspectorView: View {
 
             Divider()
 
-            if let lookup {
-                lookupHeader(lookup)
+            if let shown = displayedLookup ?? lookup {
+                lookupHeader(shown)
                 Divider()
             }
 
@@ -1089,6 +1105,12 @@ private struct DictionaryInspectorView: View {
                 }
             }
 
+            if isAwaitingLookup {
+                ProgressView()
+                    .controlSize(.small)
+                    .help("Looking up \(lookupKeyList)")
+            }
+
             Spacer(minLength: 0)
 
             Button("Clear", systemImage: "xmark.circle.fill") {
@@ -1122,14 +1144,18 @@ private struct DictionaryInspectorView: View {
             )
             .studyPaneState()
         } else if lookup != nil {
-            // Keyed on the request rather than on `isSearching`, which is still
-            // false for the first render after a lookup arrives — its `.task` has
-            // not run yet. `sections` is empty at that moment too, and
-            // `[].allSatisfy` is vacuously true, so the branch below used to
+            // Keyed on the request rather than on a plain in-flight flag, which
+            // is still false for the first render after a lookup arrives — its
+            // `.task` has not run yet. `sections` is empty at that moment too,
+            // and `[].allSatisfy` is vacuously true, so the branch below used to
             // announce "Not in Any Dictionary" before the search had begun. When
             // the lookup is what opens the study column, that wrong answer is what
             // you watch slide in, replaced by real entries a moment later.
-            if completedLookupRequest != lookupRequest {
+            //
+            // Only the first lookup empties the pane. After that there are
+            // entries worth keeping, and the spinner in the header carries the
+            // news on its own — see `isAwaitingLookup`.
+            if isAwaitingLookup, displayedLookup == nil {
                 ProgressView("Looking Up…")
                     .studyPaneState()
             } else if sections.allSatisfy({ $0.entries.isEmpty && $0.mentions.isEmpty }) {
@@ -1177,6 +1203,7 @@ private struct DictionaryInspectorView: View {
                     .padding(StudyPaneMetrics.contentInset)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .modifier(SupersededContent(isSuperseded: isAwaitingLookup))
             }
         } else if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             ContentUnavailableView(
@@ -1185,9 +1212,11 @@ private struct DictionaryInspectorView: View {
                 description: Text("Click a linked word in the reader, or search by English word, lemma, transliteration, or key such as G3056.")
             )
             .studyPaneState()
-        } else if completedSearchRequest != searchRequest {
+        } else if isAwaitingSearch, results.isEmpty {
             // Same reasoning as the lookup above: "no results" is only true once a
-            // search has actually run, and this one is debounced by 200 ms.
+            // search has actually run, and this one is debounced by 200 ms. With
+            // results already up, those stay rather than flashing away between
+            // keystrokes.
             ProgressView("Searching…")
                 .studyPaneState()
         } else if results.isEmpty {
@@ -1203,7 +1232,19 @@ private struct DictionaryInspectorView: View {
                 .padding(StudyPaneMetrics.contentInset)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .modifier(SupersededContent(isSuperseded: isAwaitingSearch))
         }
+    }
+
+    /// True while the pane has been asked for something it has not answered yet.
+    private var isAwaitingLookup: Bool {
+        lookup != nil && completedLookupRequest != lookupRequest
+    }
+
+    private var isAwaitingSearch: Bool {
+        lookup == nil
+            && !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && completedSearchRequest != searchRequest
     }
 
     private var dictionaryFontSize: Double {
@@ -1270,6 +1311,8 @@ private struct DictionaryInspectorView: View {
         seededQuery = nil
         if !keepingQuery { query = "" }
         lookup = nil
+        displayedLookup = nil
+        sections = []
     }
 
     /// Loads a lookup in two passes: the definitions the word actually has, then
@@ -1282,6 +1325,7 @@ private struct DictionaryInspectorView: View {
     private func loadLookup() async {
         guard let lookup else {
             sections = []
+            displayedLookup = nil
             return
         }
         let request = lookupRequest
@@ -1297,7 +1341,6 @@ private struct DictionaryInspectorView: View {
         let seed = lookup.keys.joined(separator: " ")
         seededQuery = seed
         if query != seed { query = seed }
-        isSearching = true
         errorMessage = nil
 
         var exactKeysByKey: [String: Set<String>] = [:]
@@ -1318,14 +1361,15 @@ private struct DictionaryInspectorView: View {
                 loaded.append(DictionaryKeySection(id: key, entries: exactEntries, mentions: []))
             }
             sections = loaded
+            displayedLookup = lookup
             completedLookupRequest = request
         } catch is CancellationError {
             return
         } catch {
             errorMessage = error.localizedDescription
             sections = []
+            displayedLookup = lookup
             completedLookupRequest = request
-            isSearching = false
             return
         }
 
@@ -1362,7 +1406,6 @@ private struct DictionaryInspectorView: View {
             // The definitions stand on their own; a failed cross-reference search
             // is not worth replacing them with an error.
         }
-        isSearching = false
     }
 
     private func loadSearch() async {
@@ -1375,13 +1418,13 @@ private struct DictionaryInspectorView: View {
         guard !trimmedQuery.isEmpty else {
             results = []
             completedSearchRequest = searchRequest
-            isSearching = false
             return
         }
-        isSearching = true
         errorMessage = nil
         do {
             try await Task.sleep(for: .milliseconds(200))
+            // Assigned only once there is an answer, so the rows already up stay
+            // put between keystrokes instead of flashing away and back.
             results = try await model.library.searchDictionaries(
                 query: trimmedQuery,
                 moduleIDs: activeDictionaryIDs(for: [trimmedQuery]),
@@ -1394,7 +1437,6 @@ private struct DictionaryInspectorView: View {
             results = []
         }
         completedSearchRequest = searchRequest
-        isSearching = false
     }
 }
 
