@@ -816,8 +816,9 @@ final class LibrarySyncController: ObservableObject {
     /// and the error alone cannot tell them apart — which is worth knowing
     /// before telling the user their notes are not on the server.
     ///
-    /// Revisions answer it without downloading anything: a file that was
-    /// written has moved off the revision it was conditioned on.
+    /// `LampSyncConditionalWrite.landing` answers it from the revision
+    /// alone in every case but one, which it reports as undecidable rather
+    /// than guessing; that one is settled here by comparing the bytes.
     ///
     /// Returns the paths genuinely left unpublished.
     @discardableResult
@@ -832,35 +833,31 @@ final class LibrarySyncController: ObservableObject {
                 continue
             }
             let now = try? await client.revision(path: path)
-            if Self.stillAtCondition(file.condition, now) {
-                unpublished.append(path)
-                print(
-                    "[LibrarySync] refused \(path): sent "
-                    + "\(Self.describe(file.condition)), server holds \(now ?? "nothing")"
-                )
-            } else {
+            var landing = LampSyncConditionalWrite.landing(
+                condition: file.condition, serverRevision: now
+            )
+            if landing == .undecidable {
+                // Only one case reaches here, and only on a failure, so the
+                // one read it costs is worth not guessing about a file the
+                // user is about to be told is missing.
+                let remote = try? await client.read(path: path)
+                landing = remote?.data == file.data ? .wrote : .didNotWrite
+            }
+            if landing == .wrote {
                 print(
                     "[LibrarySync] \(path) landed but could not be confirmed: sent "
                     + "\(Self.describe(file.condition)), server now holds "
                     + "\(now ?? "nothing")"
                 )
+            } else {
+                unpublished.append(path)
+                print(
+                    "[LibrarySync] refused \(path): sent "
+                    + "\(Self.describe(file.condition)), server holds \(now ?? "nothing")"
+                )
             }
         }
         return unpublished
-    }
-
-    /// Whether the server still holds what the condition expected, meaning
-    /// this pass did not write the file.
-    private static func stillAtCondition(
-        _ condition: LampSyncWriteCondition,
-        _ now: String?
-    ) -> Bool {
-        switch condition {
-        case .unconditional: false
-        case .ifAbsent: now == nil
-        case .ifRevision(let expected):
-            LampSyncConditionalWrite.namesSameRevision(expected, now)
-        }
     }
 
     private static func describe(_ condition: LampSyncWriteCondition) -> String {
