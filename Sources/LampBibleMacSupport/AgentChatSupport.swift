@@ -100,6 +100,35 @@ public enum AgentChatSetupRequirement {
         return markers.contains { normalized.contains($0) }
     }
 
+    /// How much a finished run looks like a setup problem.
+    public enum Verdict: Equatable, Sendable {
+        /// Nothing about it suggests one.
+        case none
+        /// It failed in the shape a setup problem makes, without saying so.
+        case possible
+        /// Its output names a prompt only the provider's own interface can answer.
+        case indicated
+    }
+
+    /// Read a failed run for a setup problem.
+    ///
+    /// The phrases above are the CLIs' own wording, which is theirs to change;
+    /// when it does, the run still fails the same way. A provider that got as
+    /// far as starting a session was past its prompts, and one that exited
+    /// cleanly was not stopped by anything — so what is left, a non-zero exit
+    /// with no session to show for it, is the shape of a prompt nobody
+    /// answered. That is worth offering the way out for, but not worth
+    /// claiming out loud: only `indicated` says it is a setup problem.
+    public static func verdict(
+        output: String,
+        failure: String,
+        sessionID: String?,
+        exitCode: Int32
+    ) -> Verdict {
+        if isIndicated(in: output) || isIndicated(in: failure) { return .indicated }
+        return sessionID == nil && exitCode != 0 ? .possible : .none
+    }
+
     /// What to tell the user, naming the provider as the UI names it.
     public static func message(provider: String) -> String {
         "\(provider) needs to be set up before it can answer here. Open the Terminal session to sign in and answer its first-run prompts, then come back to Chat."
@@ -278,5 +307,36 @@ public enum AgentChatRunDisposition: Equatable, Sendable {
         }
         guard !humanLines.isEmpty else { return nil }
         return humanLines.suffix(4).joined(separator: "\n")
+    }
+}
+
+/// What `opencode auth list` says about whether anything is signed in.
+///
+/// OpenCode reports its credentials as a count — "no credentials",
+/// "1 credentials", "12 credentials" — and the count is what decides this.
+/// Looking for "0 credential" in the text instead disconnects someone for
+/// having ten, because "10 credentials" contains it.
+public enum AgentProviderCredentialListing {
+    private static let countPattern = try! NSRegularExpression(
+        pattern: #"(\d+)\s+credentials?\b"#, options: [.caseInsensitive]
+    )
+
+    /// The number of credentials the listing reports, when it reports one.
+    public static func reportedCount(in output: String) -> Int? {
+        let range = NSRange(output.startIndex..<output.endIndex, in: output)
+        // The count is the listing's closing line, so the last one wins.
+        if let match = countPattern.matches(in: output, range: range).last,
+           let digits = Range(match.range(at: 1), in: output) {
+            return Int(output[digits])
+        }
+        return output.lowercased().contains("no credential") ? 0 : nil
+    }
+
+    /// Whether the listing describes a provider that is signed in.
+    public static func describesCredentials(output: String, exitCode: Int32) -> Bool {
+        // A listing that never says leaves it to the exit status, which is
+        // what every other provider is judged by.
+        if let count = reportedCount(in: output) { return count > 0 }
+        return exitCode == 0
     }
 }

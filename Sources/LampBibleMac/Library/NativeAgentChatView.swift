@@ -594,9 +594,17 @@ private final class NativeAgentChatModel: ObservableObject {
                 ? "That reply was stopped. \(provider.shortName) still has the conversation, so your next message carries on from it."
                 : "That reply was stopped partway through."
         case .failed(let failure):
-            needsProviderSetup = AgentChatSetupRequirement.isIndicated(in: result.output)
-                || AgentChatSetupRequirement.isIndicated(in: failure)
-            errorMessage = needsProviderSetup
+            let setupVerdict = AgentChatSetupRequirement.verdict(
+                output: result.output,
+                failure: failure,
+                sessionID: summary.sessionID,
+                exitCode: result.exitCode
+            )
+            // The way out is offered whenever the failure could be a prompt
+            // nobody answered; it is only called one when the output says so,
+            // because a network error is not a sign-in problem.
+            needsProviderSetup = setupVerdict != .none
+            errorMessage = setupVerdict == .indicated
                 ? "\(AgentChatSetupRequirement.message(provider: provider.shortName)) \(failure)"
                 : failure
             appendAgentMarkdown("I couldn\u{2019}t complete that request. \(failure)")

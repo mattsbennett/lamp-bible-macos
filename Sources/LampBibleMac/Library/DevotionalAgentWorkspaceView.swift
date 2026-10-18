@@ -132,11 +132,11 @@ enum AIProviderCommandRunner {
         if result.output.contains(notInstalledMarker) { return .notInstalled }
         guard result.started else { return .unavailable("Could not check") }
         if provider == .openCode {
-            let normalized = result.output.lowercased()
-            if normalized.contains("0 credential") || normalized.contains("no credential") {
-                return .notConnected
-            }
-            return result.exitCode == 0 ? .connected : .notConnected
+            // OpenCode exits 0 with an empty credential list, so its listing
+            // has to be read rather than its status taken at face value.
+            return AgentProviderCredentialListing.describesCredentials(
+                output: result.output, exitCode: result.exitCode
+            ) ? .connected : .notConnected
         }
         return result.exitCode == 0 ? .connected : .notConnected
     }
