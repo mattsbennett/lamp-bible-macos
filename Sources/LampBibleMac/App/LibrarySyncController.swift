@@ -113,9 +113,35 @@ final class LibrarySyncController: ObservableObject {
     }
 
     @discardableResult
+    /// Sync, and start again once if another device published while this
+    /// pass was running.
+    ///
+    /// The pass reads the archive at the start and writes it at the end, and
+    /// in between it exports the whole library — minutes, on a real library.
+    /// A phone that publishes anywhere inside that window takes the write,
+    /// correctly: what this pass built does not contain what the phone just
+    /// wrote, so letting it through would discard it. But the user pressed
+    /// Sync Now and nothing synced, and pressing it again is the whole
+    /// remedy, so the second attempt is ours to make rather than theirs.
+    ///
+    /// Once only. If something is publishing continuously, the honest
+    /// outcome is to say so rather than to keep a button spinning.
     func sync(library: LampLibrary) async -> Bool {
+        if await runSyncPass(library: library) { return true }
+        guard archiveRaceLost else { return false }
+        statusMessage = "Another device published while syncing — starting again…"
+        return await runSyncPass(library: library)
+    }
+
+    /// Set when the archive write lost to another device's publish, which is
+    /// the one failure worth repeating the pass for: nothing is wrong, this
+    /// pass is simply out of date, and the next one starts from what won.
+    private var archiveRaceLost = false
+
+    private func runSyncPass(library: LampLibrary) async -> Bool {
         guard !isSyncing else { return false }
         isSyncing = true
+        archiveRaceLost = false
         errorMessage = nil
         statusMessage = "Preparing sync…"
         let workspace = fileManager.temporaryDirectory
@@ -419,6 +445,12 @@ final class LibrarySyncController: ObservableObject {
                                 "[LibrarySync] archive write failed: replacing "
                                 + "\(archiveSnapshot?.revision ?? "nothing (no snapshot read)")"
                                 + ", server holds \(now ?? "nothing")"
+                            )
+                            // A revision that moved means another device
+                            // published, rather than anything being wrong
+                            // here. Worth starting again from what it wrote.
+                            archiveRaceLost = !LampSyncConditionalWrite.namesSameRevision(
+                                archiveSnapshot?.revision, now
                             )
                             throw error
                         }
