@@ -25,7 +25,20 @@ enum LampDeckPreview {
         /// Whether ink reaches the slide's edge, which means content is being
         /// cut off rather than merely tightened.
         var clipped: Bool
+        /// How the words were set over the picture behind the slide, when it
+        /// has one that could be read.
+        var background: BackgroundReport?
         var notes: [String]
+    }
+
+    struct BackgroundReport: Codable {
+        var text: String
+        var accent: String
+        var scrim: String
+        /// From 0, the picture left alone, to 1, the picture hidden.
+        var scrimOpacity: Double
+        /// What the words reach over 95% of the picture behind them.
+        var contrast: Double
     }
 
     struct Report: Codable {
@@ -110,10 +123,12 @@ enum LampDeckPreview {
         for (offset, slide) in deck.slides.enumerated() {
             let number = offset + 1
             if let wanted, !wanted.contains(number) { continue }
+            var treatment: LampPresentationBackdrop.Treatment?
             let canvas = LampPresentationSlideCanvas(
                 slide: slide,
                 style: .init(deck: deck),
-                assetURL: resolve
+                assetURL: resolve,
+                reportsBackdrop: { treatment = $0 }
             )
             .frame(width: width, height: height)
             let renderer = ImageRenderer(content: canvas)
@@ -127,8 +142,42 @@ enum LampDeckPreview {
                 try png.write(to: destination, options: [.atomic])
             }
 
-            let measurement = Measurement(image: image, theme: deck.theme)
+            // A picture behind the slide inks every pixel, so the words are
+            // measured on the same slide drawn without it.
+            var measured = image
+            if treatment != nil {
+                let plain = ImageRenderer(
+                    content: LampPresentationSlideCanvas(
+                        slide: slide,
+                        style: .init(deck: deck),
+                        assetURL: { $0.isBackground ? nil : resolve($0) }
+                    )
+                    .frame(width: width, height: height)
+                )
+                plain.scale = 1
+                measured = plain.cgImage ?? image
+            }
+            let measurement = Measurement(image: measured, theme: deck.theme)
             var notes: [String] = []
+            if let background = slide.plan.background, resolve(background) != nil, treatment == nil {
+                notes.append("The picture behind this slide could not be read, so it was drawn "
+                    + "on the theme's background.")
+            }
+            if let treatment {
+                if treatment.contrast < LampPresentationBackdrop.targetContrast {
+                    notes.append(
+                        "The words reach only \(String(format: "%.1f", treatment.contrast)):1 over "
+                            + "the picture behind them, even with it covered; check the theme's colours."
+                    )
+                } else if treatment.scrimOpacity >= 0.7 {
+                    notes.append(
+                        "The words need the picture behind them covered at "
+                            + "\(Int((treatment.scrimOpacity * 100).rounded()))% to be read, which "
+                            + "hides most of it. A quieter picture, or one with open space where "
+                            + "the words fall, would show more of it."
+                    )
+                }
+            }
             if measurement.clipped {
                 notes.append("Content reaches the edge of the slide and is being cut off.")
             }
@@ -155,6 +204,15 @@ enum LampDeckPreview {
                 file: destination.path,
                 textHeight: measurement.textHeight,
                 clipped: measurement.clipped,
+                background: treatment.map {
+                    BackgroundReport(
+                        text: $0.text,
+                        accent: $0.accent,
+                        scrim: $0.scrim,
+                        scrimOpacity: $0.scrimOpacity,
+                        contrast: ($0.contrast * 10).rounded() / 10
+                    )
+                },
                 notes: notes
             ))
         }

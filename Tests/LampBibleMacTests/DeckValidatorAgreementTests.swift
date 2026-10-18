@@ -49,8 +49,10 @@ struct DeckValidatorAgreementTests {
     }
 
     private func swiftWarningPaths(for deck: LampPresentationDeck) -> Set<String> {
+        // The script looks for each image beside the deck, which it is handed
+        // in an empty folder, so here too no image is there.
         Set(
-            LampPresentationDeckValidator.validate(deck)
+            LampPresentationDeckValidator.validate(deck, assetExists: { _ in false })
                 .filter { $0.severity == .warning }
                 .map(\.path)
         )
@@ -100,6 +102,31 @@ struct DeckValidatorAgreementTests {
                 .init(kind: .citation, text: "A second source"),
                 .init(kind: .subtitle, text: "Three"),
                 .init(kind: .body, text: "Third"),
+            ]),
+        ]),
+        // Pictures behind slides: one on a title slide credited by its
+        // caption, one under a column slide whose caption has nothing to
+        // credit once a second caption arrives, and a second background
+        // that has nowhere to go.
+        LampPresentationDeck(title: "Backgrounds", slides: [
+            .init(layout: .title, blocks: [
+                .init(kind: .image, assetPath: "Assets/a.jpg", altText: "A city", placement: .background),
+                .init(kind: .title, text: "Title"),
+                .init(kind: .caption, text: "Thomas Cole"),
+            ]),
+            .init(layout: .twoColumn, blocks: [
+                .init(kind: .image, assetPath: "Assets/a.jpg", altText: "A city", placement: .background),
+                .init(kind: .body, text: "First"),
+                .init(kind: .body, text: "Second"),
+                .init(kind: .caption, text: "A credit"),
+                .init(kind: .caption, text: "A second credit"),
+            ]),
+            .init(layout: .titleAndBody, blocks: [
+                .init(kind: .image, assetPath: "Assets/a.jpg", altText: "A city", placement: .background),
+                .init(kind: .title, text: "Title"),
+                .init(kind: .body, text: "Body"),
+                .init(kind: .image, assetPath: "Assets/b.jpg", altText: "A cover"),
+                .init(kind: .image, assetPath: "Assets/c.jpg", altText: "Another", placement: .background),
             ]),
         ]),
         // A slide carrying more than it can show.

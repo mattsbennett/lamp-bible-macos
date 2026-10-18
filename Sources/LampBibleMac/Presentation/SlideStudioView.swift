@@ -979,6 +979,13 @@ private struct LampSlideBlockEditor: View {
                     get: { block.altText ?? "" },
                     set: { block.altText = $0 }
                 ))
+                Picker("Placement", selection: $block.placement) {
+                    Text("Beside the text").tag(nil as LampPresentationImagePlacement?)
+                    Text("Behind the slide").tag(Optional(LampPresentationImagePlacement.background))
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .help("Behind the slide, Lamp chooses the colour of the words and covers the picture only as far as they need")
             } else {
                 if block.kind == .body {
                     Picker("Body format", selection: $block.listStyle) {
@@ -1022,6 +1029,9 @@ private struct LampSlideBlockEditor: View {
             }
             if kind != .scripture {
                 block.scriptureReference = nil
+            }
+            if kind != .image {
+                block.placement = nil
             }
         }
     }

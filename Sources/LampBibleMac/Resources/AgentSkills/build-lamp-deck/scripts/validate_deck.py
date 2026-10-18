@@ -70,6 +70,7 @@ MANUSCRIPT_CHECKS = {"skip"}
 # Notes can only follow writing Lamp holds.
 MANUSCRIPT_SOURCE_KINDS = {"devotional", "writing"}
 TYPOGRAPHY = {"verbatim"}
+PLACEMENTS = {"background"}
 # Lamp sets quotations on these layouts, so it adds the marks itself.
 QUOTE_TYPOGRAPHY_LAYOUTS = {"quotation", "scripture", "title-and-body", "two-column"}
 # Layouts that read their prose as passages, each closed by its citation.
@@ -166,8 +167,37 @@ def undrawn_in_columns(blocks: list) -> list[tuple[int, str]]:
     return sorted(set(undrawn))
 
 
+def is_background(block: object) -> bool:
+    return (
+        isinstance(block, dict)
+        and block.get("kind") == "image"
+        and block.get("placement") == "background"
+    )
+
+
 def undrawn_blocks(layout: str, blocks: list) -> list[tuple[int, str]]:
-    """Indexes and kinds of blocks this layout will not draw."""
+    """Indexes and kinds of blocks this layout will not draw.
+
+    A picture behind the slide is taken first, on every layout, and the rest
+    is read as if it were not there. A second one is not drawn. With no
+    picture beside the prose, the first caption credits the one behind.
+    """
+    backgrounds = [index for index, block in enumerate(blocks) if is_background(block)]
+    rest = [None if is_background(block) else block for block in blocks]
+    undrawn_backgrounds = [(index, "image") for index in backgrounds[1:]]
+    if backgrounds and not any(
+        isinstance(b, dict) and b.get("kind") == "image" for b in rest
+    ):
+        credit = next(
+            (i for i, b in enumerate(rest) if isinstance(b, dict) and b.get("kind") == "caption"),
+            None,
+        )
+        if credit is not None:
+            rest[credit] = None
+    return sorted(set(undrawn_backgrounds + undrawn_in_layout(layout, rest)))
+
+
+def undrawn_in_layout(layout: str, blocks: list) -> list[tuple[int, str]]:
     if layout == "two-column":
         return undrawn_in_columns(blocks)
     capacity = LAYOUT_CAPACITY.get(layout)
@@ -393,7 +423,13 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
                     )
                 if not nonempty(block.get("altText")):
                     warnings.append(f"{block_path}.altText: describe the image for accessibility")
-            elif not nonempty(block.get("text")):
+            placement = block.get("placement")
+            if placement is not None:
+                if placement not in PLACEMENTS:
+                    errors.append(f"{block_path}.placement: expected 'background'")
+                elif kind != "image":
+                    errors.append(f"{block_path}.placement: placement requires image content")
+            if kind != "image" and not nonempty(block.get("text")):
                 errors.append(f"{block_path}.text: content cannot be empty")
             text = block.get("text", "")
             if kind == "title" and isinstance(text, str) and len(text) > 90:
@@ -464,8 +500,11 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
                 if isinstance(block, dict)
                 and block.get("kind") in {"body", "scripture", "quotation", "citation"}
             )
+            # A picture behind the slide leaves the prose the whole slide.
             has_image = any(
-                isinstance(block, dict) and block.get("kind") == "image" for block in blocks
+                isinstance(block, dict) and block.get("kind") == "image"
+                and not is_background(block)
+                for block in blocks
             )
             ceiling = CROWDING_CEILING // 2 if has_image else CROWDING_CEILING
             if drawn_text > ceiling:

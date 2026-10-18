@@ -67,7 +67,9 @@ image wants, rather than a separate image slide under a headline. Use the
 `image` layout when the picture itself is the slide.
 
 `title` and `closing` are deliberately sparing: they draw a title and one
-subtitle, and drop anything further. Put it on its own slide.
+subtitle, and drop anything further. Put it on its own slide. Like every
+layout, they can also carry a picture behind them (see "A picture behind the
+slide").
 
 ### Two columns
 
@@ -106,7 +108,7 @@ size of the type.
 
 ## Content block
 
-Every block has `id`, `kind`, and `text`. It may also contain `assetPath`, `altText`, `listStyle`, or `scriptureReference`. Supported kinds are:
+Every block has `id`, `kind`, and `text`. It may also contain `assetPath`, `altText`, `placement`, `listStyle`, or `scriptureReference`. Supported kinds are:
 
 - `title`
 - `subtitle`
@@ -202,6 +204,37 @@ can be checked before it has been imported.
 
 An image Lamp cannot find renders as a placeholder on every platform rather
 than failing, and both the validator and the preview report it by path.
+
+### A picture behind the slide
+
+Set `"placement": "background"` on an image block and the picture fills the
+whole slide behind everything else, on any layout:
+
+```json
+"blocks": [
+  { "id": "…", "kind": "image", "text": "", "assetPath": "Assets/empire.jpg",
+    "altText": "A classical city at the height of its splendour", "placement": "background" },
+  { "id": "…", "kind": "title", "text": "Has Mankind Evolved and Become Smarter?" },
+  { "id": "…", "kind": "caption", "text": "Thomas Cole, The Consummation of Empire (1836)" }
+]
+```
+
+- The picture is scaled to fill the slide and centred, so what overflows is
+  cropped: a portrait picture loses its top and bottom.
+- Lamp chooses the colour of the words. It reads the picture where the words
+  fall and sets them in whichever of the theme's two ground colours needs less
+  of it covered, then darkens or lightens the picture behind them, in a band
+  the width of the slide, only as far as it takes to reach 4.5:1. The rest of
+  the picture is left as it is. Citations and rules keep the accent colour
+  while it still reads, and take the words' colour where it does not.
+- A background is not the picture beside the prose. A slide may carry one of
+  each; a second background is not drawn.
+- With no picture beside the prose, a `caption` credits the background. It is
+  drawn small in the slide's lower right corner, on every layout.
+- The preview reports, for each slide with a background, the colour chosen and
+  how much of the picture was covered. A picture that needs most of itself
+  covered for the words to read is named: a quieter picture, or one with open
+  space where the words fall, will show more of it.
 
 ## Speaker notes from the manuscript
 
