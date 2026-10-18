@@ -246,6 +246,9 @@ final class LibrarySyncController: ObservableObject {
                 var preferenceMerge: LampSharedPreferenceLedger.Merge?
                 var iOSImportSummary = IOSWebDAVImportSummary()
                 var archiveSnapshot: LampSyncArchiveRemote.Snapshot?
+                // Kept apart from a nil snapshot, which also means "there is
+                // no archive yet" — a first publish, which must go ahead.
+                var archiveReadFailed = false
                 var remoteCompatibilityManifest: LampCompatibilityManifest?
                 try await LampSyncEngine.run(
                     pullAndMerge: {
@@ -305,11 +308,13 @@ final class LibrarySyncController: ObservableObject {
                                 }
                             } catch {
                                 // Losing the read here is not cosmetic: with no
-                                // snapshot the publish below has nothing to
-                                // replace, so it writes as though the archive
-                                // were absent and loses to the one that is
-                                // there — every pass, identically.
+                                // snapshot the publish below would have nothing
+                                // to replace, so it would write as though the
+                                // archive were absent and lose to the one that
+                                // is there. That is reported below as a refusal
+                                // to publish rather than attempted and lost.
                                 print("[LibrarySync] archive read failed: \(error)")
+                                archiveReadFailed = true
                                 iOSImportSummary.failures.append(
                                     "lamp-bible.lampsync (\(error.localizedDescription))"
                                 )
@@ -389,6 +394,12 @@ final class LibrarySyncController: ObservableObject {
                             in: LampSyncArchive.create(from: outgoing),
                             from: archiveSnapshot?.archive
                         )
+                        guard !archiveReadFailed else {
+                            // Publishing now would write as a creation and
+                            // lose to the archive that is there, reporting a
+                            // lost race for what was really a failed read.
+                            throw LibrarySyncError.archiveUnreadable
+                        }
                         do {
                             try await LampSyncArchiveRemote.publish(
                                 archive,
@@ -416,10 +427,15 @@ final class LibrarySyncController: ObservableObject {
                             )
                         }
                         statusMessage = "Publishing iPhone and iPad compatible library…"
-                        try await publishIOSWebDAVContent(
-                            using: client,
-                            batch: compatible
-                        )
+                        do {
+                            try await publishIOSWebDAVContent(
+                                using: client,
+                                batch: compatible
+                            )
+                        } catch {
+                            await describeLostWrite(in: compatible, using: client)
+                            throw error
+                        }
                     },
                     complete: {
                         defaults.set(Date(), forKey: "sync.lastCompleted")
@@ -785,6 +801,63 @@ final class LibrarySyncController: ObservableObject {
         )
     }
 
+    /// Say which file in the batch the publisher stopped at, and whether that
+    /// file actually failed to land.
+    ///
+    /// `LampSyncCompatibilityPublisher` writes in order and stops at the first
+    /// file the server refuses, and the error it raises names neither the file
+    /// nor the two revisions. It also cannot distinguish the two ways a write
+    /// fails: refused outright, or written successfully and then not
+    /// confirmable because the server answered with a revision too weak to
+    /// identify a body. Those need opposite responses — one is a real lost
+    /// race, the other is a write that landed — and the message is identical.
+    ///
+    /// Revisions answer it cheaply. A file this pass wrote has moved away from
+    /// the revision it was conditioned on; the first one still sitting at its
+    /// condition is where the publisher stopped. If every file moved, they all
+    /// landed and confirmation is what failed.
+    private func describeLostWrite(
+        in batch: IOSWebDAVExportBatch,
+        using client: LampWebDAVClient
+    ) async {
+        for file in batch.files {
+            let now = try? await client.revision(path: file.remotePath)
+            guard Self.stillAtCondition(file.condition, now) else { continue }
+            print(
+                "[LibrarySync] iOS content stopped at \(file.remotePath): sent "
+                + "\(Self.describe(file.condition)), server holds "
+                + "\(now ?? "nothing")"
+            )
+            return
+        }
+        print(
+            "[LibrarySync] iOS content: every file moved to a new revision, so "
+            + "the writes landed and confirming them is what failed"
+        )
+    }
+
+    /// Whether the server still holds what the condition expected, meaning
+    /// this pass did not write the file.
+    private static func stillAtCondition(
+        _ condition: LampSyncWriteCondition,
+        _ now: String?
+    ) -> Bool {
+        switch condition {
+        case .unconditional: false
+        case .ifAbsent: now == nil
+        case .ifRevision(let expected):
+            LampSyncConditionalWrite.namesSameRevision(expected, now)
+        }
+    }
+
+    private static func describe(_ condition: LampSyncWriteCondition) -> String {
+        switch condition {
+        case .unconditional: "unconditionally"
+        case .ifAbsent: "if-absent"
+        case .ifRevision(let revision): "if-revision \(revision)"
+        }
+    }
+
     private func publishIOSWebDAVContent(
         using client: LampWebDAVClient,
         batch: IOSWebDAVExportBatch
@@ -1116,12 +1189,15 @@ private enum LibrarySyncError: LocalizedError {
     case invalidWebDAVURL
     case incompleteRemoteImport([String])
     case missingRemoteRevision(String)
+    case archiveUnreadable
 
     var errorDescription: String? {
         switch self {
         case .providerNotConfigured: "Choose a sync provider first."
         case .folderNotConfigured: "Choose an iCloud Drive or local folder for sync."
         case .invalidWebDAVURL: "Enter a valid HTTP or HTTPS WebDAV folder URL."
+        case .archiveUnreadable:
+            "Sync stopped before publishing because the remote library could not be read. Publishing now would have written over it as though it were not there. Nothing was changed; try again."
         case .incompleteRemoteImport(let failures):
             "Sync stopped before publishing because \(failures.count) remote item\(failures.count == 1 ? "" : "s") could not be imported: \(failures.prefix(3).joined(separator: "; "))"
         case .missingRemoteRevision(let path):
