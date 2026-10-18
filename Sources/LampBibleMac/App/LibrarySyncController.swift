@@ -249,6 +249,8 @@ final class LibrarySyncController: ObservableObject {
                 // Kept apart from a nil snapshot, which also means "there is
                 // no archive yet" — a first publish, which must go ahead.
                 var archiveReadFailed = false
+                // Files the server would not take, reported once the pass ends.
+                var unpublishedFiles: [String] = []
                 var remoteCompatibilityManifest: LampCompatibilityManifest?
                 try await LampSyncEngine.run(
                     pullAndMerge: {
@@ -427,24 +429,28 @@ final class LibrarySyncController: ObservableObject {
                             )
                         }
                         statusMessage = "Publishing iPhone and iPad compatible library…"
-                        do {
-                            try await publishIOSWebDAVContent(
-                                using: client,
-                                batch: compatible
-                            )
-                        } catch {
-                            await describeLostWrite(in: compatible, using: client)
-                            throw error
-                        }
+                        let refused = try await publishIOSWebDAVContent(
+                            using: client,
+                            batch: compatible
+                        )
+                        unpublishedFiles = await describeRefusals(
+                            refused, in: compatible, using: client
+                        )
                     },
                     complete: {
                         defaults.set(Date(), forKey: "sync.lastCompleted")
                         let date = Date().formatted(date: .abbreviated, time: .shortened)
+                        var synced = "Synced \(date)"
                         if iOSImportSummary.downloadedCount > 0 {
-                            statusMessage = "Synced \(date) — downloaded \(iOSImportSummary.downloadedCount) item\(iOSImportSummary.downloadedCount == 1 ? "" : "s")"
-                        } else {
-                            statusMessage = "Synced \(date)"
+                            synced += " — downloaded \(iOSImportSummary.downloadedCount) item\(iOSImportSummary.downloadedCount == 1 ? "" : "s")"
                         }
+                        // The pass did finish, so this is not an error; but
+                        // saying nothing would claim a file is on the server
+                        // when it is not.
+                        if !unpublishedFiles.isEmpty {
+                            synced += " — \(unpublishedFiles.count) file\(unpublishedFiles.count == 1 ? " was" : "s were") not published: \(unpublishedFiles.prefix(3).joined(separator: ", "))"
+                        }
+                        statusMessage = synced
                     }
                 )
             }
@@ -801,39 +807,46 @@ final class LibrarySyncController: ObservableObject {
         )
     }
 
-    /// Say which file in the batch the publisher stopped at, and whether that
-    /// file actually failed to land.
+    /// Report the files the server would not take, and say of each whether
+    /// it actually failed to land.
     ///
-    /// `LampSyncCompatibilityPublisher` writes in order and stops at the first
-    /// file the server refuses, and the error it raises names neither the file
-    /// nor the two revisions. It also cannot distinguish the two ways a write
-    /// fails: refused outright, or written successfully and then not
-    /// confirmable because the server answered with a revision too weak to
-    /// identify a body. Those need opposite responses — one is a real lost
-    /// race, the other is a write that landed — and the message is identical.
+    /// `writeAndConfirm` raises the same refusal whether the server rejected
+    /// the write or accepted it and then answered with a revision too weak
+    /// to confirm it by. One leaves the file unpublished and one does not,
+    /// and the error alone cannot tell them apart — which is worth knowing
+    /// before telling the user their notes are not on the server.
     ///
-    /// Revisions answer it cheaply. A file this pass wrote has moved away from
-    /// the revision it was conditioned on; the first one still sitting at its
-    /// condition is where the publisher stopped. If every file moved, they all
-    /// landed and confirmation is what failed.
-    private func describeLostWrite(
+    /// Revisions answer it without downloading anything: a file that was
+    /// written has moved off the revision it was conditioned on.
+    ///
+    /// Returns the paths genuinely left unpublished.
+    @discardableResult
+    private func describeRefusals(
+        _ refused: [String],
         in batch: IOSWebDAVExportBatch,
         using client: LampWebDAVClient
-    ) async {
-        for file in batch.files {
-            let now = try? await client.revision(path: file.remotePath)
-            guard Self.stillAtCondition(file.condition, now) else { continue }
-            print(
-                "[LibrarySync] iOS content stopped at \(file.remotePath): sent "
-                + "\(Self.describe(file.condition)), server holds "
-                + "\(now ?? "nothing")"
-            )
-            return
+    ) async -> [String] {
+        var unpublished: [String] = []
+        for path in refused {
+            guard let file = batch.files.first(where: { $0.remotePath == path }) else {
+                continue
+            }
+            let now = try? await client.revision(path: path)
+            if Self.stillAtCondition(file.condition, now) {
+                unpublished.append(path)
+                print(
+                    "[LibrarySync] refused \(path): sent "
+                    + "\(Self.describe(file.condition)), server holds \(now ?? "nothing")"
+                )
+            } else {
+                print(
+                    "[LibrarySync] \(path) landed but could not be confirmed: sent "
+                    + "\(Self.describe(file.condition)), server now holds "
+                    + "\(now ?? "nothing")"
+                )
+            }
         }
-        print(
-            "[LibrarySync] iOS content: every file moved to a new revision, so "
-            + "the writes landed and confirming them is what failed"
-        )
+        return unpublished
     }
 
     /// Whether the server still holds what the condition expected, meaning
@@ -858,14 +871,16 @@ final class LibrarySyncController: ObservableObject {
         }
     }
 
+    /// Returns the paths the server refused; the rest of the batch is
+    /// published either way.
     private func publishIOSWebDAVContent(
         using client: LampWebDAVClient,
         batch: IOSWebDAVExportBatch
-    ) async throws {
+    ) async throws -> [String] {
         let preparedDirectories = Set(batch.files.map {
             String($0.remotePath.prefix { $0 != "/" })
         })
-        try await LampSyncCompatibilityPublisher.publish(
+        let attempt = try await LampSyncCompatibilityPublisher.publishReportingRefusals(
             batch.files.map {
                 .init(
                     remotePath: $0.remotePath,
@@ -883,6 +898,7 @@ final class LibrarySyncController: ObservableObject {
             batch.highlightModuleIDsBySet,
             forKey: Self.iOSHighlightModuleIDsBySetKey
         )
+        return attempt.refused
     }
 
     private func compressedModuleData(_ data: Data, filename: String) throws -> Data {
