@@ -304,6 +304,12 @@ final class LibrarySyncController: ObservableObject {
                                     }
                                 }
                             } catch {
+                                // Losing the read here is not cosmetic: with no
+                                // snapshot the publish below has nothing to
+                                // replace, so it writes as though the archive
+                                // were absent and loses to the one that is
+                                // there — every pass, identically.
+                                print("[LibrarySync] archive read failed: \(error)")
                                 iOSImportSummary.failures.append(
                                     "lamp-bible.lampsync (\(error.localizedDescription))"
                                 )
@@ -383,11 +389,26 @@ final class LibrarySyncController: ObservableObject {
                             in: LampSyncArchive.create(from: outgoing),
                             from: archiveSnapshot?.archive
                         )
-                        try await LampSyncArchiveRemote.publish(
-                            archive,
-                            replacing: archiveSnapshot,
-                            in: client
-                        )
+                        do {
+                            try await LampSyncArchiveRemote.publish(
+                                archive,
+                                replacing: archiveSnapshot,
+                                in: client
+                            )
+                        } catch {
+                            // Which two revisions disagreed is the diagnosis,
+                            // and the error carries neither. A nil snapshot
+                            // here means this wrote as a creation.
+                            let now = try? await client.revision(
+                                path: LampSyncLayout.archivePath
+                            )
+                            print(
+                                "[LibrarySync] archive write failed: replacing "
+                                + "\(archiveSnapshot?.revision ?? "nothing (no snapshot read)")"
+                                + ", server holds \(now ?? "nothing")"
+                            )
+                            throw error
+                        }
                         if let preferenceMerge {
                             try rememberPreferenceLedger(
                                 preferenceMerge.baseline,
