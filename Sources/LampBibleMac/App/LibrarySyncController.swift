@@ -135,7 +135,7 @@ final class LibrarySyncController: ObservableObject {
             case .folder:
                 let folder = try resolveFolderURL()
                 let preferenceSource = "folder:\(folder.standardizedFileURL.path)"
-                var preferenceLedgerToPublish: LampSharedPreferenceLedger?
+                var preferenceMerge: LampSharedPreferenceLedger.Merge?
                 var observedFolder: LampSyncArchive?
                 let hasScope = folder.startAccessingSecurityScopedResource()
                 defer { if hasScope { folder.stopAccessingSecurityScopedResource() } }
@@ -162,7 +162,7 @@ final class LibrarySyncController: ObservableObject {
                             defer { stagedSettings.discard() }
                             try await library.withStagedChanges { stagedLibrary in
                                 _ = try await stagedLibrary.importPortableBackup(from: incoming)
-                                preferenceLedgerToPublish = try self.importSettingsAndMergePreferences(
+                                preferenceMerge = try self.importSettingsAndMergePreferences(
                                     from: incoming, source: preferenceSource,
                                     targetDefaults: stagedSettings.defaults,
                                     storedIn: stagedSettings.domainName
@@ -193,14 +193,17 @@ final class LibrarySyncController: ObservableObject {
                         self.statusMessage = "Publishing library…"
                         _ = try await library.exportPortableBackup(to: outgoing)
                         try self.exportSettings(to: outgoing)
-                        if preferenceLedgerToPublish == nil {
-                            preferenceLedgerToPublish = try self.mergePreferenceLedger(
+                        if preferenceMerge == nil {
+                            preferenceMerge = try self.mergePreferenceLedger(
                                 remote: nil,
                                 source: preferenceSource
                             )
                         }
-                        if let preferenceLedgerToPublish {
-                            try self.exportPreferenceLedger(preferenceLedgerToPublish, to: outgoing)
+                        if let preferenceMerge {
+                            self.reportDisputedPreferences(preferenceMerge)
+                            try self.exportPreferenceLedger(
+                                preferenceMerge.publishable, to: outgoing
+                            )
                         }
                         try LampWorkspaceSync.exportPortableWorkspaces(
                             from: library.rootURL,
@@ -219,9 +222,9 @@ final class LibrarySyncController: ObservableObject {
                             replacing: observedFolder,
                             fileManager: self.fileManager
                         )
-                        if let preferenceLedgerToPublish {
+                        if let preferenceMerge {
                             try self.rememberPreferenceLedger(
-                                preferenceLedgerToPublish,
+                                preferenceMerge.baseline,
                                 source: preferenceSource
                             )
                         }
@@ -240,7 +243,7 @@ final class LibrarySyncController: ObservableObject {
                     ? nil : LampWebDAVCredentials(username: username, password: storedPassword)
                 let client = LampWebDAVClient(baseURL: url, credentials: credentials)
                 let preferenceSource = "webdav:\(url.absoluteString)"
-                var preferenceLedgerToPublish: LampSharedPreferenceLedger?
+                var preferenceMerge: LampSharedPreferenceLedger.Merge?
                 var iOSImportSummary = IOSWebDAVImportSummary()
                 var archiveSnapshot: LampSyncArchiveRemote.Snapshot?
                 var remoteCompatibilityManifest: LampCompatibilityManifest?
@@ -278,7 +281,7 @@ final class LibrarySyncController: ObservableObject {
                                         )
                                     }
                                     do {
-                                        preferenceLedgerToPublish = try importSettingsAndMergePreferences(
+                                        preferenceMerge = try importSettingsAndMergePreferences(
                                             from: incoming, source: preferenceSource,
                                             targetDefaults: stagedSettings.defaults,
                                             storedIn: stagedSettings.domainName
@@ -329,14 +332,17 @@ final class LibrarySyncController: ObservableObject {
                         statusMessage = "Uploading WebDAV library…"
                         _ = try await library.exportPortableBackup(to: outgoing)
                         try exportSettings(to: outgoing)
-                        if preferenceLedgerToPublish == nil {
-                            preferenceLedgerToPublish = try mergePreferenceLedger(
+                        if preferenceMerge == nil {
+                            preferenceMerge = try mergePreferenceLedger(
                                 remote: nil,
                                 source: preferenceSource
                             )
                         }
-                        if let preferenceLedgerToPublish {
-                            try exportPreferenceLedger(preferenceLedgerToPublish, to: outgoing)
+                        if let preferenceMerge {
+                            reportDisputedPreferences(preferenceMerge)
+                            try exportPreferenceLedger(
+                                preferenceMerge.publishable, to: outgoing
+                            )
                         }
                         try LampWorkspaceSync.exportPortableWorkspaces(
                             from: library.rootURL,
@@ -382,9 +388,9 @@ final class LibrarySyncController: ObservableObject {
                             replacing: archiveSnapshot,
                             in: client
                         )
-                        if let preferenceLedgerToPublish {
+                        if let preferenceMerge {
                             try rememberPreferenceLedger(
-                                preferenceLedgerToPublish,
+                                preferenceMerge.baseline,
                                 source: preferenceSource
                             )
                         }
@@ -858,7 +864,7 @@ final class LibrarySyncController: ObservableObject {
         source: String,
         targetDefaults: UserDefaults,
         storedIn domainName: String
-    ) throws -> LampSharedPreferenceLedger {
+    ) throws -> LampSharedPreferenceLedger.Merge {
         let remote = try readPreferenceLedger(from: directory)
         let hasSharedHistory = remote != nil || cachedPreferenceLedger(for: source) != nil
         try importSettings(
@@ -878,12 +884,24 @@ final class LibrarySyncController: ObservableObject {
         return try LampSyncPreferenceState.decode(Data(contentsOf: url))
     }
 
+    /// Say which shared preferences the two devices disagree about.
+    ///
+    /// Not an error: the sync carries everything else, and neither value is
+    /// published or overwritten. It stays disputed until the two devices are
+    /// given the same value, so it has to be visible or it will sit there.
+    private func reportDisputedPreferences(_ merge: LampSharedPreferenceLedger.Merge) {
+        guard !merge.disputed.isEmpty else { return }
+        let names = merge.disputed.joined(separator: ", ")
+        statusMessage = "Left as they are, changed on both devices: \(names)"
+        print("[SharedPreferences] disputed, published by neither: \(names)")
+    }
+
     private func mergePreferenceLedger(
         remote: LampSharedPreferenceLedger?,
         source: String,
         targetDefaults: UserDefaults? = nil,
         storedIn domainName: String? = Bundle.main.bundleIdentifier
-    ) throws -> LampSharedPreferenceLedger {
+    ) throws -> LampSharedPreferenceLedger.Merge {
         let targetDefaults = targetDefaults ?? defaults
         let local = try LampSharedPreferenceLedger.explicitValues(
             from: targetDefaults,
@@ -894,7 +912,9 @@ final class LibrarySyncController: ObservableObject {
             base: cachedPreferenceLedger(for: source),
             remote: remote
         )
-        try merged.apply(to: targetDefaults)
+        // A disputed field is left out, so this Mac keeps what its user
+        // set rather than having it replaced by the other device's value.
+        try merged.applicable.apply(to: targetDefaults)
         return merged
     }
 
