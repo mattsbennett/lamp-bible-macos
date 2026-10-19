@@ -115,7 +115,7 @@ struct DeckValidatorAgreementTests {
                 .init(kind: .scripture, text: "We will not walk in it."),
                 .init(kind: .citation, text: "Jeremiah 6:16"),
                 .init(kind: .subtitle, text: "Expectancy"),
-                .init(kind: .quotation, text: "yet I shall again look upon your holy temple."),
+                .init(kind: .scripture, text: "yet I shall again look upon your holy temple."),
                 .init(kind: .citation, text: "Jonah 2:4"),
                 .init(kind: .body, text: "And a thought of my own."),
             ]),
