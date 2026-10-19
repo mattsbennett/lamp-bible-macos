@@ -371,6 +371,83 @@ struct AgentRevisionStoreCompactionTests {
         #expect(try DevotionalAgentRevisionStore.revisions(in: workspace).count == 1)
     }
 
+    @Test func anAutosaveContinuesFromAnAgentChangeItDidNotSee() throws {
+        let workspace = try makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        // The editor last saved "mine", an agent then rewrote the draft, and the
+        // writer kept typing from their own copy.
+        try DevotionalAgentRevisionStore.record(
+            kind: .agentEdit,
+            before: "mine",
+            after: "agent",
+            in: workspace,
+            createdAt: start
+        )
+        let saved = try DevotionalAgentRevisionStore.record(
+            kind: .userEdit,
+            before: "mine",
+            after: "mine and more",
+            continuingLatest: true,
+            in: workspace,
+            createdAt: start.addingTimeInterval(2)
+        )
+
+        // Recorded from the agent's result, so that version stays somewhere the
+        // writer can get back to.
+        #expect(saved?.beforeMarkdown == "agent")
+        #expect(saved?.afterMarkdown == "mine and more")
+        let revisions = try DevotionalAgentRevisionStore.revisions(in: workspace)
+        #expect(revisions.map(\.afterMarkdown) == ["mine and more", "agent"])
+    }
+
+    @Test func anAutosaveOfTextAnAgentAlreadyWroteIsNotRecordedTwice() throws {
+        let workspace = try makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        try DevotionalAgentRevisionStore.record(
+            kind: .agentEdit,
+            before: "mine",
+            after: "agent",
+            in: workspace,
+            createdAt: start
+        )
+        // The editor has taken the agent's draft in and saved it. The transition
+        // is already recorded, under the kind that made it.
+        let duplicate = try DevotionalAgentRevisionStore.record(
+            kind: .userEdit,
+            before: "mine",
+            after: "agent",
+            continuingLatest: true,
+            in: workspace,
+            createdAt: start.addingTimeInterval(2)
+        )
+
+        #expect(duplicate == nil)
+        #expect(try DevotionalAgentRevisionStore.revisions(in: workspace).count == 1)
+    }
+
+    @Test func theHistoryTokenMovesOnlyWhenTheHistoryDoes() throws {
+        let workspace = try makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        #expect(DevotionalAgentRevisionStore.historyToken(in: workspace)
+            == DevotionalAgentRevisionStore.historyToken(in: workspace))
+
+        let empty = DevotionalAgentRevisionStore.historyToken(in: workspace)
+        try DevotionalAgentRevisionStore.record(
+            kind: .userEdit, before: "A", after: "B", in: workspace, createdAt: start
+        )
+        let recorded = DevotionalAgentRevisionStore.historyToken(in: workspace)
+        #expect(recorded != empty)
+        // A read does not move it, which is what lets the pane skip one.
+        _ = try DevotionalAgentRevisionStore.revisions(in: workspace)
+        #expect(DevotionalAgentRevisionStore.historyToken(in: workspace) == recorded)
+    }
+
     @Test func compactionLeavesUnreadableFilesAlone() throws {
         let workspace = try makeWorkspace()
         defer { try? FileManager.default.removeItem(at: workspace) }

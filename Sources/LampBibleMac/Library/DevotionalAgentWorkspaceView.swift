@@ -897,6 +897,10 @@ struct DevotionalAgentWorkspaceView: View {
     @State private var workspaceDraft = ""
     @State private var lastSyncedDraft: String?
     @State private var revisions: [DevotionalAgentRevision] = []
+    /// The state of the revision folder the loaded `revisions` were read from.
+    /// Reading them decodes every file in it, so the refresh loop compares this
+    /// first and reads only when the history has actually moved.
+    @State private var loadedRevisionsToken: DevotionalAgentRevisionStore.HistoryToken?
     @State private var errorMessage: String?
     /// Kept apart from `errorMessage`: the refresh loop runs every 400ms, so
     /// clearing one state for both would erase what a failed add just reported
@@ -1462,13 +1466,45 @@ struct DevotionalAgentWorkspaceView: View {
         }
     }
 
+    /// Runs several times a second, so everything here is assigned only on a real
+    /// change — an assignment alone redraws the pane — and the history, which is
+    /// the one expensive read, is reloaded only when the folder says so.
     private func refreshWorkspaceMetadata(in workspace: URL) {
-        contextFiles = (try? DevotionalAgentWorkspaceStore.contextFiles(in: workspace)) ?? contextFiles
-        skills = (try? DevotionalAgentWorkspaceStore.skills(in: workspace)) ?? skills
-        librarySkills = (
-            try? DevotionalAgentWorkspaceStore.librarySkills(libraryRootURL: libraryRootURL)
-        ) ?? librarySkills
-        revisions = (try? DevotionalAgentRevisionStore.revisions(in: workspace)) ?? revisions
+        if let files = try? DevotionalAgentWorkspaceStore.contextFiles(in: workspace),
+           files != contextFiles {
+            contextFiles = files
+        }
+        if let workspaceSkills = try? DevotionalAgentWorkspaceStore.skills(in: workspace),
+           workspaceSkills != skills {
+            skills = workspaceSkills
+        }
+        if let catalogue = try? DevotionalAgentWorkspaceStore.librarySkills(
+            libraryRootURL: libraryRootURL
+        ), catalogue != librarySkills {
+            librarySkills = catalogue
+        }
+        reloadRevisionsIfChanged(in: workspace)
+    }
+
+    /// Reads the history when the revision folder has moved since the loaded
+    /// copy, off the main actor. Decoding it holds a full copy of the document on
+    /// both sides of every change; at 400ms intervals it was the most expensive
+    /// thing the pane did, and most passes find nothing new.
+    ///
+    /// The token is taken as read before the read finishes, so the ticks arriving
+    /// while it runs don't queue the same read behind it. A read that then fails
+    /// waits for the next change to the folder rather than retrying — it can only
+    /// fail if the folder went away, which is itself such a change.
+    private func reloadRevisionsIfChanged(in workspace: URL) {
+        let token = DevotionalAgentRevisionStore.historyToken(in: workspace)
+        guard token != loadedRevisionsToken else { return }
+        loadedRevisionsToken = token
+        Task {
+            guard let loaded = try? await DevotionalAgentRevisionHistory.shared.revisions(
+                in: workspace
+            ) else { return }
+            if loaded != revisions { revisions = loaded }
+        }
     }
 
     /// Takes a deck the agent wrote, with the images it delivered beside it,

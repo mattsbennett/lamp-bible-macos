@@ -63,6 +63,17 @@ private struct DevotionalWorkspaceEditorDocument: Identifiable, Equatable {
     var hasExternalConflict: Bool { externalText != nil || wasRemovedExternally }
 }
 
+/// A transition waiting to be written to a document's revision history.
+///
+/// Recording walks the whole revision folder, so it happens off the main actor
+/// once the file itself is written. The editor hands over what to record rather
+/// than waiting for it.
+private struct PendingWorkspaceRevision {
+    let kind: DevotionalAgentRevisionKind
+    let before: String
+    let after: String
+}
+
 private struct DevotionalRevisionHistoryRequest: Identifiable {
     let id = UUID()
     let documentID: String?
@@ -1734,22 +1745,28 @@ struct DevotionalEditorView: View {
 
     private func showActiveRevisionHistory() {
         guard let documentPath = activeRevisionDocumentPath else { return }
-        do {
-            revisionHistoryRequest = DevotionalRevisionHistoryRequest(
-                documentID: activeWorkspaceDocument?.id,
-                documentPath: documentPath,
-                documentTitle: activeWorkspaceDocument.map(title(of:)) ?? "Main Prose",
-                revisions: try DevotionalAgentRevisionStore.revisions(
-                    in: workspaceURL,
+        let documentID = activeWorkspaceDocument?.id
+        let documentTitle = activeWorkspaceDocument.map(title(of:)) ?? "Main Prose"
+        let workspace = workspaceURL
+        Task {
+            do {
+                let revisions = try await DevotionalAgentRevisionHistory.shared.revisions(
+                    in: workspace,
                     documentPath: documentPath
                 )
-            )
-        } catch {
-            if let documentID = activeWorkspaceDocument?.id,
-               let index = workspaceDocuments.firstIndex(where: { $0.id == documentID }) {
-                workspaceDocuments[index].errorMessage = error.localizedDescription
-            } else {
-                saveState = .failed(error.localizedDescription)
+                revisionHistoryRequest = DevotionalRevisionHistoryRequest(
+                    documentID: documentID,
+                    documentPath: documentPath,
+                    documentTitle: documentTitle,
+                    revisions: revisions
+                )
+            } catch {
+                if let documentID,
+                   let index = workspaceDocuments.firstIndex(where: { $0.id == documentID }) {
+                    workspaceDocuments[index].errorMessage = error.localizedDescription
+                } else {
+                    saveState = .failed(error.localizedDescription)
+                }
             }
         }
     }
@@ -1769,26 +1786,37 @@ struct DevotionalEditorView: View {
         }
 
         guard content != markdown else { return }
-        do {
-            try recordWorkspaceRevision(
-                kind: .restoration,
-                documentPath: DevotionalAgentRevisionStore.primaryDocumentPath,
-                before: content,
-                after: markdown
-            )
-            try WorkspaceTextFileStore.write(
-                markdown,
-                to: workspaceURL.appendingPathComponent(
-                    DevotionalAgentRevisionStore.primaryDocumentPath
-                ),
-                in: workspaceURL
-            )
-            try DevotionalAgentRevisionStore.markSynced(markdown, in: workspaceURL)
-            content = markdown
-            previewContent = markdown
-            save()
-        } catch {
-            saveState = .failed(error.localizedDescription)
+        // Recorded before the draft is replaced, so an interrupted restore leaves
+        // the version it moved away from recoverable rather than lost.
+        let restored = PendingWorkspaceRevision(
+            kind: .restoration,
+            before: content,
+            after: markdown
+        )
+        let workspace = workspaceURL
+        Task {
+            do {
+                try await recordWorkspaceRevisions(
+                    [restored],
+                    documentPath: DevotionalAgentRevisionStore.primaryDocumentPath
+                )
+                try WorkspaceTextFileStore.write(
+                    markdown,
+                    to: workspace.appendingPathComponent(
+                        DevotionalAgentRevisionStore.primaryDocumentPath
+                    ),
+                    in: workspace
+                )
+                try await DevotionalAgentRevisionHistory.shared.markSynced(
+                    markdown,
+                    in: workspace
+                )
+                content = markdown
+                previewContent = markdown
+                save()
+            } catch {
+                saveState = .failed(error.localizedDescription)
+            }
         }
     }
 
@@ -1849,37 +1877,86 @@ struct DevotionalEditorView: View {
         ["md", "markdown"].contains(url.pathExtension.lowercased())
     }
 
-    private func recordWorkspaceRevision(
-        kind: DevotionalAgentRevisionKind,
-        documentPath: String,
-        before: String,
-        after: String
-    ) throws {
-        _ = try DevotionalAgentRevisionStore.record(
-            kind: kind,
-            documentPath: documentPath,
-            before: before,
-            after: after,
-            in: workspaceURL
-        )
+    /// Writes transitions to a document's history, in the order they happened.
+    private func recordWorkspaceRevisions(
+        _ pending: [PendingWorkspaceRevision],
+        documentPath: String
+    ) async throws {
+        let workspace = workspaceURL
+        for revision in pending {
+            try await DevotionalAgentRevisionHistory.shared.record(
+                kind: revision.kind,
+                documentPath: documentPath,
+                before: revision.before,
+                after: revision.after,
+                in: workspace
+            )
+        }
     }
 
-    private func recordExternalRevisionError(
+    /// Records transitions in the background, reporting a failure on the document
+    /// they belong to. The file is already written by the time this runs, so the
+    /// note explains what is missing rather than what failed.
+    private func recordWorkspaceRevisions(
+        _ pending: [PendingWorkspaceRevision],
+        documentPath: String,
+        failureNote: String
+    ) {
+        guard !pending.isEmpty else { return }
+        Task {
+            do {
+                try await recordWorkspaceRevisions(pending, documentPath: documentPath)
+            } catch {
+                guard let index = workspaceDocuments.firstIndex(where: {
+                    $0.id == documentPath
+                }) else { return }
+                workspaceDocuments[index].errorMessage =
+                    "\(failureNote): \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// The transitions a refresh picked up from disk, for a document whose file
+    /// an agent has rewritten underneath the editor.
+    private func externalRevisions(
         for document: DevotionalWorkspaceEditorDocument,
         after externalText: String
-    ) -> String? {
-        guard supportsRevisionHistory(document.url) else { return nil }
-        do {
-            try recordWorkspaceRevision(
+    ) -> [PendingWorkspaceRevision] {
+        guard supportsRevisionHistory(document.url) else { return [] }
+        return [PendingWorkspaceRevision(
+            kind: .agentEdit,
+            before: document.persistedText,
+            after: externalText
+        )]
+    }
+
+    /// What a completed save adds to a document's history: whatever an agent had
+    /// written to the file since the editor last read it, and then the writer's
+    /// own change on top of that.
+    private func savedRevisions(
+        persisted: String,
+        onDisk: String?,
+        submitted: String,
+        changeKind: DevotionalAgentRevisionKind
+    ) -> [PendingWorkspaceRevision] {
+        // No file to compare against: it was deleted, and the save recreated it.
+        let base = onDisk ?? ""
+        var pending: [PendingWorkspaceRevision] = []
+        if base != persisted {
+            pending.append(PendingWorkspaceRevision(
                 kind: .agentEdit,
-                documentPath: document.id,
-                before: document.persistedText,
-                after: externalText
-            )
-            return nil
-        } catch {
-            return "Revision history could not be updated: \(error.localizedDescription)"
+                before: persisted,
+                after: base
+            ))
         }
+        if submitted != base {
+            pending.append(PendingWorkspaceRevision(
+                kind: changeKind,
+                before: base,
+                after: submitted
+            ))
+        }
+        return pending
     }
 
     private func saveWorkspaceDocument(
@@ -1926,46 +2003,20 @@ struct DevotionalEditorView: View {
             workspaceDocuments[savedIndex].errorMessage = nil
 
             guard supportsRevisionHistory(fileURL) else { return }
-            do {
-                if let diskText {
-                    if diskText != persistedText {
-                        try recordWorkspaceRevision(
-                            kind: .agentEdit,
-                            documentPath: documentID,
-                            before: persistedText,
-                            after: diskText
-                        )
-                    }
-                    if submittedText != diskText {
-                        try recordWorkspaceRevision(
-                            kind: changeKind,
-                            documentPath: documentID,
-                            before: diskText,
-                            after: submittedText
-                        )
-                    }
-                } else {
-                    if !persistedText.isEmpty {
-                        try recordWorkspaceRevision(
-                            kind: .agentEdit,
-                            documentPath: documentID,
-                            before: persistedText,
-                            after: ""
-                        )
-                    }
-                    if !submittedText.isEmpty {
-                        try recordWorkspaceRevision(
-                            kind: changeKind,
-                            documentPath: documentID,
-                            before: "",
-                            after: submittedText
-                        )
-                    }
-                }
-            } catch {
-                workspaceDocuments[savedIndex].errorMessage =
-                    "Saved, but revision history could not be updated: \(error.localizedDescription)"
-            }
+            // The document is saved and the tab already says so. Its history is
+            // written after the fact, off the main actor, because walking the
+            // revision folder is the slowest thing a save does and the writer is
+            // typing the next sentence by now.
+            recordWorkspaceRevisions(
+                savedRevisions(
+                    persisted: persistedText,
+                    onDisk: diskText,
+                    submitted: submittedText,
+                    changeKind: changeKind
+                ),
+                documentPath: documentID,
+                failureNote: "Saved, but revision history could not be updated"
+            )
         } catch {
             guard let failedIndex = workspaceDocuments.firstIndex(where: {
                 $0.id == documentID
@@ -1981,12 +2032,18 @@ struct DevotionalEditorView: View {
         if workspaceDocuments[index].wasRemovedExternally {
             let document = workspaceDocuments[index]
             if supportsRevisionHistory(document.url) {
-                try? recordWorkspaceRevision(
-                    kind: .agentEdit,
-                    documentPath: documentID,
-                    before: document.text,
-                    after: ""
-                )
+                // Nowhere left to report a failure once the tab closes, and the
+                // deletion is the agent's own: losing the record of it costs
+                // history, not work.
+                Task { [workspace = workspaceURL, text = document.text] in
+                    try? await DevotionalAgentRevisionHistory.shared.record(
+                        kind: .agentEdit,
+                        documentPath: documentID,
+                        before: text,
+                        after: "",
+                        in: workspace
+                    )
+                }
             }
             workspaceDocuments.remove(at: index)
             if selectedWorkspaceDocumentID == documentID {
@@ -1996,23 +2053,21 @@ struct DevotionalEditorView: View {
         }
         guard let externalText = workspaceDocuments[index].externalText else { return }
         let localText = workspaceDocuments[index].text
-        var revisionError: String?
         if supportsRevisionHistory(workspaceDocuments[index].url) {
-            do {
-                try recordWorkspaceRevision(
+            recordWorkspaceRevisions(
+                [PendingWorkspaceRevision(
                     kind: .agentEdit,
-                    documentPath: documentID,
                     before: localText,
                     after: externalText
-                )
-            } catch {
-                revisionError = "Revision history could not be updated: \(error.localizedDescription)"
-            }
+                )],
+                documentPath: documentID,
+                failureNote: "Revision history could not be updated"
+            )
         }
         workspaceDocuments[index].text = externalText
         workspaceDocuments[index].persistedText = externalText
         workspaceDocuments[index].externalText = nil
-        workspaceDocuments[index].errorMessage = revisionError
+        workspaceDocuments[index].errorMessage = nil
         let textLength = (externalText as NSString).length
         let caret = min(workspaceDocuments[index].selection.location, textLength)
         workspaceDocuments[index].selection = NSRange(location: caret, length: 0)
@@ -2028,9 +2083,17 @@ struct DevotionalEditorView: View {
         }
     }
 
+    /// Brings the open document tabs back in line with the workspace on disk.
+    ///
+    /// Polled several times a second, so it works on a copy and publishes it only
+    /// when it differs. Assigning the documents unconditionally — the array was
+    /// re-sorted on every pass — invalidated this view a few times a second
+    /// whether or not an agent had touched anything, and the editor is a large
+    /// view to rebuild while someone is typing into it.
     private func refreshWorkspaceDocuments() {
         do {
-            workspaceIsAvailable = FileManager.default.fileExists(atPath: workspaceURL.path)
+            let available = FileManager.default.fileExists(atPath: workspaceURL.path)
+            if workspaceIsAvailable != available { workspaceIsAvailable = available }
             let snapshots = try WorkspaceTextFileStore.snapshots(
                 in: workspaceURL,
                 excludingFilenames: [
@@ -2054,73 +2117,70 @@ struct DevotionalEditorView: View {
             let allSnapshots = snapshots + reopened
             let snapshotIDs = Set(allSnapshots.compactMap { workspaceRelativePath(of: $0.url) })
 
+            var documents = workspaceDocuments
+            var pending: [String: [PendingWorkspaceRevision]] = [:]
+
             for snapshot in allSnapshots {
                 let path = workspaceRelativePath(of: snapshot.url) ?? snapshot.id
-                if let index = workspaceDocuments.firstIndex(where: { $0.id == path }) {
-                    let document = workspaceDocuments[index]
+                if let index = documents.firstIndex(where: { $0.id == path }) {
+                    let document = documents[index]
                     if snapshot.contents == document.persistedText {
-                        workspaceDocuments[index].wasRemovedExternally = false
+                        documents[index].wasRemovedExternally = false
                     } else if snapshot.contents == document.text {
-                        let revisionError = recordExternalRevisionError(
-                            for: document,
-                            after: snapshot.contents
-                        )
-                        workspaceDocuments[index].persistedText = snapshot.contents
-                        workspaceDocuments[index].externalText = nil
-                        workspaceDocuments[index].wasRemovedExternally = false
-                        workspaceDocuments[index].errorMessage = revisionError
+                        pending[path] = externalRevisions(for: document, after: snapshot.contents)
+                        documents[index].persistedText = snapshot.contents
+                        documents[index].externalText = nil
+                        documents[index].wasRemovedExternally = false
+                        documents[index].errorMessage = nil
                     } else if document.isDirty {
-                        workspaceDocuments[index].externalText = snapshot.contents
-                        workspaceDocuments[index].wasRemovedExternally = false
-                        workspaceDocuments[index].errorMessage = nil
+                        documents[index].externalText = snapshot.contents
+                        documents[index].wasRemovedExternally = false
+                        documents[index].errorMessage = nil
                     } else {
-                        let revisionError = recordExternalRevisionError(
-                            for: document,
-                            after: snapshot.contents
-                        )
-                        workspaceDocuments[index].text = snapshot.contents
-                        workspaceDocuments[index].persistedText = snapshot.contents
-                        workspaceDocuments[index].externalText = nil
-                        workspaceDocuments[index].wasRemovedExternally = false
-                        workspaceDocuments[index].errorMessage = revisionError
+                        pending[path] = externalRevisions(for: document, after: snapshot.contents)
+                        documents[index].text = snapshot.contents
+                        documents[index].persistedText = snapshot.contents
+                        documents[index].externalText = nil
+                        documents[index].wasRemovedExternally = false
+                        documents[index].errorMessage = nil
                         let textLength = (snapshot.contents as NSString).length
-                        let caret = min(workspaceDocuments[index].selection.location, textLength)
-                        workspaceDocuments[index].selection = NSRange(location: caret, length: 0)
+                        let caret = min(documents[index].selection.location, textLength)
+                        documents[index].selection = NSRange(location: caret, length: 0)
                     }
                 } else {
-                    var document = DevotionalWorkspaceEditorDocument(
+                    if workspaceDocumentsInitialized, supportsRevisionHistory(snapshot.url) {
+                        pending[path] = [PendingWorkspaceRevision(
+                            kind: .agentEdit,
+                            before: "",
+                            after: snapshot.contents
+                        )]
+                    }
+                    documents.append(DevotionalWorkspaceEditorDocument(
                         url: snapshot.url,
                         relativePath: path,
                         text: snapshot.contents,
                         persistedText: snapshot.contents
-                    )
-                    if workspaceDocumentsInitialized, supportsRevisionHistory(snapshot.url) {
-                        do {
-                            try recordWorkspaceRevision(
-                                kind: .agentEdit,
-                                documentPath: path,
-                                before: "",
-                                after: snapshot.contents
-                            )
-                        } catch {
-                            document.errorMessage =
-                                "Revision history could not be updated: \(error.localizedDescription)"
-                        }
-                    }
-                    workspaceDocuments.append(document)
+                    ))
                 }
             }
 
-            for index in workspaceDocuments.indices where
-                !snapshotIDs.contains(workspaceDocuments[index].id) {
-                workspaceDocuments[index].wasRemovedExternally = true
-                workspaceDocuments[index].externalText = nil
-                workspaceDocuments[index].errorMessage = nil
+            for index in documents.indices where !snapshotIDs.contains(documents[index].id) {
+                documents[index].wasRemovedExternally = true
+                documents[index].externalText = nil
+                documents[index].errorMessage = nil
             }
-            workspaceDocuments.sort {
+            documents.sort {
                 $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending
             }
-            workspaceDocumentsInitialized = true
+            if documents != workspaceDocuments { workspaceDocuments = documents }
+            if !workspaceDocumentsInitialized { workspaceDocumentsInitialized = true }
+            for (path, revisions) in pending {
+                recordWorkspaceRevisions(
+                    revisions,
+                    documentPath: path,
+                    failureNote: "Revision history could not be updated"
+                )
+            }
         } catch {
             guard let selectedWorkspaceDocumentID,
                   let index = workspaceDocuments.firstIndex(where: {
@@ -2244,7 +2304,7 @@ struct DevotionalEditorView: View {
                 persistedFields[0] = saved.title
                 savedFields = persistedFields
                 saveState = .saved
-                recordPrimaryUserRevisionIfNeeded(
+                await recordPrimaryUserRevision(
                     before: previouslySavedContent,
                     after: submitted[9]
                 )
@@ -2254,28 +2314,23 @@ struct DevotionalEditorView: View {
         }
     }
 
-    private func recordPrimaryUserRevisionIfNeeded(before: String, after: String) {
+    /// Writes the saved body to the workspace's history, after the devotional
+    /// itself is durable.
+    ///
+    /// `continuingLatest`, because `before` is this editor's own last-saved copy:
+    /// an agent change may have landed since, and the store then records this
+    /// edit as continuing from the agent's result rather than discarding it.
+    private func recordPrimaryUserRevision(before: String, after: String) async {
         guard before != after else { return }
+        let workspace = workspaceURL
         do {
-            let latest = try DevotionalAgentRevisionStore.revisions(
-                in: workspaceURL,
-                documentPath: DevotionalAgentRevisionStore.primaryDocumentPath
-            ).first
-            // Agent imports and explicit restores already wrote their transition.
-            guard latest?.afterMarkdown != after else { return }
-            let revisionBefore: String
-            if let latest, latest.beforeMarkdown == before, latest.afterMarkdown != before {
-                // The user continued typing after an agent change arrived. Keep
-                // the agent result as the immediate base for the saved edit.
-                revisionBefore = latest.afterMarkdown
-            } else {
-                revisionBefore = before
-            }
-            try recordWorkspaceRevision(
+            try await DevotionalAgentRevisionHistory.shared.record(
                 kind: .userEdit,
                 documentPath: DevotionalAgentRevisionStore.primaryDocumentPath,
-                before: revisionBefore,
-                after: after
+                before: before,
+                after: after,
+                continuingLatest: true,
+                in: workspace
             )
         } catch {
             // The devotional itself is already durable at this point. A later
@@ -2330,11 +2385,19 @@ struct DevotionalEditorView: View {
 
     @MainActor
     private func monitorLinkedPresentationDecks() async {
+        let rootURL = model.library.rootURL
         while !Task.isCancelled {
-            if let decks = try? LinkedPresentationDeckLookup.decks(
-                rootURL: model.library.rootURL,
-                devotionalID: identifier
-            ), decks != linkedPresentationDecks {
+            // Finding this writing's decks means decoding every deck in the
+            // library, every two seconds, for a list that only changes when
+            // someone builds a deck. Not on the thread taking keystrokes.
+            let devotionalID = identifier
+            let decks = await Task.detached(priority: .utility) {
+                try? LinkedPresentationDeckLookup.decks(
+                    rootURL: rootURL,
+                    devotionalID: devotionalID
+                )
+            }.value
+            if let decks, decks != linkedPresentationDecks {
                 linkedPresentationDecks = decks
             }
             try? await Task.sleep(for: .seconds(2))

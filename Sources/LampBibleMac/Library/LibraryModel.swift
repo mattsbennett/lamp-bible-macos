@@ -820,7 +820,7 @@ final class LibraryModel: ObservableObject {
     func savePersonalDevotional(_ devotional: LampDevotional) async throws -> LampDevotional {
         let saved = try await library.savePersonalDevotional(devotional)
         devotionals = try await library.devotionals()
-        refreshManuscriptNotes(for: saved)
+        await refreshManuscriptNotes(for: saved)
         return saved
     }
 
@@ -830,18 +830,26 @@ final class LibraryModel: ObservableObject {
     /// from the workspace, a sync merge — which is the point: a speaker's notes
     /// keep up with the prose without anyone running anything. A deck whose
     /// notes are authored is untouched.
-    private func refreshManuscriptNotes(for devotional: LampDevotional) {
-        let store = LampPresentationDeckStore(rootURL: library.rootURL)
-        guard let decks = try? store.decks() else { return }
+    ///
+    /// Off this actor, because every autosave arrives here while the writer is
+    /// still typing: it decodes every deck in the library and rewrites the ones
+    /// that follow this writing, and a deck with its notes in it is not small.
+    private func refreshManuscriptNotes(for devotional: LampDevotional) async {
+        let rootURL = library.rootURL
         let manuscript = devotional.displayMarkdown
-        for deck in decks where deck.followsManuscript && deck.source?.id == devotional.id {
-            let resolved = LampPresentationManuscriptNotes.applying(
-                LampPresentationManuscriptNotes.resolve(deck: deck, manuscript: manuscript),
-                to: deck
-            )
-            guard resolved != deck else { continue }
-            try? store.save(resolved)
-        }
+        let devotionalID = devotional.id
+        await Task.detached(priority: .utility) {
+            let store = LampPresentationDeckStore(rootURL: rootURL)
+            guard let decks = try? store.decks() else { return }
+            for deck in decks where deck.followsManuscript && deck.source?.id == devotionalID {
+                let resolved = LampPresentationManuscriptNotes.applying(
+                    LampPresentationManuscriptNotes.resolve(deck: deck, manuscript: manuscript),
+                    to: deck
+                )
+                guard resolved != deck else { continue }
+                try? store.save(resolved)
+            }
+        }.value
     }
 
     func deletePersonalDevotional(id: String) async throws {

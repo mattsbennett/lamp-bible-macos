@@ -254,6 +254,64 @@ public enum DevotionalAgentRevisionCompactor {
     }
 }
 
+/// The revision store, off the main actor and one call at a time.
+///
+/// Every read and every record walks the whole revision folder, and a workspace
+/// holding a few days of writing holds megabytes of JSON — each record keeps a
+/// full copy of the document on either side of the change. That is not work for
+/// the thread delivering keystrokes, but autosave ran it there, so pausing to
+/// think cost the writer a stall when they started typing again.
+///
+/// An actor rather than a task for each call. The work is serial whichever way it
+/// is scheduled — the store takes a lock — and queueing here is cheaper than
+/// parking cooperative threads on that lock. It also keeps records in the order
+/// the editor made them, which is what lets consecutive edits merge into one run.
+public actor DevotionalAgentRevisionHistory {
+    public static let shared = DevotionalAgentRevisionHistory()
+
+    private init() {}
+
+    public func revisions(
+        in workspace: URL,
+        documentPath: String = DevotionalAgentRevisionStore.primaryDocumentPath
+    ) throws -> [DevotionalAgentRevision] {
+        try DevotionalAgentRevisionStore.revisions(in: workspace, documentPath: documentPath)
+    }
+
+    @discardableResult
+    public func record(
+        kind: DevotionalAgentRevisionKind,
+        providerName: String? = nil,
+        documentPath: String = DevotionalAgentRevisionStore.primaryDocumentPath,
+        before beforeMarkdown: String,
+        after afterMarkdown: String,
+        continuingLatest: Bool = false,
+        in workspace: URL
+    ) throws -> DevotionalAgentRevision? {
+        try DevotionalAgentRevisionStore.record(
+            kind: kind,
+            providerName: providerName,
+            documentPath: documentPath,
+            before: beforeMarkdown,
+            after: afterMarkdown,
+            continuingLatest: continuingLatest,
+            in: workspace
+        )
+    }
+
+    public func compact(in workspace: URL) throws {
+        try DevotionalAgentRevisionStore.compact(in: workspace)
+    }
+
+    public func lastSyncedDraft(in workspace: URL) throws -> String? {
+        try DevotionalAgentRevisionStore.lastSyncedDraft(in: workspace)
+    }
+
+    public func markSynced(_ markdown: String, in workspace: URL) throws {
+        try DevotionalAgentRevisionStore.markSynced(markdown, in: workspace)
+    }
+}
+
 public enum DevotionalAgentRevisionStore {
     public static let primaryDocumentPath = "draft.md"
 
@@ -281,13 +339,53 @@ public enum DevotionalAgentRevisionStore {
         in workspace: URL,
         documentPath: String = primaryDocumentPath
     ) throws -> [DevotionalAgentRevision] {
+        currentRevisions(
+            try storedRevisions(in: workspace).map(\.revision),
+            documentPath: documentPath
+        )
+    }
+
+    /// What `revisions` answers, from history that has already been read.
+    private static func currentRevisions(
+        _ revisions: [DevotionalAgentRevision],
+        documentPath: String
+    ) -> [DevotionalAgentRevision] {
         DevotionalAgentRevisionCompactor
-            .removingReplaced(try storedRevisions(in: workspace).map(\.revision))
+            .removingReplaced(revisions)
             .filter { $0.resolvedDocumentPath == documentPath && !$0.isNoOp }
             .sorted {
                 ($0.effectiveDate, $0.createdAt, $0.id.uuidString)
                     > ($1.effectiveDate, $1.createdAt, $1.id.uuidString)
             }
+    }
+
+    /// How the revision folder stands. Opaque on purpose: it is only ever
+    /// compared with another reading of the same folder.
+    public struct HistoryToken: Equatable, Sendable {
+        let count: Int
+        let newest: Date?
+    }
+
+    /// Stands in for the whole history when deciding whether to read it again.
+    ///
+    /// Reading the history decodes every file in the folder; this only lists it,
+    /// which is some two orders of magnitude cheaper and safe to do on the main
+    /// thread. A revision file is written once and never edited, so a new count
+    /// or a newer file is the only way the history can have moved — including
+    /// when sync merges another Mac's folder in, or a compaction rewrites this
+    /// one.
+    public static func historyToken(in workspace: URL) -> HistoryToken {
+        let directory = revisionsDirectory(in: workspace)
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else { return HistoryToken(count: 0, newest: nil) }
+        let files = urls.filter { $0.pathExtension == "json" }
+        let newest = files.compactMap {
+            try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        }.max()
+        return HistoryToken(count: files.count, newest: newest)
     }
 
     @discardableResult
@@ -297,6 +395,10 @@ public enum DevotionalAgentRevisionStore {
         documentPath: String = primaryDocumentPath,
         before beforeMarkdown: String,
         after afterMarkdown: String,
+        /// Set when `before` is the caller's own last-saved copy rather than the
+        /// state the history ends at — an autosave, where an agent edit may have
+        /// landed in between. See the rebase below.
+        continuingLatest: Bool = false,
         in workspace: URL,
         createdAt: Date = Date()
     ) throws -> DevotionalAgentRevision? {
@@ -304,28 +406,53 @@ public enum DevotionalAgentRevisionStore {
         mutationLock.lock()
         defer { mutationLock.unlock() }
 
+        // One read of the folder answers everything below it. The duplicate check
+        // read it, compaction read it again, and an autosave read it once more
+        // before calling in — megabytes of JSON three times over, for one save.
+        let stored = try storedRevisions(in: workspace)
+        let latest = currentRevisions(stored.map(\.revision), documentPath: documentPath).first
+
         // File notifications and polling can report the same atomic replacement
         // more than once. A change that lands on the state the latest revision
         // already ended at adds nothing — and once runs are merged, the latest
         // revision's `before` is the start of its run rather than this change's.
-        if let latest = try revisions(in: workspace, documentPath: documentPath).first,
-           latest.kind == kind,
-           latest.afterMarkdown == afterMarkdown {
+        // A caller continuing from its own copy discounts the kind as well: an
+        // agent import or an explicit restore already wrote this transition under
+        // its own.
+        if let latest, latest.afterMarkdown == afterMarkdown,
+           continuingLatest || latest.kind == kind {
             return nil
         }
+
+        // The writer kept typing from a copy an agent change has since replaced.
+        // Recording from where the history now ends keeps the agent's result as
+        // the step before this one, so it stays something to restore to.
+        let base: String
+        if continuingLatest, let latest,
+           latest.beforeMarkdown == beforeMarkdown,
+           latest.afterMarkdown != beforeMarkdown {
+            base = latest.afterMarkdown
+        } else {
+            base = beforeMarkdown
+        }
+        guard base != afterMarkdown else { return nil }
 
         let revision = DevotionalAgentRevision(
             createdAt: createdAt,
             kind: kind,
             providerName: providerName,
             documentPath: documentPath,
-            beforeMarkdown: beforeMarkdown,
+            beforeMarkdown: base,
             afterMarkdown: afterMarkdown
         )
-        try write(revision, in: workspace)
+        let url = try write(revision, in: workspace)
         // Measured from the change itself, which is the newest thing in the
         // history; the run it extends is judged by the most recent tier.
-        try compact(in: workspace, now: createdAt)
+        try compact(
+            stored + [StoredRevision(url: url, revision: revision)],
+            in: workspace,
+            now: createdAt
+        )
         return revision
     }
 
@@ -341,7 +468,17 @@ public enum DevotionalAgentRevisionStore {
     ) throws {
         mutationLock.lock()
         defer { mutationLock.unlock() }
-        let stored = try storedRevisions(in: workspace)
+        try compact(try storedRevisions(in: workspace), in: workspace, now: now, policy: policy)
+    }
+
+    /// `compact(in:now:policy:)` over history the caller has already read, under
+    /// the mutation lock it already holds.
+    private static func compact(
+        _ stored: [StoredRevision],
+        in workspace: URL,
+        now: Date,
+        policy: DevotionalAgentRevisionCompactor.Policy = .standard
+    ) throws {
         guard stored.count > 1 else { return }
 
         let compacted = DevotionalAgentRevisionCompactor.compact(
@@ -404,12 +541,14 @@ public enum DevotionalAgentRevisionStore {
         }
     }
 
-    private static func write(_ revision: DevotionalAgentRevision, in workspace: URL) throws {
+    @discardableResult
+    private static func write(_ revision: DevotionalAgentRevision, in workspace: URL) throws -> URL {
         let directory = revisionsDirectory(in: workspace)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let timestamp = Int64(revision.createdAt.timeIntervalSince1970 * 1_000)
         let url = directory.appendingPathComponent("\(timestamp)-\(revision.id.uuidString).json")
         try encoder.encode(revision).write(to: url, options: .atomic)
+        return url
     }
 
     private static func metadataDirectory(in workspace: URL) -> URL {
