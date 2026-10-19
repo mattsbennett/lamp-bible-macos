@@ -16,7 +16,7 @@ let package = Package(
         // 1.12+ compiles optional Metal shaders in Xcode and therefore requires
         // Apple's separately installed Metal toolchain. 1.11.2 has the same PTY
         // API used here without imposing that unrelated build prerequisite.
-        .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", exact: "1.11.2"),
+        .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", exact: "1.20.0"),
         // Apache-2.0 SwiftUI chat components with first-class macOS support.
         .package(url: "https://github.com/EnesKaraosman/SwiftyChat.git", exact: "4.1.1"),
         // Direct-download auto-updates; the app isn't sandboxed, so it can't ship through the Mac App Store.

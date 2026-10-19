@@ -70,9 +70,13 @@ struct SlideStudioView: View {
             if isLoading {
                 ProgressView("Opening Slide Studio…")
             } else if let deckBinding = bindingToDeck {
-                HSplitView {
+                // A sidebar of its own, as the reader has: window content runs
+                // up under the toolbar, so a plain split view drew its divider
+                // through the title bar and the deck's title across it.
+                NavigationSplitView {
                     slideNavigator(deck: deckBinding)
-                        .frame(minWidth: 210, idealWidth: 240, maxWidth: 300)
+                        .navigationSplitViewColumnWidth(min: 210, ideal: 240, max: 300)
+                } detail: {
                     editor(deck: deckBinding)
                         .frame(minWidth: 820)
                 }

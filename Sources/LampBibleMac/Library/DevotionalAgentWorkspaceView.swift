@@ -4,6 +4,7 @@ import CryptoKit
 import LampBibleMacSupport
 #endif
 import LampCore
+import MetalKit
 import SwiftTerm
 import SwiftUI
 
@@ -310,6 +311,7 @@ struct AIProviderAuthenticationTerminal: View {
                 workingDirectory: URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true),
                 onExit: { exitCode = $0 }
             )
+            .inset()
         }
         .frame(minWidth: 760, minHeight: 500)
     }
@@ -1251,6 +1253,7 @@ struct DevotionalAgentWorkspaceView: View {
                     },
                     onDismantle: { [launch = terminalID] in terminalWasTornDown(launch) }
                 )
+                .inset()
                 .id(terminalID)
             }
         } else {
@@ -2104,6 +2107,43 @@ private struct DevotionalAgentSkillEditor: View {
     }
 }
 
+/// A terminal drawn by SwiftTerm's GPU renderer.
+///
+/// Every provider's interface is full screen and redraws the whole screen as
+/// it updates — Claude Code's on every mouse movement — which the CoreGraphics
+/// path repaints a pass at a time. If Metal can't start, the CoreGraphics path
+/// stays; if a frame stalls later, SwiftTerm recovers or falls back to it.
+final class LampTerminalView: LocalProcessTerminalView {
+    private var askedForMetal = false
+
+    /// SwiftTerm draws through a Metal view laid over the whole terminal, and
+    /// that view takes the click. It won't become first responder, so the
+    /// terminal never did either and every keystroke beeped; it relies on
+    /// AppKit focusing whatever was clicked. The click is the terminal's.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let hit = super.hitTest(point)
+        return hit is MTKView ? self : hit
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // The renderer is bound to a window, so it is asked for once there is one.
+        guard window != nil, !askedForMetal else { return }
+        askedForMetal = true
+        try? setUseMetal(true)
+    }
+}
+
+extension EmbeddedAITerminalView {
+    /// The terminal with a margin in its own colour, so its text doesn't run to
+    /// the edges of the pane. The terminal itself has no padding to set.
+    func inset() -> some View {
+        padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(SwiftUI.Color(nsColor: .textBackgroundColor))
+    }
+}
+
 struct EmbeddedAITerminalView: NSViewRepresentable {
     let command: String
     let workingDirectory: URL
@@ -2117,7 +2157,7 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> LocalProcessTerminalView {
-        let terminal = LocalProcessTerminalView(frame: .zero)
+        let terminal = LampTerminalView(frame: .zero)
         terminal.processDelegate = context.coordinator
         terminal.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
         terminal.nativeBackgroundColor = .textBackgroundColor

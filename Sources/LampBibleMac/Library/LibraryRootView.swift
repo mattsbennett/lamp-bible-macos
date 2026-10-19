@@ -892,7 +892,10 @@ private struct ReaderTabBar: View {
         .padding(.horizontal, 10)
         .frame(minWidth: 104, maxWidth: 190)
         .frame(height: Self.height)
-        .background(cellBackground(isSelected: isSelected, isHovered: isHovered))
+        // A shape style fills the safe area too unless told not to, and the
+        // bar sits right under the toolbar: the open tab's fill would rise
+        // up behind it.
+        .background(cellBackground(isSelected: isSelected, isHovered: isHovered), ignoresSafeAreaEdges: [])
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(Color.accentColor)
@@ -921,7 +924,10 @@ private struct ReaderTabBar: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .frame(width: 30, height: Self.height)
-                .background(isHoveringNewTab ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear))
+                .background(
+                    isHoveringNewTab ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear),
+                    ignoresSafeAreaEdges: []
+                )
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
