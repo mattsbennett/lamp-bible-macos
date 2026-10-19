@@ -125,12 +125,20 @@ final class LibrarySyncController: ObservableObject {
     /// remedy, so the second attempt is ours to make rather than theirs.
     ///
     /// Once only. If something is publishing continuously, the honest
-    /// outcome is to say so rather than to keep a button spinning.
+    /// outcome is to say so rather than to keep a button spinning. The
+    /// decision is `LampSyncPassRetry`, shared and checked against the model.
     func sync(library: LampLibrary) async -> Bool {
-        if await runSyncPass(library: library) { return true }
-        guard archiveRaceLost else { return false }
-        statusMessage = "Another device published while syncing — starting again…"
-        return await runSyncPass(library: library)
+        var passesRun = 0
+        while true {
+            let succeeded = await runSyncPass(library: library)
+            passesRun += 1
+            guard LampSyncPassRetry.shouldRunAgain(
+                passesRun: passesRun,
+                lastPassSucceeded: succeeded,
+                lostRace: archiveRaceLost
+            ) else { return succeeded }
+            statusMessage = "Another device published while syncing — starting again…"
+        }
     }
 
     /// Set when the archive write lost to another device's publish, which is
@@ -449,8 +457,8 @@ final class LibrarySyncController: ObservableObject {
                             // A revision that moved means another device
                             // published, rather than anything being wrong
                             // here. Worth starting again from what it wrote.
-                            archiveRaceLost = !LampSyncConditionalWrite.namesSameRevision(
-                                archiveSnapshot?.revision, now
+                            archiveRaceLost = LampSyncPassRetry.lostRace(
+                                read: archiveSnapshot?.revision, serverNow: now
                             )
                             throw error
                         }
@@ -848,9 +856,11 @@ final class LibrarySyncController: ObservableObject {
     /// and the error alone cannot tell them apart — which is worth knowing
     /// before telling the user their notes are not on the server.
     ///
-    /// `LampSyncConditionalWrite.landing` answers it from the revision
-    /// alone in every case but one, which it reports as undecidable rather
-    /// than guessing; that one is settled here by comparing the bytes.
+    /// `LampSyncConditionalWrite.landing` answers from the revision only
+    /// when the file is still where the condition left it — not written.
+    /// A file that moved could have been moved by this write or by the
+    /// device whose write refused it, so those are undecidable, and settled
+    /// here by comparing the bytes.
     ///
     /// Returns the paths genuinely left unpublished.
     @discardableResult
@@ -869,9 +879,9 @@ final class LibrarySyncController: ObservableObject {
                 condition: file.condition, serverRevision: now
             )
             if landing == .undecidable {
-                // Only one case reaches here, and only on a failure, so the
-                // one read it costs is worth not guessing about a file the
-                // user is about to be told is missing.
+                // Only a failure reaches here, so the one read it costs is
+                // worth not guessing about a file the user is about to be
+                // told is missing — or told is published when it is not.
                 let remote = try? await client.read(path: path)
                 landing = remote?.data == file.data ? .wrote : .didNotWrite
             }
