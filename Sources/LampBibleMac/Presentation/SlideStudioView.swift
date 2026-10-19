@@ -193,14 +193,22 @@ struct SlideStudioView: View {
                         } label: {
                             VStack(alignment: .leading, spacing: 6) {
                                 ZStack(alignment: .topTrailing) {
-                                    LampPresentationSlideCanvas(
+                                    // The thumbnail is kept clear of the
+                                    // selection, so moving between slides
+                                    // redraws two rings rather than every
+                                    // slide in the deck. Drawing a slide is
+                                    // not cheap — a picture behind one has
+                                    // its page laid out three times, to find
+                                    // the words, read the picture under them
+                                    // and set them again — and the strip was
+                                    // paying that for every slide on every
+                                    // keystroke.
+                                    SlideThumbnail(
                                         slide: slide,
-                                        deck: deckBinding.wrappedValue,
-                                        store: store,
-                                        compact: true
+                                        style: .init(deck: deckBinding.wrappedValue),
+                                        store: store
                                     )
-                                    .aspectRatio(deckBinding.wrappedValue.aspectRatio.ratio, contentMode: .fit)
-                                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                                    .equatable()
                                     .overlay {
                                         RoundedRectangle(cornerRadius: 5)
                                             .stroke(
