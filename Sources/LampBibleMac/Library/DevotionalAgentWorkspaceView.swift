@@ -1323,7 +1323,14 @@ struct DevotionalAgentWorkspaceView: View {
                 helperExecutableURL: helperExecutableURL,
                 libraryRootURL: libraryRootURL,
                 bundledModulesArchiveURL: bundledModulesArchiveURL,
-                policyURL: policyURL
+                policyURL: policyURL,
+                // So the agent can read what changed in the writing rather than
+                // keeping copies of `draft.md` to compare for itself. The path
+                // is derived the same way `prepare` derives it, below.
+                workspaceURL: DevotionalAgentWorkspaceStore.workspaceURL(
+                    libraryRootURL: libraryRootURL,
+                    devotionalID: devotionalID
+                )
             )
             let workspace = try DevotionalAgentWorkspaceStore.prepare(
                 libraryRootURL: libraryRootURL,
@@ -1609,13 +1616,7 @@ struct DevotionalAgentWorkspaceView: View {
             manuscript: manuscript(in: workspace)
         )
         deck = LampPresentationManuscriptNotes.applying(resolution, to: deck)
-        let anchored = deck.slides.count { ($0.notesAnchor ?? "").isEmpty == false }
-        return .init(
-            source: LampPresentationSpeakerNotesSource.manuscript.rawValue,
-            resolved: resolution.notesBySlideID.count,
-            stale: anchored - resolution.notesBySlideID.count,
-            problems: resolution.problems.map(\.message)
-        )
+        return .init(resolution: resolution, deck: deck)
     }
 
     /// The prose a manuscript-following deck's notes are resolved against.

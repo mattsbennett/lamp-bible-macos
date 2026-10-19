@@ -52,16 +52,19 @@ struct XcodeProjectSourcesTests {
         )
     }
 
-    /// Xcode compiles the support sources straight into the app target, so
-    /// inside the app `LampBibleMacSupport` is not a module and importing it
-    /// unconditionally fails dependency scanning — while `swift build`, which
-    /// does build it as a module, passes. Hence the `#if canImport` guard every
-    /// app source uses, and hence this.
-    @Test func everyAppSourceGuardsItsSupportImport() throws {
-        let app = repositoryRoot
-            .appendingPathComponent("Sources/LampBibleMac", isDirectory: true)
+    /// Xcode compiles the support sources straight into the target that needs
+    /// them, so inside the app — and inside the MCP helper — `LampBibleMacSupport`
+    /// is not a module and importing it unconditionally fails dependency
+    /// scanning, while `swift build`, which does build it as a module, passes.
+    /// Hence the `#if canImport` guard on every such import, and hence this.
+    ///
+    /// Only the import needs guarding. The *types* are present either way, so
+    /// guarding a declaration that uses one removes it under Xcode alone — which
+    /// is a far more confusing failure than a missing import.
+    @Test(arguments: ["Sources/LampBibleMac", "Sources/LampMCPServer"])
+    func everySourceGuardsItsSupportImport(directory: String) throws {
         let walker = FileManager.default.enumerator(
-            at: app,
+            at: repositoryRoot.appendingPathComponent(directory, isDirectory: true),
             includingPropertiesForKeys: [.isRegularFileKey]
         )
         var unguarded: [String] = []
@@ -81,5 +84,31 @@ struct XcodeProjectSourcesTests {
             unguarded.isEmpty,
             "wrap the import in #if canImport(LampBibleMacSupport): \(unguarded.sorted())"
         )
+    }
+
+    /// Every file the helper references has to be in its own Sources phase as
+    /// well as the app's: Xcode builds no `LampBibleMacSupport` module, so a
+    /// file listed only for the app is missing from the tool.
+    @Test func theHelperTargetCompilesTheSupportSourcesItUses() throws {
+        let project = try String(
+            contentsOf: repositoryRoot
+                .appendingPathComponent("Lamp Bible.xcodeproj/project.pbxproj"),
+            encoding: .utf8
+        )
+        // The lamp-mcp target's Sources phase, from its declaration to its end.
+        let marker = "C10000000000000000000004 /* Sources */ = {"
+        let start = try #require(project.range(of: marker))
+        let phase = project[start.upperBound...]
+            .prefix(while: { $0 != ")" })
+        for name in [
+            "AgentRevisionSupport.swift",
+            "UnifiedDiffSupport.swift",
+            "WritingChangesSupport.swift",
+        ] {
+            #expect(
+                phase.contains(name),
+                "add \(name) to the lamp-mcp target's Sources phase"
+            )
+        }
     }
 }

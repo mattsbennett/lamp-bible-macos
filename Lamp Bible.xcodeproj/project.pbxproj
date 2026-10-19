@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A10000000000000000000051 /* WritingChangesSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000004E /* WritingChangesSupport.swift */; };
+		A10000000000000000000050 /* UnifiedDiffSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000004D /* UnifiedDiffSupport.swift */; };
+		A1000000000000000000004F /* AgentRevisionSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000025 /* AgentRevisionSupport.swift */; };
 		A10000000000000000000001 /* LampBibleCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000001 /* LampBibleCommands.swift */; };
 		A10000000000000000000002 /* LampBibleMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000002 /* LampBibleMacApp.swift */; };
 		A10000000000000000000003 /* LibraryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000003 /* LibraryModel.swift */; };
@@ -31,6 +34,7 @@
 		A10000000000000000000015 /* SyncSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000014 /* SyncSupport.swift */; };
 		A10000000000000000000016 /* LibrarySyncController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000015 /* LibrarySyncController.swift */; };
 		A10000000000000000000017 /* DevotionalContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000016 /* DevotionalContentView.swift */; };
+		A10000000000000000000052 /* ReadingTimeMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000052 /* ReadingTimeMenu.swift */; };
 		A10000000000000000000018 /* LampMenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000017 /* LampMenuBarView.swift */; };
 		A10000000000000000000019 /* DevotionalAudioRecorderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000018 /* DevotionalAudioRecorderView.swift */; };
 		A1000000000000000000001A /* ReaderScrollLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000019 /* ReaderScrollLink.swift */; };
@@ -81,6 +85,9 @@
 		A100000000000000000000F6 /* CodeHighlightSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000F6 /* CodeHighlightSupport.swift */; };
 		A100000000000000000000F5 /* AgentMarkdownMessageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000F5 /* AgentMarkdownMessageView.swift */; };
 		A100000000000000000000F2 /* PresentationImportStatusSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000F2 /* PresentationImportStatusSupport.swift */; };
+		A1000000000000000000004E /* WritingChangesSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000004E /* WritingChangesSupport.swift */; };
+		A1000000000000000000004D /* UnifiedDiffSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000004D /* UnifiedDiffSupport.swift */; };
+		A1000000000000000000004C /* ManuscriptNotesRefreshSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000004C /* ManuscriptNotesRefreshSupport.swift */; };
 		A1000000000000000000003D /* SwiftyChat in Frameworks */ = {isa = PBXBuildFile; productRef = G1000000000000000000000A /* SwiftyChat */; };
 		A1000000000000000000003E /* WorkspaceTextFileSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000039 /* WorkspaceTextFileSupport.swift */; };
 		A1000000000000000000003F /* WorkspaceSkillSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000003A /* WorkspaceSkillSupport.swift */; };
@@ -116,6 +123,7 @@
 		B10000000000000000000014 /* SyncSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/SyncSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000015 /* LibrarySyncController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/App/LibrarySyncController.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000016 /* DevotionalContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/DevotionalContentView.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000052 /* ReadingTimeMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/ReadingTimeMenu.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000017 /* LampMenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/App/LampMenuBarView.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000018 /* DevotionalAudioRecorderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/DevotionalAudioRecorderView.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000019 /* ReaderScrollLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/ReaderScrollLink.swift; sourceTree = SOURCE_ROOT; };
@@ -163,6 +171,9 @@
 		B100000000000000000000F6 /* CodeHighlightSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/CodeHighlightSupport.swift; sourceTree = SOURCE_ROOT; };
 		B100000000000000000000F5 /* AgentMarkdownMessageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/AgentMarkdownMessageView.swift; sourceTree = SOURCE_ROOT; };
 		B100000000000000000000F2 /* PresentationImportStatusSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/PresentationImportStatusSupport.swift; sourceTree = SOURCE_ROOT; };
+		B1000000000000000000004E /* WritingChangesSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/WritingChangesSupport.swift; sourceTree = SOURCE_ROOT; };
+		B1000000000000000000004D /* UnifiedDiffSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/UnifiedDiffSupport.swift; sourceTree = SOURCE_ROOT; };
+		B1000000000000000000004C /* ManuscriptNotesRefreshSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/ManuscriptNotesRefreshSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000039 /* WorkspaceTextFileSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/WorkspaceTextFileSupport.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000003A /* WorkspaceSkillSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/WorkspaceSkillSupport.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000003B /* BookReadingSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/BookReadingSupport.swift; sourceTree = SOURCE_ROOT; };
@@ -258,6 +269,7 @@
 				B10000000000000000000036 /* WrappingRow.swift */,
 				B10000000000000000000010 /* DevotionalEditorView.swift */,
 				B10000000000000000000016 /* DevotionalContentView.swift */,
+				B10000000000000000000052 /* ReadingTimeMenu.swift */,
 				B10000000000000000000018 /* DevotionalAudioRecorderView.swift */,
 				B10000000000000000000011 /* ReadAloudController.swift */,
 				B10000000000000000000012 /* VerseHighlightEditorView.swift */,
@@ -287,6 +299,9 @@
 				B100000000000000000000F6 /* CodeHighlightSupport.swift */,
 				B100000000000000000000F5 /* AgentMarkdownMessageView.swift */,
 				B100000000000000000000F2 /* PresentationImportStatusSupport.swift */,
+				B1000000000000000000004E /* WritingChangesSupport.swift */,
+				B1000000000000000000004D /* UnifiedDiffSupport.swift */,
+				B1000000000000000000004C /* ManuscriptNotesRefreshSupport.swift */,
 				B1000000000000000000003D /* ReaderChatSidebarView.swift */,
 				B1000000000000000000003C /* ReaderChatSupport.swift */,
 				B10000000000000000000039 /* WorkspaceTextFileSupport.swift */,
@@ -499,6 +514,9 @@
 				A100000000000000000000F6 /* CodeHighlightSupport.swift in Sources */,
 				A100000000000000000000F5 /* AgentMarkdownMessageView.swift in Sources */,
 				A100000000000000000000F2 /* PresentationImportStatusSupport.swift in Sources */,
+				A1000000000000000000004E /* WritingChangesSupport.swift in Sources */,
+				A1000000000000000000004D /* UnifiedDiffSupport.swift in Sources */,
+				A1000000000000000000004C /* ManuscriptNotesRefreshSupport.swift in Sources */,
 				A10000000000000000000042 /* ReaderChatSidebarView.swift in Sources */,
 				A10000000000000000000041 /* ReaderChatSupport.swift in Sources */,
 				A1000000000000000000003E /* WorkspaceTextFileSupport.swift in Sources */,
@@ -514,6 +532,7 @@
 				A10000000000000000000029 /* AgentModuleAccess.swift in Sources */,
 				A10000000000000000000011 /* DevotionalEditorView.swift in Sources */,
 				A10000000000000000000017 /* DevotionalContentView.swift in Sources */,
+				A10000000000000000000052 /* ReadingTimeMenu.swift in Sources */,
 				A10000000000000000000019 /* DevotionalAudioRecorderView.swift in Sources */,
 				A10000000000000000000012 /* ReadAloudController.swift in Sources */,
 				A10000000000000000000013 /* VerseHighlightEditorView.swift in Sources */,
@@ -524,6 +543,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A10000000000000000000051 /* WritingChangesSupport.swift in Sources */,
+				A10000000000000000000050 /* UnifiedDiffSupport.swift in Sources */,
+				A1000000000000000000004F /* AgentRevisionSupport.swift in Sources */,
 				A1000000000000000000002A /* main.swift in Sources */,
 				A100000000000000000000F1 /* DeckPreview.swift in Sources */,
 				A100000000000000000000F4 /* DeckBuild.swift in Sources */,

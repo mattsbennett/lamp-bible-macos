@@ -104,6 +104,22 @@ struct DeckValidatorAgreementTests {
                 .init(kind: .body, text: "Third"),
             ]),
         ]),
+        // Two credited passages under each heading, which both validators
+        // now draw in full, and a trailing passage with no citation.
+        LampPresentationDeck(title: "Paired", slides: [
+            .init(layout: .twoColumn, blocks: [
+                .init(kind: .title, text: "Two attitudes"),
+                .init(kind: .subtitle, text: "Resignation"),
+                .init(kind: .quotation, text: "Nothing to be done."),
+                .init(kind: .citation, text: "Beckett"),
+                .init(kind: .scripture, text: "We will not walk in it."),
+                .init(kind: .citation, text: "Jeremiah 6:16"),
+                .init(kind: .subtitle, text: "Expectancy"),
+                .init(kind: .quotation, text: "Yet I will look again."),
+                .init(kind: .citation, text: "Jonah 2:4"),
+                .init(kind: .body, text: "And a thought of my own."),
+            ]),
+        ]),
         // Pictures behind slides: one on a title slide credited by its
         // caption, one under a column slide whose caption has nothing to
         // credit once a second caption arrives, and a second background

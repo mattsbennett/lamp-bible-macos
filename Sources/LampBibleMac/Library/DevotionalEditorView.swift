@@ -1076,8 +1076,7 @@ struct DevotionalEditorView: View {
                 .monospacedDigit()
             Text("·")
                 .foregroundStyle(.tertiary)
-            Text(statistics.readingTimeDescription)
-                .monospacedDigit()
+            ReadingTimeMenu(statistics: statistics)
         }
         .font(.caption)
         .foregroundStyle(.secondary)

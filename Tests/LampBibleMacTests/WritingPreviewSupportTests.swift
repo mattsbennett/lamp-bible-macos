@@ -134,6 +134,44 @@ struct WritingStatisticsTests {
         #expect(statistics.readingTimeDescription == "10 min read")
     }
 
+    /// A talk is written to be spoken: the same words take half as long again
+    /// out loud, so one figure cannot answer both questions.
+    @Test func readingAloudTakesLongerThanReadingSilently() {
+        let statistics = WritingStatistics(wordCount: 2_000, characterCount: 10_000)
+
+        #expect(statistics.readingMinutes(mode: .silent) == 10)
+        #expect(statistics.readingTimeDescription(mode: .silent) == "10 min read")
+        #expect(statistics.readingMinutes(mode: .aloud) == 15)
+        #expect(statistics.readingTimeDescription(mode: .aloud) == "15 min aloud")
+    }
+
+    @Test func followsTheRateSetForThatPace() {
+        let statistics = WritingStatistics(wordCount: 1_200, characterCount: 6_000)
+
+        #expect(statistics.readingTimeDescription(mode: .aloud, wordsPerMinute: 120) == "10 min aloud")
+        #expect(statistics.readingTimeDescription(mode: .aloud, wordsPerMinute: 60) == "20 min aloud")
+        // A rate from an older version or another device must not divide by
+        // zero or turn the estimate negative.
+        #expect(statistics.readingTimeDescription(mode: .silent, wordsPerMinute: 0) == "1200 min read")
+    }
+
+    @Test func eachPaceKeepsItsOwnRateAndFallsBackToSilent() {
+        #expect(LampReadingMode.silent.wordsPerMinuteKey == "writing.wordsPerMinute.silent")
+        #expect(LampReadingMode.aloud.wordsPerMinuteKey == "writing.wordsPerMinute.aloud")
+        #expect(LampReadingMode.silent.wordsPerMinuteKey != LampReadingMode.aloud.wordsPerMinuteKey)
+
+        #expect(LampReadingMode(storedValue: "aloud") == .aloud)
+        #expect(LampReadingMode(storedValue: nil) == .silent)
+        #expect(LampReadingMode(storedValue: "shouted") == .silent)
+    }
+
+    @Test func anEmptyDraftReportsNothingAtEitherPace() {
+        let statistics = WritingStatistics(wordCount: 0, characterCount: 0)
+
+        #expect(statistics.readingTimeDescription(mode: .aloud) == "—")
+        #expect(statistics.readingMinutes(mode: .aloud) == 0)
+    }
+
     @Test func snippetsStripMarkdownSyntax() {
         let snippet = WritingStatistics.snippet(from: """
         ## The Weight of Small Obedience

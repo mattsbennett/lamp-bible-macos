@@ -27,7 +27,15 @@ enum LampDeckBuild {
         var coveredCharacters: Int
         var manuscriptCharacters: Int
         var assignedIdentifiers: Int
+        /// Problems with the deck as a whole. A problem belonging to one slide
+        /// is under that slide, and named in `slidesWithProblems`.
         var problems: [String]
+        /// The numbers of the slides whose own entry carries a problem.
+        ///
+        /// This used to be missing, so a report said `"resolved": false` over
+        /// an empty `problems` — which reads as "no problems". The broken
+        /// anchor was listed under that slide, seventy entries down.
+        var slidesWithProblems: [Int]
         var slides: [SlideReport]
         /// Whether every anchor was found. The command's exit status follows it.
         var resolved: Bool
@@ -56,6 +64,7 @@ enum LampDeckBuild {
                         + "Set \"speakerNotesSource\" to \"manuscript\" to have Lamp keep "
                         + "them in step with the writing.",
                 ],
+                slidesWithProblems: [],
                 slides: slideReports(deck, resolution: nil, stale: []),
                 resolved: true
             )
@@ -80,6 +89,7 @@ enum LampDeckBuild {
             if case .anchorNotFound = problem { return true }
             return false
         }
+        let slides = slideReports(deck, resolution: resolution, stale: stale)
         return Report(
             deckTitle: deck.title,
             speakerNotesSource: LampPresentationSpeakerNotesSource.manuscript.rawValue,
@@ -89,7 +99,10 @@ enum LampDeckBuild {
             manuscriptCharacters: resolution.manuscriptCharacters,
             assignedIdentifiers: assigned,
             problems: resolution.problems.filter { $0.slideID == nil }.map(\.message),
-            slides: slideReports(deck, resolution: resolution, stale: stale),
+            slidesWithProblems: slides
+                .filter { !$0.problems.isEmpty || !$0.staleQuotations.isEmpty }
+                .map(\.index),
+            slides: slides,
             resolved: !unresolved
         )
     }

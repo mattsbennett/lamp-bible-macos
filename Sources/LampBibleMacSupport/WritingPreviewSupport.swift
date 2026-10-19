@@ -66,6 +66,68 @@ public enum WritingPreviewPlacement: String, CaseIterable, Codable, Sendable {
 /// permanently visible at the edge of the window. Devotional and sermon writing is
 /// written to a length — "about fifteen minutes" — so the estimate is not a
 /// novelty, it is the constraint the author is writing against.
+/// How a reader will meet the writing: to themselves, or out loud.
+///
+/// Reading time was one figure at one pace, which answers "how long is this to
+/// read" and not "how long will this take me to deliver" — the question a
+/// talk's writer is actually asking.
+public enum LampReadingMode: String, CaseIterable, Identifiable, Sendable {
+    case silent
+    case aloud
+
+    public static let defaultsKey = "writing.readingMode"
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .silent: "Silent"
+        case .aloud: "Aloud"
+        }
+    }
+
+    /// What the choice means, for the menu that offers it.
+    public var explanation: String {
+        switch self {
+        case .silent: "How long this takes to read to yourself"
+        case .aloud: "How long this takes to deliver, read aloud"
+        }
+    }
+
+    public var systemImage: String {
+        switch self {
+        case .silent: "clock"
+        case .aloud: "microphone"
+        }
+    }
+
+    /// 200 words a minute silently, the middle of the range for adult silent
+    /// reading; 130 aloud, the pace of prepared speech read to a room, which is
+    /// slower than the 140–160 of ordinary conversation.
+    public var defaultWordsPerMinute: Int {
+        switch self {
+        case .silent: 200
+        case .aloud: 130
+        }
+    }
+
+    /// Where this pace's rate is kept, so each is set and read on its own.
+    public var wordsPerMinuteKey: String { "writing.wordsPerMinute.\(rawValue)" }
+
+    public func description(minutes: Int) -> String {
+        switch self {
+        case .silent: minutes == 1 ? "1 min read" : "\(minutes) min read"
+        case .aloud: minutes == 1 ? "1 min aloud" : "\(minutes) min aloud"
+        }
+    }
+
+    /// Reads a stored choice, falling back to silent for anything unexpected —
+    /// a value from an older version, or from another device.
+    public init(storedValue: String?) {
+        self = LampReadingMode(rawValue: storedValue ?? "") ?? .silent
+    }
+}
+
 public struct WritingStatistics: Equatable, Sendable {
     public let wordCount: Int
     public let characterCount: Int
@@ -90,18 +152,33 @@ public struct WritingStatistics: Equatable, Sendable {
 
     /// 200 words per minute, the middle of the range for adult silent reading and
     /// the figure Obsidian and Medium both settle on.
-    public static let wordsPerMinute = 200
+    public static let wordsPerMinute = LampReadingMode.silent.defaultWordsPerMinute
 
-    public var readingMinutes: Int {
+    public func readingMinutes(
+        mode: LampReadingMode = .silent,
+        wordsPerMinute: Int? = nil
+    ) -> Int {
         guard wordCount > 0 else { return 0 }
-        return max(1, Int((Double(wordCount) / Double(Self.wordsPerMinute)).rounded()))
+        let rate = max(wordsPerMinute ?? mode.defaultWordsPerMinute, 1)
+        return max(1, Int((Double(wordCount) / Double(rate)).rounded()))
     }
 
-    public var readingTimeDescription: String {
+    /// How long this will take, and at which of the two paces.
+    ///
+    /// A talk is written to be spoken, and a devotional to be read: the same
+    /// words take half as long again out loud, so one figure cannot answer
+    /// both questions.
+    public func readingTimeDescription(
+        mode: LampReadingMode = .silent,
+        wordsPerMinute: Int? = nil
+    ) -> String {
         guard wordCount > 0 else { return "—" }
-        let minutes = readingMinutes
-        return minutes == 1 ? "1 min read" : "\(minutes) min read"
+        return mode.description(minutes: readingMinutes(mode: mode, wordsPerMinute: wordsPerMinute))
     }
+
+    public var readingMinutes: Int { readingMinutes() }
+
+    public var readingTimeDescription: String { readingTimeDescription() }
 
     public var wordCountDescription: String {
         wordCount == 1 ? "1 word" : "\(wordCount.formatted()) words"

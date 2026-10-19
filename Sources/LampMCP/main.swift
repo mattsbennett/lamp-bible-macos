@@ -47,7 +47,8 @@ struct LampMCPCommand {
             }
             try await LampMCPServerFactory.runStdio(
                 library: library,
-                policyURL: options.policyURL
+                policyURL: options.policyURL,
+                workspaceURL: options.workspaceURL
             )
         } catch {
             FileHandle.standardError.write(Data("lamp-mcp: \(error.localizedDescription)\n".utf8))
@@ -79,6 +80,7 @@ struct LampMCPCommand {
             outputDirectory: options.outputURL
                 ?? deckURL.deletingLastPathComponent()
                     .appendingPathComponent("presentation-preview", isDirectory: true),
+            overviewURL: options.overviewURL,
             libraryRoot: options.libraryRootURL,
             manuscriptURL: options.manuscriptURL,
             slideNumbers: options.slideNumbers,
@@ -110,8 +112,10 @@ private struct Options {
     let buildDeckURL: URL?
     let manuscriptURL: URL?
     let outputURL: URL?
+    let overviewURL: URL?
     let slideNumbers: [Int]?
     let renderWidth: Double
+    let workspaceURL: URL?
 
     init(arguments: [String]) throws {
         var libraryRootURL: URL?
@@ -122,8 +126,10 @@ private struct Options {
         var buildDeckURL: URL?
         var manuscriptURL: URL?
         var outputURL: URL?
+        var overviewURL: URL?
         var slideNumbers: [Int]?
         var renderWidth = 1_600.0
+        var workspaceURL: URL?
         var index = 0
         while index < arguments.count {
             let argument = arguments[index]
@@ -158,6 +164,14 @@ private struct Options {
                 index += 1
                 guard arguments.indices.contains(index) else { throw OptionError.missingValue(argument) }
                 outputURL = URL(fileURLWithPath: arguments[index], isDirectory: true)
+            case "--overview":
+                index += 1
+                guard arguments.indices.contains(index) else { throw OptionError.missingValue(argument) }
+                overviewURL = URL(fileURLWithPath: arguments[index])
+            case "--workspace":
+                index += 1
+                guard arguments.indices.contains(index) else { throw OptionError.missingValue(argument) }
+                workspaceURL = URL(fileURLWithPath: arguments[index], isDirectory: true)
             case "--slides":
                 index += 1
                 guard arguments.indices.contains(index) else { throw OptionError.missingValue(argument) }
@@ -195,8 +209,10 @@ private struct Options {
         self.buildDeckURL = buildDeckURL
         self.manuscriptURL = manuscriptURL
         self.outputURL = outputURL
+        self.overviewURL = overviewURL
         self.slideNumbers = slideNumbers
         self.renderWidth = renderWidth
+        self.workspaceURL = workspaceURL
     }
 }
 
@@ -209,8 +225,8 @@ private enum OptionError: Error, LocalizedError {
 
     var errorDescription: String? {
         let usage = """
-        Usage: lamp-mcp --library-root PATH [--bundled-modules-archive PATH] [--policy PATH] [--health-check]
-               lamp-mcp --render-deck PATH [--output DIR] [--slides 1,3,5] [--width 1600] [--library-root PATH] [--manuscript PATH]
+        Usage: lamp-mcp --library-root PATH [--bundled-modules-archive PATH] [--policy PATH] [--workspace DIR] [--health-check]
+               lamp-mcp --render-deck PATH [--output DIR] [--overview FILE] [--slides 1,3,5] [--width 1600] [--library-root PATH] [--manuscript PATH]
                lamp-mcp --build-deck PATH --manuscript PATH
         """
         switch self {

@@ -48,6 +48,15 @@ enum LampDeckPreview {
         var width: Int
         var height: Int
         var outputDirectory: String
+        /// Where every slide was tiled into one picture, when `--overview`
+        /// asked for one.
+        var overviewFile: String?
+        /// The numbers of the slides whose own entry carries a problem.
+        ///
+        /// The top level used to say `"resolved": false` over an empty
+        /// `problems`, which reads as "no problems" — the broken anchor was
+        /// listed under that slide, forty entries down.
+        var slidesWithProblems: [Int]
         var slides: [SlideReport]
         var issues: [String]
     }
@@ -60,6 +69,7 @@ enum LampDeckPreview {
     static func render(
         deckURL: URL,
         outputDirectory: URL,
+        overviewURL: URL?,
         libraryRoot: URL?,
         manuscriptURL: URL?,
         slideNumbers: [Int]?,
@@ -120,6 +130,9 @@ enum LampDeckPreview {
 
         let wanted = slideNumbers.map(Set.init)
         var reports: [SlideReport] = []
+        /// Kept only when an overview was asked for: a long deck's slides are
+        /// several megabytes of bitmap together.
+        var rendered: [(number: Int, image: CGImage)] = []
         for (offset, slide) in deck.slides.enumerated() {
             let number = offset + 1
             if let wanted, !wanted.contains(number) { continue }
@@ -141,6 +154,7 @@ enum LampDeckPreview {
             if let png = representation.representation(using: .png, properties: [:]) {
                 try png.write(to: destination, options: [.atomic])
             }
+            if overviewURL != nil { rendered.append((number, image)) }
 
             // A picture behind the slide inks every pixel, so the words are
             // measured on the same slide drawn without it.
@@ -217,6 +231,10 @@ enum LampDeckPreview {
             ))
         }
 
+        let overview = try overviewURL.flatMap { url -> String? in
+            try writeOverview(of: rendered, to: url)
+        }
+
         return Report(
             deckTitle: deck.title,
             slideCount: deck.slides.count,
@@ -224,12 +242,100 @@ enum LampDeckPreview {
             width: Int(width),
             height: Int(height),
             outputDirectory: outputDirectory.path,
+            overviewFile: overview,
+            slidesWithProblems: reports.filter { !$0.notes.isEmpty }.map(\.index),
             slides: reports,
             issues: LampPresentationDeckValidator.validate(deck) { assetPath in
                 resolve(.init(kind: .image, assetPath: assetPath)) != nil
             }.map { "\($0.severity == .error ? "error" : "warning") \($0.path): \($0.message)" }
                 + deckProblems.map { "warning speakerNotes: \($0)" }
         )
+    }
+
+    /// Tiles every slide rendered into one picture, numbered.
+    ///
+    /// Reviewing a run of slides together means looking at them together, and
+    /// an agent was tiling the PNGs with a script of its own several times a
+    /// session to do it.
+    ///
+    /// Returns where it was written, or nil when there was nothing to tile.
+    private static func writeOverview(
+        of slides: [(number: Int, image: CGImage)],
+        to url: URL
+    ) throws -> String? {
+        guard let first = slides.first?.image else { return nil }
+
+        // Near-square, so a 78-slide deck is a grid rather than a strip.
+        let columns = max(Int(Double(slides.count).squareRoot().rounded(.up)), 1)
+        let rows = Int((Double(slides.count) / Double(columns)).rounded(.up))
+        // Each slide drawn small enough that the whole deck fits a screen, and
+        // large enough to tell one slide from another.
+        let cell = CGSize(width: 480, height: 480 * Double(first.height) / Double(first.width))
+        let label = 26.0
+        let gap = 10.0
+        let size = CGSize(
+            width: Double(columns) * cell.width + Double(columns + 1) * gap,
+            height: Double(rows) * (cell.height + label) + Double(rows + 1) * gap
+        )
+
+        guard let context = CGContext(
+            data: nil,
+            width: Int(size.width),
+            height: Int(size.height),
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+
+        // A grey ground, so a slide's own dark background has an edge.
+        context.setFillColor(CGColor(gray: 0.12, alpha: 1))
+        context.fill(CGRect(origin: .zero, size: size))
+
+        let graphics = NSGraphicsContext(cgContext: context, flipped: false)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = graphics
+        for (index, slide) in slides.enumerated() {
+            let column = index % columns
+            let row = index / columns
+            let x = gap + Double(column) * (cell.width + gap)
+            // Core Graphics counts up from the foot of the image; the deck
+            // reads downwards, so the first row is the topmost.
+            let y = size.height - Double(row + 1) * (cell.height + label + gap)
+            context.draw(
+                slide.image,
+                in: CGRect(x: x, y: y, width: cell.width, height: cell.height)
+            )
+            let number = NSAttributedString(
+                string: "\(slide.number)",
+                attributes: [
+                    .font: NSFont.monospacedDigitSystemFont(ofSize: 15, weight: .semibold),
+                    .foregroundColor: NSColor.white,
+                ]
+            )
+            // Above its slide, not below: a number under a picture reads as
+            // belonging to whatever is drawn beneath it.
+            number.draw(at: CGPoint(x: x + 2, y: y + cell.height + 5))
+        }
+        NSGraphicsContext.restoreGraphicsState()
+
+        guard let image = context.makeImage() else { return nil }
+        let representation = NSBitmapImageRep(cgImage: image)
+        // JPEG by choice: a tiled sheet of photographs and prose is for looking
+        // at, and lossless would be many times the size for no more use.
+        let type: NSBitmapImageRep.FileType = url.pathExtension.lowercased() == "png"
+            ? .png
+            : .jpeg
+        guard let data = representation.representation(
+            using: type,
+            properties: type == .jpeg ? [.compressionFactor: 0.8] : [:]
+        ) else { return nil }
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try data.write(to: url, options: [.atomic])
+        return url.path
     }
 
     /// Checks a slide's quoted scripture against the translation it names.

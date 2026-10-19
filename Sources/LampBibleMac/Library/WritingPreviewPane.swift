@@ -189,7 +189,7 @@ struct WritingPreviewPane: View {
             }
 
             DevotionalContentView(
-                markdown: markdown,
+                markdown: LampDevotionalFootnotes.displayContent(numberedFootnotes),
                 libraryRootURL: libraryRootURL,
                 devotionalID: devotionalID,
                 mediaReferences: mediaReferences,
@@ -202,10 +202,11 @@ struct WritingPreviewPane: View {
                 titleShownAbove: hasFrontMatter ? title : nil
             )
 
-            if !footnotes.isEmpty {
+            let shownFootnotes = LampDevotionalFootnotes.displayFootnotes(numberedFootnotes)
+            if !shownFootnotes.isEmpty {
                 Divider()
                 DevotionalContentView(
-                    markdown: footnotes,
+                    markdown: shownFootnotes,
                     libraryRootURL: libraryRootURL,
                     devotionalID: devotionalID,
                     mediaReferences: mediaReferences,
@@ -234,6 +235,17 @@ struct WritingPreviewPane: View {
 
     private var hasFrontMatter: Bool {
         !title.isEmpty || !subtitle.isEmpty || !summary.isEmpty
+    }
+
+    /// The writing's footnotes numbered by the order of their first reference,
+    /// so the labels in the source can be anything and a reader still sees
+    /// 1, 2, 3. The source is never rewritten: an agent may be editing it.
+    ///
+    /// Both halves of the pane read from this one numbering, or a marker and
+    /// its note could disagree. Writing with no footnotes costs a scan for the
+    /// two characters that open a marker and nothing more.
+    private var numberedFootnotes: LampDevotionalFootnotes.Numbered {
+        LampDevotionalFootnotes.numbered(content: markdown, footnotes: footnotes)
     }
 
     private var emptyState: some View {

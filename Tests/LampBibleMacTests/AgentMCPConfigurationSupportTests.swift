@@ -33,6 +33,30 @@ struct AgentMCPConfigurationSupportTests {
         #expect(openCodeObject["agent"] == nil)
     }
 
+    /// Without this the server has no workspace, and `writing_changes` has no
+    /// history to read — so an agent is back to keeping its own copies of the
+    /// draft to compare.
+    @Test func namesTheWorkspaceSoTheWritingHistoryCanBeRead() {
+        let workspace = URL(fileURLWithPath: "/Users/Reader/Lamp Library/AgentWorkspaces/Devotionals/talk", isDirectory: true)
+        let withWorkspace = LampAgentMCPConfiguration(
+            helperExecutableURL: URL(fileURLWithPath: "/tmp/lamp-mcp"),
+            libraryRootURL: URL(fileURLWithPath: "/tmp/library"),
+            policyURL: URL(fileURLWithPath: "/tmp/policy.json"),
+            workspaceURL: workspace
+        )
+        #expect(withWorkspace.arguments.contains("--workspace"))
+        #expect(withWorkspace.arguments.contains(workspace.path))
+        #expect(withWorkspace.codexTOML.contains(workspace.path))
+
+        // A reader chat has no writing, so it names no workspace.
+        let reader = LampAgentMCPConfiguration(
+            helperExecutableURL: URL(fileURLWithPath: "/tmp/lamp-mcp"),
+            libraryRootURL: URL(fileURLWithPath: "/tmp/library"),
+            policyURL: URL(fileURLWithPath: "/tmp/policy.json")
+        )
+        #expect(!reader.arguments.contains("--workspace"))
+    }
+
     @Test func writesAllThreeProjectLocalFiles() throws {
         let workspace = FileManager.default.temporaryDirectory
             .appendingPathComponent("lamp-agent-config-tests-\(UUID().uuidString)", isDirectory: true)

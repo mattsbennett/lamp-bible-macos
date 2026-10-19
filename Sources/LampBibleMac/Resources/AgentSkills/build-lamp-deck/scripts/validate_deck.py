@@ -132,9 +132,13 @@ def contrast_ratio(first: str, second: str) -> float | None:
 def undrawn_in_columns(blocks: list) -> list[tuple[int, str]]:
     """Mirror of Lamp's two-column reading.
 
-    A `subtitle` opens a column and names it; the prose after it is that
-    column's, until a citation closes it or the next subtitle opens another.
-    With no subtitles, every prose block is a column of its own. A citation
+    A `subtitle` opens a column and names it; everything after it is that
+    column's until the next subtitle opens another. Inside a headed column a
+    citation closes the passage it follows rather than the column, so a column
+    can credit a writer and then the verse that answers him, each passage drawn
+    with its own citation.
+
+    With no subtitles, every prose block is a column of its own and a citation
     attributes the column it follows. Only the first two columns are drawn.
     """
     kinds = [b.get("kind") if isinstance(b, dict) else None for b in blocks]
@@ -142,6 +146,20 @@ def undrawn_in_columns(blocks: list) -> list[tuple[int, str]]:
     columns: list[dict] = []
     undrawn: list[tuple[int, str]] = []
     title_taken = False
+    # Prose read since the last citation, waiting to be attributed.
+    pending: list[int] = []
+
+    def close(citation: int | None) -> None:
+        """Closes what has been read into the open column as one passage."""
+        nonlocal pending
+        if not pending or not columns:
+            return
+        columns[-1]["indexes"].extend(pending)
+        columns[-1]["prose"] += len(pending)
+        if citation is not None:
+            columns[-1]["indexes"].append(citation)
+        pending = []
+
     for index, kind in enumerate(kinds):
         if kind is None:
             continue
@@ -150,18 +168,29 @@ def undrawn_in_columns(blocks: list) -> list[tuple[int, str]]:
                 undrawn.append((index, kind))
             title_taken = True
         elif kind == "subtitle":
+            # Whatever is still open belongs to the column being left.
+            close(None)
             columns.append({"indexes": [index], "prose": 0, "cited": False})
         elif kind in COLUMN_PROSE:
-            if uses_headings and columns and not columns[-1]["cited"]:
-                columns[-1]["indexes"].append(index)
-                columns[-1]["prose"] += 1
+            if uses_headings and columns:
+                pending.append(index)
             else:
                 columns.append({"indexes": [index], "prose": 1, "cited": False})
-        elif kind == "citation" and columns and columns[-1]["prose"] and not columns[-1]["cited"]:
-            columns[-1]["indexes"].append(index)
-            columns[-1]["cited"] = True
+        elif kind == "citation":
+            if uses_headings:
+                if pending:
+                    close(index)
+                else:
+                    undrawn.append((index, str(kind)))
+            elif columns and columns[-1]["prose"] and not columns[-1]["cited"]:
+                columns[-1]["indexes"].append(index)
+                columns[-1]["cited"] = True
+            else:
+                undrawn.append((index, str(kind)))
         else:
             undrawn.append((index, str(kind)))
+    # A column may end on an unattributed passage, which still draws.
+    close(None)
     for column in columns[2:]:
         undrawn.extend((index, str(kinds[index])) for index in column["indexes"])
     return sorted(set(undrawn))

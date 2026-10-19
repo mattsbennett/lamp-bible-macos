@@ -824,32 +824,34 @@ final class LibraryModel: ObservableObject {
         return saved
     }
 
-    /// Re-splits the writing across any deck whose notes follow it.
+    /// Re-splits the writing across any deck whose notes follow it, and reports
+    /// each split into the writing's agent workspace.
     ///
     /// Every save comes through here — the editor, an agent's edit picked up
     /// from the workspace, a sync merge — which is the point: a speaker's notes
-    /// keep up with the prose without anyone running anything. A deck whose
-    /// notes are authored is untouched.
+    /// keep up with the prose without anyone running anything, and an agent is
+    /// told when an edit broke a slide's anchor. A deck whose notes are
+    /// authored is untouched.
     ///
-    /// Off this actor, because every autosave arrives here while the writer is
-    /// still typing: it decodes every deck in the library and rewrites the ones
-    /// that follow this writing, and a deck with its notes in it is not small.
+    /// Handed off rather than awaited: the work is coalesced across a burst of
+    /// autosaves, so a save returns without waiting for every deck in the
+    /// library to be decoded.
     private func refreshManuscriptNotes(for devotional: LampDevotional) async {
-        let rootURL = library.rootURL
-        let manuscript = devotional.displayMarkdown
-        let devotionalID = devotional.id
-        await Task.detached(priority: .utility) {
-            let store = LampPresentationDeckStore(rootURL: rootURL)
-            guard let decks = try? store.decks() else { return }
-            for deck in decks where deck.followsManuscript && deck.source?.id == devotionalID {
-                let resolved = LampPresentationManuscriptNotes.applying(
-                    LampPresentationManuscriptNotes.resolve(deck: deck, manuscript: manuscript),
-                    to: deck
+        await LampManuscriptNotesRefresh.shared.schedule(
+            .init(
+                libraryRootURL: library.rootURL,
+                devotionalID: devotional.id,
+                manuscript: devotional.displayMarkdown,
+                // Named whether or not it exists: a writing with no workspace
+                // has no status file, and the refresh then has nobody to tell
+                // and says nothing. Checking here would put a stat on the save
+                // path for no answer the refresh does not already have.
+                workspaceURL: DevotionalAgentWorkspaceFiles.workspaceURL(
+                    libraryRootURL: library.rootURL,
+                    devotionalID: devotional.id
                 )
-                guard resolved != deck else { continue }
-                try? store.save(resolved)
-            }
-        }.value
+            )
+        )
     }
 
     func deletePersonalDevotional(id: String) async throws {

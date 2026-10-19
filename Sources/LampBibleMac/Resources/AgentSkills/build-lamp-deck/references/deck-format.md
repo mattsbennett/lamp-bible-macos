@@ -73,11 +73,12 @@ slide").
 
 ### Two columns
 
-A `two-column` slide draws its title and two columns. Each column is, in order:
+A `two-column` slide draws its title and two columns. A headed column is, in
+order:
 
 - an optional `subtitle`, drawn as the column's heading in a heavier weight;
-- its prose: `body`, `scripture` or `quotation` blocks;
-- an optional `citation`, drawn under the column in the accent colour.
+- one or more passages, each being `body`, `scripture` or `quotation` blocks
+  followed by an optional `citation` in the accent colour.
 
 ```json
 "blocks": [
@@ -91,12 +92,32 @@ A `two-column` slide draws its title and two columns. Each column is, in order:
 ]
 ```
 
-A `subtitle` opens a column, and the prose after it belongs to that column
-until a citation closes it or the next subtitle opens another. Without
-subtitles, each prose block is a column of its own. Do not type a heading or a
-reference as the first or last line of a `body` block: it is drawn as body text
-like the lines around it. A third column, and a citation that does not directly
-follow a column's prose, are not drawn and are reported.
+A `subtitle` opens a column and everything after it belongs to that column
+until the next subtitle opens another. Inside a headed column a citation closes
+the passage it follows rather than the column, so one heading can carry a
+writer's sentence and then the verse that answers him, each drawn with its own
+citation:
+
+```json
+"blocks": [
+  { "id": "…", "kind": "title", "text": "Two attitudes" },
+  { "id": "…", "kind": "subtitle", "text": "Resignation" },
+  { "id": "…", "kind": "quotation", "text": "Nothing to be done." },
+  { "id": "…", "kind": "citation", "text": "Beckett, Waiting for Godot" },
+  { "id": "…", "kind": "scripture", "text": "We will not walk in it." },
+  { "id": "…", "kind": "citation", "text": "Jeremiah 6:16 (ESV)" },
+  { "id": "…", "kind": "subtitle", "text": "Expectancy" },
+  { "id": "…", "kind": "quotation", "text": "Yet I will look again." },
+  { "id": "…", "kind": "citation", "text": "Jonah 2:4 (ESV)" }
+]
+```
+
+Without subtitles, each prose block is a column of its own and a citation
+attributes the column it follows — so an unheaded column carries one passage.
+
+Do not type a heading or a reference as the first or last line of a `body`
+block: it is drawn as body text like the lines around it. A third column, and a
+citation with no passage in front of it, are not drawn and are reported.
 
 ### Type size
 
@@ -190,9 +211,23 @@ module whose `kind` is `translation`. A reference naming a translation the
 library does not have cannot be checked, and the preview says so.
 
 When a scripture block carries a `scriptureReference`, the preview compares the
-block's text with that passage as installed and reports a mismatch. Copy the
-translation's wording exactly, or drop the reference and label the text a
-paraphrase.
+block's text with that passage as installed and reports a mismatch.
+
+A `scriptureReference` names whole verses. To show part of a verse — a phrase,
+or half of one — copy its words exactly, leave the reference off, and name the
+passage in the citation. The preview then checks the excerpt against the prose
+instead of against the translation, which is the right check for an excerpt.
+
+Keep "paraphrase" for words that are not the translation's. Labelling an exact
+excerpt a paraphrase tells a listener the wording is yours when it is not.
+
+### A verse can hold half a quotation
+
+A verse that opens a speech closing in a later verse, or closes one opened
+earlier, shows a quotation mark with no partner when it is excerpted alone. In
+the ESV, Jeremiah 6:16 opens "Stand by the roads…" and the speech runs on into
+verse 17. Start the excerpt after the mark, or include the verse that closes
+it.
 
 ## Images
 
@@ -274,13 +309,24 @@ whitespace is wrapped and treats straight and curly quotation marks alike.
 | An anchor phrase is reworded | The slide keeps its last notes and is reported; its passage reads on under the previous slide |
 | A phrase appears twice | The first after the cursor wins, and a longer phrase is suggested |
 | Slides are reordered past their passages | Reported, because anchors are never searched backwards |
+| A paragraph a slide *summarises* is reworded | Nothing is reported: what a slide shows does not follow the prose |
+
+That last row is the one to watch. A slide's title and bullets are your reading
+of a passage, not a copy of it, so nothing can tell when an edit has left them
+behind. After the writing changes, read the slides whose passages changed.
+Quotations are the one part that is checked — see "Quotations the manuscript no
+longer supports".
 
 `speakerNotes` stays in the file as the resolved result, so the presenter view,
 the remote and every export keep reading exactly what they read now.
 
-Run `lamp-mcp --build-deck presentation.lampdeck --manuscript draft.md` to fill
-them in. It also gives a UUID to any slide or block whose `id` is missing, so a
-slide can be added without inventing identifiers.
+Lamp derives these notes by itself, whenever the writing is saved, with nothing
+running. `lamp-mcp --build-deck presentation.lampdeck --manuscript draft.md`
+writes the same notes into the workspace's copy of the deck, so what you have in
+front of you matches what Lamp holds. It also gives a UUID to any slide or block
+whose `id` is missing, so a slide can be added without inventing identifiers,
+and lists a broken anchor both under that slide's entry in `slides` and by slide
+number in the top-level `slidesWithProblems`.
 
 ### Quotations checked against the prose
 
@@ -311,12 +357,33 @@ write to it.
 | `slideIdentity` | How many slide IDs were `reused`, `added`, and `removed` against the deck already in the library |
 | `importedAssets`, `missingAssets` | Images that arrived, and images the deck names that are nowhere to be found |
 | `issues` | Everything the validator said, warnings included |
-| `speakerNotes` | When notes follow the manuscript: how many slides `resolved`, how many are `stale`, and any `problems` |
+| `speakerNotes` | When notes follow the manuscript: how many slides `resolved`, how many are `stale`, any `problems`, and `resolvedAt` |
 | `lastImport` | The last import that actually happened, kept through later checks that found nothing new |
 
 A `slideIdentity` showing no reuse means every slide ID was rewritten, which
 discards the link between a slide and anything the user has done to it. When
 revising a deck, keep the IDs of slides that survive.
+
+`speakerNotes` follows the writing rather than the deck file: Lamp re-splits the
+prose across the deck on every save and amends this summary, leaving `outcome`
+and `lastImport` describing the artifact. So a reworded anchor shows up here as
+`stale` shortly after the writer types it, without the deck being touched. Each
+entry in `problems` names its `slide` by one-based position and by `slideID`,
+and `resolvedAt` says when the split was last taken.
+
+## What has changed in the writing
+
+`writing_changes` returns the edits to `draft.md` as unified diffs, newest last,
+each saying when it happened and whether it came from the editor — the writer —
+or from an agent. Use it instead of keeping copies of the draft to compare:
+
+- `since`: a change `id` from an earlier call, or an ISO 8601 time. Omitted, it
+  returns the most recent changes.
+- `document_path`: a companion document instead of `draft.md`.
+- `limit`, `context`: how many changes, and how many unchanged lines either side.
+
+After a writer's edit, this says what moved; `presentation-import.json` says
+whether it broke an anchor.
 
 ## Revision stability
 

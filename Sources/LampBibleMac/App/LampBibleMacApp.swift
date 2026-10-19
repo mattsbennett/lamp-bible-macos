@@ -136,6 +136,10 @@ private struct ReaderSettingsView: View {
     @AppStorage("reader.readAloud.rate") private var readAloudRate = 0.5
     @AppStorage("reader.readAloud.followAlong") private var followReadAloud = true
     @AppStorage("plans.wordsPerMinute") private var wordsPerMinute = 225
+    @AppStorage(LampReadingMode.silent.wordsPerMinuteKey)
+    private var silentWordsPerMinute = LampReadingMode.silent.defaultWordsPerMinute
+    @AppStorage(LampReadingMode.aloud.wordsPerMinuteKey)
+    private var aloudWordsPerMinute = LampReadingMode.aloud.defaultWordsPerMinute
     @AppStorage("plans.externalBibleApp") private var externalBibleApp = ""
     @AppStorage("plans.reminder.enabled") private var reminderEnabled = false
     @AppStorage("plans.reminder.hour") private var reminderHour = 8
@@ -418,12 +422,30 @@ private struct ReaderSettingsView: View {
                             "Preview follows the editor while writing",
                             isOn: $writingPreviewFollowsEditorScrolling
                         )
+                        // A talk is written to be spoken and a devotional to be
+                        // read, and the same words take half as long again out
+                        // loud — so each pace keeps its own rate. Which of the
+                        // two an estimate uses is chosen by clicking it.
+                        Stepper(
+                            "Silent reading: \(silentWordsPerMinute) words per minute",
+                            value: $silentWordsPerMinute,
+                            in: 80...600,
+                            step: 5
+                        )
+                        Stepper(
+                            "Reading aloud: \(aloudWordsPerMinute) words per minute",
+                            value: $aloudWordsPerMinute,
+                            in: 60...300,
+                            step: 5
+                        )
                         Button("Restore Writing Defaults") {
                             writingEditorFontSize = LampTextScale.writingEditorText.defaultValue
                             writingPreviewFontSize = LampTextScale.writingPreviewText.defaultValue
                             writingPreviewLineSpacing = LampTextScale.writingPreviewLineSpacing.defaultValue
                             writingPreviewTypeface = ProseTypeface.readerDefault
                             writingPreviewFollowsEditorScrolling = true
+                            silentWordsPerMinute = LampReadingMode.silent.defaultWordsPerMinute
+                            aloudWordsPerMinute = LampReadingMode.aloud.defaultWordsPerMinute
                         }
                     }
 

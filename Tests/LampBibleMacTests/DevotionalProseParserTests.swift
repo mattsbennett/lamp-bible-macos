@@ -1,4 +1,5 @@
 import Foundation
+import LampCore
 import Testing
 @testable import LampBibleMacSupport
 
@@ -389,5 +390,49 @@ struct DevotionalProseParserTests {
         if case .codeBlock = blocks[1] {
             Issue.record("inline code is not a fenced block")
         }
+    }
+}
+
+/// The reader and the preview pane draw a devotional's footnotes from
+/// `LampDevotionalFootnotes.displayFootnotes`, so what that emits has to parse
+/// as the numbered list it is meant to be.
+struct DevotionalFootnoteRenderingTests {
+    @Test func footnotesDrawAsANumberedListInReadingOrder() {
+        let numbered = LampDevotionalFootnotes.numbered(
+            content: "Capacity[^lewis] has not changed[^2a].",
+            footnotes: """
+            [^2a]: Defined first, referred to second.
+            [^lewis]: Lewis, *The Weight of Glory*, p. 26.
+            """
+        )
+        let blocks = DevotionalProseParser.parse(
+            LampDevotionalFootnotes.displayFootnotes(numbered)
+        )
+        guard case .numberedList(let items) = blocks.first else {
+            Issue.record("expected a numbered list, got \(blocks)")
+            return
+        }
+        // The list draws its markers from position, so the numbers a reader
+        // sees are these items' places — which is why the numbering has to be
+        // 1…n with nothing missing.
+        #expect(items == [
+            "Lewis, *The Weight of Glory*, p. 26.",
+            "Defined first, referred to second.",
+        ])
+    }
+
+    @Test func markersDrawAsSuperscriptsInTheProse() {
+        let numbered = LampDevotionalFootnotes.numbered(
+            content: "Capacity[^lewis] has not changed[^2a].",
+            footnotes: "[^2a]: Second.\n[^lewis]: First."
+        )
+        let blocks = DevotionalProseParser.parse(
+            LampDevotionalFootnotes.displayContent(numbered)
+        )
+        guard case .paragraph(let text) = blocks.first else {
+            Issue.record("expected a paragraph, got \(blocks)")
+            return
+        }
+        #expect(text == "Capacity¹ has not changed².")
     }
 }

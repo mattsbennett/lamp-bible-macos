@@ -68,19 +68,71 @@ public struct LampPresentationImportStatus: Codable, Equatable, Sendable {
     /// How the deck's speaker notes were arrived at, when they follow the
     /// writing rather than being typed on each slide.
     public struct SpeakerNotes: Codable, Equatable, Sendable {
+        /// Something the split could not do, and the slide it concerns.
+        ///
+        /// This was a bare message, which said *what* was wrong — an anchor no
+        /// longer in the writing — but not *where*, so an agent had to search
+        /// the deck for the phrase the message quoted.
+        public struct Problem: Codable, Equatable, Sendable {
+            /// The slide this concerns, when it concerns one. A problem with
+            /// the deck as a whole has neither identifier nor position.
+            public var slideID: String?
+            /// Its one-based position in the deck, which is how `--build-deck`
+            /// and `--render-deck` number slides.
+            public var slide: Int?
+            /// The same sentence this has always carried.
+            public var message: String
+
+            public init(slideID: String? = nil, slide: Int? = nil, message: String) {
+                self.slideID = slideID
+                self.slide = slide
+                self.message = message
+            }
+
+            /// Also reads the bare strings written before problems named their
+            /// slide, so an existing workspace's status still decodes — and its
+            /// `lastImport` survives rather than being dropped and rebuilt.
+            public init(from decoder: Decoder) throws {
+                if let message = try? decoder.singleValueContainer().decode(String.self) {
+                    self.init(message: message)
+                    return
+                }
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.init(
+                    slideID: try container.decodeIfPresent(String.self, forKey: .slideID),
+                    slide: try container.decodeIfPresent(Int.self, forKey: .slide),
+                    message: try container.decode(String.self, forKey: .message)
+                )
+            }
+        }
+
         public var source: String
         /// Slides whose anchor was found and whose notes are current.
         public var resolved: Int
         /// Slides keeping older notes because their anchor is no longer in the
         /// manuscript.
         public var stale: Int
-        public var problems: [String]
+        public var problems: [Problem]
+        /// When the writing was last split across the deck.
+        ///
+        /// A check that finds the deck file unchanged carries the previous
+        /// summary forward, so without this there is no telling a summary taken
+        /// against the current writing from one taken days ago — which is how a
+        /// stale slide went on being reported as resolved.
+        public var resolvedAt: Date?
 
-        public init(source: String, resolved: Int, stale: Int, problems: [String]) {
+        public init(
+            source: String,
+            resolved: Int,
+            stale: Int,
+            problems: [Problem],
+            resolvedAt: Date? = nil
+        ) {
             self.source = source
             self.resolved = resolved
             self.stale = stale
             self.problems = problems
+            self.resolvedAt = resolvedAt
         }
     }
 
@@ -209,9 +261,63 @@ public extension LampPresentationImportStatus {
     }
 }
 
+public extension LampPresentationImportStatus.SpeakerNotes {
+    /// The summary of one split of the writing across one deck.
+    ///
+    /// The import and the save-time refresh both report through this, so the
+    /// two cannot describe the same resolution differently.
+    init(
+        resolution: LampPresentationManuscriptNotes.Resolution,
+        deck: LampPresentationDeck,
+        resolvedAt: Date = Date()
+    ) {
+        let positions = Dictionary(
+            deck.slides.enumerated().map { ($1.id, $0 + 1) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let anchored = deck.slides.count { ($0.notesAnchor ?? "").isEmpty == false }
+        self.init(
+            source: LampPresentationSpeakerNotesSource.manuscript.rawValue,
+            resolved: resolution.notesBySlideID.count,
+            stale: anchored - resolution.notesBySlideID.count,
+            problems: resolution.problems.map { problem in
+                Problem(
+                    slideID: problem.slideID,
+                    slide: problem.slideID.flatMap { positions[$0] },
+                    message: problem.message
+                )
+            },
+            resolvedAt: resolvedAt
+        )
+    }
+}
+
 public enum LampPresentationImportStatusStore {
     public static func url(in workspace: URL) -> URL {
         workspace.appendingPathComponent(LampPresentationImportStatus.filename)
+    }
+
+    /// Replaces the speaker-notes summary alone, leaving the outcome and the
+    /// last import as they were.
+    ///
+    /// The writing is re-split across a deck on every save, which is not a look
+    /// at `presentation.lampdeck`: `outcome` and `checkedAt` must go on
+    /// describing the artifact, or an agent would read a save as an import. A
+    /// workspace with no status file has never had a deck taken, so there is
+    /// nothing to amend and nothing is written.
+    ///
+    /// Returns whether anything was written, which is what a test can check.
+    @discardableResult
+    public static func updateSpeakerNotesIfChanged(
+        _ speakerNotes: LampPresentationImportStatus.SpeakerNotes,
+        in workspace: URL
+    ) -> Bool {
+        guard var status = read(in: workspace),
+              status.speakerNotes != speakerNotes
+        else { return false }
+        status.speakerNotes = speakerNotes
+        write(status, in: workspace)
+        return true
     }
 
     /// Writes the status only when it says something new.

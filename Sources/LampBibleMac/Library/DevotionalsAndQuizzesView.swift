@@ -68,6 +68,11 @@ struct DevotionalsView: View {
     @State private var query = ""
     @State private var categoryFilter: String?
     @State private var moduleFilter: String?
+    @AppStorage(LampReadingMode.defaultsKey) private var readingModeRawValue = LampReadingMode.silent.rawValue
+    @AppStorage(LampReadingMode.silent.wordsPerMinuteKey)
+    private var silentWordsPerMinute = LampReadingMode.silent.defaultWordsPerMinute
+    @AppStorage(LampReadingMode.aloud.wordsPerMinuteKey)
+    private var aloudWordsPerMinute = LampReadingMode.aloud.defaultWordsPerMinute
     @AppStorage("writing.sortOrder") private var sortOrderRawValue = WritingSortOrder.titleAscending.rawValue
     @AppStorage("writing.groupBy") private var groupByRawValue = WritingGroupBy.none.rawValue
     @State private var devotionalPendingDeletion: LampDevotional?
@@ -537,8 +542,15 @@ struct DevotionalsView: View {
 
                 Divider()
 
+                // The labels in the writing can be anything; a reader is shown
+                // 1, 2, 3 in reading order. Both halves come from one numbering
+                // so a marker and its note cannot disagree.
+                let numbered = LampDevotionalFootnotes.numbered(
+                    content: devotional.displayMarkdown,
+                    footnotes: devotional.footnotes
+                )
                 DevotionalContentView(
-                    markdown: devotional.displayMarkdown,
+                    markdown: LampDevotionalFootnotes.displayContent(numbered),
                     libraryRootURL: model.library.rootURL,
                     devotionalID: devotional.id,
                     mediaReferences: devotional.mediaReferences,
@@ -551,13 +563,14 @@ struct DevotionalsView: View {
                     titleShownAbove: devotional.title
                 )
 
-                if let footnotes = devotional.footnotes, !footnotes.isEmpty {
+                let shownFootnotes = LampDevotionalFootnotes.displayFootnotes(numbered)
+                if !shownFootnotes.isEmpty {
                     Divider()
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Footnotes")
                             .font(.headline)
                         DevotionalContentView(
-                            markdown: footnotes,
+                            markdown: shownFootnotes,
                             libraryRootURL: model.library.rootURL,
                             devotionalID: devotional.id,
                             mediaReferences: devotional.mediaReferences,
@@ -599,6 +612,15 @@ struct DevotionalsView: View {
         .padding(.vertical, 36)
     }
 
+    private var readingMode: LampReadingMode { LampReadingMode(storedValue: readingModeRawValue) }
+
+    private var readingWordsPerMinute: Int {
+        switch readingMode {
+        case .silent: silentWordsPerMinute
+        case .aloud: aloudWordsPerMinute
+        }
+    }
+
     private func rowSnippet(for devotional: LampDevotional) -> String? {
         let source = devotional.summary?.isEmpty == false
             ? devotional.summary!
@@ -622,7 +644,12 @@ struct DevotionalsView: View {
         }
         let statistics = WritingStatistics.measuring(markdown: devotional.displayMarkdown)
         if statistics.wordCount > 0 {
-            parts.append(statistics.readingTimeDescription)
+            // A row is not a control, but it answers the same question, so it
+            // answers it at whichever pace was chosen.
+            parts.append(statistics.readingTimeDescription(
+                mode: readingMode,
+                wordsPerMinute: readingWordsPerMinute
+            ))
         }
         return parts.isEmpty ? "Empty draft" : parts.joined(separator: " · ")
     }
@@ -643,8 +670,7 @@ struct DevotionalsView: View {
                 Label(series, systemImage: "square.stack")
             }
             if statistics.wordCount > 0 {
-                Label(statistics.readingTimeDescription, systemImage: "clock")
-                    .monospacedDigit()
+                ReadingTimeMenu(statistics: statistics, showsIcon: true)
             }
             if devotional.isEditable {
                 Button("Edit") {

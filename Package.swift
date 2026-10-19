@@ -49,6 +49,12 @@ let package = Package(
         .target(
             name: "LampMCPServer",
             dependencies: [
+                // `writing_changes` reads the workspace's revision history, so
+                // the server shares the store the app records it with rather
+                // than re-deriving the folder layout. Xcode compiles those
+                // sources into the helper target instead, hence the
+                // `#if canImport` guard on the import.
+                "LampBibleMacSupport",
                 .product(name: "LampCore", package: "lamp-bible-core"),
                 .product(name: "MCP", package: "swift-sdk"),
             ]
@@ -72,7 +78,7 @@ let package = Package(
         ),
         .testTarget(
             name: "LampMCPServerTests",
-            dependencies: ["LampMCPServer"]
+            dependencies: ["LampMCPServer", "LampBibleMacSupport"]
         ),
     ],
     swiftLanguageModes: [.v5]

@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(LampBibleMacSupport)
+import LampBibleMacSupport
+#endif
 import LampCore
 import LampModuleKit
 import MCP
@@ -6,13 +9,22 @@ import MCP
 public actor LampMCPToolHandler {
     private let library: LampAgentLibrary
     private let policyURL: URL?
+    /// The agent workspace this session serves, when it has one. Only the
+    /// writing's own history is reachable, and only to read.
+    private let workspaceURL: URL?
     private let encoder: JSONEncoder
 
-    public init(library: LampAgentLibrary, policyURL: URL? = nil) {
+    public init(
+        library: LampAgentLibrary,
+        policyURL: URL? = nil,
+        workspaceURL: URL? = nil
+    ) {
         self.library = library
         self.policyURL = policyURL
+        self.workspaceURL = workspaceURL
         encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        encoder.dateEncodingStrategy = .iso8601
     }
 
     public func call(name: String, arguments: [String: Value]?) async throws -> CallTool.Result {
@@ -106,9 +118,31 @@ public actor LampMCPToolHandler {
                 translationID: try requiredString("translation_id", in: arguments)
             ))
 
+        case "writing_changes":
+            return try result(try writingChanges(arguments))
+
         default:
             throw LampMCPToolError.unknownTool(name)
         }
+    }
+
+    /// What has changed in the writing, as diffs.
+    ///
+    /// An agent is told `draft.md` changed but not what changed, and used to
+    /// keep private copies of the draft to compare. Lamp has the revisions.
+    private func writingChanges(_ arguments: [String: Value]) throws -> [WritingChange] {
+        guard let workspaceURL else {
+            throw LampMCPToolError.noWorkspace
+        }
+        let changes = try LampWritingChanges.changes(
+            in: workspaceURL,
+            documentPath: arguments["document_path"]?.stringValue
+                ?? DevotionalAgentRevisionStore.primaryDocumentPath,
+            since: LampWritingChanges.since(arguments["since"]?.stringValue),
+            limit: arguments["limit"]?.intValue ?? 20,
+            context: arguments["context"]?.intValue ?? LampUnifiedDiff.defaultContext
+        )
+        return changes.map { WritingChange($0) }
     }
 
     private func refreshPolicy() async throws {
@@ -190,10 +224,42 @@ public actor LampMCPToolHandler {
     }
 }
 
+/// One change to the writing, as it is sent to an agent.
+///
+/// Named here rather than returned from the support layer directly, so what
+/// goes over the wire is a deliberate shape — `kind` reads as `editor` or
+/// `agent`, which is the question being asked.
+struct WritingChange: Codable, Sendable {
+    var id: String
+    var at: Date
+    var startedAt: Date
+    var source: String
+    var providerName: String?
+    var documentPath: String
+    var addedLines: Int
+    var removedLines: Int
+    var diff: String
+
+    /// Not guarded by `canImport`: under Xcode the support sources compile
+    /// into this target, so the type is here even though the module is not.
+    init(_ change: LampWritingChanges.Change) {
+        id = change.id.uuidString
+        at = change.at
+        startedAt = change.startedAt
+        source = change.source.rawValue
+        providerName = change.providerName
+        documentPath = change.documentPath
+        addedLines = change.addedLines
+        removedLines = change.removedLines
+        diff = change.diff
+    }
+}
+
 public enum LampMCPToolError: Error, LocalizedError, Equatable, Sendable {
     case unknownTool(String)
     case missingArgument(String)
     case invalidArgument(String, String)
+    case noWorkspace
 
     public var errorDescription: String? {
         switch self {
@@ -203,6 +269,8 @@ public enum LampMCPToolError: Error, LocalizedError, Equatable, Sendable {
             "The required ‘\(name)’ argument is missing or invalid."
         case .invalidArgument(let name, let message):
             "The ‘\(name)’ argument is invalid. \(message)"
+        case .noWorkspace:
+            "This session serves no agent workspace, so it has no writing history to read."
         }
     }
 }

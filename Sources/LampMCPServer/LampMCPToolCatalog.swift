@@ -1,6 +1,7 @@
 import MCP
 
 public enum LampMCPToolCatalog {
+    /// The read-only library tools, which every session has.
     public static let tools: [Tool] = [
         tool(
             "list_modules",
@@ -133,6 +134,42 @@ public enum LampMCPToolCatalog {
             required: ["reference", "translation_id"]
         ),
     ]
+
+    /// Reads the history of the writing this workspace holds.
+    ///
+    /// Offered only to a session that was given a workspace: there is nothing
+    /// to report on without one, and a tool that always answers "no workspace"
+    /// is worse than no tool.
+    public static let workspaceTools: [Tool] = [
+        tool(
+            "writing_changes",
+            """
+            Read what has changed in this workspace's writing, as unified diffs, \
+            newest last. Each change says when it happened and whether it came \
+            from the editor (the writer) or from an agent. Use this to tell the \
+            writer's edits from your own before moving a slide's notes anchor.
+            """,
+            properties: [
+                "since": string(
+                    "A change ID from an earlier call, or an ISO 8601 time. "
+                        + "Omitted, the most recent changes are returned."
+                ),
+                "document_path": string(
+                    "Which document's history to read, relative to the workspace. "
+                        + "Defaults to draft.md, the writing itself."
+                ),
+                "limit": integer("Maximum changes to return. Defaults to 20."),
+                "context": integer(
+                    "Unchanged lines to show either side of a change. Defaults to 3."
+                ),
+            ]
+        ),
+    ]
+
+    /// Everything a session with a workspace is offered.
+    public static func tools(workspace: Bool) -> [Tool] {
+        workspace ? tools + workspaceTools : tools
+    }
 
     private static func tool(
         _ name: String,

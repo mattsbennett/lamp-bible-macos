@@ -1,4 +1,5 @@
 import Foundation
+import LampBibleMacSupport
 import LampCore
 import MCP
 @testable import LampMCPServer
@@ -6,12 +7,60 @@ import Testing
 
 struct LampMCPServerTests {
     @Test func advertisesOnlyReadOnlyToolsWithValidObjectSchemas() {
+        let all = LampMCPToolCatalog.tools(workspace: true)
         #expect(LampMCPToolCatalog.tools.count == 15)
-        #expect(Set(LampMCPToolCatalog.tools.map(\.name)).count == 15)
-        #expect(LampMCPToolCatalog.tools.allSatisfy { $0.annotations.readOnlyHint == true })
-        #expect(LampMCPToolCatalog.tools.allSatisfy {
+        #expect(all.count == 16)
+        #expect(Set(all.map(\.name)).count == all.count)
+        #expect(all.allSatisfy { $0.annotations.readOnlyHint == true })
+        #expect(all.allSatisfy {
             $0.inputSchema.objectValue?["type"]?.stringValue == "object"
         })
+    }
+
+    /// A session with no workspace has no writing history, and a tool that can
+    /// only answer "there is no workspace" is worse than no tool.
+    @Test func offersTheWritingHistoryOnlyToASessionWithAWorkspace() {
+        #expect(!LampMCPToolCatalog.tools(workspace: false).contains { $0.name == "writing_changes" })
+        #expect(LampMCPToolCatalog.tools(workspace: true).contains { $0.name == "writing_changes" })
+    }
+
+    @Test func refusesTheWritingHistoryWithoutAWorkspace() async throws {
+        let fixture = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-mcp-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixture, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let handler = LampMCPToolHandler(library: LampAgentLibrary(libraryRootURL: fixture))
+        await #expect(throws: LampMCPToolError.noWorkspace) {
+            try await handler.call(name: "writing_changes", arguments: nil)
+        }
+    }
+
+    @Test func readsTheWritingHistoryOfTheWorkspaceItWasGiven() async throws {
+        let fixture = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-mcp-tests-\(UUID().uuidString)", isDirectory: true)
+        let workspace = fixture.appendingPathComponent("workspace", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        try DevotionalAgentRevisionStore.record(
+            kind: .userEdit,
+            before: "So on capacity there has been no meaningful change.",
+            after: "But on this question of capacity, there has been no meaningful change.",
+            in: workspace
+        )
+
+        let handler = LampMCPToolHandler(
+            library: LampAgentLibrary(libraryRootURL: fixture),
+            workspaceURL: workspace
+        )
+        let response = try await handler.call(name: "writing_changes", arguments: nil)
+        #expect(response.isError == false)
+        guard case .text(let text, _, _) = response.content.first else {
+            Issue.record("expected text content")
+            return
+        }
+        #expect(text.contains("\"source\" : \"editor\""))
+        #expect(text.contains("+But on this question of capacity"))
+        #expect(text.contains("-So on capacity there has been no meaningful change."))
     }
 
     @Test func dispatchesAListCallWithStructuredContent() async throws {

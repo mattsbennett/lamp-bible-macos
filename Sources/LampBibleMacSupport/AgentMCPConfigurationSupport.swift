@@ -5,17 +5,25 @@ public struct LampAgentMCPConfiguration: Equatable, Sendable {
     public let libraryRootURL: URL
     public let bundledModulesArchiveURL: URL?
     public let policyURL: URL
+    /// The agent workspace this server serves, when it serves one.
+    ///
+    /// It is what lets `writing_changes` answer: the history of the writing
+    /// lives in the workspace, and a server told nothing about one has nothing
+    /// to report. A reader chat has no writing, so it passes none.
+    public let workspaceURL: URL?
 
     public init(
         helperExecutableURL: URL,
         libraryRootURL: URL,
         bundledModulesArchiveURL: URL? = nil,
-        policyURL: URL
+        policyURL: URL,
+        workspaceURL: URL? = nil
     ) {
         self.helperExecutableURL = helperExecutableURL
         self.libraryRootURL = libraryRootURL
         self.bundledModulesArchiveURL = bundledModulesArchiveURL
         self.policyURL = policyURL
+        self.workspaceURL = workspaceURL
     }
 
     public var arguments: [String] {
@@ -24,6 +32,9 @@ public struct LampAgentMCPConfiguration: Equatable, Sendable {
             result += ["--bundled-modules-archive", bundledModulesArchiveURL.path]
         }
         result += ["--policy", policyURL.path]
+        if let workspaceURL {
+            result += ["--workspace", workspaceURL.path]
+        }
         return result
     }
 
