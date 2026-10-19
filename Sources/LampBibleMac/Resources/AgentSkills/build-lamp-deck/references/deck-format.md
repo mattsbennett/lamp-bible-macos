@@ -107,7 +107,7 @@ citation:
   { "id": "…", "kind": "scripture", "text": "We will not walk in it." },
   { "id": "…", "kind": "citation", "text": "Jeremiah 6:16 (ESV)" },
   { "id": "…", "kind": "subtitle", "text": "Expectancy" },
-  { "id": "…", "kind": "quotation", "text": "Yet I will look again." },
+  { "id": "…", "kind": "quotation", "text": "yet I shall again look upon your holy temple." },
   { "id": "…", "kind": "citation", "text": "Jonah 2:4 (ESV)" }
 ]
 ```

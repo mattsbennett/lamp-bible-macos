@@ -61,6 +61,19 @@ struct LampMCPServerTests {
         #expect(text.contains("\"source\" : \"editor\""))
         #expect(text.contains("+But on this question of capacity"))
         #expect(text.contains("-So on capacity there has been no meaningful change."))
+
+        // A time has to come back in the form `since` takes. It used to be
+        // seconds from Apple's 2001 epoch in the structured copy and ISO 8601
+        // in the text, so neither could be handed back without knowing which
+        // was which.
+        #expect(text.contains("\"at\" : \"20"))
+        let structured = try #require(response.structuredContent)
+        let changes = try #require(structured.objectValue?["results"]?.arrayValue)
+        let at = try #require(changes.first?.objectValue?["at"]?.stringValue)
+        guard case .time = LampWritingChanges.since(at) else {
+            Issue.record("`at` should read back as a time: \(at)")
+            return
+        }
     }
 
     @Test func dispatchesAListCallWithStructuredContent() async throws {

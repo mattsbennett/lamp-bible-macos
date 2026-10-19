@@ -157,7 +157,7 @@ public actor LampMCPToolHandler {
         let text = String(decoding: data, as: UTF8.self)
         return CallTool.Result(
             content: [.text(text: text, annotations: nil, _meta: nil)],
-            structuredContent: Value?.some(try structuredContent(for: output)),
+            structuredContent: Value?.some(try structuredContent(from: data)),
             isError: false
         )
     }
@@ -166,10 +166,14 @@ public actor LampMCPToolHandler {
     /// answer with a list, and sending that list bare makes a client that
     /// validates the result — Claude Code does — reject every call. A list is
     /// therefore named rather than dropped, so structured consumers keep it.
-    private func structuredContent<Output: Codable & Sendable>(
-        for output: Output
-    ) throws -> Value {
-        let encoded = try Value(output)
+    ///
+    /// Built by reading back what was already encoded, rather than encoding the
+    /// answer a second time through `Value`. The second encoding used the SDK's
+    /// own defaults, which write a `Date` as seconds from Apple's 2001 epoch
+    /// while the text beside it read ISO 8601 — two answers to one question,
+    /// and `writing_changes` takes only one of them back as `since`.
+    private func structuredContent(from data: Data) throws -> Value {
+        let encoded = try JSONDecoder().decode(Value.self, from: data)
         if case .object = encoded { return encoded }
         return .object(["results": encoded])
     }

@@ -51,11 +51,13 @@ enum LampDeckPreview {
         /// Where every slide was tiled into one picture, when `--overview`
         /// asked for one.
         var overviewFile: String?
-        /// The numbers of the slides whose own entry carries a problem.
+        /// The numbers of the slides whose own entry carries a problem, out of
+        /// the slides this run drew.
         ///
-        /// The top level used to say `"resolved": false` over an empty
-        /// `problems`, which reads as "no problems" — the broken anchor was
-        /// listed under that slide, forty entries down.
+        /// The top level used to say nothing at all, so a problem forty
+        /// entries down in `slides` was easy to read past. With `--slides` this
+        /// covers only the slides named there — `renderedCount` against
+        /// `slideCount` says when that is the case.
         var slidesWithProblems: [Int]
         var slides: [SlideReport]
         var issues: [String]
