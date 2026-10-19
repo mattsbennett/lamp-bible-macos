@@ -26,10 +26,19 @@ struct LampBibleMacApp: App {
             LampBibleCommands(softwareUpdater: softwareUpdater)
         }
 
+        // A window that carries a value cannot be restored: AppKit keeps a
+        // record of every window as it opens and closes and hands those records
+        // back at the next launch, but SwiftUI restores such a window with no
+        // value at all. Each group below reads no value as "start a new one", so
+        // a writing editor killed with the app — which is what a rebuild does —
+        // came back at the next launch as a blank new writing, beside whatever
+        // was being written. Better not to come back than to come back as the
+        // wrong thing.
         WindowGroup("Book Reader", id: "book-reader", for: BookReaderRequest.self) { $request in
             StandaloneBookReaderView(request: request ?? BookReaderRequest())
                 .environmentObject(libraryModel)
         }
+        .restorationBehavior(.disabled)
         .defaultSize(width: 1_180, height: 820)
 
         Window("Import or Create Content", id: "add-to-library") {
@@ -46,6 +55,7 @@ struct LampBibleMacApp: App {
                 .environmentObject(libraryModel)
                 .environmentObject(syncController)
         }
+        .restorationBehavior(.disabled)
         .defaultSize(width: 1_180, height: 780)
 
         WindowGroup("Slide Studio", id: "slide-studio", for: SlideStudioRequest.self) { $request in
@@ -53,6 +63,7 @@ struct LampBibleMacApp: App {
                 .environmentObject(libraryModel)
                 .environmentObject(presentationRemoteHost)
         }
+        .restorationBehavior(.disabled)
         .defaultSize(width: 1_360, height: 860)
 
         WindowGroup(
@@ -66,6 +77,7 @@ struct LampBibleMacApp: App {
                     .environmentObject(presentationRemoteHost)
             }
         }
+        .restorationBehavior(.disabled)
         .defaultSize(width: 1_440, height: 900)
         .windowStyle(.hiddenTitleBar)
 
@@ -79,6 +91,7 @@ struct LampBibleMacApp: App {
                     .environmentObject(libraryModel)
             }
         }
+        .restorationBehavior(.disabled)
         .defaultSize(width: 1_440, height: 900)
         .windowStyle(.hiddenTitleBar)
 
