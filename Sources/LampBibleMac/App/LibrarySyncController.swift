@@ -35,9 +35,19 @@ final class LibrarySyncController: ObservableObject {
     /// republishes its whole library into whatever it joined.
     @Published private(set) var moveOffer: LampSyncMoveOffer?
 
-    /// The archive the last pass read, kept so the move has something to
-    /// plan from without downloading it again.
-    private var archiveToMove: (archive: LampSyncArchive, revision: String?)?
+    /// The revision of the archive the last pass imported.
+    ///
+    /// The revision, not the archive: an archive holds every file's bytes, so
+    /// keeping one to offer a move with would pin a whole library — on this
+    /// user's, better than half a gigabyte — resident until the app quit. The
+    /// move reads it again when it is actually pressed.
+    ///
+    /// It is load-bearing rather than a convenience. On WebDAV the move
+    /// replaces the archive with the bundle, so anything living only in an
+    /// archive this Mac never imported would be lost; passing the revision
+    /// that *was* imported makes the write refuse if the archive has moved
+    /// since.
+    private var importedArchiveRevision: String??
 
     private let defaults: UserDefaults
     private let fileManager: FileManager
@@ -189,7 +199,7 @@ final class LibrarySyncController: ObservableObject {
                 let directory = LampSyncDirectoryStore(root: folder)
                 if case .perFile(let opened) = try await LampSyncLibraryLayout.of(directory) {
                     moveOffer = nil
-                    archiveToMove = nil
+                    importedArchiveRevision = nil
                     try await runBundlePass(
                         library: library,
                         store: directory,
@@ -295,7 +305,10 @@ final class LibrarySyncController: ObservableObject {
                         // Captured already, so which kind of library this is
                         // costs nothing to decide.
                         if let observedFolder {
-                            self.archiveToMove = (observedFolder, nil)
+                            // A folder has no revision to condition on, and
+                            // the move leaves its files where they are, so
+                            // re-capturing at the time loses nothing.
+                            self.importedArchiveRevision = .some(nil)
                             self.moveOffer = LampSyncSettingsStore
                                 .earlierLibrary(ofArchive: observedFolder) == .phone
                                 ? .join : .migrate
@@ -319,7 +332,7 @@ final class LibrarySyncController: ObservableObject {
                 // below, exactly as before, and offered the move.
                 if case .perFile(let opened) = try await LampSyncLibraryLayout.of(client) {
                     moveOffer = nil
-                    archiveToMove = nil
+                    importedArchiveRevision = nil
                     try await runBundlePass(
                         library: library,
                         store: client,
@@ -535,7 +548,7 @@ final class LibrarySyncController: ObservableObject {
                         // this is costs nothing to decide — asking the server
                         // again would download all of it a second time.
                         if let snapshot = archiveSnapshot {
-                            archiveToMove = (snapshot.archive, snapshot.revision)
+                            importedArchiveRevision = .some(snapshot.revision)
                             moveOffer = LampSyncSettingsStore
                                 .earlierLibrary(ofArchive: snapshot.archive) == .phone
                                 ? .join : .migrate
@@ -1218,7 +1231,7 @@ extension LibrarySyncController {
     /// refusal halfway through.
     @discardableResult
     func move(library: LampLibrary) async -> Bool {
-        guard let offer = moveOffer, let pending = archiveToMove else { return false }
+        guard let offer = moveOffer, let imported = importedArchiveRevision else { return false }
         isSyncing = true
         errorMessage = nil
         defer { isSyncing = false }
@@ -1228,13 +1241,6 @@ extension LibrarySyncController {
         do {
             try fileManager.createDirectory(at: workspace, withIntermediateDirectories: false)
             defer { try? fileManager.removeItem(at: workspace) }
-
-            let unplaceable = LampSyncLibraryMigration.unplaceableEntries(in: pending.archive)
-            guard unplaceable.isEmpty else {
-                errorMessage = "Sync cannot place these, so the library was left as it is: "
-                    + unplaceable.prefix(5).joined(separator: ", ")
-                return false
-            }
 
             // Whichever provider this library is on. The folder keeps its
             // security scope for as long as its store is alive, which is
@@ -1265,15 +1271,27 @@ extension LibrarySyncController {
             }
             defer { folderScope?.stopAccessingSecurityScopedResource() }
 
+            statusMessage = "Reading the library one more time…"
+            let archive = try await archiveToMove(from: store, importedRevision: imported)
+
+            // Named before anything is written, so the reason is legible
+            // rather than a refusal halfway through.
+            let unplaceable = LampSyncLibraryMigration.unplaceableEntries(in: archive)
+            guard unplaceable.isEmpty else {
+                errorMessage = "Sync cannot place these, so the library was left as it is: "
+                    + unplaceable.prefix(5).joined(separator: ", ")
+                return false
+            }
+
             statusMessage = offer == .migrate
                 ? "Moving the library…"
                 : "Joining the library…"
             let moved = try await LampSyncLibraryMigration.migrate(
-                in: store, imported: pending.archive, revision: pending.revision
+                in: store, imported: archive, revision: imported
             )
 
             moveOffer = nil
-            archiveToMove = nil
+            importedArchiveRevision = nil
             statusMessage = "Moved. Checking every file once…"
             try await runBundlePass(
                 library: library,
@@ -1288,6 +1306,39 @@ extension LibrarySyncController {
             errorMessage = error.localizedDescription
             return false
         }
+    }
+
+    /// Reads the library to move, now that someone has asked for it.
+    ///
+    /// Read rather than remembered, so no archive is held between passes. On
+    /// WebDAV it must still be the one this Mac imported: the move replaces
+    /// the archive with the bundle, so an archive another device wrote since
+    /// holds content this library never took in, and publishing from this
+    /// library afterwards would drop it. Refused rather than guessed at, with
+    /// a sentence saying what to do.
+    private func archiveToMove(
+        from store: any LampSyncRemoteStore,
+        importedRevision: String?
+    ) async throws -> LampSyncArchive {
+        if case .folder = provider {
+            // A folder's files are left where they are by the move, so
+            // anything added since is adopted by the next pass rather than
+            // lost. Nothing to condition on, and nothing at risk.
+            return try await LampSyncFolderPublisher.capture(
+                from: try resolveFolderURL(), fileManager: fileManager
+            )
+        }
+        guard let snapshot = try await LampSyncArchiveRemote.read(from: store) else {
+            throw LibrarySyncError.archiveUnreadable
+        }
+        guard LampSyncConditionalWrite.namesSameRevision(
+            snapshot.revision, importedRevision
+        ) else {
+            throw LibrarySyncError.incompleteRemoteImport([
+                "another device published since the last sync — sync again, then move",
+            ])
+        }
+        return snapshot.archive
     }
 
     /// One pass over a library that has moved to the per-file layout.
