@@ -244,6 +244,15 @@ public struct LampSyncBundlePass {
                 // not a read-back: the PUT was accepted, and what is wanted
                 // here is the name of what is now there, not proof that it
                 // arrived.
+                //
+                // Deliberately not `LampSyncConditionalWrite.write`, which
+                // confirms by reading the body back. The phone uses it for
+                // its module uploads and is right to; here the bodies are
+                // the Mac's own modules, and confirming a translation would
+                // mean downloading it again to see it had arrived. A server
+                // that answers 2xx without storing the file would go unseen,
+                // and that is the trade: a module-sized download on every
+                // publish, against a server that lies about success.
                 var revision = try await store.write(fileAt: url, to: path, condition: condition)
                 if revision == nil {
                     revision = try? await store.revision(path: path)
