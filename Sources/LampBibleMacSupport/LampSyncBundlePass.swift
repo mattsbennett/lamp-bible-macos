@@ -267,6 +267,15 @@ public struct LampSyncBundlePass {
                     path, at: deletedAt, revision: listing[path]
                 )
             }
+            // Old enough to forget, and gone from the server. `present` is
+            // the **whole** listing, never a filtered one: a tombstone whose
+            // file is still waiting to be reaped must be kept, or the next
+            // pass finds a file no manifest knows and adopts the deletion
+            // back into the library. ios-92 hit exactly that on the phone by
+            // pruning against a listing it had filtered for planning.
+            bundle.manifest = bundle.manifest.pruned(
+                now: time, present: Set(listing.keys)
+            )
         }
         outcome.bundleRevision = snapshot.revision
         outcome.tombstoned = tombstone.keys.sorted()

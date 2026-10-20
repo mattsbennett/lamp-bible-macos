@@ -331,6 +331,30 @@ struct LampSyncBundlePassTests {
 
         #expect(order == ["received", "gathered"])
     }
+
+    /// A tombstone old enough to forget is dropped — but only once its file
+    /// has gone from the server. Pruned while the file still waited for its
+    /// reap, the next pass would find a file no manifest knows, adopt it, and
+    /// take the deletion back.
+    @Test func atombstoneIsKeptWhileItsFileIsStillOnTheServer() async throws {
+        let ancient = Int64(1_000)
+        let now = ancient + LampSyncLibraryManifest.tombstoneLifetime + 1
+        let store = try seeded(
+            path: "Translations/old.lamp", revision: "\"old-1\"", deletedAt: ancient
+        )
+        store.refusedWrites = ["Translations/old.lamp"]  // the reap cannot land
+        var records = LampSyncFileRecords()
+
+        _ = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { now }
+        ).run(gathering: { gathered([]) }, records: &records)
+
+        let bundle = try LampSyncSettingsBundle.decode(try #require(store.bodies[bundlePath]))
+        #expect(
+            bundle.manifest.tombstones.map(\.path) == ["Translations/old.lamp"],
+            "its file is still listed, so forgetting the deletion would resurrect it"
+        )
+    }
 }
 
 // MARK: - Doubles
