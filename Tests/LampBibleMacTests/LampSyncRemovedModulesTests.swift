@@ -85,3 +85,54 @@ struct LampSyncRemovedModulesTests {
         #expect(LampSyncRemovedModules.load(fromLibraryAt: library).removedAt.isEmpty)
     }
 }
+
+/// The collision that could cost somebody every note they have written.
+///
+/// An installed module's ID can equal a reserved collection ID — import an
+/// exported notes file and it may well be `notes` — and that collection's
+/// path is the file this Mac publishes every note into. Removing the module
+/// is local and harmless; *recording* it tombstones the collection, and the
+/// phone honours such a tombstone by deleting the lot, with only a later save
+/// to save it.
+struct RemovedModulesNeverTombstoneACollectionTests {
+    @Test(arguments: [
+        (LampModuleKind.notes, "notes", "Notes/notes.lamp"),
+        (LampModuleKind.devotional, "devotionals", "Devotionals/devotionals.lamp"),
+    ])
+    func removingAModuleThatCollidesWithACollectionRecordsNothing(
+        kind: LampModuleKind, moduleID: String, path: String
+    ) throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-collision-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let recorded = try LampSyncRemovedModules.record(
+            LampInstalledModule(id: moduleID, kind: kind, name: "Imported"),
+            inLibraryAt: root
+        )
+
+        #expect(
+            recorded == String?.none,
+            "recording \(path) tombstones the collection, and a client that honours it deletes every item in it"
+        )
+        #expect(LampSyncRemovedModules.load(fromLibraryAt: root).removedAt.isEmpty)
+    }
+
+    /// And a module that merely shares the *kind* is still recorded: a second
+    /// notes module is a real module, and refusing to record its removal
+    /// would bring it back on the next pass.
+    @Test func asecondNotesModuleIsStillRecorded() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-collision-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let recorded = try LampSyncRemovedModules.record(
+            LampInstalledModule(id: "grandads-notes", kind: .notes, name: "Grandad's Notes"),
+            inLibraryAt: root
+        )
+
+        #expect(recorded == "Notes/grandads-notes.lamp")
+    }
+}
