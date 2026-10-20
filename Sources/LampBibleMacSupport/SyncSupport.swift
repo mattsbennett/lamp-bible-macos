@@ -871,8 +871,6 @@ public struct LampWebDAVClient: Sendable, LampSyncRemoteStore {
 /// Compatibility adapters are shared with iOS through LampModuleKit.
 public typealias LampWebDAVPersonalArchiveKind = LampModuleKit.LampWebDAVPersonalArchiveKind
 public typealias LampWebDAVPersonalArchiveAdapter = LampModuleKit.LampWebDAVPersonalArchiveAdapter
-public typealias LampWebDAVModuleJSONDocument = LampModuleKit.LampWebDAVModuleJSONDocument
-public typealias LampWebDAVModuleJSONAdapter = LampModuleKit.LampWebDAVModuleJSONAdapter
 
 /// `LampSyncRefusal` because `mapped` translates the storage layer's errors
 /// into these for the user's sake, and a translated refusal is still a
