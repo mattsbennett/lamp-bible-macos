@@ -81,6 +81,15 @@ public enum LampSyncBundleLedgers {
         /// device's deletions. Both ledgers join by the later of each entry's
         /// times, so the order does not matter, and a library with nothing of
         /// its own clears nothing of theirs.
+        ///
+        /// One assumption to keep in mind if a ledger's own format ever
+        /// changes: a ledger this client cannot read decodes as empty, so a
+        /// client with deletions of its own would write over a *newer* ledger
+        /// and lose whatever it recorded. Leaving it alone instead would lose
+        /// this client's deletions every pass, which is no better, so the
+        /// answer is not here — a ledger format change has to travel with a
+        /// bundle format that older clients refuse, the way format 3 is
+        /// refused by the archive readers.
         public func apply(to bundle: inout LampSyncSettingsBundle) throws {
             var personal = personal
             if let data = bundle.personalDeletions,
