@@ -170,6 +170,56 @@ struct LampSyncBundleSettingsTests {
         #expect(defaults.string(forKey: "reader.typeface") == "Palatino")
     }
 
+    /// The binary plist's key order follows a Swift dictionary's iteration
+    /// order, which is seeded per process — three runs of identical settings
+    /// give three different digests. Assigned unconditionally, that would
+    /// change the bundle on every launch and hand every other device a
+    /// revision to fetch for a file whose meaning had not moved.
+    @Test func unchangedSettingsLeaveTheBundleAloneEvenThoughTheBytesDiffer() throws {
+        let (defaults, domain) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let library = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: library) }
+        defaults.set(18.0, forKey: "reader.fontSize")
+        defaults.set("Charter", forKey: "reader.typeface")
+
+        let settings = LampSyncBundleSettings(
+            defaults: defaults, libraryRoot: library, source: source, domainName: domain
+        )
+        var bundle = LampSyncSettingsBundle()
+        let received = try settings.receive(bundle)
+        try settings.contribute(received, to: &bundle)
+
+        // Another device's encoding of the very same values: a different byte
+        // string, which is what a different process produces.
+        let theirs = try reorderedEncoding(of: ["reader.fontSize": 18.0, "reader.typeface": "Charter"])
+        bundle.macSettings = theirs
+
+        try settings.contribute(received, to: &bundle)
+        #expect(bundle.macSettings == theirs, "same values, so nothing to say")
+
+        // And a real change still goes.
+        defaults.set("Palatino", forKey: "reader.typeface")
+        try settings.contribute(received, to: &bundle)
+        #expect(bundle.macSettings != theirs)
+        #expect(
+            try LampPortableSettingsCodec.decode(#require(bundle.macSettings))["reader.typeface"]
+                as? String == "Palatino"
+        )
+    }
+
+    /// The same values encoded by a separate `UserDefaults`, which is as
+    /// close as one process gets to another process's dictionary order.
+    private func reorderedEncoding(of values: [String: Any]) throws -> Data {
+        let domain = "lamp-settings-other-\(UUID().uuidString)"
+        let other = UserDefaults(suiteName: domain)!
+        defer { other.removePersistentDomain(forName: domain) }
+        for (key, value) in values.sorted(by: { $0.key > $1.key }) {
+            other.set(value, forKey: key)
+        }
+        return try LampPortableSettingsCodec.encode(from: other)
+    }
+
     /// Someone changing a setting while the pass runs must not have it
     /// silently reverted by a plan built before they did. Testable because
     /// planning and writing are separate steps.

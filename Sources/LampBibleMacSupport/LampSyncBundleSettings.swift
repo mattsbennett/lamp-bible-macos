@@ -166,12 +166,37 @@ public struct LampSyncBundleSettings {
     /// `publishable` rather than the whole ledger: a disputed field is
     /// published by neither device, which is what stops two Macs trading the
     /// same pair of values back and forth.
+    /// Left exactly as it is when the values have not changed, even though a
+    /// fresh encoding of them would differ.
+    ///
+    /// `LampPortableSettingsCodec.encode` serialises a Swift dictionary as a
+    /// binary plist, and the key order follows the dictionary's iteration
+    /// order, which Swift seeds per process. Measured: three runs of the same
+    /// settings gave three different digests. Assigning the new bytes
+    /// unconditionally would therefore change the bundle on every launch,
+    /// write it, and hand every other device a revision to fetch and merge —
+    /// for a file whose meaning had not moved.
+    ///
+    /// Compared by value, which is this project's rule for deciding whether
+    /// anything changed, and the same rule that stops two clients trading
+    /// their own spellings of identical content for ever.
     public func contribute(
         _ received: Received,
         to bundle: inout LampSyncSettingsBundle
     ) throws {
-        bundle.macSettings = try LampPortableSettingsCodec.encode(from: defaults)
+        let encoded = try LampPortableSettingsCodec.encode(from: defaults)
+        if !settingsMatch(bundle.macSettings, encoded) {
+            bundle.macSettings = encoded
+        }
         bundle.preferences = received.merge.publishable
+    }
+
+    private func settingsMatch(_ existing: Data?, _ fresh: Data) -> Bool {
+        guard let existing,
+              let a = try? LampPortableSettingsCodec.decode(existing),
+              let b = try? LampPortableSettingsCodec.decode(fresh)
+        else { return false }
+        return NSDictionary(dictionary: a).isEqual(to: b)
     }
 
     /// Remembers the merge's base for this source, once a publish has landed.
