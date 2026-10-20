@@ -1397,16 +1397,26 @@ extension LibrarySyncController {
         var gaps: [LampSyncLocalFiles.Unreadable] = []
         var skippedHighlightSets: [String] = []
 
-        // What the server sent, when it sent something unusable. The error
-        // alone says a strong ETag was missing; the value says why, and
-        // whether it is weak (`W/"…"`), absent, or something else again.
+        // What the server sent, when it sent something unusable.
+        //
+        // Both requests, labelled, because they can disagree: the read that
+        // failed used the **GET's** ETag, while a PROPFIND is a different
+        // request and some WebDAV servers answer only one of them. Reporting
+        // the PROPFIND alone could show a perfectly good value for a GET that
+        // carried none, and send the next day's work in the wrong direction.
         func reportingWeakRevision<T>(_ work: () async throws -> T) async throws -> T {
             do {
                 return try await work()
             } catch LampSyncSettingsStore.StoreError.unversioned {
-                let seen = try? await store.revision(path: LampSyncFolderLayout.bundlePath)
+                let path = LampSyncFolderLayout.bundlePath
+                let onGet = try? await store.read(path: path)?.revision
+                let onPropfind = try? await store.revision(path: path)
+                func shown(_ revision: String??) -> String {
+                    guard let revision, let revision else { return "none" }
+                    return "“\(revision)”"
+                }
                 throw LibrarySyncError.weakBundleETag(
-                    seen.map { "“\($0)”" } ?? "no ETag at all"
+                    "GET \(shown(onGet)), PROPFIND \(shown(onPropfind))"
                 )
             }
         }
@@ -1702,7 +1712,7 @@ private enum LibrarySyncError: LocalizedError {
         case .missingRemoteRevision(let path):
             "Sync stopped because the server did not provide an ETag for \(path)."
         case .weakBundleETag(let seen):
-            "The server did not give the sync file a strong ETag, so it could not be written over safely. Nothing was changed. It sent: \(seen). A weak or missing ETag usually means the server is compressing or transforming the file as it sends it."
+            "The server did not give the sync file a strong ETag, so it could not be written over safely. Nothing was changed. It answered: \(seen)."
         case .libraryMovedOn:
             "The library on the server changed after the last sync, so the move was not started. Nothing was changed. Sync Now again, then move."
         }
