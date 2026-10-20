@@ -33,7 +33,7 @@ final class LibrarySyncController: ObservableObject {
     /// the per-file layout, or — if only another device ever synced here —
     /// be joined. Offered rather than done, because a Mac that joins
     /// republishes its whole library into whatever it joined.
-    @Published private(set) var moveOffer: MoveOffer?
+    @Published private(set) var moveOffer: LampSyncMoveOffer?
 
     /// The archive the last pass read, kept so the move has something to
     /// plan from without downloading it again.
@@ -1182,17 +1182,65 @@ final class LibrarySyncController: ObservableObject {
 // MARK: - Design B
 
 extension LibrarySyncController {
-    /// What a library that has not moved to the per-file layout can be
-    /// offered.
-    enum MoveOffer: Equatable {
-        /// This Mac's own library: its files are a backup's layout, so only
-        /// the Mac's migration can move it.
-        case migrate
-        /// Only another device has ever synced here, and its files are
-        /// already per-file. Joining is a deliberate act rather than
-        /// something a background pass does, because a Mac that joins
-        /// republishes its whole library into whatever it joined.
-        case join
+    /// Moves this library to the per-file layout, then syncs it.
+    ///
+    /// Only ever from a deliberate press. The archive the last pass read is
+    /// what it plans from, so nothing is downloaded again, and an archive
+    /// holding an entry the move cannot place stops it *before* anything is
+    /// written — with the paths named, so the reason is legible rather than a
+    /// refusal halfway through.
+    @discardableResult
+    func move(library: LampLibrary) async -> Bool {
+        guard let offer = moveOffer, let pending = archiveToMove else { return false }
+        guard case .webDAV = provider, let url = URL(string: endpoint) else {
+            errorMessage = "Moving a folder library is not supported yet."
+            return false
+        }
+        isSyncing = true
+        errorMessage = nil
+        defer { isSyncing = false }
+
+        let workspace = fileManager.temporaryDirectory
+            .appendingPathComponent("lamp-move-\(UUID().uuidString)", isDirectory: true)
+        do {
+            try fileManager.createDirectory(at: workspace, withIntermediateDirectories: false)
+            defer { try? fileManager.removeItem(at: workspace) }
+
+            let unplaceable = LampSyncLibraryMigration.unplaceableEntries(in: pending.archive)
+            guard unplaceable.isEmpty else {
+                errorMessage = "Sync cannot place these, so the library was left as it is: "
+                    + unplaceable.prefix(5).joined(separator: ", ")
+                return false
+            }
+
+            let storedPassword = SyncSecretStore.password ?? ""
+            let credentials = username.isEmpty && storedPassword.isEmpty
+                ? nil : LampWebDAVCredentials(username: username, password: storedPassword)
+            let client = LampWebDAVClient(baseURL: url, credentials: credentials)
+
+            statusMessage = offer == .migrate
+                ? "Moving the library…"
+                : "Joining the library…"
+            let moved = try await LampSyncLibraryMigration.migrate(
+                in: client, imported: pending.archive, revision: pending.revision
+            )
+
+            moveOffer = nil
+            archiveToMove = nil
+            statusMessage = "Moved. Checking every file once…"
+            try await runBundlePass(
+                library: library,
+                store: client,
+                source: LampSyncFileRecords.webDAVSource(url),
+                preferenceSource: "webdav:\(url.absoluteString)",
+                workspace: workspace,
+                knownBundleRevision: moved.revision
+            )
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
     }
 
     /// One pass over a library that has moved to the per-file layout.

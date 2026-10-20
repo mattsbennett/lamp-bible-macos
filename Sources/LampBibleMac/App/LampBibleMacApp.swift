@@ -627,6 +627,22 @@ private struct ReaderSettingsView: View {
                         }
                     }
 
+                    if let offer = syncController.moveOffer {
+                        Section(offer.title) {
+                            Text(offer.explanation)
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Button(offer.buttonTitle) {
+                                Task {
+                                    await syncController.move(library: model.library)
+                                    model.refresh()
+                                }
+                            }
+                            .disabled(syncController.isSyncing)
+                        }
+                    }
+
                     if !syncController.conflicts.isEmpty {
                         Section("Needs Your Decision") {
                             Text(SyncConflictSummary.text(for: syncController.conflicts))
