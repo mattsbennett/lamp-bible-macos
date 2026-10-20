@@ -1609,13 +1609,23 @@ extension LibrarySyncController {
         skippedHighlightSets: [String],
         manifest: LampSyncLibraryManifest
     ) {
+        // Named, not just counted. "sent 1" cannot be chased: working out
+        // afterwards which file it was has cost real time more than once,
+        // and the outcome has carried the paths all along.
+        func listed(_ paths: [String], _ verb: String) -> String {
+            let names = paths.prefix(3).map { $0.split(separator: "/").last.map(String.init) ?? $0 }
+            let rest = paths.count - names.count
+            return "\(verb) \(paths.count): \(names.joined(separator: ", "))"
+                + (rest > 0 ? " and \(rest) more" : "")
+        }
+
         var parts = ["Synced \(Date().formatted(date: .abbreviated, time: .shortened))"]
-        if !outcome.installed.isEmpty || !outcome.reconciled.isEmpty {
-            let count = outcome.installed.count + outcome.reconciled.count
-            parts.append("brought \(count) file\(count == 1 ? "" : "s") down")
+        let down = outcome.installed + outcome.reconciled
+        if !down.isEmpty {
+            parts.append(listed(down.sorted(), "brought down"))
         }
         if !outcome.uploaded.isEmpty {
-            parts.append("sent \(outcome.uploaded.count)")
+            parts.append(listed(outcome.uploaded.sorted(), "sent"))
         }
         if !gaps.isEmpty {
             parts.append(

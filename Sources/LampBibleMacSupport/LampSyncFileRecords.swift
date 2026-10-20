@@ -117,18 +117,28 @@ public struct LampSyncFileRecords: Codable, Equatable, Sendable {
         sources[source, default: Source()].files[path] = record
     }
 
-    /// Records a copy taken from the server. The digest is this client's own
-    /// only once it has published its own encoding, so installing clears it:
-    /// an imported file has no last-upload from here.
+    /// Records a copy taken from the server.
+    ///
+    /// `digest` is what was installed, and it is kept as this client's own:
+    /// the local file now *is* those bytes, so there is nothing to send back.
+    /// Cleared instead, as this used to do, the next pass finds no record of
+    /// having sent the file, calls it changed, and publishes a module it has
+    /// just finished downloading — a commentary going back up for nothing,
+    /// and every other device reinstalling it.
+    ///
+    /// For an editable collection the re-export after a merge genuinely
+    /// differs from what came down, so it is still published. The record only
+    /// stops a file being sent back unaltered.
     public mutating func recordInstall(
         _ path: String,
         in source: String,
-        revision: String?
+        revision: String?,
+        digest: String? = nil
     ) {
         var record = sources[source, default: Source()].files[path] ?? Record()
         record.installedRevision = revision
         record.pendingRevision = nil
-        record.uploadedDigest = nil
+        record.uploadedDigest = digest
         sources[source, default: Source()].files[path] = record
     }
 

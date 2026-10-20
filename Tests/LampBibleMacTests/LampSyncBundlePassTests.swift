@@ -432,6 +432,48 @@ struct LampSyncBundlePassTests {
         #expect(second.uploaded.isEmpty)
         #expect(second.reconciled.isEmpty)
     }
+
+    /// A module taken from the server is not sent straight back.
+    ///
+    /// Installing used to clear this client's record of what it had in common
+    /// with the server, so the next pass found no record of having sent the
+    /// file, called it changed, and published a commentary it had just
+    /// downloaded — which every other device then reinstalled.
+    @Test func amoduleJustInstalledIsNotPublishedAgain() async throws {
+        let store = try seeded(path: "Commentaries/NIC.lamp", revision: "\"nic-2\"")
+        store.bodies["Commentaries/NIC.lamp"] = Data("the newer commentary".utf8)
+        let url = try makeFile("the older commentary")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var records = LampSyncFileRecords()
+        records.recordUpload(
+            "Commentaries/NIC.lamp", in: source,
+            digest: LampSyncContentRevision.digest(for: Data("the older commentary".utf8)),
+            revision: "\"nic-1\""
+        )
+        records.confirmRecorded(["Commentaries/NIC.lamp": "\"nic-1\""], in: source)
+
+        let first = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(
+            gathering: { gathered([local("Commentaries/NIC.lamp", url, "the older commentary")]) },
+            records: &records
+        )
+        #expect(first.installed == ["Commentaries/NIC.lamp"], "the server's copy had moved on")
+
+        // The library now holds what came down. Nothing to send.
+        let installed = try makeFile("the newer commentary")
+        defer { try? FileManager.default.removeItem(at: installed) }
+        let second = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 3_000 }
+        ).run(
+            gathering: {
+                gathered([local("Commentaries/NIC.lamp", installed, "the newer commentary")])
+            },
+            records: &records
+        )
+        #expect(second.uploaded.isEmpty, "it must not publish what it just installed")
+        #expect(second.installed.isEmpty)
+    }
 }
 
 // MARK: - Doubles

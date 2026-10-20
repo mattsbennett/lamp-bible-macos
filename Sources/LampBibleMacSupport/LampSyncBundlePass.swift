@@ -176,7 +176,10 @@ public struct LampSyncBundlePass {
                         return
                     }
                     try await library.install(path, from: downloaded.url)
-                    records.recordInstall(path, in: source, revision: downloaded.revision)
+                    records.recordInstall(
+                        path, in: source, revision: downloaded.revision,
+                        digest: try? LampSyncContentRevision.digest(forFileAt: downloaded.url)
+                    )
                     outcome.installed.append(path)
                 }
             } catch {
@@ -260,6 +263,22 @@ public struct LampSyncBundlePass {
                 records.recordUpload(path, in: source, digest: digest, revision: revision)
                 written[path] = (revision, condition.revision)
                 outcome.uploaded.append(path)
+            } catch where LampSyncConditionalWrite.isRefusal(error)
+                && condition == .ifAbsent
+                && (LampSyncFolderLayout.kind(of: path)?.isMedia ?? false) {
+                // A refused `.ifAbsent` means the file is already there, and
+                // for media that is the whole answer: a path's bytes never
+                // change, so an existing copy is either ours or a genuine
+                // clash. Without settling it the pass offers the same write
+                // every time and is refused every time — which is what two
+                // deck images did, on every pass, for ever.
+                do {
+                    try await settleExistingMedia(
+                        at: path, ours: digest, records: &records, outcome: &outcome
+                    )
+                } catch {
+                    outcome.failures.append("\(path): \(error.localizedDescription)")
+                }
             } catch {
                 // A refusal is another device having written first, which the
                 // next pass plans again from what won. Neither is fatal here.
@@ -346,6 +365,41 @@ public struct LampSyncBundlePass {
     /// The comparison is of real downloaded bytes, not an assumption that
     /// two clients encode alike. That distinction is the whole reason this
     /// is safe where seeding records from a guess would not be.
+    /// What to do about a file that would not go up because one is already
+    /// there, at a path whose bytes never change.
+    ///
+    /// Reading it is the only way to tell the two cases apart. If it is the
+    /// same file, this client simply had no record of having sent it — so it
+    /// records one, and the path is finished with. If it is a different file,
+    /// that is a real clash at an immutable path: reported, never
+    /// overwritten, because the other copy is as much somebody's as this one.
+    private func settleExistingMedia(
+        at path: String,
+        ours digest: String,
+        records: inout LampSyncFileRecords,
+        outcome: inout Outcome
+    ) async throws {
+        try await LampSyncScratchFile.with { scratch in
+            guard let theirs = try await store.read(path: path, into: scratch) else {
+                // Gone between the refusal and now. The next pass sends it.
+                return
+            }
+            guard try LampSyncContentRevision.digest(forFileAt: theirs.url) == digest else {
+                outcome.failures.append(
+                    "\(path): a different file is already there, so this one was not sent"
+                )
+                return
+            }
+            records.recordUpload(
+                path, in: source, digest: digest, revision: theirs.revision
+            )
+            records.confirmRecorded(
+                theirs.revision.map { [path: $0] } ?? [:], in: source
+            )
+            outcome.alreadyInStep.append(path)
+        }
+    }
+
     private func reconcile(
         _ merge: [String: String],
         local: [String: LampSyncLocalFile],
@@ -373,7 +427,10 @@ public struct LampSyncBundlePass {
                 continue
             }
             downloaded[path] = file.url
-            records.recordInstall(path, in: source, revision: file.revision)
+            records.recordInstall(
+                path, in: source, revision: file.revision,
+                digest: try? LampSyncContentRevision.digest(forFileAt: file.url)
+            )
         }
         outcome.alreadyInStep.append(contentsOf: unchanged)
         guard !downloaded.isEmpty else { return [:] }
