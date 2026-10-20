@@ -69,7 +69,9 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             try installFile(from: url, to: deckStore.decksDirectoryURL, named: path)
         case .deckAsset:
             try installFile(from: url, to: deckStore.assetsDirectoryURL, named: path)
-        case .devotionalMedia, .bookMedia, .workspaceFile:
+        case .bookMedia:
+            try installBookMedia(from: url, remotePath: path)
+        case .devotionalMedia, .workspaceFile:
             // Enumerated and planned, but installed by the parts of the pass
             // that know where they belong. Reported rather than ignored, so
             // nothing goes missing quietly.
@@ -92,6 +94,30 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
         ) { path in
             try await readRemote(path)
         }
+    }
+
+    /// A book's pictures are not inside its module — `media_json` holds only
+    /// their metadata — so these files are the library's only copy, and a
+    /// library without them shows the book with its pictures missing.
+    ///
+    /// Installed under `Media/Books/<module>/`, which is the root
+    /// `BookReaderMediaResolver` checks second and the only one a sync
+    /// writes, so what arrives is what the reader finds.
+    private func installBookMedia(from url: URL, remotePath: String) throws {
+        let components = remotePath.split(separator: "/").map(String.init)
+        guard components.count >= 3 else { throw PassError.unsupported(remotePath) }
+        let moduleID = components[1]
+        let relative = components.dropFirst(2).joined(separator: "/")
+        let destination = LampSyncLocalFiles
+            .bookMediaInstallRoot(for: moduleID, inLibraryAt: library.rootURL)
+            .appendingPathComponent(relative)
+        try fileManager.createDirectory(
+            at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        if fileManager.fileExists(atPath: destination.path) {
+            try fileManager.removeItem(at: destination)
+        }
+        try fileManager.copyItem(at: url, to: destination)
     }
 
     private func installFile(from url: URL, to directory: URL, named path: String) throws {

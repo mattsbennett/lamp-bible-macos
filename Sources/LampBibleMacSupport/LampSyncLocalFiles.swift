@@ -232,6 +232,102 @@ public enum LampSyncLocalFiles {
         }
     }
 
+    /// The pictures a book shows.
+    ///
+    /// These are not inside the `.lamp`: a book module's `media_json` holds
+    /// only each file's metadata, so the files under the library's media
+    /// folders are the library's **only** copy. A device that ignores them
+    /// shows those books with their pictures missing.
+    ///
+    /// Gathered from every root `BookReaderMediaResolver` reads, in its own
+    /// order of precedence, so what is published is what the reader would
+    /// show. A relative path found in an earlier root wins, as it does there.
+    /// Only for the module IDs passed in — books in the library, or ones the
+    /// manifest already names — which is what keeps a picture belonging to
+    /// something else from going up as a book's.
+    ///
+    /// Immutable at a path, like the files a writing embeds.
+    public static func bookMedia(
+        forBookModuleIDs moduleIDs: Set<String>,
+        inLibraryAt libraryRoot: URL,
+        fileManager: FileManager = .default
+    ) -> (candidates: [Candidate], unplaceable: [Unreadable]) {
+        var candidates: [Candidate] = []
+        var unplaceable: [Unreadable] = []
+        for moduleID in moduleIDs.sorted() {
+            var taken = Set<String>()
+            for root in bookMediaRoots(for: moduleID, inLibraryAt: libraryRoot) {
+                for (relative, url) in tree(under: root, fileManager: fileManager) {
+                    guard taken.insert(relative).inserted else { continue }
+                    do {
+                        candidates.append(Candidate(
+                            path: try LampSyncFolderLayout.bookMediaPath(
+                                moduleID: moduleID, path: relative
+                            ),
+                            kind: .bookMedia,
+                            url: url
+                        ))
+                    } catch {
+                        unplaceable.append(Unreadable(
+                            path: "\(moduleID)/\(relative)",
+                            reason: error.localizedDescription
+                        ))
+                    }
+                }
+            }
+        }
+        return (candidates, unplaceable)
+    }
+
+    /// Where a book's pictures may be, in the order the reader looks.
+    /// `Media/Books/<id>` is the one a sync writes to, and the others are
+    /// layouts libraries already have.
+    public static func bookMediaRoots(
+        for moduleID: String,
+        inLibraryAt libraryRoot: URL
+    ) -> [URL] {
+        [
+            "Media/Modules/\(moduleID)",
+            "Media/Books/\(moduleID)",
+            "Media/\(moduleID)",
+            "Modules/\(moduleID)/media",
+        ].map { libraryRoot.appendingPathComponent($0, isDirectory: true) }
+    }
+
+    /// Where a sync installs a book's picture: the root the reader checks
+    /// second, and the only one a sync writes.
+    public static func bookMediaInstallRoot(
+        for moduleID: String,
+        inLibraryAt libraryRoot: URL
+    ) -> URL {
+        libraryRoot.appendingPathComponent("Media/Books/\(moduleID)", isDirectory: true)
+    }
+
+    /// Every regular file under a directory, by its path relative to it.
+    /// Links are skipped, here as everywhere: what one points at is not this
+    /// library's to publish.
+    private static func tree(
+        under root: URL,
+        fileManager: FileManager
+    ) -> [(relative: String, url: URL)] {
+        guard let walker = fileManager.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+        let prefix = root.standardizedFileURL.path + "/"
+        var found: [(String, URL)] = []
+        for case let url as URL in walker {
+            guard let values = try? url.resourceValues(
+                forKeys: [.isRegularFileKey, .isSymbolicLinkKey]
+            ), values.isRegularFile == true, values.isSymbolicLink != true else { continue }
+            let path = url.standardizedFileURL.path
+            guard path.hasPrefix(prefix) else { continue }
+            found.append((String(path.dropFirst(prefix.count)), url))
+        }
+        return found.sorted { $0.0 < $1.0 }
+    }
+
     /// The decks and the images they show, from a library root.
     ///
     /// Decks are the `.lampdeck` files directly in the presentations folder,

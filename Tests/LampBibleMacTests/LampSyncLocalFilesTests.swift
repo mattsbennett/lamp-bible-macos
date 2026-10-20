@@ -28,6 +28,14 @@ struct LampSyncLocalFilesTests {
         )
     }
 
+    private func write(_ contents: String, at relativePath: String, in library: URL) throws {
+        let url = library.appendingPathComponent(relativePath)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        try Data(contents.utf8).write(to: url)
+    }
+
     private func writing(id: String, attachment: String) -> LampDevotional {
         let reference = LampDevotionalMediaReference(
             id: "ref-\(attachment)", type: .image, filename: attachment, mimeType: "image/jpeg"
@@ -227,6 +235,50 @@ struct LampSyncLocalFilesTests {
         )
 
         #expect(unresolved.map(\.path) == [nowhere])
+    }
+
+    /// A book's pictures are not inside its module: `media_json` holds only
+    /// their metadata, so these files are the library's only copy. Gathered
+    /// from every root the reader looks in, in its order, so what is
+    /// published is what the reader would show.
+    @Test func aBooksPicturesAreGatheredFromEveryRootTheReaderLooksIn() throws {
+        let library = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: library) }
+        // `Media/Modules` wins over `Media/Books` for the same relative path,
+        // as it does in BookReaderMediaResolver.
+        try write("preferred", at: "Media/Modules/atonement/plates/one.jpg", in: library)
+        try write("shadowed", at: "Media/Books/atonement/plates/one.jpg", in: library)
+        try write("only here", at: "Media/Books/atonement/two.jpg", in: library)
+        try write("legacy", at: "Modules/atonement/media/three.jpg", in: library)
+        try write("another book", at: "Media/Books/ignored/four.jpg", in: library)
+
+        let found = LampSyncLocalFiles.bookMedia(
+            forBookModuleIDs: ["atonement"], inLibraryAt: library
+        )
+
+        #expect(found.unplaceable.isEmpty)
+        #expect(found.candidates.map(\.path) == [
+            "BookMedia/atonement/plates/one.jpg",
+            "BookMedia/atonement/two.jpg",
+            "BookMedia/atonement/three.jpg",
+        ])
+        #expect(found.candidates.allSatisfy { $0.kind == .bookMedia })
+        #expect(
+            try Data(contentsOf: #require(found.candidates.first).url) == Data("preferred".utf8),
+            "the root the reader checks first is the copy that is published"
+        )
+        // A book nobody asked about stays where it is.
+        #expect(!found.candidates.contains { $0.path.contains("ignored") })
+    }
+
+    @Test func aLibraryWithNoBookPicturesYieldsNothing() throws {
+        let library = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: library) }
+        let found = LampSyncLocalFiles.bookMedia(
+            forBookModuleIDs: ["atonement"], inLibraryAt: library
+        )
+        #expect(found.candidates.isEmpty)
+        #expect(found.unplaceable.isEmpty)
     }
 
     /// The deck folder also holds the deletion ledger, which must never be

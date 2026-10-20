@@ -99,6 +99,26 @@ struct LampSyncMacPassLibraryTests {
         try await pass.deleteLocally("Workspaces/Presentations/sunday.lampdeck")
     }
 
+    /// Installed under the root the reader checks second, which is the only
+    /// one a sync writes — so what arrives is what the reader finds.
+    @Test func aBooksPictureIsInstalledWhereTheReaderLooks() async throws {
+        let (library, root, workspace) = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let incoming = workspace.appendingPathComponent("incoming")
+        try Data("a plate".utf8).write(to: incoming)
+
+        try await passLibrary(library, workspace: workspace)
+            .install("BookMedia/atonement/plates/one.jpg", from: incoming)
+
+        let installed = root.appendingPathComponent("Media/Books/atonement/plates/one.jpg")
+        #expect(try Data(contentsOf: installed) == Data("a plate".utf8))
+        #expect(
+            LampSyncLocalFiles.bookMediaRoots(for: "atonement", inLibraryAt: root)[1]
+                == root.appendingPathComponent("Media/Books/atonement", isDirectory: true),
+            "the install root is the reader's second root"
+        )
+    }
+
     /// A path outside the layout, and one whose kind this does not place, are
     /// both reported. A pass that silently skipped them would publish or hold
     /// a library quietly missing a file.
