@@ -450,52 +450,35 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
     /// somewhere else rather than an instruction. Items are deleted through
     /// their own ledger, which is a different thing from the file.
     public func deleteLocally(_ path: String) async throws {
-        guard let kind = LampSyncFolderLayout.kind(of: path) else {
-            throw PassError.unsupported(path)
-        }
-        switch kind {
-        case .module(.notes), .module(.devotionals):
-            // Only the two that hold everything. A collection's own file is
-            // never deleted on a tombstone: one file holds every note and
-            // one every writing, so honouring it would destroy the lot, and
-            // an item's deletion travels in the personal ledger instead.
-            //
-            // A module merely of that *kind* is a different matter, but the
-            // Mac has nothing separate to delete — an imported notes module
-            // is merged into this Mac's own notes on arrival — so it is
-            // unsupported rather than refused.
-            guard LampSyncRemovedModules.isSharedCollection(path) else {
-                throw PassError.unsupported(path)
-            }
+        // What a path means for deletion is core's rule, so the send side and
+        // the receive side cannot drift: a removal this Mac records is one
+        // every client will carry out, and vice versa.
+        switch LampSyncLocalDeletion.target(of: path) {
+        case .collection:
             throw PassError.refusedToDeleteACollection(path)
-        case .module(.highlights):
-            // One file per set, so this is bounded: it removes that set and
-            // nothing else, which is what deleting a set means. The library
-            // records the deletion, so it travels on from here.
-            guard let moduleID = LampSyncFolderLayout.remoteModuleID(of: path),
-                  let setID = highlightSetIDsByModule[moduleID]
-            else { throw PassError.unsupported(path) }
-            try await library.deleteHighlightSet(id: setID)
-        case .module:
-            guard let moduleID = LampSyncFolderLayout.remoteModuleID(of: path) else {
-                throw PassError.unsupported(path)
-            }
-            try await library.remove(moduleID: moduleID)
-        case .deck:
-            try removeFile(named: path, from: deckStore.decksDirectoryURL)
-        case .deckAsset:
-            try removeFile(named: path, from: deckStore.assetsDirectoryURL)
-        case .devotionalMedia, .bookMedia, .workspaceFile:
-            // Media goes when the module that shows it goes, and a workspace
-            // file's removal travels inside the tree the importer reads.
+        case .unsupported:
             throw PassError.unsupported(path)
+        case .deck(let filename):
+            try removeFile(named: filename, from: deckStore.decksDirectoryURL)
+        case .deckAsset(let filename):
+            try removeFile(named: filename, from: deckStore.assetsDirectoryURL)
+        case .module(let moduleID):
+            // A highlight module is an installed module on the phone and a
+            // *set* here, so the one allowed deletion that needs translating
+            // is this one. Without the mapping the Mac cannot tell which set
+            // the module stands for and must not guess.
+            if LampSyncFolderLayout.kind(of: path) == .module(.highlights) {
+                guard let setID = highlightSetIDsByModule[moduleID] else {
+                    throw PassError.unsupported(path)
+                }
+                try await library.deleteHighlightSet(id: setID)
+            } else {
+                try await library.remove(moduleID: moduleID)
+            }
         }
     }
 
-    private func removeFile(named path: String, from directory: URL) throws {
-        guard let filename = path.split(separator: "/").last.map(String.init) else {
-            throw PassError.unsupported(path)
-        }
+    private func removeFile(named filename: String, from directory: URL) throws {
         let url = directory.appendingPathComponent(filename)
         guard fileManager.fileExists(atPath: url.path) else { return }
         try fileManager.removeItem(at: url)

@@ -74,39 +74,14 @@ public struct LampSyncRemovedModules: Codable, Equatable, Sendable {
     ) throws -> String? {
         guard let path = try? LampSyncFolderLayout.modulePath(
             kind: LampSyncContentKind(module.kind), moduleID: module.id
-        ), !Self.isSharedCollection(path) else { return nil }
+        ), LampSyncLocalDeletion.target(of: path).isAllowed else { return nil }
+        // Refused by core's rule, which is the same rule every client's
+        // `deleteLocally` answers to. Recording a deletion no client carries
+        // out is how an imported module whose ID is `notes` would tombstone
+        // the file every note lives in.
         var records = load(fromLibraryAt: libraryRoot, fileManager: fileManager)
         records.record(path, at: Int64(date.timeIntervalSince1970 * 1_000))
         try records.save(toLibraryAt: libraryRoot, fileManager: fileManager)
         return path
-    }
-
-    /// The paths that hold a whole collection rather than one module.
-    ///
-    /// An installed module can collide with one of these: import an exported
-    /// notes file and its module ID may be `notes`, whose module path is the
-    /// very file this Mac publishes every note into. Removing that module is
-    /// a local act — the installed copy goes, the collection does not — but
-    /// recorded as a deletion it tombstones the collection, and a client that
-    /// honours the tombstone deletes every note in it. The phone does exactly
-    /// that, with only a later save to save it.
-    ///
-    /// So a module removal never tombstones one of these. The cost is that
-    /// the next pass fetches the file back and imports it as personal study
-    /// data, which is a redundant round rather than a loss. An item deleted
-    /// from a collection still travels, in the personal ledger, which is
-    /// where a collection's deletions belong.
-    static func isSharedCollection(_ path: String) -> Bool {
-        guard let kind = LampSyncFolderLayout.kind(of: path) else { return false }
-        switch kind {
-        case .module(.notes):
-            return LampSyncFolderLayout.remoteModuleID(of: path)
-                == LampSyncMacPassLibrary.remoteNotesModuleID
-        case .module(.devotionals):
-            return LampSyncFolderLayout.remoteModuleID(of: path)
-                == LampSyncMacPassLibrary.remoteWritingModuleID
-        default:
-            return false
-        }
     }
 }
