@@ -355,6 +355,42 @@ struct LampSyncBundlePassTests {
             "its file is still listed, so forgetting the deletion would resurrect it"
         )
     }
+
+    /// The first pass after a move has no records, so the plan calls every
+    /// file changed on both sides. Each one is fetched — but a file whose
+    /// bytes turn out to be the ones this client already holds is recorded
+    /// and left alone, not reinstalled. Without this a library's worth of
+    /// modules is rebuilt having just been proved identical, and nothing is
+    /// recorded, so the next pass does it again.
+    @Test func afileWhoseBytesAlreadyMatchIsRecordedRatherThanReinstalled() async throws {
+        let store = try seeded(path: "Translations/KJVs.lamp", revision: "\"kjv-1\"")
+        // The server's copy is the same bytes this Mac holds.
+        store.bodies["Translations/KJVs.lamp"] = Data("a translation".utf8)
+        let url = try makeFile("a translation")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let library = StubLibrary()
+        var records = LampSyncFileRecords()
+
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: library, source: source, now: { 2_000 }
+        ).run(
+            gathering: { gathered([local("Translations/KJVs.lamp", url, "a translation")]) },
+            records: &records
+        )
+
+        #expect(outcome.alreadyInStep == ["Translations/KJVs.lamp"])
+        #expect(outcome.reconciled.isEmpty)
+        #expect(library.installed.isEmpty, "nothing to install: it is already these bytes")
+        #expect(library.reconcileCalls == 0)
+        #expect(outcome.uploaded.isEmpty, "and nothing to send back")
+
+        // Recorded as what it is — these bytes, that revision — so the next
+        // pass has nothing to do rather than proving it all again.
+        let record = try #require(records.record("Translations/KJVs.lamp", in: source))
+        #expect(record.uploadedDigest == LampSyncContentRevision.digest(for: Data("a translation".utf8)))
+        #expect(record.installedRevision == "\"kjv-1\"")
+        #expect(record.pendingRevision == nil)
+    }
 }
 
 // MARK: - Doubles

@@ -68,6 +68,9 @@ public struct LampSyncBundlePass {
         public var deletedLocally: [String] = []
         public var tombstoned: [String] = []
         public var reaped: [String] = []
+        /// Files the server's copy turned out to be byte-for-byte the one
+        /// this client already held: fetched, compared, and left alone.
+        public var alreadyInStep: [String] = []
         /// A file the server would not take, or one whose work failed. The
         /// pass carries on and reports, rather than abandoning the rest.
         public var failures: [String] = []
@@ -184,7 +187,9 @@ public struct LampSyncBundlePass {
         var republish: [String: URL] = [:]
         if !plan.merge.isEmpty {
             do {
-                republish = try await reconcile(plan.merge, records: &records, outcome: &outcome)
+                republish = try await reconcile(
+                    plan.merge, local: filesByPath, records: &records, outcome: &outcome
+                )
             } catch {
                 outcome.failures.append("merging: \(error.localizedDescription)")
             }
@@ -298,21 +303,51 @@ public struct LampSyncBundlePass {
         return outcome
     }
 
+    /// Downloads everything the plan says both sides changed, and merges what
+    /// is genuinely different.
+    ///
+    /// A file whose downloaded bytes are the ones this client already holds
+    /// needs neither merging nor installing — it is only *recorded*, as
+    /// having been uploaded from here at the server's revision, which is the
+    /// plain truth about it: these bytes, that revision. Without that, a pass
+    /// with no records to go on treats every file as changed on both sides
+    /// and reinstalls the whole library, module by module, having just
+    /// proved each one identical. It also leaves nothing recorded, so the
+    /// next pass does it again.
+    ///
+    /// The comparison is of real downloaded bytes, not an assumption that
+    /// two clients encode alike. That distinction is the whole reason this
+    /// is safe where seeding records from a guess would not be.
     private func reconcile(
         _ merge: [String: String],
+        local: [String: LampSyncLocalFile],
         records: inout LampSyncFileRecords,
         outcome: inout Outcome
     ) async throws -> [String: URL] {
         var downloaded: [String: URL] = [:]
         var scratch: [URL] = []
         defer { for url in scratch { try? FileManager.default.removeItem(at: url) } }
+        var unchanged: [String] = []
         for path in merge.keys.sorted() {
             let url = LampSyncScratchFile.url()
             scratch.append(url)
             guard let file = try await store.read(path: path, into: url) else { continue }
+            if let held = local[path],
+               let fetched = try? LampSyncContentRevision.digest(forFileAt: file.url),
+               fetched == held.digest {
+                records.recordUpload(
+                    path, in: source, digest: held.digest, revision: file.revision
+                )
+                records.confirmRecorded(
+                    file.revision.map { [path: $0] } ?? [:], in: source
+                )
+                unchanged.append(path)
+                continue
+            }
             downloaded[path] = file.url
             records.recordInstall(path, in: source, revision: file.revision)
         }
+        outcome.alreadyInStep.append(contentsOf: unchanged)
         guard !downloaded.isEmpty else { return [:] }
         let republish = try await library.reconcile(downloaded)
         outcome.reconciled = downloaded.keys.sorted()
