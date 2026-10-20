@@ -182,6 +182,25 @@ final class LibrarySyncController: ObservableObject {
                 var observedFolder: LampSyncArchive?
                 let hasScope = folder.startAccessingSecurityScopedResource()
                 defer { if hasScope { folder.stopAccessingSecurityScopedResource() } }
+
+                // The same branch as WebDAV, over the folder as a store. The
+                // scope above is held for the store's whole lifetime, which
+                // is this pass, as it requires.
+                let directory = LampSyncDirectoryStore(root: folder)
+                if case .perFile(let opened) = try await LampSyncLibraryLayout.of(directory) {
+                    moveOffer = nil
+                    archiveToMove = nil
+                    try await runBundlePass(
+                        library: library,
+                        store: directory,
+                        source: LampSyncFileRecords.folderSource(folder),
+                        preferenceSource: preferenceSource,
+                        workspace: workspace,
+                        knownBundleRevision: opened?.revision
+                    )
+                    break
+                }
+
                 try await LampSyncEngine.run(
                     pullAndMerge: {
                         let observed: LampSyncArchive
@@ -273,6 +292,14 @@ final class LibrarySyncController: ObservableObject {
                         }
                     },
                     complete: {
+                        // Captured already, so which kind of library this is
+                        // costs nothing to decide.
+                        if let observedFolder {
+                            self.archiveToMove = (observedFolder, nil)
+                            self.moveOffer = LampSyncSettingsStore
+                                .earlierLibrary(ofArchive: observedFolder) == .phone
+                                ? .join : .migrate
+                        }
                         self.defaults.set(Date(), forKey: "sync.lastCompleted")
                         self.statusMessage = "Synced \(Date().formatted(date: .abbreviated, time: .shortened))"
                     }
@@ -1192,10 +1219,6 @@ extension LibrarySyncController {
     @discardableResult
     func move(library: LampLibrary) async -> Bool {
         guard let offer = moveOffer, let pending = archiveToMove else { return false }
-        guard case .webDAV = provider, let url = URL(string: endpoint) else {
-            errorMessage = "Moving a folder library is not supported yet."
-            return false
-        }
         isSyncing = true
         errorMessage = nil
         defer { isSyncing = false }
@@ -1213,16 +1236,40 @@ extension LibrarySyncController {
                 return false
             }
 
-            let storedPassword = SyncSecretStore.password ?? ""
-            let credentials = username.isEmpty && storedPassword.isEmpty
-                ? nil : LampWebDAVCredentials(username: username, password: storedPassword)
-            let client = LampWebDAVClient(baseURL: url, credentials: credentials)
+            // Whichever provider this library is on. The folder keeps its
+            // security scope for as long as its store is alive, which is
+            // until this move and the pass after it have finished.
+            let store: any LampSyncRemoteStore
+            let source: String
+            let preferenceSource: String
+            var folderScope: URL?
+            switch provider {
+            case .webDAV:
+                guard let url = URL(string: endpoint) else {
+                    throw LibrarySyncError.invalidWebDAVURL
+                }
+                let storedPassword = SyncSecretStore.password ?? ""
+                let credentials = username.isEmpty && storedPassword.isEmpty
+                    ? nil : LampWebDAVCredentials(username: username, password: storedPassword)
+                store = LampWebDAVClient(baseURL: url, credentials: credentials)
+                source = LampSyncFileRecords.webDAVSource(url)
+                preferenceSource = "webdav:\(url.absoluteString)"
+            case .folder:
+                let folder = try resolveFolderURL()
+                if folder.startAccessingSecurityScopedResource() { folderScope = folder }
+                store = LampSyncDirectoryStore(root: folder)
+                source = LampSyncFileRecords.folderSource(folder)
+                preferenceSource = "folder:\(folder.standardizedFileURL.path)"
+            case .off:
+                throw LibrarySyncError.providerNotConfigured
+            }
+            defer { folderScope?.stopAccessingSecurityScopedResource() }
 
             statusMessage = offer == .migrate
                 ? "Moving the library…"
                 : "Joining the library…"
             let moved = try await LampSyncLibraryMigration.migrate(
-                in: client, imported: pending.archive, revision: pending.revision
+                in: store, imported: pending.archive, revision: pending.revision
             )
 
             moveOffer = nil
@@ -1230,9 +1277,9 @@ extension LibrarySyncController {
             statusMessage = "Moved. Checking every file once…"
             try await runBundlePass(
                 library: library,
-                store: client,
-                source: LampSyncFileRecords.webDAVSource(url),
-                preferenceSource: "webdav:\(url.absoluteString)",
+                store: store,
+                source: source,
+                preferenceSource: preferenceSource,
                 workspace: workspace,
                 knownBundleRevision: moved.revision
             )
