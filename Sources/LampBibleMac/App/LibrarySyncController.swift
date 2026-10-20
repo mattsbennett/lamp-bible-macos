@@ -1440,6 +1440,7 @@ extension LibrarySyncController {
                 return gathered.gathered
             },
             records: &records,
+            mergingVersion: { bundle, version in try bundle.merge(version: version.bundle) },
             receiving: { bundle in
                 manifest = bundle.manifest
                 plannedSettings = try settings.receive(bundle)

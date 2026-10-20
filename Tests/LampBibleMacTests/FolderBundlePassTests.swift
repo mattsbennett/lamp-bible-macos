@@ -166,7 +166,7 @@ struct FolderBundlePassTests {
 
 /// A library that installs nothing, for a pass whose point is the store.
 private struct NoopPassLibrary: LampSyncPassLibrary {
-    func install(_ path: String, from url: URL) async throws {}
+    func install(_ path: String, from url: URL) async throws -> String? { nil }
     func reconcile(_ downloaded: [String: URL]) async throws -> [String: URL] { [:] }
     func deleteLocally(_ path: String) async throws {}
 }

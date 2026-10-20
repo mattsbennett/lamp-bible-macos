@@ -75,7 +75,17 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
 
     // MARK: - Installing
 
-    public func install(_ path: String, from url: URL) async throws {
+    /// Installs a file, and says what this Mac then holds at that path.
+    ///
+    /// An editable collection is merged into the library, so what this Mac
+    /// would publish afterwards is its *own* export of the merged content —
+    /// different bytes from the ones that arrived, because the two clients
+    /// encode the same values differently. Returning that export's digest is
+    /// what stops the two devices trading encodings for ever. Everything else
+    /// is stored as it arrived, so the bytes received are the truth about it
+    /// and nil says so.
+    @discardableResult
+    public func install(_ path: String, from url: URL) async throws -> String? {
         guard let kind = LampSyncFolderLayout.kind(of: path) else {
             throw PassError.unsupported(path)
         }
@@ -84,30 +94,48 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             _ = try await library.importPersonalStudyData(
                 from: try named(url, as: path), forSync: true
             )
+            return try await digestOfOwnExport(
+                .notes, adapterKind: .notes,
+                remoteModuleID: Self.remoteNotesModuleID, filename: "notes.lamp"
+            )
         case .module(.highlights):
             let file = try named(url, as: path)
             // Read before importing: the set ID is in the module, and this is
             // the only place the mapping to its module ID can be learned.
-            if let setID = (try? LampWebDAVPersonalArchiveAdapter.highlightSetID(
+            let setID = (try? LampWebDAVPersonalArchiveAdapter.highlightSetID(
                 in: try Data(contentsOf: file, options: .mappedIfSafe)
-            )) ?? nil, let moduleID = LampSyncFolderLayout.remoteModuleID(of: path) {
+            )) ?? nil
+            if let setID, let moduleID = LampSyncFolderLayout.remoteModuleID(of: path) {
                 learned.note(setID: setID, moduleID: moduleID)
             }
             _ = try await library.importPersonalStudyData(from: file, forSync: true)
+            guard let setID, let moduleID = LampSyncFolderLayout.remoteModuleID(of: path),
+                  let exported = try? await exportHighlights(setID: setID, moduleID: moduleID)
+            else { return nil }
+            return try? LampSyncContentRevision.digest(forFileAt: exported)
         case .module(.devotionals):
             try await installWritings(from: try named(url, as: path), remotePath: path)
+            return try await digestOfOwnExport(
+                .writing, adapterKind: .devotionals,
+                remoteModuleID: Self.remoteWritingModuleID, filename: "devotionals.lamp"
+            )
         case .module:
             _ = try await library.install(from: try named(url, as: path))
+            return nil
         case .deck:
             try installFile(from: url, to: deckStore.decksDirectoryURL, named: path)
+            return nil
         case .deckAsset:
             try installFile(from: url, to: deckStore.assetsDirectoryURL, named: path)
+            return nil
         case .bookMedia:
             try installBookMedia(from: url, remotePath: path)
+            return nil
         case .workspaceFile:
             // Staged, not installed: a workspace is a tree with one importer,
             // so what arrives is gathered and taken in by `finishInstalling`.
             try stageWorkspaceFile(from: url, remotePath: path)
+            return nil
         case .devotionalMedia:
             // Installed by the step that knows where a writing's attachments
             // belong. Reported rather than ignored, so nothing goes missing
@@ -167,6 +195,20 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             try fileManager.removeItem(at: destination)
         }
         try fileManager.copyItem(at: url, to: destination)
+    }
+
+    /// This Mac's own export of a collection it has just merged into.
+    private func digestOfOwnExport(
+        _ module: LampPersonalModule,
+        adapterKind: LampWebDAVPersonalArchiveKind,
+        remoteModuleID: String,
+        filename: String
+    ) async throws -> String? {
+        let exported = try await exportPersonal(
+            module, adapterKind: adapterKind,
+            remoteModuleID: remoteModuleID, filename: filename
+        )
+        return try? LampSyncContentRevision.digest(forFileAt: exported)
     }
 
     /// The downloaded body under a name the library will accept.

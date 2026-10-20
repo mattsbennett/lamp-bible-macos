@@ -5,7 +5,19 @@ import LampModuleKit
 /// this, so the pass itself only orders the work and keeps the records.
 public protocol LampSyncPassLibrary {
     /// Installs a file taken from the server, whose body is already on disk.
-    func install(_ path: String, from url: URL) async throws
+    ///
+    /// Returns this client's own digest of what it now holds at that path, or
+    /// nil when that is simply the bytes it was given.
+    ///
+    /// The distinction decides whether two devices settle or argue. A
+    /// read-only module is stored as it arrived, so the downloaded digest is
+    /// the truth about it. An editable collection is merged into the library
+    /// and re-exported, and the two clients encode identically-valued content
+    /// differently — so recording the *downloaded* digest means the next pass
+    /// finds its own export unlike it, calls the file changed, and publishes.
+    /// The other device does the same with what it receives, and the two
+    /// trade encodings of the same content for ever.
+    func install(_ path: String, from url: URL) async throws -> String?
 
     /// Reconciles the files both sides changed, having downloaded each.
     ///
@@ -139,6 +151,12 @@ public struct LampSyncBundlePass {
     /// to read local state asynchronously is read in `receiving` and kept for
     /// `contributing` to use.
     ///
+    /// `mergingVersion` folds in the copies iCloud keeps when two devices
+    /// wrote at once. It is the caller's because merging a bundle needs to
+    /// merge the ledgers inside it, and those belong to the library rather
+    /// than to a pass. Without one, a bundle with versions stops rather than
+    /// guessing which to keep.
+    ///
     /// `gathering` runs **after** `receiving`, and that order is load-bearing:
     /// applying the deletion records removes content from this library, so a
     /// library read before them would publish the very notes and writings it
@@ -147,6 +165,9 @@ public struct LampSyncBundlePass {
     public func run(
         gathering: () async throws -> Gathered,
         records: inout LampSyncFileRecords,
+        mergingVersion: (
+            (inout LampSyncSettingsBundle, LampSyncSettingsStore.Version) throws -> Void
+        )? = nil,
         receiving: (LampSyncSettingsBundle) async throws -> Void = { _ in },
         contributing: (inout LampSyncSettingsBundle) throws -> Void = { _ in }
     ) async throws -> Outcome {
@@ -203,10 +224,11 @@ public struct LampSyncBundlePass {
                         // and for anything else the next pass sees it again.
                         return
                     }
-                    try await library.install(path, from: downloaded.url)
+                    let held = try await library.install(path, from: downloaded.url)
                     records.recordInstall(
                         path, in: source, revision: downloaded.revision,
-                        digest: try? LampSyncContentRevision.digest(forFileAt: downloaded.url)
+                        digest: held
+                            ?? (try? LampSyncContentRevision.digest(forFileAt: downloaded.url))
                     )
                     outcome.installed.append(path)
                 }
@@ -245,7 +267,17 @@ public struct LampSyncBundlePass {
             toPublish[path] = .ifRevision(revision)
         }
         var written: [String: (revision: String?, previous: String?)] = [:]
-        for (path, condition) in toPublish.sorted(by: { $0.key < $1.key }) {
+        // Media first, then everything else, each in path order. A writing
+        // must never land on another device before the picture it names, and
+        // a book before its plates. Today that also happens to fall out of
+        // the alphabet — `BookMedia` before `Books`, `DevotionalMedia` before
+        // `Devotionals` — which is true until somebody renames a folder.
+        let inOrder = toPublish.sorted { a, b in
+            let aMedia = LampSyncFolderLayout.kind(of: a.key)?.isMedia ?? false
+            let bMedia = LampSyncFolderLayout.kind(of: b.key)?.isMedia ?? false
+            return aMedia == bMedia ? a.key < b.key : aMedia
+        }
+        for (path, condition) in inOrder {
             // A merged file is only ever the merge's own output: falling back
             // to the pre-merge copy would publish the other side's changes
             // straight back out of the library.
@@ -331,7 +363,7 @@ public struct LampSyncBundlePass {
         let tombstone = plan.tombstone
         let snapshot = try await LampSyncSettingsStore.update(
             in: store,
-            mergingVersion: { bundle, version in try bundle.merge(version: version.bundle) }
+            mergingVersion: mergingVersion
         ) { bundle in
             try contributing(&bundle)
             for (path, write) in written {

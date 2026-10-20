@@ -523,6 +523,82 @@ struct LampSyncBundlePassTests {
             "nothing recorded means nothing held, whatever the caller says"
         )
     }
+
+    /// Two clients encode identically-valued content differently, so after
+    /// taking an editable collection from the other device this client's own
+    /// export is *different bytes*. Recording the downloaded digest therefore
+    /// makes the next pass call the file changed and publish — and the other
+    /// device does the same with what it receives, so the two trade
+    /// encodings for ever while the content never moves.
+    @Test func takingAnEditableCollectionDoesNotStartAnExchangeOfEncodings() async throws {
+        let store = try seeded(path: "Notes/notes.lamp", revision: "\"notes-2\"")
+        store.bodies["Notes/notes.lamp"] = Data("the other device's encoding".utf8)
+        let mine = try makeFile("my own encoding")
+        defer { try? FileManager.default.removeItem(at: mine) }
+        let library = StubLibrary()
+        // What this client holds once it has merged and re-exported: its own
+        // spelling of the same content, not the bytes that arrived.
+        library.heldAfterInstall = LampSyncContentRevision.digest(
+            for: Data("my own encoding".utf8)
+        )
+        // Unchanged here since this client last published, so the other
+        // device's write is simply taken rather than merged.
+        var records = LampSyncFileRecords()
+        records.recordUpload(
+            "Notes/notes.lamp", in: source,
+            digest: LampSyncContentRevision.digest(for: Data("my own encoding".utf8)),
+            revision: "\"notes-1\""
+        )
+        records.confirmRecorded(["Notes/notes.lamp": "\"notes-1\""], in: source)
+
+        let first = try await LampSyncBundlePass(
+            store: store, library: library, source: source, now: { 2_000 }
+        ).run(
+            gathering: { gathered([local("Notes/notes.lamp", mine, "my own encoding")]) },
+            records: &records
+        )
+        #expect(first.installed == ["Notes/notes.lamp"])
+
+        let second = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 3_000 }
+        ).run(
+            gathering: { gathered([local("Notes/notes.lamp", mine, "my own encoding")]) },
+            records: &records
+        )
+        #expect(
+            second.uploaded.isEmpty,
+            "its own encoding of what it just took is not a change worth publishing"
+        )
+        #expect(second.installed.isEmpty)
+    }
+
+    /// A picture goes up before the writing that names it, so the writing
+    /// never lands on another device pointing at something not yet there.
+    /// True today only because `DevotionalMedia` sorts before `Devotionals`.
+    @Test func mediaIsPublishedBeforeTheModulesThatNameIt() async throws {
+        let store = FakeStore()
+        let url = try makeFile("bytes")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var records = LampSyncFileRecords()
+
+        _ = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(
+            gathering: {
+                gathered([
+                    local("Devotionals/devotionals.lamp", url, "bytes"),
+                    local("DevotionalMedia/devotionals/w1/a.jpg", url, "bytes"),
+                    local("Translations/KJVs.lamp", url, "bytes"),
+                ])
+            },
+            records: &records
+        )
+
+        let writes = store.operations.filter { $0.hasPrefix("write ") }
+        let picture = try #require(writes.firstIndex(of: "write DevotionalMedia/devotionals/w1/a.jpg"))
+        let writing = try #require(writes.firstIndex(of: "write Devotionals/devotionals.lamp"))
+        #expect(picture < writing)
+    }
 }
 
 // MARK: - Doubles
@@ -533,7 +609,14 @@ final class StubLibrary: LampSyncPassLibrary, @unchecked Sendable {
     var reconcileCalls = 0
     var reconciled: (([String: URL]) -> [String: URL]) = { _ in [:] }
 
-    func install(_ path: String, from url: URL) async throws { installed.append(path) }
+    /// What this client holds afterwards, when it is not simply what
+    /// arrived — an editable collection's own re-export.
+    var heldAfterInstall: String?
+
+    func install(_ path: String, from url: URL) async throws -> String? {
+        installed.append(path)
+        return heldAfterInstall
+    }
 
     func reconcile(_ downloaded: [String: URL]) async throws -> [String: URL] {
         reconcileCalls += 1
