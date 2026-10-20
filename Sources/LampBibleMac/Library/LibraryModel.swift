@@ -389,6 +389,9 @@ final class LibraryModel: ObservableObject {
     func remove(_ module: LampInstalledModule) {
         Task {
             do {
+                // Written down before it goes: afterwards there is nothing
+                // left to say it was ever here, and sync would fetch it back.
+                try? LampSyncRemovedModules.record(module, inLibraryAt: library.rootURL)
                 try await library.remove(moduleID: module.id)
                 if selectedTranslationID == module.id {
                     selectedTranslationID = nil

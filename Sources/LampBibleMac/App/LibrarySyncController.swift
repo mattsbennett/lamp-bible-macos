@@ -1483,6 +1483,14 @@ extension LibrarySyncController {
             records.setHighlightModuleID(moduleID, forSet: setID, in: source)
         }
         try records.save(toLibraryAt: library.rootURL, fileManager: fileManager)
+        // The manifest carries these now, so this Mac need not.
+        if !outcome.tombstoned.isEmpty {
+            var removed = LampSyncRemovedModules.load(
+                fromLibraryAt: library.rootURL, fileManager: fileManager
+            )
+            removed.forget(outcome.tombstoned)
+            try removed.save(toLibraryAt: library.rootURL, fileManager: fileManager)
+        }
         if let plannedSettings {
             try settings.remember(plannedSettings)
             reportDisputedPreferences(plannedSettings.merge)
@@ -1626,6 +1634,14 @@ extension LibrarySyncController {
         for (deckID, deletedAt) in deckLedger.deletedAt {
             guard let path = try? LampSyncFolderLayout.deckPath(deckID: deckID) else { continue }
             result.gathered.deletedLocally[path] = Int64(deletedAt.timeIntervalSince1970 * 1_000)
+        }
+        // Modules removed here. Nothing else records them: a note, a writing
+        // and a highlight set each leave a trace in the personal ledger as
+        // they go, and a deck in its own, but removing a module leaves none.
+        for (path, removedAt) in LampSyncRemovedModules.load(
+            fromLibraryAt: library.rootURL, fileManager: fileManager
+        ).removedAt {
+            result.gathered.deletedLocally[path] = removedAt
         }
         // A highlight set's deletion is recorded per item; the file that
         // carried it is the module this source published it under.
