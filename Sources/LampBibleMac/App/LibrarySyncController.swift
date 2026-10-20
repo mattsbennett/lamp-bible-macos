@@ -346,6 +346,12 @@ final class LibrarySyncController: ObservableObject {
                 var preferenceMerge: LampSharedPreferenceLedger.Merge?
                 var iOSImportSummary = IOSWebDAVImportSummary()
                 var archiveSnapshot: LampSyncArchiveRemote.Snapshot?
+                // What this pass leaves at the archive path. The move must
+                // be conditioned on this, not on what the pass read: the
+                // publish below replaces the archive, so comparing against
+                // the revision read at the start compares against this Mac's
+                // own write and never matches.
+                var publishedArchiveRevision: String?
                 // Kept apart from a nil snapshot, which also means "there is
                 // no archive yet" — a first publish, which must go ahead.
                 var archiveReadFailed = false
@@ -503,7 +509,7 @@ final class LibrarySyncController: ObservableObject {
                             throw LibrarySyncError.archiveUnreadable
                         }
                         do {
-                            try await LampSyncArchiveRemote.publish(
+                            publishedArchiveRevision = try await LampSyncArchiveRemote.publish(
                                 archive,
                                 replacing: archiveSnapshot,
                                 in: client
@@ -548,7 +554,9 @@ final class LibrarySyncController: ObservableObject {
                         // this is costs nothing to decide — asking the server
                         // again would download all of it a second time.
                         if let snapshot = archiveSnapshot {
-                            importedArchiveRevision = .some(snapshot.revision)
+                            // The archive this pass just published, whose
+                            // content is this library's by construction.
+                            importedArchiveRevision = .some(publishedArchiveRevision)
                             moveOffer = LampSyncSettingsStore
                                 .earlierLibrary(ofArchive: snapshot.archive) == .phone
                                 ? .join : .migrate
@@ -1311,11 +1319,15 @@ extension LibrarySyncController {
     /// Reads the library to move, now that someone has asked for it.
     ///
     /// Read rather than remembered, so no archive is held between passes. On
-    /// WebDAV it must still be the one this Mac imported: the move replaces
-    /// the archive with the bundle, so an archive another device wrote since
-    /// holds content this library never took in, and publishing from this
-    /// library afterwards would drop it. Refused rather than guessed at, with
-    /// a sentence saying what to do.
+    /// WebDAV it must still be the one this Mac's last pass left there: the
+    /// move replaces the archive with the bundle, so an archive another
+    /// device wrote since holds content this library never took in, and
+    /// publishing from this library afterwards would drop it.
+    ///
+    /// The revision to compare is the one that pass *published*, not the one
+    /// it read — the pass replaces the archive at its end, so comparing
+    /// against the read revision compares against this Mac's own write and
+    /// refuses every time.
     private func archiveToMove(
         from store: any LampSyncRemoteStore,
         importedRevision: String?
@@ -1334,9 +1346,7 @@ extension LibrarySyncController {
         guard LampSyncConditionalWrite.namesSameRevision(
             snapshot.revision, importedRevision
         ) else {
-            throw LibrarySyncError.incompleteRemoteImport([
-                "another device published since the last sync — sync again, then move",
-            ])
+            throw LibrarySyncError.libraryMovedOn
         }
         return snapshot.archive
     }
@@ -1663,6 +1673,7 @@ private enum LibrarySyncError: LocalizedError {
     case incompleteRemoteImport([String])
     case missingRemoteRevision(String)
     case archiveUnreadable
+    case libraryMovedOn
 
     var errorDescription: String? {
         switch self {
@@ -1675,6 +1686,8 @@ private enum LibrarySyncError: LocalizedError {
             "Sync stopped before publishing because \(failures.count) remote item\(failures.count == 1 ? "" : "s") could not be imported: \(failures.prefix(3).joined(separator: "; "))"
         case .missingRemoteRevision(let path):
             "Sync stopped because the server did not provide an ETag for \(path)."
+        case .libraryMovedOn:
+            "The library on the server changed after the last sync, so the move was not started. Nothing was changed. Sync Now again, then move."
         }
     }
 }
