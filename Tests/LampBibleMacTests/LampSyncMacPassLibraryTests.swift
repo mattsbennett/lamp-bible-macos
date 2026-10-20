@@ -41,6 +41,32 @@ struct LampSyncMacPassLibraryTests {
         }
     }
 
+    /// A tombstone arriving from another device for a module this Mac holds
+    /// must remove *that* module. The engine decides to delete; this decides
+    /// what. Getting the path-to-identity step wrong would either remove
+    /// nothing or, worse, remove something else.
+    ///
+    /// The library here is empty, so it answers "not installed" — which is
+    /// the proof wanted: the removal got as far as naming `wsd_greek`, rather
+    /// than failing on the path.
+    @Test func atombstonedModulePathNamesTheModuleToRemove() async throws {
+        let (library, root, workspace) = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        do {
+            try await passLibrary(library, workspace: workspace)
+                .deleteLocally("Dictionaries/wsd_greek.lamp")
+            Issue.record("an empty library cannot have removed anything")
+        } catch {
+            let message = error.localizedDescription
+            #expect(
+                message.contains("wsd_greek"),
+                "it must name the module the path points at, not fail on the path: \(message)"
+            )
+            #expect(!message.contains("does not yet handle"))
+        }
+    }
+
     @Test func aDeckAndItsImageAreInstalledBesideTheOthers() async throws {
         let (library, root, workspace) = try makeLibrary()
         defer { try? FileManager.default.removeItem(at: root) }
