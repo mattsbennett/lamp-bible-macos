@@ -135,14 +135,16 @@ public struct LampSyncBundlePass {
     public func run(
         gathering: () async throws -> Gathered,
         records: inout LampSyncFileRecords,
-        knownBundleRevision: String? = nil,
         receiving: (LampSyncSettingsBundle) async throws -> Void = { _ in },
         contributing: (inout LampSyncSettingsBundle) throws -> Void = { _ in }
     ) async throws -> Outcome {
         var outcome = Outcome()
-        let opened = try await LampSyncSettingsStore.readOrClaim(
-            from: store, knownArchiveRevision: knownBundleRevision
-        )
+        // Deliberately without `knownArchiveRevision`. That parameter names a
+        // revision at which an *archive* is known to sit, and a read that
+        // still finds it there throws `notMigrated`. Handing it a bundle's
+        // revision makes a migrated library report itself unmigrated on every
+        // pass — which is what it did.
+        let opened = try await LampSyncSettingsStore.readOrClaim(from: store)
         try await receiving(opened.bundle)
 
         // Only now: the library has had the other devices' deletions applied

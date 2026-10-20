@@ -88,7 +88,8 @@ final class LibrarySyncController: ObservableObject {
             statusMessage = "WebDAV password saved."
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            print("[LibrarySync] move failed: \(error)")
+            errorMessage = LampSyncErrorText.sentence(for: error)
             return false
         }
     }
@@ -205,8 +206,7 @@ final class LibrarySyncController: ObservableObject {
                         store: directory,
                         source: LampSyncFileRecords.folderSource(folder),
                         preferenceSource: preferenceSource,
-                        workspace: workspace,
-                        knownBundleRevision: opened?.revision
+                        workspace: workspace
                     )
                     break
                 }
@@ -338,8 +338,7 @@ final class LibrarySyncController: ObservableObject {
                         store: client,
                         source: LampSyncFileRecords.webDAVSource(url),
                         preferenceSource: preferenceSource,
-                        workspace: workspace,
-                        knownBundleRevision: opened?.revision
+                        workspace: workspace
                     )
                     break
                 }
@@ -578,7 +577,8 @@ final class LibrarySyncController: ObservableObject {
                 )
             }
         } catch {
-            errorMessage = error.localizedDescription
+            print("[LibrarySync] pass failed: \(error)")
+            errorMessage = LampSyncErrorText.sentence(for: error)
             statusMessage = nil
             isSyncing = false
             await refreshConflicts(library: library)
@@ -1306,12 +1306,12 @@ extension LibrarySyncController {
                 store: store,
                 source: source,
                 preferenceSource: preferenceSource,
-                workspace: workspace,
-                knownBundleRevision: moved.revision
+                workspace: workspace
             )
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            print("[LibrarySync] move failed: \(error)")
+            errorMessage = LampSyncErrorText.sentence(for: error)
             return false
         }
     }
@@ -1357,8 +1357,7 @@ extension LibrarySyncController {
         store: any LampSyncRemoteStore,
         source: String,
         preferenceSource: String,
-        workspace: URL,
-        knownBundleRevision: String? = nil
+        workspace: URL
     ) async throws {
         statusMessage = "Syncing…"
         var records = LampSyncFileRecords.load(
@@ -1413,7 +1412,6 @@ extension LibrarySyncController {
                 return gathered.gathered
             },
             records: &records,
-            knownBundleRevision: knownBundleRevision,
             receiving: { bundle in
                 manifest = bundle.manifest
                 plannedSettings = try settings.receive(bundle)
