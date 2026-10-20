@@ -13,6 +13,22 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
     /// therefore the IDs they are published under. The Mac's own are
     /// `personal-notes` and `personal-devotionals`;
     /// `LampWebDAVPersonalArchiveAdapter` rewrites them on the way out.
+    /// The kinds `install` merges *into* the library rather than keeping as
+    /// a file of their own.
+    ///
+    /// A member of one of these may leave no file at its path — an empty
+    /// highlight set exports to nothing, and an imported notes module is
+    /// folded into this Mac's own notes — and a member with no local copy is
+    /// downloaded on every pass, for ever. A gather says it holds such a path
+    /// instead, through `heldWithoutAFile`.
+    ///
+    /// Kept beside `install` because it has to agree with it: a kind that
+    /// starts being merged, or stops, has to be added or removed here in the
+    /// same breath, and nothing else would notice.
+    public static let mergedIntoTheLibrary: Set<LampSyncFileKind> = [
+        .module(.notes), .module(.devotionals), .module(.highlights),
+    ]
+
     public static let remoteNotesModuleID = "notes"
     public static let remoteWritingModuleID = "devotionals"
 

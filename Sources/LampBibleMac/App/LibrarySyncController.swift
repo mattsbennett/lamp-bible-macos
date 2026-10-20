@@ -708,15 +708,25 @@ extension LibrarySyncController {
         candidates += collections.candidates
         result.skippedHighlightSets = collections.skipped
 
-        // A highlight module whose set has nothing in it exports to nothing,
-        // so no file is produced at its path — and a member with no local
-        // copy is downloaded, every pass, for ever. The content is in the
-        // library; it simply is not a file. Only for paths this Mac has
-        // actually installed, which is what makes it true rather than
-        // convenient.
+        // An editable collection is merged *into* the library rather than
+        // kept as a file, so a member of one of these kinds may leave no file
+        // at its path — and a member with no local copy is downloaded, every
+        // pass, for ever. The content is in the library; it simply is not a
+        // file. Only for paths this Mac has actually installed, which is what
+        // makes it true rather than convenient: core ignores a claim with no
+        // recorded install behind it.
+        //
+        // Two ways a path lands here. A highlight set with nothing in it
+        // exports to nothing — the bug this started as. And a notes or
+        // writings module that is not this Mac's own: `install` merges every
+        // module of those kinds into this Mac's collection, so an imported
+        // one leaves nothing of its own behind. Only highlights were covered
+        // at first, which left the second as the same loop waiting for
+        // somebody to publish a second notes module.
         let produced = Set(candidates.map(\.path))
         for member in manifest.members
-        where member.kind == .module(.highlights) && !produced.contains(member.path) {
+        where member.kind.map(LampSyncMacPassLibrary.mergedIntoTheLibrary.contains) == true
+            && !produced.contains(member.path) {
             result.gathered.heldWithoutAFile.insert(member.path)
         }
 

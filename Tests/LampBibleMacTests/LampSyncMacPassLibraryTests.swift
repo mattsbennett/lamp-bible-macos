@@ -262,3 +262,39 @@ struct LampSyncMacPassLibraryTests {
         #expect(LampSyncMacPassLibrary.remoteWritingModuleID == "devotionals")
     }
 }
+
+/// The set that says which kinds leave no file of their own has to agree with
+/// what `install` actually does, and nothing but this checks it. A kind that
+/// is merged but missing here is downloaded and installed on every pass for
+/// ever — the `esvs-highlights.lamp` loop — and a kind listed here but kept
+/// as a file would have this Mac claim to hold something it does not.
+struct MergedCollectionKindsMatchInstallTests {
+    @Test func everyMergedKindIsOneInstallFoldsIntoTheLibrary() throws {
+        #expect(
+            LampSyncMacPassLibrary.mergedIntoTheLibrary == [
+                .module(.notes), .module(.devotionals), .module(.highlights),
+            ],
+            "these are the three `install` passes to importPersonalStudyData"
+        )
+    }
+
+    /// The kinds kept as files must not be in it. A module, a deck, its
+    /// assets and media all land on disk at the path they came from, so this
+    /// Mac can always produce them and must never claim otherwise.
+    @Test(arguments: [
+        LampSyncFileKind.module(.translations),
+        .module(.dictionaries),
+        .module(.commentaries),
+        .module(.books),
+        .module(.plans),
+        .module(.quizzes),
+        .deck,
+        .deckAsset,
+        .devotionalMedia,
+        .bookMedia,
+        .workspaceFile,
+    ])
+    func akindKeptAsAFileIsNotClaimedAsMerged(kind: LampSyncFileKind) throws {
+        #expect(!LampSyncMacPassLibrary.mergedIntoTheLibrary.contains(kind))
+    }
+}
