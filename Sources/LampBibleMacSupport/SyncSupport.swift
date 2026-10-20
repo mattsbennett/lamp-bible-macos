@@ -795,6 +795,28 @@ public struct LampWebDAVClient: Sendable, LampSyncRemoteStore {
         try await mapped { try await storage.write(data, to: path, condition: condition) }
     }
 
+    /// The streaming counterparts, forwarded so the Mac streams too. Without
+    /// them the protocol's defaults hold the whole body in memory, and the
+    /// archive is the whole library.
+    public func read(path: String, into url: URL) async throws -> LampSyncDownloadedFile? {
+        try await mapped { try await storage.read(path: path, into: url) }
+    }
+
+    public func write(
+        fileAt url: URL,
+        to path: String,
+        condition: LampSyncWriteCondition
+    ) async throws -> String? {
+        try await mapped { try await storage.write(fileAt: url, to: path, condition: condition) }
+    }
+
+    /// Forwarded rather than left to the protocol's default, which throws
+    /// `deleteUnsupported`: a store that cannot delete never reaps a
+    /// tombstoned file, so the bytes would stay on the server for good.
+    public func delete(path: String, condition: LampSyncWriteCondition) async throws {
+        try await mapped { try await storage.delete(path: path, condition: condition) }
+    }
+
     public func upload(_ data: Data, filename: String) async throws {
         try validateFilename(filename)
         try await mapped { try await storage.upload(data, to: filename) }
@@ -852,7 +874,14 @@ public typealias LampWebDAVPersonalArchiveAdapter = LampModuleKit.LampWebDAVPers
 public typealias LampWebDAVModuleJSONDocument = LampModuleKit.LampWebDAVModuleJSONDocument
 public typealias LampWebDAVModuleJSONAdapter = LampModuleKit.LampWebDAVModuleJSONAdapter
 
-public enum LampSyncError: LocalizedError {
+/// `LampSyncRefusal` because `mapped` translates the storage layer's errors
+/// into these for the user's sake, and a translated refusal is still a
+/// refusal. `LampSyncConditionalWrite.isRefusal` decides whether a
+/// read-merge-retry reads again or gives up, and it recognises the storage
+/// error, not this one — so without the conformance the settings bundle's
+/// `update` would abandon a pass every time another device wrote first,
+/// which is the one case it exists to recover from.
+public enum LampSyncError: LocalizedError, LampSyncRefusal {
     case unsafeArchivePath
     case unsupportedArchiveVersion
     case invalidResponse
@@ -871,6 +900,14 @@ public enum LampSyncError: LocalizedError {
         case .archiveConversionFailed: "Lamp Bible could not prepare personal content for cross-device sync."
         case .invalidModuleJSON: "The WebDAV module JSON is not in a supported Lamp Bible format."
         }
+    }
+
+    /// Only `remoteChanged`, which is what a 412 or 428 becomes. The storage
+    /// layer raises `preconditionFailed` for both and never reports either as
+    /// an `httpStatus`, so no status code needs reading here.
+    public var isRefusal: Bool {
+        if case .remoteChanged = self { return true }
+        return false
     }
 }
 
