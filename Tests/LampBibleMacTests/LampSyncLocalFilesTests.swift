@@ -136,6 +136,46 @@ struct LampSyncLocalFilesTests {
         #expect(highlights.path == "Highlights/esvs-highlights.lamp")
     }
 
+    /// The deck folder also holds the deletion ledger, which must never be
+    /// published as a file: it is merged in the settings bundle, and as a file
+    /// it would be won instead — two Macs deleting different decks would
+    /// overwrite each other's record and a deleted deck would come back.
+    @Test func decksAndTheirImagesArePublishedButTheLedgerIsNot() throws {
+        let library = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: library) }
+        let store = LampPresentationDeckStore(rootURL: library)
+        try FileManager.default.createDirectory(
+            at: store.assetsDirectoryURL, withIntermediateDirectories: true
+        )
+        for (name, directory) in [
+            ("sunday-evening.lampdeck", store.decksDirectoryURL),
+            ("deleted-decks.json", store.decksDirectoryURL),
+            ("notes.txt", store.decksDirectoryURL),
+            ("a1b2c3.jpg", store.assetsDirectoryURL),
+        ] {
+            try Data(name.utf8).write(to: directory.appendingPathComponent(name))
+        }
+
+        let found = LampSyncLocalFiles.decks(inLibraryAt: library)
+
+        #expect(found.unplaceable.isEmpty)
+        #expect(found.candidates.map(\.path) == [
+            "Workspaces/Presentations/sunday-evening.lampdeck",
+            "Workspaces/Presentations/Assets/a1b2c3.jpg",
+        ])
+        #expect(found.candidates.map(\.kind) == [.deck, .deckAsset])
+        // And the layout agrees that the ledger is outside the library.
+        #expect(LampSyncFolderLayout.kind(of: "Workspaces/Presentations/deleted-decks.json") == nil)
+    }
+
+    @Test func aLibraryWithNoDecksYieldsNothingRatherThanFailing() throws {
+        let library = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: library) }
+        let found = LampSyncLocalFiles.decks(inLibraryAt: library)
+        #expect(found.candidates.isEmpty)
+        #expect(found.unplaceable.isEmpty)
+    }
+
     @Test func localsCarryWhatThisClientLastUploaded() throws {
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

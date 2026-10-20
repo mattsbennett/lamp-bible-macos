@@ -152,6 +152,79 @@ public enum LampSyncLocalFiles {
         )
     }
 
+    /// The decks and the images they show, from a library root.
+    ///
+    /// Decks are the `.lampdeck` files directly in the presentations folder,
+    /// each published under its own ID. The deletion ledger lives in that
+    /// same folder and is deliberately not among them: it is a ledger, which
+    /// travels in the settings bundle under read-merge-retry, and published
+    /// as a file it would be *won* rather than merged — two Macs deleting
+    /// different decks would overwrite each other's record and a deleted deck
+    /// would come back. `LampSyncFolderLayout.kind(of:)` returns nil for it
+    /// for the same reason.
+    ///
+    /// Images are the regular files directly in the assets folder, under the
+    /// generated names decks refer to them by, so they are immutable at a
+    /// path: never merged, written only where absent.
+    ///
+    /// A symbolic link is skipped in both: what it points at is not this
+    /// library's to publish.
+    public static func decks(
+        inLibraryAt libraryRoot: URL,
+        fileManager: FileManager = .default
+    ) -> (candidates: [Candidate], unplaceable: [Unreadable]) {
+        let store = LampPresentationDeckStore(rootURL: libraryRoot)
+        var candidates: [Candidate] = []
+        var unplaceable: [Unreadable] = []
+
+        for url in plainFiles(in: store.decksDirectoryURL, fileManager: fileManager)
+        where url.pathExtension.lowercased() == LampSyncFolderLayout.deckExtension {
+            let deckID = url.deletingPathExtension().lastPathComponent
+            do {
+                candidates.append(Candidate(
+                    path: try LampSyncFolderLayout.deckPath(deckID: deckID),
+                    kind: .deck,
+                    url: url
+                ))
+            } catch {
+                unplaceable.append(Unreadable(
+                    path: deckID, reason: error.localizedDescription
+                ))
+            }
+        }
+
+        for url in plainFiles(in: store.assetsDirectoryURL, fileManager: fileManager) {
+            do {
+                candidates.append(Candidate(
+                    path: try LampSyncFolderLayout.deckAssetPath(filename: url.lastPathComponent),
+                    kind: .deckAsset,
+                    url: url
+                ))
+            } catch {
+                unplaceable.append(Unreadable(
+                    path: url.lastPathComponent, reason: error.localizedDescription
+                ))
+            }
+        }
+        return (candidates, unplaceable)
+    }
+
+    /// Regular files directly inside a directory, links and subdirectories
+    /// left out. A missing directory is simply empty.
+    private static func plainFiles(in directory: URL, fileManager: FileManager) -> [URL] {
+        guard let contents = try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
+            options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]
+        ) else { return [] }
+        return contents.filter { url in
+            guard let values = try? url.resourceValues(
+                forKeys: [.isRegularFileKey, .isSymbolicLinkKey]
+            ) else { return false }
+            return values.isRegularFile == true && values.isSymbolicLink != true
+        }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+    }
+
     /// Each described file in the form the plan reads, with `savedAt` looked
     /// up per path — a module file has no save time of its own, so a caller
     /// with nothing better passes nil and lets the manifest's own times rule.
