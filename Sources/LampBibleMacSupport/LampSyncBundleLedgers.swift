@@ -65,36 +65,62 @@ public enum LampSyncBundleLedgers {
         return applied
     }
 
-    /// Puts this library's records into the bundle, merged with whatever is
-    /// already there.
+    /// This library's own records, read ready to be put into a bundle.
     ///
-    /// Merged rather than replaced: the bundle being written may be newer than
-    /// the one this pass read — `update` re-applies its change against a newer
-    /// copy when another device writes first — so overwriting would drop that
-    /// device's deletions. Both ledgers join by the later of each entry's
-    /// times, so merging in either order gives the same answer.
+    /// Read before the pass's update rather than inside it, because the
+    /// update's change must be synchronous and may run more than once.
+    public struct Contribution: Sendable {
+        let personal: LampPersonalDeletionLedger
+        let decks: LampPresentationDeckDeletionLedger
+
+        /// Merges this library's records into the bundle being written.
+        ///
+        /// Merged rather than replaced: the bundle may be newer than the one
+        /// the pass read — `update` re-applies its change against a newer copy
+        /// when another device writes first — so overwriting would drop that
+        /// device's deletions. Both ledgers join by the later of each entry's
+        /// times, so the order does not matter, and a library with nothing of
+        /// its own clears nothing of theirs.
+        public func apply(to bundle: inout LampSyncSettingsBundle) throws {
+            var personal = personal
+            if let data = bundle.personalDeletions,
+               let existing = try? LampPersonalDeletionLedger.decode(data) {
+                personal.merge(existing)
+            }
+            bundle.personalDeletions = personal.isEmpty
+                ? bundle.personalDeletions
+                : try personal.encoded()
+
+            var decks = decks
+            if let data = bundle.deckDeletions {
+                decks.merge(LampPresentationDeckDeletionLedger.decoded(from: data))
+            }
+            bundle.deckDeletions = decks.isEmpty
+                ? bundle.deckDeletions
+                : try decks.encoded()
+        }
+    }
+
+    public static func prepareContribution(
+        from library: LampLibrary,
+        fileManager: FileManager = .default
+    ) async throws -> Contribution {
+        Contribution(
+            personal: try await library.personalDeletionLedger(),
+            decks: try LampPresentationDeckSync.deletions(
+                in: library.rootURL, fileManager: fileManager
+            )
+        )
+    }
+
+    /// Reads this library's records and merges them in, for a caller that can
+    /// await.
     public static func contribute(
         from library: LampLibrary,
         to bundle: inout LampSyncSettingsBundle,
         fileManager: FileManager = .default
     ) async throws {
-        var personal = try await library.personalDeletionLedger()
-        if let data = bundle.personalDeletions,
-           let existing = try? LampPersonalDeletionLedger.decode(data) {
-            personal.merge(existing)
-        }
-        bundle.personalDeletions = personal.isEmpty
-            ? bundle.personalDeletions
-            : try personal.encoded()
-
-        var decks = try LampPresentationDeckSync.deletions(
-            in: library.rootURL, fileManager: fileManager
-        )
-        if let data = bundle.deckDeletions {
-            decks.merge(LampPresentationDeckDeletionLedger.decoded(from: data))
-        }
-        bundle.deckDeletions = decks.isEmpty
-            ? bundle.deckDeletions
-            : try decks.encoded()
+        try await prepareContribution(from: library, fileManager: fileManager)
+            .apply(to: &bundle)
     }
 }

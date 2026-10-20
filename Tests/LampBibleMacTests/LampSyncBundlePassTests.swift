@@ -32,6 +32,16 @@ struct LampSyncBundlePassTests {
         )
     }
 
+    private func gathered(
+        _ local: [LampSyncLocalFile],
+        deletedLocally: [String: Int64] = [:]
+    ) -> LampSyncBundlePass.Gathered {
+        var gathered = LampSyncBundlePass.Gathered()
+        gathered.local = local
+        gathered.deletedLocally = deletedLocally
+        return gathered
+    }
+
     /// A library already on Design B, holding one module at `revision`.
     private func seeded(
         path: String,
@@ -69,8 +79,7 @@ struct LampSyncBundlePassTests {
         let outcome = try await LampSyncBundlePass(
             store: store, library: StubLibrary(), source: source, now: { 2_000 }
         ).run(
-            local: [local("Translations/KJVs.lamp", url, "a translation")],
-            deletedLocally: [:],
+            gathering: { gathered([local("Translations/KJVs.lamp", url, "a translation")]) },
             records: &records
         )
 
@@ -97,8 +106,7 @@ struct LampSyncBundlePassTests {
         _ = try await LampSyncBundlePass(
             store: store, library: StubLibrary(), source: source, now: { 2_000 }
         ).run(
-            local: [local("Notes/notes.lamp", url, "my notes")],
-            deletedLocally: [:],
+            gathering: { gathered([local("Notes/notes.lamp", url, "my notes")]) },
             records: &records
         )
 
@@ -119,8 +127,7 @@ struct LampSyncBundlePassTests {
         let outcome = try await LampSyncBundlePass(
             store: store, library: StubLibrary(), source: source, now: { 2_000 }
         ).run(
-            local: [],
-            deletedLocally: ["Translations/old.lamp": 1_900],
+            gathering: { gathered([], deletedLocally: ["Translations/old.lamp": 1_900]) },
             records: &records
         )
 
@@ -145,8 +152,7 @@ struct LampSyncBundlePassTests {
         _ = try await LampSyncBundlePass(
             store: store, library: StubLibrary(), source: source, now: { 2_000 }
         ).run(
-            local: [local("Translations/new.lamp", url, "fresh")],
-            deletedLocally: [:],
+            gathering: { gathered([local("Translations/new.lamp", url, "fresh")]) },
             records: &records
         )
 
@@ -173,11 +179,12 @@ struct LampSyncBundlePassTests {
         let outcome = try await LampSyncBundlePass(
             store: store, library: StubLibrary(), source: source, now: { 2_000 }
         ).run(
-            local: [
-                local("Translations/refused.lamp", refused, "refused"),
-                local("Translations/accepted.lamp", accepted, "accepted"),
-            ],
-            deletedLocally: [:],
+            gathering: {
+                gathered([
+                    local("Translations/refused.lamp", refused, "refused"),
+                    local("Translations/accepted.lamp", accepted, "accepted"),
+                ])
+            },
             records: &records
         )
 
@@ -209,8 +216,7 @@ struct LampSyncBundlePassTests {
         let outcome = try await LampSyncBundlePass(
             store: store, library: library, source: source, now: { 2_000 }
         ).run(
-            local: [local("Notes/notes.lamp", stale, "mine, before merging")],
-            deletedLocally: [:],
+            gathering: { gathered([local("Notes/notes.lamp", stale, "mine, before merging")]) },
             records: &records
         )
 
@@ -239,8 +245,7 @@ struct LampSyncBundlePassTests {
         let outcome = try await LampSyncBundlePass(
             store: store, library: StubLibrary(), source: source, now: { 2_000 }
         ).run(
-            local: [local("Translations/KJVs.lamp", url, "a translation")],
-            deletedLocally: [:],
+            gathering: { gathered([local("Translations/KJVs.lamp", url, "a translation")]) },
             records: &records
         )
 
@@ -266,8 +271,7 @@ struct LampSyncBundlePassTests {
         _ = try await LampSyncBundlePass(
             store: store, library: StubLibrary(), source: source, now: { 2_000 }
         ).run(
-            local: [local("Translations/KJVs.lamp", url, "a translation")],
-            deletedLocally: [:],
+            gathering: { gathered([local("Translations/KJVs.lamp", url, "a translation")]) },
             records: &records,
             receiving: { _ in receivedAfter = store.operations }
         )
@@ -290,8 +294,7 @@ struct LampSyncBundlePassTests {
         _ = try await LampSyncBundlePass(
             store: store, library: StubLibrary(), source: source, now: { 2_000 }
         ).run(
-            local: [local("Translations/KJVs.lamp", url, "a translation")],
-            deletedLocally: [:],
+            gathering: { gathered([local("Translations/KJVs.lamp", url, "a translation")]) },
             records: &records,
             contributing: { bundle in
                 bundle.macSettings = Data("this Mac's settings".utf8)
@@ -304,6 +307,29 @@ struct LampSyncBundlePassTests {
         #expect(bundle.manifest.members.map(\.path) == ["Translations/KJVs.lamp"])
         // The claim plus one update, and no third write of the bundle.
         #expect(store.operations.filter { $0 == "write \(bundlePath)" }.count == 2)
+    }
+
+    /// What this client holds is read *after* the bundle's deletion records
+    /// have been applied to it. Read before, a pass would publish the very
+    /// notes and writings it had just been told were deleted, and the other
+    /// device would take them back as new.
+    @Test func whatThisClientHoldsIsReadAfterTheDeletionsAreApplied() async throws {
+        let store = FakeStore()
+        var records = LampSyncFileRecords()
+        var order: [String] = []
+
+        _ = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(
+            gathering: {
+                order.append("gathered")
+                return gathered([])
+            },
+            records: &records,
+            receiving: { _ in order.append("received") }
+        )
+
+        #expect(order == ["received", "gathered"])
     }
 }
 

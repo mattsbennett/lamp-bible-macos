@@ -101,6 +101,20 @@ public struct LampSyncBundlePass {
     ///
     /// `records` is updated in place and saved by the caller, so a pass that
     /// throws still leaves behind what it had already written.
+    /// What this client holds, as the plan reads it.
+    public struct Gathered {
+        /// Every local file: its remote path, its kind and its digest.
+        public var local: [LampSyncLocalFile] = []
+        /// What this client has deleted since its last pass, by remote path.
+        public var deletedLocally: [String: Int64] = [:]
+        /// Revisions for paths no folder listing reaches — writing
+        /// attachments, book pictures and workspace files, which the manifest
+        /// names and the caller checks one at a time.
+        public var extraListing: [String: String] = [:]
+
+        public init() {}
+    }
+
     /// `receiving` is handed the bundle as it was read, once, before anything
     /// is published — settings and deletion records are applied there, so what
     /// this client publishes already holds what came down. `contributing`
@@ -109,10 +123,14 @@ public struct LampSyncBundlePass {
     /// newer bundle when another device writes first, so anything that needs
     /// to read local state asynchronously is read in `receiving` and kept for
     /// `contributing` to use.
+    ///
+    /// `gathering` runs **after** `receiving`, and that order is load-bearing:
+    /// applying the deletion records removes content from this library, so a
+    /// library read before them would publish the very notes and writings it
+    /// had just been told were deleted, and the next pass on the other device
+    /// would resurrect them.
     public func run(
-        local: [LampSyncLocalFile],
-        deletedLocally: [String: Int64],
-        extraListing: [String: String] = [:],
+        gathering: () async throws -> Gathered,
         records: inout LampSyncFileRecords,
         knownBundleRevision: String? = nil,
         receiving: (LampSyncSettingsBundle) async throws -> Void = { _ in },
@@ -124,16 +142,22 @@ public struct LampSyncBundlePass {
         )
         try await receiving(opened.bundle)
 
+        // Only now: the library has had the other devices' deletions applied
+        // to it, so this is what it actually holds.
+        let gathered = try await gathering()
+
         var listing = try await LampSyncFilePlan.listing(
             in: store, manifest: opened.bundle.manifest
         )
-        listing.merge(extraListing) { _, extra in extra }
+        listing.merge(gathered.extraListing) { _, extra in extra }
 
-        let filesByPath = Dictionary(local.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
+        let filesByPath = Dictionary(
+            gathered.local.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a }
+        )
         let plan = LampSyncFilePlan.plan(
             manifest: opened.bundle.manifest,
-            local: LampSyncLocalFiles.locals(local, records: records, source: source),
-            deletedLocally: deletedLocally,
+            local: LampSyncLocalFiles.locals(gathered.local, records: records, source: source),
+            deletedLocally: gathered.deletedLocally,
             listing: listing
         )
 
