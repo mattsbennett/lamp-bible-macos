@@ -27,8 +27,7 @@ struct LampSyncFileRecordsTests {
         var records = LampSyncFileRecords()
         records.recordUpload(
             "Notes/notes.lamp", in: webDAV,
-            digest: "sha-notes", revision: "\"notes-v2\"",
-            size: 2_048, modifiedAt: 1_800_000_000
+            digest: "sha-notes", revision: "\"notes-v2\""
         )
         records.setHighlightModuleID("psalms-set", forSet: "set-1", in: webDAV)
         try records.save(toLibraryAt: library)
@@ -136,20 +135,6 @@ struct LampSyncFileRecordsTests {
 
         #expect(records.highlightModuleID(forSet: "set-1", in: webDAV) == "learned-from-server")
         #expect(records.highlightModuleID(forSet: "set-2", in: webDAV) == "from-defaults")
-    }
-
-    @Test func anUnchangedFileNeedNotBeReadAgain() {
-        var records = LampSyncFileRecords()
-        #expect(records.needsDigest("Translations/kjv.lamp", in: webDAV, size: 10, modifiedAt: 1))
-
-        records.recordUpload(
-            "Translations/kjv.lamp", in: webDAV, digest: "a", revision: "\"v1\"",
-            size: 10, modifiedAt: 1
-        )
-        #expect(!records.needsDigest("Translations/kjv.lamp", in: webDAV, size: 10, modifiedAt: 1))
-        #expect(records.needsDigest("Translations/kjv.lamp", in: webDAV, size: 11, modifiedAt: 1))
-        #expect(records.needsDigest("Translations/kjv.lamp", in: webDAV, size: 10, modifiedAt: 2))
-        #expect(records.needsDigest("Translations/kjv.lamp", in: webDAV, size: nil, modifiedAt: nil))
     }
 
     @Test func damagedOrNewerRecordsStartFreshRatherThanFailing() throws {

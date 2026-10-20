@@ -41,25 +41,14 @@ public struct LampSyncFileRecords: Codable, Equatable, Sendable {
         /// a pass that dies in between leaves this behind; the next pass
         /// records it rather than treating the file as never uploaded.
         public var pendingRevision: String?
-        /// The size and modification date the local file had when its digest
-        /// was taken, so an unchanged file need not be read again. Only ever a
-        /// hint for skipping work: a file this Mac authors is digested every
-        /// pass regardless, because it is rebuilt every pass anyway.
-        public var localSize: Int64?
-        public var localModifiedAt: Double?
-
         public init(
             uploadedDigest: String? = nil,
             installedRevision: String? = nil,
-            pendingRevision: String? = nil,
-            localSize: Int64? = nil,
-            localModifiedAt: Double? = nil
+            pendingRevision: String? = nil
         ) {
             self.uploadedDigest = uploadedDigest
             self.installedRevision = installedRevision
             self.pendingRevision = pendingRevision
-            self.localSize = localSize
-            self.localModifiedAt = localModifiedAt
         }
 
         /// The revision to plan against: a pending write is the newest thing
@@ -102,29 +91,6 @@ public struct LampSyncFileRecords: Codable, Equatable, Sendable {
         return uploaded != digest
     }
 
-    /// Whether the local file has to be read to know its digest, or whether
-    /// the recorded one still describes it. False only when size and
-    /// modification date both match what was recorded beside that digest.
-    ///
-    /// This is a cache hint, not a sync decision — `sync-layout-option-b`'s
-    /// rule that content is compared by digest and never by mtime is about
-    /// comparing *devices*, and this compares one file on one disk with itself.
-    /// Callers that author the file they are about to publish skip the hint.
-    public func needsDigest(
-        _ path: String,
-        in source: String,
-        size: Int64?,
-        modifiedAt: Double?
-    ) -> Bool {
-        guard let record = sources[source]?.files[path],
-              record.uploadedDigest != nil,
-              let recordedSize = record.localSize,
-              let recordedModified = record.localModifiedAt,
-              let size, let modifiedAt
-        else { return true }
-        return recordedSize != size || recordedModified != modifiedAt
-    }
-
     public func highlightModuleID(forSet setID: String, in source: String) -> String? {
         sources[source]?.highlightModuleIDsBySet[setID]
     }
@@ -137,15 +103,11 @@ public struct LampSyncFileRecords: Codable, Equatable, Sendable {
         _ path: String,
         in source: String,
         digest: String,
-        revision: String?,
-        size: Int64? = nil,
-        modifiedAt: Double? = nil
+        revision: String?
     ) {
         var record = sources[source, default: Source()].files[path] ?? Record()
         record.uploadedDigest = digest
         record.pendingRevision = revision
-        record.localSize = size
-        record.localModifiedAt = modifiedAt
         sources[source, default: Source()].files[path] = record
     }
 
@@ -161,8 +123,6 @@ public struct LampSyncFileRecords: Codable, Equatable, Sendable {
         record.installedRevision = revision
         record.pendingRevision = nil
         record.uploadedDigest = nil
-        record.localSize = nil
-        record.localModifiedAt = nil
         sources[source, default: Source()].files[path] = record
     }
 
