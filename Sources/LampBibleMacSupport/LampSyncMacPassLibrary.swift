@@ -55,6 +55,10 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
     private let workspace: URL
     private let fileManager: FileManager
     private let learned: Learned
+    /// Module ID to highlight set ID, the inverse of what the records keep.
+    /// A tombstone names a module path; deleting the set it stands for needs
+    /// the set's own ID, and this is the only place that direction is known.
+    private let highlightSetIDsByModule: [String: String]
     private let readRemote: (String) async throws -> Data
 
     /// `workspace` is a scratch directory for this pass; `readRemote` fetches
@@ -64,8 +68,10 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
         workspace: URL,
         fileManager: FileManager = .default,
         learned: Learned = Learned(),
+        highlightSetIDsByModule: [String: String] = [:],
         readRemote: @escaping (String) async throws -> Data
     ) {
+        self.highlightSetIDsByModule = highlightSetIDsByModule
         self.library = library
         self.workspace = workspace
         self.fileManager = fileManager
@@ -432,8 +438,28 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             throw PassError.unsupported(path)
         }
         switch kind {
-        case .module(.notes), .module(.devotionals), .module(.highlights):
+        case .module(.notes), .module(.devotionals):
+            // Only the two that hold everything. A collection's own file is
+            // never deleted on a tombstone: one file holds every note and
+            // one every writing, so honouring it would destroy the lot, and
+            // an item's deletion travels in the personal ledger instead.
+            //
+            // A module merely of that *kind* is a different matter, but the
+            // Mac has nothing separate to delete — an imported notes module
+            // is merged into this Mac's own notes on arrival — so it is
+            // unsupported rather than refused.
+            guard LampSyncRemovedModules.isSharedCollection(path) else {
+                throw PassError.unsupported(path)
+            }
             throw PassError.refusedToDeleteACollection(path)
+        case .module(.highlights):
+            // One file per set, so this is bounded: it removes that set and
+            // nothing else, which is what deleting a set means. The library
+            // records the deletion, so it travels on from here.
+            guard let moduleID = LampSyncFolderLayout.remoteModuleID(of: path),
+                  let setID = highlightSetIDsByModule[moduleID]
+            else { throw PassError.unsupported(path) }
+            try await library.deleteHighlightSet(id: setID)
         case .module:
             guard let moduleID = LampSyncFolderLayout.remoteModuleID(of: path) else {
                 throw PassError.unsupported(path)

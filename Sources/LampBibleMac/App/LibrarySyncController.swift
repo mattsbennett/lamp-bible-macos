@@ -518,18 +518,22 @@ extension LibrarySyncController {
         // What the pass learns while installing, which it cannot write to the
         // records itself: the pass holds those exclusively while it runs.
         let learned = LampSyncMacPassLibrary.Learned()
+        // Copied out before the pass, which holds `records` exclusively while
+        // it runs. Inverted for the pass: a tombstone names a module path and
+        // deleting the set behind it needs the set's own ID.
+        let highlightModuleIDs = records.highlightModuleIDs(in: source)
         let passLibrary = LampSyncMacPassLibrary(
-            library: library, workspace: staging, fileManager: fileManager, learned: learned
+            library: library, workspace: staging, fileManager: fileManager, learned: learned,
+            highlightSetIDsByModule: Dictionary(
+                highlightModuleIDs.map { ($0.value, $0.key) },
+                uniquingKeysWith: { first, _ in first }
+            )
         ) { path in
             guard let file = try await store.read(path: path) else {
                 throw LibrarySyncError.incompleteRemoteImport([path])
             }
             return file.data
         }
-
-        // Copied out before the pass, which holds `records` exclusively
-        // while it runs.
-        let highlightModuleIDs = records.highlightModuleIDs(in: source)
 
         // What `receiving` prepared against. A contribution is computed from
         // the bundle as read — the preference merge in particular — so

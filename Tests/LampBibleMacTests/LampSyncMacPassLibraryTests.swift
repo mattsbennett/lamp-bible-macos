@@ -19,25 +19,66 @@ struct LampSyncMacPassLibraryTests {
 
     private func passLibrary(
         _ library: LampLibrary,
-        workspace: URL
+        workspace: URL,
+        highlightSetIDsByModule: [String: String] = [:]
     ) -> LampSyncMacPassLibrary {
-        LampSyncMacPassLibrary(library: library, workspace: workspace) { _ in Data() }
+        LampSyncMacPassLibrary(
+            library: library, workspace: workspace,
+            highlightSetIDsByModule: highlightSetIDsByModule
+        ) { _ in Data() }
     }
 
-    /// The one that matters most. Those collections exist in every library, so
-    /// a tombstone naming one is a mistake somewhere else, not an instruction
-    /// — and obeying it would delete everything the person has written.
-    @Test(arguments: [
-        "Notes/notes.lamp",
-        "Devotionals/devotionals.lamp",
-        "Highlights/esvs-highlights.lamp",
-    ])
-    func syncRefusesToDeleteAnEditableCollection(path: String) async throws {
+    /// The one that matters most. These two files each hold *everything* —
+    /// one every note, one every writing — so a tombstone naming one is a
+    /// mistake somewhere else, not an instruction, and obeying it would
+    /// delete everything the person has written. An item's own deletion
+    /// travels in the personal ledger instead.
+    @Test(arguments: ["Notes/notes.lamp", "Devotionals/devotionals.lamp"])
+    func syncRefusesToDeleteACollectionThatHoldsEverything(path: String) async throws {
         let (library, root, workspace) = try makeLibrary()
         defer { try? FileManager.default.removeItem(at: root) }
 
         await #expect(throws: LampSyncMacPassLibrary.PassError.refusedToDeleteACollection(path)) {
             try await passLibrary(library, workspace: workspace).deleteLocally(path)
+        }
+    }
+
+    /// A highlight set is *not* one of those: there is one file per set, so
+    /// deleting it removes that set and nothing else, which is exactly what
+    /// deleting a set on another device means. Refusing it instead left the
+    /// Mac re-planning the same deletion on every pass, for ever, because the
+    /// record is only forgotten once the delete succeeds.
+    @Test func ahighlightSetDeletedElsewhereIsDeletedHere() async throws {
+        let (library, root, workspace) = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let set = try await library.saveHighlightSet(
+            LampHighlightSet(name: "Study", translationID: "ESVs")
+        )
+        #expect(try await library.highlightSets().contains { $0.id == set.id })
+
+        try await passLibrary(
+            library, workspace: workspace,
+            highlightSetIDsByModule: ["esvs-highlights": set.id]
+        ).deleteLocally("Highlights/esvs-highlights.lamp")
+
+        #expect(
+            try await library.highlightSets().allSatisfy { $0.id != set.id },
+            "the set the tombstone named has to be gone, or the next pass asks again"
+        )
+    }
+
+    /// And without the mapping it is unsupported rather than refused: the Mac
+    /// cannot tell which set the module stands for, so it must not guess.
+    @Test func ahighlightModuleWithNoKnownSetIsNotGuessedAt() async throws {
+        let (library, root, workspace) = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        await #expect(
+            throws: LampSyncMacPassLibrary.PassError.unsupported("Highlights/esvs-highlights.lamp")
+        ) {
+            try await passLibrary(library, workspace: workspace)
+                .deleteLocally("Highlights/esvs-highlights.lamp")
         }
     }
 
