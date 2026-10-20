@@ -1397,7 +1397,22 @@ extension LibrarySyncController {
         var gaps: [LampSyncLocalFiles.Unreadable] = []
         var skippedHighlightSets: [String] = []
 
-        let outcome = try await LampSyncBundlePass(
+        // What the server sent, when it sent something unusable. The error
+        // alone says a strong ETag was missing; the value says why, and
+        // whether it is weak (`W/"…"`), absent, or something else again.
+        func reportingWeakRevision<T>(_ work: () async throws -> T) async throws -> T {
+            do {
+                return try await work()
+            } catch LampSyncSettingsStore.StoreError.unversioned {
+                let seen = try? await store.revision(path: LampSyncFolderLayout.bundlePath)
+                throw LibrarySyncError.weakBundleETag(
+                    seen.map { "“\($0)”" } ?? "no ETag at all"
+                )
+            }
+        }
+
+        let outcome = try await reportingWeakRevision {
+            try await LampSyncBundlePass(
             store: store, library: passLibrary, source: source
         ).run(
             gathering: {
@@ -1432,6 +1447,7 @@ extension LibrarySyncController {
                 try ledgers?.apply(to: &bundle)
             }
         )
+        }
 
         try records.save(toLibraryAt: library.rootURL, fileManager: fileManager)
         if let plannedSettings {
@@ -1672,6 +1688,7 @@ private enum LibrarySyncError: LocalizedError {
     case missingRemoteRevision(String)
     case archiveUnreadable
     case libraryMovedOn
+    case weakBundleETag(String)
 
     var errorDescription: String? {
         switch self {
@@ -1684,6 +1701,8 @@ private enum LibrarySyncError: LocalizedError {
             "Sync stopped before publishing because \(failures.count) remote item\(failures.count == 1 ? "" : "s") could not be imported: \(failures.prefix(3).joined(separator: "; "))"
         case .missingRemoteRevision(let path):
             "Sync stopped because the server did not provide an ETag for \(path)."
+        case .weakBundleETag(let seen):
+            "The server did not give the sync file a strong ETag, so it could not be written over safely. Nothing was changed. It sent: \(seen). A weak or missing ETag usually means the server is compressing or transforming the file as it sends it."
         case .libraryMovedOn:
             "The library on the server changed after the last sync, so the move was not started. Nothing was changed. Sync Now again, then move."
         }
