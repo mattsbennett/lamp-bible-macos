@@ -55,13 +55,10 @@
 		A10000000000000000000049 /* PresentationDeckSyncSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000043 /* PresentationDeckSyncSupport.swift */; };
 		A10000000000000000000048 /* AgentTerminalSessionSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000042 /* AgentTerminalSessionSupport.swift */; };
 		A10000000000000000000047 /* LampSyncSettingsCommit.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000041 /* LampSyncSettingsCommit.swift */; };
-		A100000000000000000000FB /* LampSyncFileRecords.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000FC /* LampSyncFileRecords.swift */; };
 		A100000000000000000000FC /* LampSyncLocalFiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000FD /* LampSyncLocalFiles.swift */; };
-		A100000000000000000000FD /* LampSyncBundlePass.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000FE /* LampSyncBundlePass.swift */; };
 		A100000000000000000000FE /* LampSyncMacPassLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000FF /* LampSyncMacPassLibrary.swift */; };
 		A10000000000000000000100 /* LampSyncBundleLedgers.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000101 /* LampSyncBundleLedgers.swift */; };
 		A10000000000000000000102 /* LampSyncBundleSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000103 /* LampSyncBundleSettings.swift */; };
-		A10000000000000000000104 /* LampSyncLibraryLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000105 /* LampSyncLibraryLayout.swift */; };
 		A10000000000000000000106 /* LampSyncMoveOffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000107 /* LampSyncMoveOffer.swift */; };
 		A10000000000000000000108 /* LampSyncErrorText.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000109 /* LampSyncErrorText.swift */; };
 		A1000000000000000000010A /* LampSyncHighlightModules.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000010B /* LampSyncHighlightModules.swift */; };
@@ -153,13 +150,10 @@
 		B10000000000000000000043 /* PresentationDeckSyncSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/PresentationDeckSyncSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000042 /* AgentTerminalSessionSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/AgentTerminalSessionSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000041 /* LampSyncSettingsCommit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/LampSyncSettingsCommit.swift; sourceTree = SOURCE_ROOT; };
-		B100000000000000000000FC /* LampSyncFileRecords.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/LampSyncFileRecords.swift; sourceTree = SOURCE_ROOT; };
 		B100000000000000000000FD /* LampSyncLocalFiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/LampSyncLocalFiles.swift; sourceTree = SOURCE_ROOT; };
-		B100000000000000000000FE /* LampSyncBundlePass.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/LampSyncBundlePass.swift; sourceTree = SOURCE_ROOT; };
 		B100000000000000000000FF /* LampSyncMacPassLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/LampSyncMacPassLibrary.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000101 /* LampSyncBundleLedgers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/LampSyncBundleLedgers.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000103 /* LampSyncBundleSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/LampSyncBundleSettings.swift; sourceTree = SOURCE_ROOT; };
-		B10000000000000000000105 /* LampSyncLibraryLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/LampSyncLibraryLayout.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000107 /* LampSyncMoveOffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/LampSyncMoveOffer.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000109 /* LampSyncErrorText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/LampSyncErrorText.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000010B /* LampSyncHighlightModules.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/LampSyncHighlightModules.swift; sourceTree = SOURCE_ROOT; };
@@ -332,13 +326,10 @@
 				B10000000000000000000043 /* PresentationDeckSyncSupport.swift */,
 				B10000000000000000000042 /* AgentTerminalSessionSupport.swift */,
 				B10000000000000000000041 /* LampSyncSettingsCommit.swift */,
-				B100000000000000000000FC /* LampSyncFileRecords.swift */,
 				B100000000000000000000FD /* LampSyncLocalFiles.swift */,
-				B100000000000000000000FE /* LampSyncBundlePass.swift */,
 				B100000000000000000000FF /* LampSyncMacPassLibrary.swift */,
 				B10000000000000000000101 /* LampSyncBundleLedgers.swift */,
 				B10000000000000000000103 /* LampSyncBundleSettings.swift */,
-				B10000000000000000000105 /* LampSyncLibraryLayout.swift */,
 				B10000000000000000000107 /* LampSyncMoveOffer.swift */,
 				B10000000000000000000109 /* LampSyncErrorText.swift */,
 				B1000000000000000000010B /* LampSyncHighlightModules.swift */,
@@ -557,13 +548,10 @@
 				A10000000000000000000049 /* PresentationDeckSyncSupport.swift in Sources */,
 				A10000000000000000000048 /* AgentTerminalSessionSupport.swift in Sources */,
 				A10000000000000000000047 /* LampSyncSettingsCommit.swift in Sources */,
-				A100000000000000000000FB /* LampSyncFileRecords.swift in Sources */,
 				A100000000000000000000FC /* LampSyncLocalFiles.swift in Sources */,
-				A100000000000000000000FD /* LampSyncBundlePass.swift in Sources */,
 				A100000000000000000000FE /* LampSyncMacPassLibrary.swift in Sources */,
 				A10000000000000000000100 /* LampSyncBundleLedgers.swift in Sources */,
 				A10000000000000000000102 /* LampSyncBundleSettings.swift in Sources */,
-				A10000000000000000000104 /* LampSyncLibraryLayout.swift in Sources */,
 				A10000000000000000000106 /* LampSyncMoveOffer.swift in Sources */,
 				A10000000000000000000108 /* LampSyncErrorText.swift in Sources */,
 				A1000000000000000000010A /* LampSyncHighlightModules.swift in Sources */,
