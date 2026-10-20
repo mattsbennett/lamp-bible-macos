@@ -1394,6 +1394,12 @@ extension LibrarySyncController {
         // while it runs.
         let highlightModuleIDs = records.highlightModuleIDs(in: source)
 
+        // What `receiving` prepared against. A contribution is computed from
+        // the bundle as read — the preference merge in particular — so
+        // applying it to a newer one would publish a decision made about
+        // something else, and quietly drop whatever the other device wrote.
+        var preparedFrom: LampSyncSettingsBundle?
+
         var plannedSettings: LampSyncBundleSettings.Planned?
         var ledgers: LampSyncBundleLedgers.Contribution?
         var manifest = LampSyncLibraryManifest()
@@ -1441,8 +1447,10 @@ extension LibrarySyncController {
             },
             records: &records,
             mergingVersion: { bundle, version in try bundle.merge(version: version.bundle) },
-            receiving: { bundle in
+            receiving: { snapshot in
+                let bundle = snapshot.bundle
                 manifest = bundle.manifest
+                preparedFrom = bundle
                 plannedSettings = try settings.receive(bundle)
                 try await LampSyncBundleLedgers.apply(
                     bundle, to: library, fileManager: self.fileManager
@@ -1455,6 +1463,12 @@ extension LibrarySyncController {
                 )
             },
             contributing: { bundle in
+                guard bundle == preparedFrom else {
+                    // Another device wrote between the read and this write.
+                    // The pass takes it from the top rather than publishing a
+                    // merge decided against a bundle that has moved on.
+                    throw LampSyncBundlePass.PrepareAgain()
+                }
                 if let plannedSettings {
                     try settings.contribute(plannedSettings, to: &bundle)
                 }
@@ -1625,6 +1639,23 @@ extension LibrarySyncController {
             else { continue }
             result.gathered.deletedLocally[path] = deletedAt
         }
+
+        // When this Mac last saved each thing it publishes, so that content
+        // edited here after another device deleted it survives rather than
+        // being deleted. The ledger records a presence for every item as it
+        // is written, so the latest of those is the collection's last change.
+        result.gathered.savedAt = LampSyncSavedAt.paths(
+            notesLastSaved: LampSyncSavedAt.lastSaved(.note, in: personal),
+            writingsLastSaved: writings.compactMap(\.lastModified).max(),
+            highlightSets: sets.map { ($0.id, $0.lastModified) },
+            highlightModuleIDs: moduleIDs,
+            decks: decks.candidates.compactMap { candidate in
+                guard let modified = try? candidate.url.resourceValues(
+                    forKeys: [.contentModificationDateKey]
+                ).contentModificationDate else { return nil }
+                return (candidate.path, modified)
+            }
+        )
 
         // The paths no folder listing reaches: the manifest names them, so
         // their revisions are asked for one at a time.
