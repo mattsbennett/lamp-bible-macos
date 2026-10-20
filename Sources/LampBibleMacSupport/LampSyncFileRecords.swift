@@ -95,6 +95,12 @@ public struct LampSyncFileRecords: Codable, Equatable, Sendable {
         sources[source]?.highlightModuleIDsBySet[setID]
     }
 
+    /// Every set's module ID for this source, so a caller can take a copy
+    /// rather than hold these records while a pass is mutating them.
+    public func highlightModuleIDs(in source: String) -> [String: String] {
+        sources[source]?.highlightModuleIDsBySet ?? [:]
+    }
+
     // MARK: - Writing
 
     /// Records a write the server took. `pending` until a bundle this client

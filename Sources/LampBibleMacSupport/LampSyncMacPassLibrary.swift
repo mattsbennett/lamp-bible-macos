@@ -220,6 +220,54 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
         return republish
     }
 
+    /// The three editable collections, exported ready to publish.
+    ///
+    /// The same export a merge re-runs afterwards, so there is one place that
+    /// knows notes and writings go out through the adapter under the phone's
+    /// IDs and a highlight set is compiled under the module ID this source
+    /// has recorded for it.
+    ///
+    /// `highlightModuleID` is asked for each set. A set with no recorded
+    /// module ID is skipped rather than given a fresh one: minting an ID
+    /// publishes a second module for a set that already has one, and the ID
+    /// is recoverable from the set's existing module on the server.
+    public func editableCollections(
+        highlightModuleID: (String) -> String?
+    ) async throws -> (candidates: [LampSyncLocalFiles.Candidate], skipped: [String]) {
+        var candidates: [LampSyncLocalFiles.Candidate] = []
+        candidates.append(try LampSyncLocalFiles.personalModuleCandidate(
+            remoteModuleID: Self.remoteNotesModuleID,
+            kind: .notes,
+            at: try await exportPersonal(
+                .notes, adapterKind: .notes,
+                remoteModuleID: Self.remoteNotesModuleID, filename: "notes.lamp"
+            )
+        ))
+        candidates.append(try LampSyncLocalFiles.personalModuleCandidate(
+            remoteModuleID: Self.remoteWritingModuleID,
+            kind: .devotionals,
+            at: try await exportPersonal(
+                .writing, adapterKind: .devotionals,
+                remoteModuleID: Self.remoteWritingModuleID, filename: "devotionals.lamp"
+            )
+        ))
+
+        var skipped: [String] = []
+        for set in try await library.highlightSets() {
+            guard let moduleID = highlightModuleID(set.id) else {
+                skipped.append(set.name.isEmpty ? set.id : set.name)
+                continue
+            }
+            guard let url = try await exportHighlights(setID: set.id, moduleID: moduleID) else {
+                continue
+            }
+            candidates.append(try LampSyncLocalFiles.personalModuleCandidate(
+                remoteModuleID: moduleID, kind: .highlights, at: url
+            ))
+        }
+        return (candidates, skipped)
+    }
+
     /// One editable collection, exported and rewritten into the phone's
     /// format — which is the canonical one, so the digest is taken over the
     /// adapter's output rather than the Mac's own export.

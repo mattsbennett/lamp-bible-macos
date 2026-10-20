@@ -29,6 +29,15 @@ final class LibrarySyncController: ObservableObject {
     /// Writings two devices changed at the same moment, waiting for someone to
     /// say which version they meant. Sync keeps this Mac's copy until then.
     @Published private(set) var conflicts: [LampSyncConflict] = []
+    /// Set when the server still holds an archive: this library can move to
+    /// the per-file layout, or — if only another device ever synced here —
+    /// be joined. Offered rather than done, because a Mac that joins
+    /// republishes its whole library into whatever it joined.
+    @Published private(set) var moveOffer: MoveOffer?
+
+    /// The archive the last pass read, kept so the move has something to
+    /// plan from without downloading it again.
+    private var archiveToMove: (archive: LampSyncArchive, revision: String?)?
 
     private let defaults: UserDefaults
     private let fileManager: FileManager
@@ -277,6 +286,23 @@ final class LibrarySyncController: ObservableObject {
                     ? nil : LampWebDAVCredentials(username: username, password: storedPassword)
                 let client = LampWebDAVClient(baseURL: url, credentials: credentials)
                 let preferenceSource = "webdav:\(url.absoluteString)"
+
+                // A library on the per-file layout syncs through the new
+                // pass. One still on the archive is carried by everything
+                // below, exactly as before, and offered the move.
+                if case .perFile(let opened) = try await LampSyncLibraryLayout.of(client) {
+                    moveOffer = nil
+                    archiveToMove = nil
+                    try await runBundlePass(
+                        library: library,
+                        store: client,
+                        source: LampSyncFileRecords.webDAVSource(url),
+                        preferenceSource: preferenceSource,
+                        workspace: workspace,
+                        knownBundleRevision: opened?.revision
+                    )
+                    break
+                }
                 var preferenceMerge: LampSharedPreferenceLedger.Merge?
                 var iOSImportSummary = IOSWebDAVImportSummary()
                 var archiveSnapshot: LampSyncArchiveRemote.Snapshot?
@@ -478,6 +504,15 @@ final class LibrarySyncController: ObservableObject {
                         )
                     },
                     complete: {
+                        // The archive is in hand, so which kind of library
+                        // this is costs nothing to decide — asking the server
+                        // again would download all of it a second time.
+                        if let snapshot = archiveSnapshot {
+                            archiveToMove = (snapshot.archive, snapshot.revision)
+                            moveOffer = LampSyncSettingsStore
+                                .earlierLibrary(ofArchive: snapshot.archive) == .phone
+                                ? .join : .migrate
+                        }
                         defaults.set(Date(), forKey: "sync.lastCompleted")
                         let date = Date().formatted(date: .abbreviated, time: .shortened)
                         var synced = "Synced \(date)"
@@ -1143,6 +1178,243 @@ final class LibrarySyncController: ObservableObject {
         )
     }
 }
+
+// MARK: - Design B
+
+extension LibrarySyncController {
+    /// What a library that has not moved to the per-file layout can be
+    /// offered.
+    enum MoveOffer: Equatable {
+        /// This Mac's own library: its files are a backup's layout, so only
+        /// the Mac's migration can move it.
+        case migrate
+        /// Only another device has ever synced here, and its files are
+        /// already per-file. Joining is a deliberate act rather than
+        /// something a background pass does, because a Mac that joins
+        /// republishes its whole library into whatever it joined.
+        case join
+    }
+
+    /// One pass over a library that has moved to the per-file layout.
+    func runBundlePass(
+        library: LampLibrary,
+        store: any LampSyncRemoteStore,
+        source: String,
+        preferenceSource: String,
+        workspace: URL,
+        knownBundleRevision: String? = nil
+    ) async throws {
+        statusMessage = "Syncing…"
+        var records = LampSyncFileRecords.load(
+            fromLibraryAt: library.rootURL, fileManager: fileManager
+        )
+        // The mapping used to live in UserDefaults alone. Seeded rather than
+        // read, so a Mac that has synced before does not mint fresh module
+        // IDs and publish a second module for every highlight set it has.
+        records.seedHighlightModuleIDs(
+            defaults.dictionary(forKey: Self.iOSHighlightModuleIDsBySetKey) as? [String: String]
+                ?? [:],
+            in: source
+        )
+
+        let exports = workspace.appendingPathComponent("Exports", isDirectory: true)
+        let staging = workspace.appendingPathComponent("Staging", isDirectory: true)
+        let settings = LampSyncBundleSettings(
+            defaults: defaults, libraryRoot: library.rootURL,
+            source: preferenceSource, fileManager: fileManager
+        )
+        let passLibrary = LampSyncMacPassLibrary(
+            library: library, workspace: staging, fileManager: fileManager
+        ) { path in
+            guard let file = try await store.read(path: path) else {
+                throw LibrarySyncError.incompleteRemoteImport([path])
+            }
+            return file.data
+        }
+
+        // Copied out before the pass, which holds `records` exclusively
+        // while it runs.
+        let highlightModuleIDs = records.highlightModuleIDs(in: source)
+
+        var plannedSettings: LampSyncBundleSettings.Planned?
+        var ledgers: LampSyncBundleLedgers.Contribution?
+        var manifest = LampSyncLibraryManifest()
+        var gaps: [LampSyncLocalFiles.Unreadable] = []
+        var skippedHighlightSets: [String] = []
+
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: passLibrary, source: source
+        ).run(
+            gathering: {
+                let gathered = try await self.gather(
+                    library: library, store: store, source: source,
+                    exports: exports, staging: staging,
+                    highlightModuleIDs: highlightModuleIDs, manifest: manifest,
+                    passLibrary: passLibrary
+                )
+                gaps = gathered.gaps
+                skippedHighlightSets = gathered.skippedHighlightSets
+                return gathered.gathered
+            },
+            records: &records,
+            knownBundleRevision: knownBundleRevision,
+            receiving: { bundle in
+                manifest = bundle.manifest
+                plannedSettings = try settings.receive(bundle)
+                try await LampSyncBundleLedgers.apply(
+                    bundle, to: library, fileManager: self.fileManager
+                )
+                // Read after applying, so what goes back up includes what was
+                // just taken in, and read here because the update's change
+                // cannot await.
+                ledgers = try await LampSyncBundleLedgers.prepareContribution(
+                    from: library, fileManager: self.fileManager
+                )
+            },
+            contributing: { bundle in
+                if let plannedSettings {
+                    try settings.contribute(plannedSettings, to: &bundle)
+                }
+                try ledgers?.apply(to: &bundle)
+            }
+        )
+
+        try records.save(toLibraryAt: library.rootURL, fileManager: fileManager)
+        if let plannedSettings {
+            try settings.remember(plannedSettings)
+            reportDisputedPreferences(plannedSettings.merge)
+        }
+        defaults.set(Date(), forKey: "sync.lastCompleted")
+        report(outcome, gaps: gaps, skippedHighlightSets: skippedHighlightSets, manifest: manifest)
+    }
+
+    private struct GatheredLibrary {
+        var gathered = LampSyncBundlePass.Gathered()
+        var gaps: [LampSyncLocalFiles.Unreadable] = []
+        var skippedHighlightSets: [String] = []
+    }
+
+    /// Everything this Mac holds, as remote paths with digests.
+    ///
+    /// Every kind the archive used to carry has a home here: the installed
+    /// modules, the three editable collections, the files a writing embeds,
+    /// the pictures a book shows, the decks and their images, and the
+    /// workspaces. A kind left out would simply stop syncing, quietly, so
+    /// this is the list to check against the layout when one is added.
+    private func gather(
+        library: LampLibrary,
+        store: any LampSyncRemoteStore,
+        source: String,
+        exports: URL,
+        staging: URL,
+        highlightModuleIDs: [String: String],
+        manifest: LampSyncLibraryManifest,
+        passLibrary: LampSyncMacPassLibrary
+    ) async throws -> GatheredLibrary {
+        var result = GatheredLibrary()
+        var candidates: [LampSyncLocalFiles.Candidate] = []
+
+        let modules = try await library.installedModuleFiles()
+        let placed = LampSyncLocalFiles.installedModules(modules)
+        candidates += placed.candidates
+        result.gaps += placed.unplaceable
+
+        let collections = try await passLibrary.editableCollections { setID in
+            highlightModuleIDs[setID]
+        }
+        candidates += collections.candidates
+        result.skippedHighlightSets = collections.skipped
+
+        let writings = try await library.personalDevotionals()
+        let media = LampSyncLocalFiles.devotionalMedia(
+            for: writings,
+            remoteModuleID: LampSyncMacPassLibrary.remoteWritingModuleID,
+            inLibraryAt: library.rootURL,
+            fileManager: fileManager
+        )
+        candidates += media.candidates
+
+        // A book's pictures, for the books in the library and any the
+        // manifest already names — the gate that keeps a picture belonging to
+        // something else from going up as a book's.
+        var bookIDs = Set(
+            modules.filter { $0.module.kind == .book }.map(\.module.id)
+        )
+        for member in manifest.members where member.kind == .bookMedia {
+            let components = member.path.split(separator: "/").map(String.init)
+            if components.count >= 3 { bookIDs.insert(components[1]) }
+        }
+        let pictures = LampSyncLocalFiles.bookMedia(
+            forBookModuleIDs: bookIDs, inLibraryAt: library.rootURL, fileManager: fileManager
+        )
+        candidates += pictures.candidates
+        result.gaps += pictures.unplaceable
+
+        let decks = LampSyncLocalFiles.decks(
+            inLibraryAt: library.rootURL, fileManager: fileManager
+        )
+        candidates += decks.candidates
+        result.gaps += decks.unplaceable
+
+        candidates += try LampSyncLocalFiles.workspaceFiles(
+            inLibraryAt: library.rootURL,
+            stagingIn: exports,
+            fileManager: fileManager
+        )
+
+        let described = LampSyncLocalFiles.describe(candidates, fileManager: fileManager)
+        result.gathered.local = described.files
+        result.gaps += described.unreadable
+        result.gaps += LampSyncLocalFiles.unresolved(
+            media.missing, candidates: media.candidates, manifest: manifest
+        )
+
+        // The paths no folder listing reaches: the manifest names them, so
+        // their revisions are asked for one at a time.
+        for member in manifest.members where !(member.kind?.isListed ?? true) {
+            if let revision = try await store.revision(path: member.path) {
+                result.gathered.extraListing[member.path] = revision
+            }
+        }
+        return result
+    }
+
+    /// What the pass did, in one line, and what it could not do.
+    ///
+    /// A gap is not a failure: the pass carried everything else, and saying
+    /// nothing would leave someone believing a file is on the server when it
+    /// is not.
+    private func report(
+        _ outcome: LampSyncBundlePass.Outcome,
+        gaps: [LampSyncLocalFiles.Unreadable],
+        skippedHighlightSets: [String],
+        manifest: LampSyncLibraryManifest
+    ) {
+        var parts = ["Synced \(Date().formatted(date: .abbreviated, time: .shortened))"]
+        if !outcome.installed.isEmpty || !outcome.reconciled.isEmpty {
+            let count = outcome.installed.count + outcome.reconciled.count
+            parts.append("brought \(count) file\(count == 1 ? "" : "s") down")
+        }
+        if !outcome.uploaded.isEmpty {
+            parts.append("sent \(outcome.uploaded.count)")
+        }
+        if !gaps.isEmpty {
+            parts.append(
+                "\(gaps.count) not sent: \(gaps.prefix(3).map(\.path).joined(separator: ", "))"
+            )
+        }
+        if !skippedHighlightSets.isEmpty {
+            parts.append(
+                "waiting on the server for: \(skippedHighlightSets.joined(separator: ", "))"
+            )
+        }
+        if !outcome.failures.isEmpty {
+            parts.append(outcome.failures.prefix(2).joined(separator: "; "))
+        }
+        statusMessage = parts.joined(separator: " — ")
+    }
+}
+
 
 private typealias IOSWebDAVModuleDirectory = LampSyncContentKind
 
