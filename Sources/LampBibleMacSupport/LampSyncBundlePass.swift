@@ -115,6 +115,18 @@ public struct LampSyncBundlePass {
         /// names and the caller checks one at a time.
         public var extraListing: [String: String] = [:]
 
+        /// Paths whose content this client holds, but not as a file at that
+        /// path.
+        ///
+        /// An editable collection is merged *into* the library, so a copy
+        /// taken from the server leaves nothing behind to re-export when the
+        /// collection has nothing in it — an empty highlight set exports to
+        /// nothing at all. The plan downloads any member with no local copy,
+        /// so without saying so this client fetches and installs the same
+        /// file on every pass, for ever. Saying so is the truth about it:
+        /// taken at that revision, unchanged since.
+        public var heldWithoutAFile: Set<String> = []
+
         public init() {}
     }
 
@@ -159,9 +171,25 @@ public struct LampSyncBundlePass {
         let filesByPath = Dictionary(
             gathered.local.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a }
         )
+        var locals = LampSyncLocalFiles.locals(
+            gathered.local, records: records, source: source
+        )
+        let described = Set(gathered.local.map(\.path))
+        for path in gathered.heldWithoutAFile.sorted() where !described.contains(path) {
+            guard let revision = records.record(path, in: source)?.effectiveRevision else {
+                continue
+            }
+            locals.append(LampSyncFilePlan.Local(
+                path: path,
+                changedSinceUpload: false,
+                lastRevision: revision,
+                savedAt: nil
+            ))
+        }
+
         let plan = LampSyncFilePlan.plan(
             manifest: opened.bundle.manifest,
-            local: LampSyncLocalFiles.locals(gathered.local, records: records, source: source),
+            local: locals,
             deletedLocally: gathered.deletedLocally,
             listing: listing
         )

@@ -1544,6 +1544,18 @@ extension LibrarySyncController {
         candidates += collections.candidates
         result.skippedHighlightSets = collections.skipped
 
+        // A highlight module whose set has nothing in it exports to nothing,
+        // so no file is produced at its path — and a member with no local
+        // copy is downloaded, every pass, for ever. The content is in the
+        // library; it simply is not a file. Only for paths this Mac has
+        // actually installed, which is what makes it true rather than
+        // convenient.
+        let produced = Set(candidates.map(\.path))
+        for member in manifest.members
+        where member.kind == .module(.highlights) && !produced.contains(member.path) {
+            result.gathered.heldWithoutAFile.insert(member.path)
+        }
+
         let writings = try await library.personalDevotionals()
         let media = LampSyncLocalFiles.devotionalMedia(
             for: writings,

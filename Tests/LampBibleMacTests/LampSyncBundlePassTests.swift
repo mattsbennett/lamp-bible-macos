@@ -474,11 +474,60 @@ struct LampSyncBundlePassTests {
         #expect(second.uploaded.isEmpty, "it must not publish what it just installed")
         #expect(second.installed.isEmpty)
     }
+
+    /// Content a client holds but not as a file at that path.
+    ///
+    /// An editable collection is merged *into* the library, so a highlight
+    /// set with nothing in it exports to nothing and leaves no file at its
+    /// path. The plan downloads any member with no local copy, so the Mac
+    /// fetched and installed the same highlights module on every pass — the
+    /// last thing left stuck on the real library.
+    @Test func amemberHeldWithoutAFileIsNotFetchedAgain() async throws {
+        let store = try seeded(path: "Highlights/esvs-highlights.lamp", revision: "\"hl-1\"")
+        var records = LampSyncFileRecords()
+        var passLibrary = StubLibrary()
+
+        // First pass: nothing local, nothing recorded, so it comes down.
+        let first = try await LampSyncBundlePass(
+            store: store, library: passLibrary, source: source, now: { 2_000 }
+        ).run(gathering: { gathered([]) }, records: &records)
+        #expect(first.installed == ["Highlights/esvs-highlights.lamp"])
+
+        // Second pass: still no file to export, but the library holds it.
+        passLibrary = StubLibrary()
+        var held = LampSyncBundlePass.Gathered()
+        held.heldWithoutAFile = ["Highlights/esvs-highlights.lamp"]
+        let second = try await LampSyncBundlePass(
+            store: store, library: passLibrary, source: source, now: { 3_000 }
+        ).run(gathering: { held }, records: &records)
+
+        #expect(second.installed.isEmpty, "it was taken once; taking it again changes nothing")
+        #expect(second.uploaded.isEmpty)
+        #expect(passLibrary.installed.isEmpty)
+    }
+
+    /// And a claim with nothing behind it is ignored: only a path this client
+    /// has actually taken counts as held.
+    @Test func claimingToHoldSomethingNeverTakenIsIgnored() async throws {
+        let store = try seeded(path: "Highlights/esvs-highlights.lamp", revision: "\"hl-1\"")
+        var records = LampSyncFileRecords()
+        var held = LampSyncBundlePass.Gathered()
+        held.heldWithoutAFile = ["Highlights/esvs-highlights.lamp"]
+
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(gathering: { held }, records: &records)
+
+        #expect(
+            outcome.installed == ["Highlights/esvs-highlights.lamp"],
+            "nothing recorded means nothing held, whatever the caller says"
+        )
+    }
 }
 
 // MARK: - Doubles
 
-private final class StubLibrary: LampSyncPassLibrary, @unchecked Sendable {
+final class StubLibrary: LampSyncPassLibrary, @unchecked Sendable {
     var installed: [String] = []
     var deleted: [String] = []
     var reconcileCalls = 0
