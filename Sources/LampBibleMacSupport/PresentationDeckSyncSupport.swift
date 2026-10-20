@@ -31,6 +31,66 @@ public enum LampPresentationDeckSync {
         try saveDeletions(deletions, in: directory, fileManager: fileManager)
     }
 
+    /// This library's record of the decks it has deleted.
+    ///
+    /// Public because under Design B the record travels in the settings
+    /// bundle rather than as a file beside the decks: a ledger published as a
+    /// file would be won rather than merged, and two Macs deleting different
+    /// decks would overwrite each other's record.
+    public static func deletions(
+        in libraryRoot: URL,
+        fileManager: FileManager = .default
+    ) throws -> LampPresentationDeckDeletionLedger {
+        try loadDeletions(in: decksDirectory(in: libraryRoot), fileManager: fileManager)
+    }
+
+    /// Folds another device's record into this library's and carries out
+    /// whatever it says: a deck deleted elsewhere after this copy was saved
+    /// goes, and one saved here since the deletion stays.
+    ///
+    /// The same decision `importDecks` makes, through the same planner, with
+    /// nothing incoming — under B the decks themselves arrive as their own
+    /// files, so only the deletions are left to apply.
+    ///
+    /// A deck file that does not decode and validate is skipped, as it is
+    /// everywhere else here, which means a deletion can never be applied to
+    /// one. Worth knowing before concluding a deletion was ignored: the
+    /// planner only ever sees decks it could read.
+    @discardableResult
+    public static func applyDeletions(
+        _ incoming: LampPresentationDeckDeletionLedger,
+        in libraryRoot: URL,
+        fileManager: FileManager = .default
+    ) throws -> [String] {
+        let directory = decksDirectory(in: libraryRoot)
+        var deletions = try loadDeletions(in: directory, fileManager: fileManager)
+        deletions.merge(incoming)
+
+        var localFiles: [String: URL] = [:]
+        var local: [LampPresentationDeckRevision] = []
+        for file in try deckFiles(in: directory, fileManager: fileManager) {
+            guard let data = try? Data(contentsOf: file.url),
+                  let deck = try? LampPresentationDeckStore.decode(data)
+            else { continue }
+            localFiles[deck.id] = file.url
+            local.append(.init(deck: deck, data: data, modifiedAt: file.modified))
+        }
+
+        let plan = LampPresentationDeckPortablePull.plan(
+            incoming: [], deletions: deletions, local: local
+        )
+        var removed: [String] = []
+        for id in plan.deckIDsToDelete {
+            guard let url = localFiles[id] else { continue }
+            try fileManager.removeItem(at: url)
+            removed.append(id)
+        }
+        if !deletions.isEmpty {
+            try saveDeletions(deletions, in: directory, fileManager: fileManager)
+        }
+        return removed.sorted()
+    }
+
     public static func exportDecks(
         from libraryRoot: URL,
         to backupRoot: URL,
