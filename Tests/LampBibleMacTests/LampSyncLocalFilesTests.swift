@@ -237,6 +237,53 @@ struct LampSyncLocalFilesTests {
         #expect(unresolved.map(\.path) == [nowhere])
     }
 
+    /// Enumerated by running the real exporter into a scratch directory,
+    /// because the published shape is not the stored one — a document moves
+    /// into `Documents/`, context into `Context/`, and so on. Decks come out
+    /// of the same exporter and are skipped here: they are their own kind.
+    @Test func workspaceFilesComeOutInTheShapeTheyArePublishedIn() throws {
+        let library = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: library) }
+        let scratch = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: scratch) }
+
+        try write(
+            "# Notes toward Sunday",
+            at: "AgentWorkspaces/Devotionals/talk-123/outline.md",
+            in: library
+        )
+        try write(
+            "a gathered fact",
+            at: "AgentWorkspaces/Devotionals/talk-123/context/fact.md",
+            in: library
+        )
+        // A deck, which the same exporter also writes.
+        let store = LampPresentationDeckStore(rootURL: library)
+        try FileManager.default.createDirectory(
+            at: store.decksDirectoryURL, withIntermediateDirectories: true
+        )
+        try Data("a deck".utf8).write(
+            to: store.decksDirectoryURL.appendingPathComponent("sunday.lampdeck")
+        )
+
+        let found = try LampSyncLocalFiles.workspaceFiles(
+            inLibraryAt: library, stagingIn: scratch
+        )
+
+        #expect(found.allSatisfy { $0.kind == .workspaceFile })
+        #expect(found.contains { $0.path == "Workspaces/Devotionals/talk-123/Documents/outline.md" })
+        #expect(found.contains { $0.path == "Workspaces/Devotionals/talk-123/Context/fact.md" })
+        #expect(
+            !found.contains { $0.path.hasPrefix("Workspaces/Presentations/") },
+            "decks and their images are their own kinds, enumerated from the library"
+        )
+        #expect(
+            try Data(contentsOf: #require(
+                found.first { $0.path.hasSuffix("Documents/outline.md") }
+            ).url) == Data("# Notes toward Sunday".utf8)
+        )
+    }
+
     /// A book's pictures are not inside its module: `media_json` holds only
     /// their metadata, so these files are the library's only copy. Gathered
     /// from every root the reader looks in, in its order, so what is

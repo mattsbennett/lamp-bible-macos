@@ -232,6 +232,46 @@ public enum LampSyncLocalFiles {
         }
     }
 
+    /// The files in the Mac's agent workspaces.
+    ///
+    /// Not enumerated from the library directly, because the published shape
+    /// is not the stored one: `AgentWorkspaces/Devotionals/<ws>/outline.md`
+    /// becomes `Workspaces/Devotionals/<ws>/Documents/outline.md`, with
+    /// context, enabled skills, revisions and conversations each moved and
+    /// some of them transformed. That mapping has one home — the exporter —
+    /// and reimplementing it here as path arithmetic would be a second copy
+    /// to drift.
+    ///
+    /// So the real exporter runs into a scratch directory and what it wrote
+    /// is enumerated. Its top folder is already `Workspaces`, so each
+    /// relative path *is* the remote path. Workspace documents are small text
+    /// files, so the copy is cheap in a way a module would not be.
+    ///
+    /// Decks and their images come out of the same exporter, since it calls
+    /// the deck export too, and are skipped here: they are their own kinds,
+    /// enumerated from the library. The deck deletion ledger is skipped for
+    /// the same reason it is everywhere — it travels in the bundle. Both fall
+    /// out of asking the layout what each path is, rather than being listed
+    /// by hand.
+    public static func workspaceFiles(
+        inLibraryAt libraryRoot: URL,
+        stagingIn scratch: URL,
+        fileManager: FileManager = .default
+    ) throws -> [Candidate] {
+        try fileManager.createDirectory(at: scratch, withIntermediateDirectories: true)
+        try LampWorkspaceSync.exportPortableWorkspaces(
+            from: libraryRoot, to: scratch, fileManager: fileManager
+        )
+        let root = scratch.appendingPathComponent(
+            LampPortableBackupLayout.workspacesDirectory, isDirectory: true
+        )
+        return tree(under: root, fileManager: fileManager).compactMap { relative, url in
+            let path = "\(LampPortableBackupLayout.workspacesDirectory)/\(relative)"
+            guard LampSyncFolderLayout.kind(of: path) == .workspaceFile else { return nil }
+            return Candidate(path: path, kind: .workspaceFile, url: url)
+        }
+    }
+
     /// The pictures a book shows.
     ///
     /// These are not inside the `.lamp`: a book module's `media_json` holds

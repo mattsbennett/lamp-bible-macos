@@ -18,6 +18,19 @@ public protocol LampSyncPassLibrary {
 
     /// Removes the local copy of a file deleted elsewhere.
     func deleteLocally(_ path: String) async throws
+
+    /// Called once after every download and merge, before anything is
+    /// published.
+    ///
+    /// Most files are complete on their own. A workspace is not: its
+    /// documents, context, skills and conversations are a tree with one
+    /// importer, so they are staged as they arrive and taken in here
+    /// together. Nothing to do for a library that met none.
+    func finishInstalling() async throws
+}
+
+public extension LampSyncPassLibrary {
+    func finishInstalling() async throws {}
 }
 
 /// One Design B pass: read the bundle, work out what moved, move it, and
@@ -88,17 +101,28 @@ public struct LampSyncBundlePass {
     ///
     /// `records` is updated in place and saved by the caller, so a pass that
     /// throws still leaves behind what it had already written.
+    /// `receiving` is handed the bundle as it was read, once, before anything
+    /// is published — settings and deletion records are applied there, so what
+    /// this client publishes already holds what came down. `contributing`
+    /// writes this client's own half into the bundle, inside the pass's single
+    /// update. It must only compute: `update` re-applies its change against a
+    /// newer bundle when another device writes first, so anything that needs
+    /// to read local state asynchronously is read in `receiving` and kept for
+    /// `contributing` to use.
     public func run(
         local: [LampSyncLocalFile],
         deletedLocally: [String: Int64],
         extraListing: [String: String] = [:],
         records: inout LampSyncFileRecords,
-        knownBundleRevision: String? = nil
+        knownBundleRevision: String? = nil,
+        receiving: (LampSyncSettingsBundle) async throws -> Void = { _ in },
+        contributing: (inout LampSyncSettingsBundle) throws -> Void = { _ in }
     ) async throws -> Outcome {
         var outcome = Outcome()
         let opened = try await LampSyncSettingsStore.readOrClaim(
             from: store, knownArchiveRevision: knownBundleRevision
         )
+        try await receiving(opened.bundle)
 
         var listing = try await LampSyncFilePlan.listing(
             in: store, manifest: opened.bundle.manifest
@@ -142,7 +166,14 @@ public struct LampSyncBundlePass {
             }
         }
 
-        // 3. Publish, both what only changed here and what was just merged.
+        // 3. Let whatever arrived as part of a tree be taken in together.
+        do {
+            try await library.finishInstalling()
+        } catch {
+            outcome.failures.append("installing: \(error.localizedDescription)")
+        }
+
+        // 4. Publish, both what only changed here and what was just merged.
         //    A merged path carries its own condition — the revision that was
         //    downloaded — and publishes the file the transaction produced,
         //    never the one digested before it ran. Each success is remembered
@@ -179,7 +210,7 @@ public struct LampSyncBundlePass {
             }
         }
 
-        // 4. Drop what was deleted elsewhere.
+        // 5. Drop what was deleted elsewhere.
         for path in plan.deleteLocally.sorted() {
             do {
                 try await library.deleteLocally(path)
@@ -190,7 +221,7 @@ public struct LampSyncBundlePass {
             }
         }
 
-        // 5. One update, carrying everything this pass did.
+        // 6. One update, carrying everything this pass did.
         let time = now()
         let adopt = plan.adopt
         let tombstone = plan.tombstone
@@ -198,6 +229,7 @@ public struct LampSyncBundlePass {
             in: store,
             mergingVersion: { bundle, version in try bundle.merge(version: version.bundle) }
         ) { bundle in
+            try contributing(&bundle)
             for (path, write) in written {
                 bundle.manifest = try bundle.manifest.recordingWrite(
                     path, revision: write.revision, replacing: write.previous, at: time
@@ -218,7 +250,7 @@ public struct LampSyncBundlePass {
             written.compactMapValues(\.revision), in: source
         )
 
-        // 6. Only now may the bytes go. Before the bundle named the deletion,
+        // 7. Only now may the bytes go. Before the bundle named the deletion,
         //    a missing file reads as one nobody has uploaded yet.
         for (path, revision) in plan.reap.sorted(by: { $0.key < $1.key }) {
             do {

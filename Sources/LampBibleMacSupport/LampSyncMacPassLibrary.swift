@@ -71,10 +71,14 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             try installFile(from: url, to: deckStore.assetsDirectoryURL, named: path)
         case .bookMedia:
             try installBookMedia(from: url, remotePath: path)
-        case .devotionalMedia, .workspaceFile:
-            // Enumerated and planned, but installed by the parts of the pass
-            // that know where they belong. Reported rather than ignored, so
-            // nothing goes missing quietly.
+        case .workspaceFile:
+            // Staged, not installed: a workspace is a tree with one importer,
+            // so what arrives is gathered and taken in by `finishInstalling`.
+            try stageWorkspaceFile(from: url, remotePath: path)
+        case .devotionalMedia:
+            // Installed by the step that knows where a writing's attachments
+            // belong. Reported rather than ignored, so nothing goes missing
+            // quietly.
             throw PassError.unsupported(path)
         }
     }
@@ -130,6 +134,36 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             try fileManager.removeItem(at: destination)
         }
         try fileManager.copyItem(at: url, to: destination)
+    }
+
+    /// Where a pass gathers the workspace files it has downloaded, in the
+    /// shape `importPortableWorkspaces` expects to read.
+    private var workspaceStaging: URL {
+        workspace.appendingPathComponent("IncomingWorkspaces", isDirectory: true)
+    }
+
+    private func stageWorkspaceFile(from url: URL, remotePath: String) throws {
+        let destination = workspaceStaging.appendingPathComponent(remotePath)
+        try fileManager.createDirectory(
+            at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        if fileManager.fileExists(atPath: destination.path) {
+            try fileManager.removeItem(at: destination)
+        }
+        try fileManager.copyItem(at: url, to: destination)
+    }
+
+    /// Takes in whatever workspace files this pass gathered, together.
+    ///
+    /// One call rather than one per file, because the importer reads a tree:
+    /// it resolves each workspace's documents against its context, its
+    /// enabled skills and its file ledger, and a document imported without
+    /// them would be judged against nothing.
+    public func finishInstalling() async throws {
+        guard fileManager.fileExists(atPath: workspaceStaging.path) else { return }
+        try LampWorkspaceSync.importPortableWorkspaces(
+            from: workspaceStaging, into: library.rootURL, fileManager: fileManager
+        )
     }
 
     // MARK: - Merging
@@ -262,6 +296,8 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
         case .deckAsset:
             try removeFile(named: path, from: deckStore.assetsDirectoryURL)
         case .devotionalMedia, .bookMedia, .workspaceFile:
+            // Media goes when the module that shows it goes, and a workspace
+            // file's removal travels inside the tree the importer reads.
             throw PassError.unsupported(path)
         }
     }

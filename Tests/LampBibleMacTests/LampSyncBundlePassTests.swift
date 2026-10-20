@@ -252,6 +252,59 @@ struct LampSyncBundlePassTests {
             "a quiet pass costs reads only, not a rewritten bundle"
         )
     }
+
+    /// Settings and deletion records are taken from the bundle before
+    /// anything goes up, so what this client publishes already holds what
+    /// came down — the same order the archive pass published in.
+    @Test func whatCameDownIsTakenBeforeAnythingGoesUp() async throws {
+        let store = FakeStore()
+        let url = try makeFile("a translation")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var records = LampSyncFileRecords()
+        var receivedAfter: [String] = []
+
+        _ = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(
+            local: [local("Translations/KJVs.lamp", url, "a translation")],
+            deletedLocally: [:],
+            records: &records,
+            receiving: { _ in receivedAfter = store.operations }
+        )
+
+        #expect(
+            !receivedAfter.contains("write Translations/KJVs.lamp"),
+            "the bundle is read and taken from before a file is published"
+        )
+    }
+
+    /// This client's own half of the bundle is written inside the pass's
+    /// single update, beside the manifest changes, rather than in a write of
+    /// its own.
+    @Test func whatThisClientContributesTravelsInTheOneUpdate() async throws {
+        let store = FakeStore()
+        let url = try makeFile("a translation")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var records = LampSyncFileRecords()
+
+        _ = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(
+            local: [local("Translations/KJVs.lamp", url, "a translation")],
+            deletedLocally: [:],
+            records: &records,
+            contributing: { bundle in
+                bundle.macSettings = Data("this Mac's settings".utf8)
+            }
+        )
+
+        let written = try #require(store.bodies[bundlePath])
+        let bundle = try LampSyncSettingsBundle.decode(written)
+        #expect(bundle.macSettings == Data("this Mac's settings".utf8))
+        #expect(bundle.manifest.members.map(\.path) == ["Translations/KJVs.lamp"])
+        // The claim plus one update, and no third write of the bundle.
+        #expect(store.operations.filter { $0 == "write \(bundlePath)" }.count == 2)
+    }
 }
 
 // MARK: - Doubles
