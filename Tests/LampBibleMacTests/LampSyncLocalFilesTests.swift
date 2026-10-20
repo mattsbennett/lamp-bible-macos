@@ -28,6 +28,34 @@ struct LampSyncLocalFilesTests {
         )
     }
 
+    private func writing(id: String, attachment: String) -> LampDevotional {
+        let reference = LampDevotionalMediaReference(
+            id: "ref-\(attachment)", type: .image, filename: attachment, mimeType: "image/jpeg"
+        )
+        return LampDevotional(
+            id: id,
+            moduleID: "personal-devotionals",
+            moduleName: "Writing",
+            title: "Morning",
+            content: "Light on the water.",
+            mediaJSON: String(
+                decoding: try! JSONEncoder().encode([reference]), as: UTF8.self
+            )
+        )
+    }
+
+    private func write(
+        _ contents: String,
+        as filename: String,
+        for devotionalID: String,
+        in library: URL
+    ) throws {
+        let directory = library
+            .appendingPathComponent("Media/Devotionals/\(devotionalID)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data(contents.utf8).write(to: directory.appendingPathComponent(filename))
+    }
+
     /// The property the phone enforces: it inspects a downloaded module and
     /// refuses one whose identity disagrees with its filename's stem. The
     /// library names its files by a storage key — a hash of the ID — so
@@ -137,62 +165,68 @@ struct LampSyncLocalFilesTests {
     }
 
     /// Attachments are immutable at a path and published before the module
-    /// that names them. A missing one stops the pass rather than being
-    /// reported, because a writing published without its picture is worse
-    /// than a pass that did not run.
+    /// that names them.
     @Test func theFilesAWritingEmbedsAreGatheredFromTheLibrary() throws {
         let library = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: library) }
-        let attachments = library
-            .appendingPathComponent("Media/Devotionals/writing-1", isDirectory: true)
-        try FileManager.default.createDirectory(at: attachments, withIntermediateDirectories: true)
-        try Data("a photograph".utf8).write(
-            to: attachments.appendingPathComponent("sunrise.jpg")
-        )
-        let reference = LampDevotionalMediaReference(
-            id: "m1", type: .image, filename: "sunrise.jpg", mimeType: "image/jpeg"
-        )
-        let writing = LampDevotional(
-            id: "writing-1",
-            moduleID: "personal-devotionals",
-            moduleName: "Writing",
-            title: "Morning",
-            content: "Light on the water.",
-            mediaJSON: String(decoding: try JSONEncoder().encode([reference]), as: UTF8.self)
-        )
+        try write("a photograph", as: "sunrise.jpg", for: "writing-1", in: library)
 
-        let found = try LampSyncLocalFiles.devotionalMedia(
-            for: [writing],
+        let found = LampSyncLocalFiles.devotionalMedia(
+            for: [writing(id: "writing-1", attachment: "sunrise.jpg")],
             remoteModuleID: LampSyncMacPassLibrary.remoteWritingModuleID,
             inLibraryAt: library
         )
 
-        #expect(found.map(\.path) == ["DevotionalMedia/devotionals/writing-1/sunrise.jpg"])
-        #expect(found.first?.kind == .devotionalMedia)
-        #expect(found.first?.kind.isMedia == true, "never merged, written only where absent")
-        #expect(try Data(contentsOf: #require(found.first).url) == Data("a photograph".utf8))
+        #expect(found.missing.isEmpty)
+        #expect(found.candidates.map(\.path) == ["DevotionalMedia/devotionals/writing-1/sunrise.jpg"])
+        #expect(found.candidates.first?.kind.isMedia == true, "never merged, written only where absent")
+        #expect(try Data(contentsOf: #require(found.candidates.first).url) == Data("a photograph".utf8))
     }
 
-    @Test func aMissingAttachmentStopsThePass() throws {
+    /// Every writing shares one module file, so withholding over one missing
+    /// image would stop them all. And the gap heals by itself: an immutable
+    /// path is a predictable one, so if the file comes back a later pass
+    /// writes it there and every device's reference resolves.
+    @Test func aMissingAttachmentIsReportedWithoutHidingTheOthers() throws {
         let library = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: library) }
-        let reference = LampDevotionalMediaReference(
-            id: "m1", type: .image, filename: "gone.jpg", mimeType: "image/jpeg"
-        )
-        let writing = LampDevotional(
-            id: "writing-1",
-            moduleID: "personal-devotionals",
-            moduleName: "Writing",
-            title: "Morning",
-            content: "Light on the water.",
-            mediaJSON: String(decoding: try JSONEncoder().encode([reference]), as: UTF8.self)
+        try write("kept", as: "kept.jpg", for: "writing-2", in: library)
+
+        let found = LampSyncLocalFiles.devotionalMedia(
+            for: [
+                writing(id: "writing-1", attachment: "gone.jpg"),
+                writing(id: "writing-2", attachment: "kept.jpg"),
+            ],
+            remoteModuleID: "devotionals",
+            inLibraryAt: library
         )
 
-        #expect(throws: (any Error).self) {
-            try LampSyncLocalFiles.devotionalMedia(
-                for: [writing], remoteModuleID: "devotionals", inLibraryAt: library
-            )
-        }
+        #expect(
+            found.candidates.map(\.path) == ["DevotionalMedia/devotionals/writing-2/kept.jpg"],
+            "the bad writing must not hide the good one's attachments"
+        )
+        #expect(found.missing.map(\.path) == ["DevotionalMedia/devotionals/writing-1/gone.jpg"])
+    }
+
+    /// A gap the server already covers needs nothing from this device and
+    /// resolves everywhere, so saying so would be noise. One in neither place
+    /// is a reference nothing will supply, and worth knowing about. Read from
+    /// the manifest, never probed.
+    @Test func onlyAGapTheServerDoesNotCoverIsWorthReporting() throws {
+        let onServer = "DevotionalMedia/devotionals/writing-1/elsewhere.jpg"
+        let nowhere = "DevotionalMedia/devotionals/writing-2/nowhere.jpg"
+        var manifest = LampSyncLibraryManifest()
+        manifest = try manifest.recordingWrite(onServer, revision: "\"m1\"", replacing: nil, at: 10)
+
+        let missing = [
+            LampSyncLocalFiles.Unreadable(path: onServer, reason: "elsewhere"),
+            LampSyncLocalFiles.Unreadable(path: nowhere, reason: "nowhere"),
+        ]
+        let unresolved = LampSyncLocalFiles.unresolved(
+            missing, candidates: [], manifest: manifest
+        )
+
+        #expect(unresolved.map(\.path) == [nowhere])
     }
 
     /// The deck folder also holds the deletion ledger, which must never be

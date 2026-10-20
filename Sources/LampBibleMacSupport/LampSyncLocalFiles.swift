@@ -53,6 +53,11 @@ public enum LampSyncLocalFiles {
     public struct Unreadable: Equatable, Sendable {
         public let path: String
         public let reason: String
+
+        public init(path: String, reason: String) {
+            self.path = path
+            self.reason = reason
+        }
     }
 
     public struct Described: Equatable, Sendable {
@@ -156,22 +161,74 @@ public enum LampSyncLocalFiles {
     ///
     /// Immutable at a path: a different body gets a different name, so these
     /// are never merged and are written only where absent. Published before
-    /// the module that names them, so a writing never arrives on another
-    /// device pointing at an attachment that is not there yet.
+    /// the module that names them, so a writing arriving on another device
+    /// finds its attachments already there.
     ///
-    /// Throws rather than reporting, unlike the others here: a missing,
-    /// irregular or linked attachment stops the pass, because a writing
-    /// published without its picture is worse than a pass that did not run.
+    /// A writing whose attachment the library does not hold is **reported,
+    /// not withheld**. Every writing shares one module file, so withholding
+    /// would stop them all over one missing image; and the gap heals by
+    /// itself, because an immutable path is a predictable one — if the file
+    /// comes back, a later pass writes it there with `.ifAbsent` and every
+    /// device's reference resolves. A writing that references a file the
+    /// library has lost is the library's own state, and sync reproducing it
+    /// is not sync worsening it.
+    ///
+    /// Collected one writing at a time so a single bad one cannot hide the
+    /// attachments of the rest.
     public static func devotionalMedia(
         for devotionals: [LampDevotional],
         remoteModuleID: String,
         inLibraryAt libraryRoot: URL,
         fileManager: FileManager = .default
-    ) throws -> [Candidate] {
-        try LampSyncDevotionalMedia.outgoingFileURLs(
-            for: devotionals, to: remoteModuleID, from: libraryRoot, fileManager: fileManager
-        ).map {
-            Candidate(path: $0.remotePath, kind: .devotionalMedia, url: $0.localURL)
+    ) -> (candidates: [Candidate], missing: [Unreadable]) {
+        var candidates: [Candidate] = []
+        var missing: [Unreadable] = []
+        for devotional in devotionals {
+            do {
+                candidates.append(contentsOf: try LampSyncDevotionalMedia.outgoingFileURLs(
+                    for: [devotional], to: remoteModuleID, from: libraryRoot,
+                    fileManager: fileManager
+                ).map {
+                    Candidate(path: $0.remotePath, kind: .devotionalMedia, url: $0.localURL)
+                })
+            } catch LampSyncDevotionalMedia.UploadError.invalidLocalFile(let path) {
+                // Keyed by the attachment's own remote path, which the error
+                // carries, so `unresolved` can ask the manifest about it.
+                missing.append(Unreadable(
+                    path: path,
+                    reason: "“\(name(of: devotional))” refers to a file the library does not hold"
+                ))
+            } catch {
+                // An attachment whose name cannot be a path, say. No remote
+                // path to ask the manifest about, so it is always reported.
+                missing.append(Unreadable(
+                    path: name(of: devotional), reason: error.localizedDescription
+                ))
+            }
+        }
+        return (candidates, missing)
+    }
+
+    private static func name(of devotional: LampDevotional) -> String {
+        devotional.title.isEmpty ? devotional.id : devotional.title
+    }
+
+    /// The reported gaps worth telling someone about: the ones the manifest
+    /// does not already name as members.
+    ///
+    /// A file absent here but present on the server needs nothing from this
+    /// device and resolves everywhere, so saying so would be noise. One in
+    /// neither place is a reference nothing will supply until the file comes
+    /// back, which is worth knowing. Read from the manifest, never probed.
+    public static func unresolved(
+        _ missing: [Unreadable],
+        candidates: [Candidate],
+        manifest: LampSyncLibraryManifest
+    ) -> [Unreadable] {
+        let onServer = Set(manifest.members.map(\.path))
+        let gathered = Set(candidates.map(\.path))
+        return missing.filter { gap in
+            !onServer.contains(gap.path) && !gathered.contains(gap.path)
         }
     }
 
