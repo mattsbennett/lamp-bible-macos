@@ -867,19 +867,6 @@ extension LibrarySyncController {
 }
 
 
-private typealias IOSWebDAVModuleDirectory = LampSyncContentKind
-
-private struct StagedSyncSettings {
-    let defaults: UserDefaults
-    let domainName: String
-    let baseline: [String: Any]
-    let highlightMappingBaseline: [String: String]?
-
-    func discard() {
-        defaults.removePersistentDomain(forName: domainName)
-    }
-}
-
 private extension LampSyncContentKind {
     var kind: LampModuleKind {
         switch self {
