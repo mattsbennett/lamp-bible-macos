@@ -1600,6 +1600,31 @@ extension LibrarySyncController {
             media.missing, candidates: media.candidates, manifest: manifest
         )
 
+        // What this Mac has deleted, so the manifest can carry it. Without
+        // this nothing deleted here is ever tombstoned: the file stays a
+        // member, this Mac stops producing it, and the next pass downloads it
+        // back — a deck deleted here would be removed by its own ledger and
+        // fetched again on every pass, for ever.
+        let deckLedger = try LampPresentationDeckSync.deletions(
+            in: library.rootURL, fileManager: fileManager
+        )
+        for (deckID, deletedAt) in deckLedger.deletedAt {
+            guard let path = try? LampSyncFolderLayout.deckPath(deckID: deckID) else { continue }
+            result.gathered.deletedLocally[path] = Int64(deletedAt.timeIntervalSince1970 * 1_000)
+        }
+        // A highlight set's deletion is recorded per item; the file that
+        // carried it is the module this source published it under.
+        let personal = try await library.personalDeletionLedger()
+        for (setID, entry) in personal.entries[.highlightSet] ?? [:] {
+            guard let deletedAt = entry.deletedAt,
+                  let moduleID = moduleIDs[setID],
+                  let path = try? LampSyncFolderLayout.modulePath(
+                      kind: .highlights, moduleID: moduleID
+                  )
+            else { continue }
+            result.gathered.deletedLocally[path] = deletedAt
+        }
+
         // The paths no folder listing reaches: the manifest names them, so
         // their revisions are asked for one at a time.
         for member in manifest.members where !(member.kind?.isListed ?? true) {
