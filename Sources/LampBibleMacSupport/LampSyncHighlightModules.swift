@@ -48,13 +48,29 @@ public enum LampSyncHighlightModules {
     /// otherwise this is how a library ends up with the same highlights under
     /// two modules. Derived from the set's own ID so it is recognisable, and
     /// made safe for a path.
-    public static func mintedModuleID(forSet setID: String) -> String {
+    ///
+    /// `taken` is every module ID already spoken for: the ones discovered on
+    /// the server and the ones this Mac has recorded for other sets. Without
+    /// it the name is a pure function of the set ID, and two different sets
+    /// can land on one module — a Mac set called "ESVs" mints
+    /// `esvs-highlights`, which is exactly what the phone names an ESVs set
+    /// of its own. The two sets would then share a file and merge into each
+    /// other. A taken name takes a number, as the phone does.
+    public static func mintedModuleID(
+        forSet setID: String,
+        avoiding taken: Set<String> = []
+    ) -> String {
         let safe = String(setID.map { character in
             character.isLetter || character.isNumber || character == "-" || character == "_"
                 ? Character(character.lowercased())
                 : "-"
         })
         let trimmed = safe.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-        return "\(trimmed.isEmpty ? "set" : trimmed)-highlights"
+        let base = "\(trimmed.isEmpty ? "set" : trimmed)-highlights"
+        guard taken.contains(base) else { return base }
+        for suffix in 2...99 where !taken.contains("\(base)-\(suffix)") {
+            return "\(base)-\(suffix)"
+        }
+        return "\(base)-\(UUID().uuidString.prefix(8).lowercased())"
     }
 }

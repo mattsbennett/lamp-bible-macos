@@ -1524,8 +1524,15 @@ extension LibrarySyncController {
             // Anything still unknown is a set no module on the server claims,
             // which is the one case where minting an ID is right rather than
             // the way a library ends up holding the same highlights twice.
+            // Avoiding every module ID already spoken for — discovered on the
+            // server or recorded here for another set — and each one minted
+            // just now, so two unclaimed sets cannot land on one file either.
+            var taken = Set(moduleIDs.values)
             for set in sets where moduleIDs[set.id] == nil {
-                let minted = LampSyncHighlightModules.mintedModuleID(forSet: set.id)
+                let minted = LampSyncHighlightModules.mintedModuleID(
+                    forSet: set.id, avoiding: taken
+                )
+                taken.insert(minted)
                 moduleIDs[set.id] = minted
                 learned.note(setID: set.id, moduleID: minted)
             }

@@ -230,7 +230,24 @@ public struct LampSyncBundlePass {
                 continue
             }
             do {
-                let revision = try await store.write(fileAt: url, to: path, condition: condition)
+                // A PUT that answers without an ETag leaves this client with
+                // no revision for a file it has just written. The next pass
+                // then finds a revision in the listing where it recorded
+                // none, reads that as the other side having changed the file,
+                // and downloads its own upload back — 601 of them, on the
+                // first pass after the workspaces went up. Media is worse
+                // still: with no revision it is offered `.ifAbsent` for ever
+                // against a file that is plainly there, and every attempt is
+                // refused.
+                //
+                // So a write that names no revision is asked for one. A HEAD,
+                // not a read-back: the PUT was accepted, and what is wanted
+                // here is the name of what is now there, not proof that it
+                // arrived.
+                var revision = try await store.write(fileAt: url, to: path, condition: condition)
+                if revision == nil {
+                    revision = try? await store.revision(path: path)
+                }
                 records.recordUpload(path, in: source, digest: digest, revision: revision)
                 written[path] = (revision, condition.revision)
                 outcome.uploaded.append(path)

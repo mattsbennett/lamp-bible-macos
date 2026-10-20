@@ -391,6 +391,47 @@ struct LampSyncBundlePassTests {
         #expect(record.installedRevision == "\"kjv-1\"")
         #expect(record.pendingRevision == nil)
     }
+
+    /// A server that answers a PUT without an ETag used to leave this client
+    /// with no revision for a file it had just written. The next pass found
+    /// one in the listing where it had recorded none, read that as the other
+    /// side having changed the file, and downloaded its own upload back —
+    /// 601 of them on the real library, the pass after the workspaces went
+    /// up. The same nil made media offer `.ifAbsent` for ever against a file
+    /// that was plainly there.
+    @Test func afileUploadedToASilentServerIsStillRecordedWithARevision() async throws {
+        let store = FakeStore()
+        store.namesRevisionOnWrite = false
+        let url = try makeFile("a workspace document")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var records = LampSyncFileRecords()
+        let path = "Workspaces/Devotionals/talk/Documents/outline.md"
+
+        _ = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(
+            gathering: { gathered([local(path, url, "a workspace document")]) },
+            records: &records
+        )
+
+        let record = try #require(records.record(path, in: source))
+        #expect(
+            record.effectiveRevision != nil,
+            "without a revision the next pass takes this file's own upload back down"
+        )
+
+        // And the next pass, finding the listing agrees with what it
+        // recorded, has nothing to do at all.
+        let second = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 3_000 }
+        ).run(
+            gathering: { gathered([local(path, url, "a workspace document")]) },
+            records: &records
+        )
+        #expect(second.installed.isEmpty, "it must not download what it just sent")
+        #expect(second.uploaded.isEmpty)
+        #expect(second.reconciled.isEmpty)
+    }
 }
 
 // MARK: - Doubles
@@ -419,6 +460,8 @@ private final class FakeStore: LampSyncRemoteStore, @unchecked Sendable {
     var operations: [String] = []
     var refusedWrites: Set<String> = []
     var revisionAfterWrite: String?
+    /// Some servers answer a PUT with no ETag at all.
+    var namesRevisionOnWrite = true
     private var counter = 0
 
     func list(directory: String) async throws -> [LampSyncRemoteEntry]? {
@@ -468,7 +511,7 @@ private final class FakeStore: LampSyncRemoteStore, @unchecked Sendable {
         let revision = revisionAfterWrite ?? "\"\(path)-\(counter)\""
         bodies[path] = data
         revisions[path] = revision
-        return revision
+        return namesRevisionOnWrite ? revision : nil
     }
 
     func delete(path: String, condition: LampSyncWriteCondition) async throws {
