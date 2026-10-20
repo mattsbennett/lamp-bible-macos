@@ -141,6 +141,53 @@ struct LampSyncMacPassLibraryTests {
         }
     }
 
+    /// The library decides what a file is by its extension, and a pass
+    /// downloads to a scratch file that has none. Handed one as it is, every
+    /// module import fails with "Choose a file with the .lamp extension" —
+    /// which is exactly what the first real pass reported. The name the
+    /// library sees must carry the remote path's extension.
+    @Test(arguments: [
+        "Translations/KJVs.lamp",
+        "Notes/notes.lamp",
+        "Highlights/esvs-highlights.lamp",
+        "Devotionals/devotionals.lamp",
+    ])
+    func adownloadIsNamedSoTheLibraryWillAcceptIt(path: String) async throws {
+        let (library, root, workspace) = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: root) }
+        // A scratch file exactly as the pass produces: no extension at all.
+        let scratch = workspace.appendingPathComponent("lamp-sync-\(UUID().uuidString)")
+        try Data("not a real module".utf8).write(to: scratch)
+
+        // The import fails on the content, as it must — these are not real
+        // modules — but never again on the file's name.
+        do {
+            try await passLibrary(library, workspace: workspace).install(path, from: scratch)
+        } catch {
+            let message = error.localizedDescription
+            #expect(!message.contains(".lamp extension"), "named wrongly: \(message)")
+            #expect(!message.contains(".json or .lamp file"), "named wrongly: \(message)")
+        }
+    }
+
+    @Test func installingAHighlightModuleRemembersWhichSetItIsFor() async throws {
+        let (library, root, workspace) = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let learned = LampSyncMacPassLibrary.Learned()
+        let scratch = workspace.appendingPathComponent("lamp-sync-\(UUID().uuidString)")
+        try Data("not a real module".utf8).write(to: scratch)
+
+        // Unreadable content, so nothing is learned — and nothing is claimed.
+        try? await LampSyncMacPassLibrary(
+            library: library, workspace: workspace, learned: learned
+        ) { _ in Data() }.install("Highlights/esvs-highlights.lamp", from: scratch)
+
+        #expect(
+            learned.highlightModuleIDsBySet.isEmpty,
+            "a set's module ID is only ever read from a module that could be read"
+        )
+    }
+
     @Test func theCollectionsArePublishedUnderThePhonesIdentities() {
         // The Mac's own are `personal-notes` and `personal-devotionals`; the
         // adapter rewrites them, and these are what the stem must be.

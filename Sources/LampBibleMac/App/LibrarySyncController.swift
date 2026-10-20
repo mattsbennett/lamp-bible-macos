@@ -1378,8 +1378,11 @@ extension LibrarySyncController {
             defaults: defaults, libraryRoot: library.rootURL,
             source: preferenceSource, fileManager: fileManager
         )
+        // What the pass learns while installing, which it cannot write to the
+        // records itself: the pass holds those exclusively while it runs.
+        let learned = LampSyncMacPassLibrary.Learned()
         let passLibrary = LampSyncMacPassLibrary(
-            library: library, workspace: staging, fileManager: fileManager
+            library: library, workspace: staging, fileManager: fileManager, learned: learned
         ) { path in
             guard let file = try await store.read(path: path) else {
                 throw LibrarySyncError.incompleteRemoteImport([path])
@@ -1459,6 +1462,11 @@ extension LibrarySyncController {
         )
         }
 
+        // A highlight set's module ID lives only in the module on the server,
+        // so a set stays unpublished until a pass has read one.
+        for (setID, moduleID) in learned.highlightModuleIDsBySet {
+            records.setHighlightModuleID(moduleID, forSet: setID, in: source)
+        }
         try records.save(toLibraryAt: library.rootURL, fileManager: fileManager)
         if let plannedSettings {
             try settings.remember(plannedSettings)

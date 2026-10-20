@@ -33,9 +33,28 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
         }
     }
 
+    /// What a pass learns from the files it installs, for the caller to keep.
+    ///
+    /// A reference because installing happens inside the pass, which holds
+    /// the records exclusively while it runs.
+    public final class Learned: @unchecked Sendable {
+        /// Each highlight set's module ID, read from the module that carries
+        /// it. Without this a set stays unpublished for ever: a set with no
+        /// recorded module ID is skipped rather than given a fresh one, and
+        /// the ID only exists in the module already on the server.
+        public private(set) var highlightModuleIDsBySet: [String: String] = [:]
+
+        public init() {}
+
+        func note(setID: String, moduleID: String) {
+            highlightModuleIDsBySet[setID] = moduleID
+        }
+    }
+
     private let library: LampLibrary
     private let workspace: URL
     private let fileManager: FileManager
+    private let learned: Learned
     private let readRemote: (String) async throws -> Data
 
     /// `workspace` is a scratch directory for this pass; `readRemote` fetches
@@ -44,11 +63,13 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
         library: LampLibrary,
         workspace: URL,
         fileManager: FileManager = .default,
+        learned: Learned = Learned(),
         readRemote: @escaping (String) async throws -> Data
     ) {
         self.library = library
         self.workspace = workspace
         self.fileManager = fileManager
+        self.learned = learned
         self.readRemote = readRemote
     }
 
@@ -59,12 +80,24 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             throw PassError.unsupported(path)
         }
         switch kind {
-        case .module(.notes), .module(.highlights):
-            _ = try await library.importPersonalStudyData(from: url, forSync: true)
+        case .module(.notes):
+            _ = try await library.importPersonalStudyData(
+                from: try named(url, as: path), forSync: true
+            )
+        case .module(.highlights):
+            let file = try named(url, as: path)
+            // Read before importing: the set ID is in the module, and this is
+            // the only place the mapping to its module ID can be learned.
+            if let setID = (try? LampWebDAVPersonalArchiveAdapter.highlightSetID(
+                in: try Data(contentsOf: file, options: .mappedIfSafe)
+            )) ?? nil, let moduleID = LampSyncFolderLayout.remoteModuleID(of: path) {
+                learned.note(setID: setID, moduleID: moduleID)
+            }
+            _ = try await library.importPersonalStudyData(from: file, forSync: true)
         case .module(.devotionals):
-            try await installWritings(from: url, remotePath: path)
+            try await installWritings(from: try named(url, as: path), remotePath: path)
         case .module:
-            _ = try await library.install(from: url)
+            _ = try await library.install(from: try named(url, as: path))
         case .deck:
             try installFile(from: url, to: deckStore.decksDirectoryURL, named: path)
         case .deckAsset:
@@ -134,6 +167,29 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             try fileManager.removeItem(at: destination)
         }
         try fileManager.copyItem(at: url, to: destination)
+    }
+
+    /// The downloaded body under a name the library will accept.
+    ///
+    /// A pass downloads to a scratch file with no extension, and the library
+    /// decides what a file is by its extension: `importPersonalStudyData`
+    /// wants `.json` or `.lamp`, `install` wants `.lamp`. Handed the scratch
+    /// file as it is, every module import fails with "Choose a file with the
+    /// .lamp extension" — which is what happened on the first real pass. The
+    /// remote path already carries the right one.
+    private func named(_ url: URL, as remotePath: String) throws -> URL {
+        let filename = remotePath.split(separator: "/").last.map(String.init) ?? "module.lamp"
+        let destination = workspace
+            .appendingPathComponent("Incoming", isDirectory: true)
+            .appendingPathComponent("\(UUID().uuidString)-\(filename)")
+        try fileManager.createDirectory(
+            at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        if fileManager.fileExists(atPath: destination.path) {
+            try fileManager.removeItem(at: destination)
+        }
+        try fileManager.copyItem(at: url, to: destination)
+        return destination
     }
 
     /// Where a pass gathers the workspace files it has downloaded, in the
