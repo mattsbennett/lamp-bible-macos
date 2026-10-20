@@ -58,6 +58,7 @@
 		A100000000000000000000FB /* LampSyncFileRecords.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000FC /* LampSyncFileRecords.swift */; };
 		A100000000000000000000FC /* LampSyncLocalFiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000FD /* LampSyncLocalFiles.swift */; };
 		A100000000000000000000FD /* LampSyncBundlePass.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000FE /* LampSyncBundlePass.swift */; };
+		A100000000000000000000FE /* LampSyncMacPassLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000FF /* LampSyncMacPassLibrary.swift */; };
 		A10000000000000000000046 /* AgentChatTranscriptSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000040 /* AgentChatTranscriptSupport.swift */; };
 		A10000000000000000000028 /* AgentMCPConfigurationSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000026 /* AgentMCPConfigurationSupport.swift */; };
 		A10000000000000000000029 /* AgentModuleAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000027 /* AgentModuleAccess.swift */; };
@@ -149,6 +150,7 @@
 		B100000000000000000000FC /* LampSyncFileRecords.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/LampSyncFileRecords.swift; sourceTree = SOURCE_ROOT; };
 		B100000000000000000000FD /* LampSyncLocalFiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/LampSyncLocalFiles.swift; sourceTree = SOURCE_ROOT; };
 		B100000000000000000000FE /* LampSyncBundlePass.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/LampSyncBundlePass.swift; sourceTree = SOURCE_ROOT; };
+		B100000000000000000000FF /* LampSyncMacPassLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/LampSyncMacPassLibrary.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000040 /* AgentChatTranscriptSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/AgentChatTranscriptSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000026 /* AgentMCPConfigurationSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/AgentMCPConfigurationSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000027 /* AgentModuleAccess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/AgentModuleAccess.swift; sourceTree = SOURCE_ROOT; };
@@ -321,6 +323,7 @@
 				B100000000000000000000FC /* LampSyncFileRecords.swift */,
 				B100000000000000000000FD /* LampSyncLocalFiles.swift */,
 				B100000000000000000000FE /* LampSyncBundlePass.swift */,
+				B100000000000000000000FF /* LampSyncMacPassLibrary.swift */,
 				B10000000000000000000040 /* AgentChatTranscriptSupport.swift */,
 				B10000000000000000000026 /* AgentMCPConfigurationSupport.swift */,
 				B10000000000000000000027 /* AgentModuleAccess.swift */,
@@ -539,6 +542,7 @@
 				A100000000000000000000FB /* LampSyncFileRecords.swift in Sources */,
 				A100000000000000000000FC /* LampSyncLocalFiles.swift in Sources */,
 				A100000000000000000000FD /* LampSyncBundlePass.swift in Sources */,
+				A100000000000000000000FE /* LampSyncMacPassLibrary.swift in Sources */,
 				A10000000000000000000046 /* AgentChatTranscriptSupport.swift in Sources */,
 				A10000000000000000000028 /* AgentMCPConfigurationSupport.swift in Sources */,
 				A10000000000000000000029 /* AgentModuleAccess.swift in Sources */,
