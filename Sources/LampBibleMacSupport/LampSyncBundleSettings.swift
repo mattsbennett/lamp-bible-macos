@@ -153,8 +153,16 @@ public struct LampSyncBundleSettings {
             in: libraryRoot,
             fileManager: fileManager
         )
+        // `storedIn:` explicitly: it defaults to the bundle identifier, so
+        // leaving it off reads a different domain from the one every other
+        // line here uses. The two agree inside the app and disagree
+        // anywhere else — the sort of difference that surfaces as a test
+        // failing now and then rather than as a bug.
         try LampSyncSettingsCommit.recover(
-            from: libraryRoot, to: defaults, fileManager: fileManager
+            from: libraryRoot,
+            to: defaults,
+            storedIn: domainName,
+            fileManager: fileManager
         )
     }
 
