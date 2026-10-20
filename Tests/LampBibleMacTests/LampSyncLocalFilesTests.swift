@@ -136,6 +136,65 @@ struct LampSyncLocalFilesTests {
         #expect(highlights.path == "Highlights/esvs-highlights.lamp")
     }
 
+    /// Attachments are immutable at a path and published before the module
+    /// that names them. A missing one stops the pass rather than being
+    /// reported, because a writing published without its picture is worse
+    /// than a pass that did not run.
+    @Test func theFilesAWritingEmbedsAreGatheredFromTheLibrary() throws {
+        let library = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: library) }
+        let attachments = library
+            .appendingPathComponent("Media/Devotionals/writing-1", isDirectory: true)
+        try FileManager.default.createDirectory(at: attachments, withIntermediateDirectories: true)
+        try Data("a photograph".utf8).write(
+            to: attachments.appendingPathComponent("sunrise.jpg")
+        )
+        let reference = LampDevotionalMediaReference(
+            id: "m1", type: .image, filename: "sunrise.jpg", mimeType: "image/jpeg"
+        )
+        let writing = LampDevotional(
+            id: "writing-1",
+            moduleID: "personal-devotionals",
+            moduleName: "Writing",
+            title: "Morning",
+            content: "Light on the water.",
+            mediaJSON: String(decoding: try JSONEncoder().encode([reference]), as: UTF8.self)
+        )
+
+        let found = try LampSyncLocalFiles.devotionalMedia(
+            for: [writing],
+            remoteModuleID: LampSyncMacPassLibrary.remoteWritingModuleID,
+            inLibraryAt: library
+        )
+
+        #expect(found.map(\.path) == ["DevotionalMedia/devotionals/writing-1/sunrise.jpg"])
+        #expect(found.first?.kind == .devotionalMedia)
+        #expect(found.first?.kind.isMedia == true, "never merged, written only where absent")
+        #expect(try Data(contentsOf: #require(found.first).url) == Data("a photograph".utf8))
+    }
+
+    @Test func aMissingAttachmentStopsThePass() throws {
+        let library = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: library) }
+        let reference = LampDevotionalMediaReference(
+            id: "m1", type: .image, filename: "gone.jpg", mimeType: "image/jpeg"
+        )
+        let writing = LampDevotional(
+            id: "writing-1",
+            moduleID: "personal-devotionals",
+            moduleName: "Writing",
+            title: "Morning",
+            content: "Light on the water.",
+            mediaJSON: String(decoding: try JSONEncoder().encode([reference]), as: UTF8.self)
+        )
+
+        #expect(throws: (any Error).self) {
+            try LampSyncLocalFiles.devotionalMedia(
+                for: [writing], remoteModuleID: "devotionals", inLibraryAt: library
+            )
+        }
+    }
+
     /// The deck folder also holds the deletion ledger, which must never be
     /// published as a file: it is merged in the settings bundle, and as a file
     /// it would be won instead — two Macs deleting different decks would

@@ -152,6 +152,29 @@ public enum LampSyncLocalFiles {
         )
     }
 
+    /// The images and files the writings embed.
+    ///
+    /// Immutable at a path: a different body gets a different name, so these
+    /// are never merged and are written only where absent. Published before
+    /// the module that names them, so a writing never arrives on another
+    /// device pointing at an attachment that is not there yet.
+    ///
+    /// Throws rather than reporting, unlike the others here: a missing,
+    /// irregular or linked attachment stops the pass, because a writing
+    /// published without its picture is worse than a pass that did not run.
+    public static func devotionalMedia(
+        for devotionals: [LampDevotional],
+        remoteModuleID: String,
+        inLibraryAt libraryRoot: URL,
+        fileManager: FileManager = .default
+    ) throws -> [Candidate] {
+        try LampSyncDevotionalMedia.outgoingFileURLs(
+            for: devotionals, to: remoteModuleID, from: libraryRoot, fileManager: fileManager
+        ).map {
+            Candidate(path: $0.remotePath, kind: .devotionalMedia, url: $0.localURL)
+        }
+    }
+
     /// The decks and the images they show, from a library root.
     ///
     /// Decks are the `.lampdeck` files directly in the presentations folder,
