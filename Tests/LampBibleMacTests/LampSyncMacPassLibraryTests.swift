@@ -126,6 +126,9 @@ struct LampSyncMacPassLibraryTests {
         "Workspaces/Presentations/deleted-decks.json",
         "lamp-bible.lampsync",
         "DevotionalMedia/devotionals/writing-1/photo.jpg",
+        // The copy the old sync left under notes' former ID. Installed, it
+        // would arrive as a second notes module holding old notes.
+        "Notes/bible-notes.lamp",
     ])
     func aFileThisDoesNotPlaceIsReported(path: String) async throws {
         let (library, root, workspace) = try makeLibrary()
