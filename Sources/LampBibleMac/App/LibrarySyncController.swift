@@ -1433,7 +1433,7 @@ extension LibrarySyncController {
                     library: library, store: store, source: source,
                     exports: exports, staging: staging,
                     highlightModuleIDs: highlightModuleIDs, manifest: manifest,
-                    passLibrary: passLibrary
+                    passLibrary: passLibrary, learned: learned
                 )
                 gaps = gathered.gaps
                 skippedHighlightSets = gathered.skippedHighlightSets
@@ -1497,7 +1497,8 @@ extension LibrarySyncController {
         staging: URL,
         highlightModuleIDs: [String: String],
         manifest: LampSyncLibraryManifest,
-        passLibrary: LampSyncMacPassLibrary
+        passLibrary: LampSyncMacPassLibrary,
+        learned: LampSyncMacPassLibrary.Learned
     ) async throws -> GatheredLibrary {
         var result = GatheredLibrary()
         var candidates: [LampSyncLocalFiles.Candidate] = []
@@ -1507,8 +1508,31 @@ extension LibrarySyncController {
         candidates += placed.candidates
         result.gaps += placed.unplaceable
 
+        // A set's module ID exists only inside the module it was published
+        // under, so a Mac that has not recorded one asks the server before
+        // concluding anything. Learning it only when a module was *installed*
+        // left a set whose bytes this Mac already had waiting for ever.
+        var moduleIDs = highlightModuleIDs
+        let sets = try await library.highlightSets()
+        if sets.contains(where: { moduleIDs[$0.id] == nil }) {
+            let onServer = try await LampSyncHighlightModules.discover(in: store)
+            // What is recorded wins: it is this Mac's own history with this
+            // source, and discovery is only filling gaps.
+            moduleIDs.merge(onServer) { recorded, _ in recorded }
+            for (setID, moduleID) in onServer { learned.note(setID: setID, moduleID: moduleID) }
+
+            // Anything still unknown is a set no module on the server claims,
+            // which is the one case where minting an ID is right rather than
+            // the way a library ends up holding the same highlights twice.
+            for set in sets where moduleIDs[set.id] == nil {
+                let minted = LampSyncHighlightModules.mintedModuleID(forSet: set.id)
+                moduleIDs[set.id] = minted
+                learned.note(setID: set.id, moduleID: minted)
+            }
+        }
+
         let collections = try await passLibrary.editableCollections { setID in
-            highlightModuleIDs[setID]
+            moduleIDs[setID]
         }
         candidates += collections.candidates
         result.skippedHighlightSets = collections.skipped

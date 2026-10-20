@@ -46,7 +46,7 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
 
         public init() {}
 
-        func note(setID: String, moduleID: String) {
+        public func note(setID: String, moduleID: String) {
             highlightModuleIDsBySet[setID] = moduleID
         }
     }
@@ -283,10 +283,12 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
     /// IDs and a highlight set is compiled under the module ID this source
     /// has recorded for it.
     ///
-    /// `highlightModuleID` is asked for each set. A set with no recorded
-    /// module ID is skipped rather than given a fresh one: minting an ID
-    /// publishes a second module for a set that already has one, and the ID
-    /// is recoverable from the set's existing module on the server.
+    /// `highlightModuleID` is asked for each set, and a set it has no answer
+    /// for is skipped. Minting one here would publish a second module for a
+    /// set that already has one, so the caller is expected to have asked the
+    /// server first — see `LampSyncHighlightModules.discover`, which reads the
+    /// IDs out of the modules that are there, and only then may a set with no
+    /// module anywhere be given a fresh one.
     public func editableCollections(
         highlightModuleID: (String) -> String?
     ) async throws -> (candidates: [LampSyncLocalFiles.Candidate], skipped: [String]) {
