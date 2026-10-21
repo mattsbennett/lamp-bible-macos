@@ -10,6 +10,13 @@ struct PendingTranslationImport: Identifiable {
     let translation: LampImportedTranslation
 }
 
+/// A locked SWORD module waiting for the key its owner bought.
+struct TranslationUnlockRequest: Identifiable {
+    let id = UUID()
+    let url: URL
+    let prompt: String
+}
+
 /// Shows what was found in a Bible file and asks what to call the translation.
 struct TranslationImportSheet: View {
     let pending: PendingTranslationImport

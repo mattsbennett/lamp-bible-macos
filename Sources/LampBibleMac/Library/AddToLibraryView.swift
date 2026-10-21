@@ -32,7 +32,7 @@ private enum LibraryAdditionPath: String, CaseIterable, Identifiable {
     var sidebarDescription: String {
         switch self {
         case .installModule: "Install a finished .lamp content package"
-        case .importBible: "Bring in a USFM, OSIS or XML Bible you own"
+        case .importBible: "Bring in a USFM, OSIS, XML or SWORD Bible you own"
         case .importStudyData: "Import .md writing or restore Lamp exports"
         case .buildModule: "Validate source .json and build a .lamp file"
         }
@@ -57,6 +57,7 @@ struct AddToLibraryView: View {
     @State private var selection = LibraryAdditionPath.installModule
     @State private var showingModuleImporter = false
     @State private var showingBibleImporter = false
+    @State private var unlockKey = ""
     @State private var showingStudyDataImporter = false
     @State private var showingNotesMarkdownImporter = false
     @State private var showingDevotionalsMarkdownImporter = false
@@ -169,6 +170,28 @@ struct AddToLibraryView: View {
             Text(model.errorMessage ?? "The operation could not be completed.")
         }
         .alert(
+            "Unlock Module",
+            isPresented: Binding(
+                get: { model.translationUnlockRequest != nil },
+                set: { if !$0 { model.translationUnlockRequest = nil } }
+            ),
+            presenting: model.translationUnlockRequest
+        ) { request in
+            TextField("Unlock key", text: $unlockKey)
+            Button("Unlock") {
+                let key = unlockKey
+                unlockKey = ""
+                model.translationUnlockRequest = nil
+                model.readTranslation(at: request.url, unlockKey: key)
+            }
+            Button("Cancel", role: .cancel) {
+                unlockKey = ""
+                model.translationUnlockRequest = nil
+            }
+        } message: { request in
+            Text(request.prompt)
+        }
+        .alert(
             "Translation Imported",
             isPresented: Binding(
                 get: { model.translationImportMessage != nil },
@@ -220,10 +243,10 @@ struct AddToLibraryView: View {
         pathPane(
             title: "Import a Bible You Own",
             systemImage: "text.book.closed",
-            description: "Turn a Bible you already have into a translation in your library: USFM, OSIS, Zefania or another XML Bible, as a single file, a folder of books, or a zip.",
+            description: "Turn a Bible you already have into a translation in your library: USFM, OSIS, Zefania or another XML Bible, or a SWORD module — as a single file, a folder, or a zip. A locked SWORD module opens with the key you bought for it.",
             distinction: "Input: a Bible in another app’s format. Lamp converts it once and keeps the translation in your library, where it syncs like your other modules. Import only Bibles you have the right to use.",
             steps: [
-                ("Choose the file, folder or zip.", "Lamp reads it and shows what it found, including anything it had to leave out, such as books outside the 66."),
+                ("Choose the file, folder or zip.", "For a SWORD module, choose its zip, its folder or its .conf file. Lamp reads it — asking for the key if it's locked — and shows what it found, including anything it had to leave out, such as books outside the 66."),
                 ("Name it and import.", "Give the translation a name and abbreviation. Importing the same abbreviation again replaces the earlier import."),
             ]
         ) {

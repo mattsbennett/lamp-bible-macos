@@ -107,6 +107,7 @@ final class LibraryModel: ObservableObject {
     @Published private(set) var isReadingTranslation = false
     /// A Bible file read and waiting for the user to name it.
     @Published var pendingTranslationImport: PendingTranslationImport?
+    @Published var translationUnlockRequest: TranslationUnlockRequest?
     @Published var translationImportMessage: String?
     @Published private(set) var isImportingStudyData = false
     @Published private(set) var isLoadingChapter = false
@@ -314,19 +315,23 @@ final class LibraryModel: ObservableObject {
     /// Reads a Bible the user has in another format. Reading a whole Bible
     /// takes a second or more, so it happens off the main actor; the sheet
     /// that names it opens when it is done.
-    func readTranslation(at url: URL) {
+    /// A locked SWORD module comes back as a request for its key, and is
+    /// read again with it.
+    func readTranslation(at url: URL, unlockKey: String? = nil) {
         guard !isReadingTranslation, !isImporting else { return }
         isReadingTranslation = true
         errorMessage = nil
         Task {
             do {
                 let translation = try await Task.detached(priority: .userInitiated) {
-                    try LampTranslationImporter().read(url)
+                    try LampTranslationImporter().read(url, unlockKey: unlockKey)
                 }.value
                 pendingTranslationImport = PendingTranslationImport(
                     sourceName: url.lastPathComponent,
                     translation: translation
                 )
+            } catch let error as LampTranslationImportError where error.unlockPrompt != nil {
+                translationUnlockRequest = TranslationUnlockRequest(url: url, prompt: error.unlockPrompt ?? "")
             } catch {
                 errorMessage = error.localizedDescription
             }
