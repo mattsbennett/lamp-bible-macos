@@ -6,7 +6,7 @@ This matrix tracks user-facing capability rather than identical UI. Touch-only i
 | --- | --- | --- | --- |
 | Bundled library | Built-in translations, lexicons, commentaries, plans, and quiz | Consumes the same `bundled_modules.db.zlib` artifact | Complete |
 | Portable modules | Install translations, dictionaries, commentaries, plans, devotionals, quizzes, notes, highlights, and books | Integrity-checked `.lamp` installation and management for all nine kinds | Complete |
-| Bible import | Not yet | Import a USFM, OSIS, Zefania or XML Bible the user owns as a translation, with a report of what was left out; re-importing an abbreviation replaces it | macOS addition |
+| Bible import | Import a USFM, OSIS, Zefania or XML Bible the user owns from Files as a translation, reviewed before it installs | The same import from Import or Create Content; both apps take their wording and the replace-or-add decision from core | Complete |
 | Reader | Formatted scripture, poetry, red letters, annotations, selectable text, font settings | Native SwiftUI reader with the same schema rendering and typography controls | Complete |
 | Long-form books | Hierarchical books with annotated prose, scripture links, footnotes, covers, images, and audio | Three-pane reader with nested contents/search, bookmarks, section and block resume, metadata, rich annotations, footnotes, image viewing, audio/waveforms/transcripts, navigation, and independent typography | Complete |
 | Navigation | Book/chapter/verse navigation and history | Menus, chapter shortcuts, precise verse links, persistent back/forward history | Complete |
