@@ -27,17 +27,20 @@ import Testing
         defaults.set("serif", forKey: "reader.typeface")
         defaults.set(["set-a": "old"], forKey: LampSyncSettingsCommit.highlightMappingKey)
 
+        // Staged straight into the library root: since `4cc849e` the journal
+        // no longer rides a library swap, so there is nothing to stage into.
         let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
-        try await library.withStagedChanges { staged in
-            try LampSyncSettingsCommit.stage(
-                baseline: ["reader.fontSize": 16.0, "reader.lineSpacing": 1.2,
-                           "reader.typeface": "serif"],
-                planned: ["reader.fontSize": 19.0, "reader.lineSpacing": 1.4],
-                highlightMappingBaseline: ["set-a": "old"],
-                plannedHighlightMapping: ["set-a": "new"],
-                in: staged.rootURL
-            )
-        }
+        try FileManager.default.createDirectory(
+            at: library.rootURL, withIntermediateDirectories: true
+        )
+        try LampSyncSettingsCommit.stage(
+            baseline: ["reader.fontSize": 16.0, "reader.lineSpacing": 1.2,
+                       "reader.typeface": "serif"],
+            planned: ["reader.fontSize": 19.0, "reader.lineSpacing": 1.4],
+            highlightMappingBaseline: ["set-a": "old"],
+            plannedHighlightMapping: ["set-a": "new"],
+            in: library.rootURL
+        )
         let pending = library.rootURL.appendingPathComponent(
             LampSyncSettingsCommit.pendingFilename
         )
@@ -70,15 +73,16 @@ import Testing
         defer { defaults.removePersistentDomain(forName: domain) }
         defaults.set(16.0, forKey: "reader.fontSize")
         let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
-        try await library.withStagedChanges { staged in
-            try LampSyncSettingsCommit.stage(
-                baseline: ["reader.fontSize": 16.0],
-                planned: ["reader.fontSize": 19.0],
-                highlightMappingBaseline: nil,
-                plannedHighlightMapping: nil,
-                in: staged.rootURL
-            )
-        }
+        try FileManager.default.createDirectory(
+            at: library.rootURL, withIntermediateDirectories: true
+        )
+        try LampSyncSettingsCommit.stage(
+            baseline: ["reader.fontSize": 16.0],
+            planned: ["reader.fontSize": 19.0],
+            highlightMappingBaseline: nil,
+            plannedHighlightMapping: nil,
+            in: library.rootURL
+        )
         defaults.set(22.0, forKey: "reader.fontSize")
         #expect(throws: LampSyncSettingsCommit.CommitError.self) {
             try LampSyncSettingsCommit.recover(

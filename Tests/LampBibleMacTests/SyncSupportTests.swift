@@ -274,62 +274,6 @@ import Testing
         #expect(try String(contentsOf: localTied, encoding: .utf8) == "zeta")
     }
 
-    @Test func stagedWorkspaceImportLeavesLiveLibraryUntouchedAfterLateFailure() async throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("lamp-staged-workspace-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let liveRoot = root.appendingPathComponent("Library", isDirectory: true)
-        let library = LampLibrary(rootURL: liveRoot)
-        let liveWorkspace = liveRoot.appendingPathComponent(
-            "AgentWorkspaces/Devotionals/talk-123", isDirectory: true
-        )
-        try FileManager.default.createDirectory(
-            at: liveWorkspace, withIntermediateDirectories: true
-        )
-        let localFile = liveWorkspace.appendingPathComponent("local.md")
-        try Data("local document".utf8).write(to: localFile)
-
-        let backupWorkspace = root.appendingPathComponent(
-            "Backup/Workspaces/Devotionals/talk-123", isDirectory: true
-        )
-        let backupDocuments = backupWorkspace.appendingPathComponent("Documents", isDirectory: true)
-        try FileManager.default.createDirectory(
-            at: backupDocuments, withIntermediateDirectories: true
-        )
-        try Data("incoming document".utf8).write(
-            to: backupDocuments.appendingPathComponent("remote.md")
-        )
-        let selection = backupWorkspace.appendingPathComponent("EnabledSkills.json")
-        try Data("damaged selection".utf8).write(to: selection)
-        try FileManager.default.setAttributes(
-            [.modificationDate: Date().addingTimeInterval(3_600)],
-            ofItemAtPath: selection.path
-        )
-
-        let backup = root.appendingPathComponent("Backup", isDirectory: true)
-        await #expect(throws: DecodingError.self) {
-            try await library.withStagedChanges { staged in
-                try LampWorkspaceSync.importPortableWorkspaces(
-                    from: backup, into: staged.rootURL
-                )
-            }
-        }
-        #expect(try Data(contentsOf: localFile) == Data("local document".utf8))
-        #expect(!FileManager.default.fileExists(
-            atPath: liveWorkspace.appendingPathComponent("remote.md").path
-        ))
-
-        try FileManager.default.removeItem(at: selection)
-        try await library.withStagedChanges { staged in
-            try LampWorkspaceSync.importPortableWorkspaces(
-                from: backup, into: staged.rootURL
-            )
-        }
-        #expect(try Data(contentsOf: localFile) == Data("local document".utf8))
-        #expect(try Data(contentsOf: liveWorkspace.appendingPathComponent("remote.md"))
-            == Data("incoming document".utf8))
-    }
-
     @Test func importsLegacyPerWorkspaceSkillsIntoTheSharedCatalog() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("lamp-legacy-skills-\(UUID().uuidString)", isDirectory: true)
