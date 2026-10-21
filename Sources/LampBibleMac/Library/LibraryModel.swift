@@ -104,6 +104,10 @@ final class LibraryModel: ObservableObject {
     /// states. One-way: later refreshes never send the interface away again.
     @Published private(set) var hasLoadedInitialContent = false
     @Published private(set) var isImporting = false
+    @Published private(set) var isReadingTranslation = false
+    /// A Bible file read and waiting for the user to name it.
+    @Published var pendingTranslationImport: PendingTranslationImport?
+    @Published var translationImportMessage: String?
     @Published private(set) var isImportingStudyData = false
     @Published private(set) var isLoadingChapter = false
     @Published private(set) var isSearching = false
@@ -300,6 +304,70 @@ final class LibraryModel: ObservableObject {
                     selectedTranslationID = lastInstalledTranslationID
                 }
                 await refreshLibrary()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isImporting = false
+        }
+    }
+
+    /// Reads a Bible the user has in another format. Reading a whole Bible
+    /// takes a second or more, so it happens off the main actor; the sheet
+    /// that names it opens when it is done.
+    func readTranslation(at url: URL) {
+        guard !isReadingTranslation, !isImporting else { return }
+        isReadingTranslation = true
+        errorMessage = nil
+        Task {
+            do {
+                let translation = try await Task.detached(priority: .userInitiated) {
+                    try LampTranslationImporter().read(url)
+                }.value
+                pendingTranslationImport = PendingTranslationImport(
+                    sourceName: url.lastPathComponent,
+                    translation: translation
+                )
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isReadingTranslation = false
+        }
+    }
+
+    func importTranslation(
+        _ pending: PendingTranslationImport,
+        name: String,
+        abbreviation: String,
+        language: String
+    ) {
+        guard !isImporting else { return }
+        let destination = TranslationImportSupport.destination(abbreviation: abbreviation, installed: modules)
+        let translation = pending.translation
+        isImporting = true
+        errorMessage = nil
+        Task {
+            let directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("lamp-translation-import-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            do {
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                let compiled = try await Task.detached(priority: .userInitiated) {
+                    try translation.compile(
+                        into: directory,
+                        id: destination.moduleID,
+                        name: name,
+                        abbreviation: abbreviation,
+                        language: language
+                    )
+                }.value
+                let module = try await library.install(from: compiled.outputURL)
+                selectedTranslationID = module.id
+                await refreshLibrary()
+                translationImportMessage = TranslationImportSupport.completionMessage(
+                    name: name,
+                    report: translation.report,
+                    replaced: destination.replacing != nil
+                )
             } catch {
                 errorMessage = error.localizedDescription
             }
