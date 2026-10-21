@@ -863,6 +863,13 @@ extension LibrarySyncController {
         if !outcome.uploaded.isEmpty {
             parts.append(listed(outcome.uploaded.sorted(), "sent"))
         }
+        // Deleting something of theirs is the last thing a pass should do
+        // quietly. Without this a pass that removed a highlight set reads
+        // exactly like one that did nothing — which is also what made the
+        // first paired test of it inconclusive.
+        if !outcome.deletedLocally.isEmpty {
+            parts.append(listed(outcome.deletedLocally.sorted(), "deleted here"))
+        }
         if !gaps.isEmpty {
             parts.append(
                 "\(gaps.count) not sent: \(gaps.prefix(3).map(\.path).joined(separator: ", "))"
