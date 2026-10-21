@@ -522,12 +522,23 @@ extension LibrarySyncController {
         // it runs. Inverted for the pass: a tombstone names a module path and
         // deleting the set behind it needs the set's own ID.
         let highlightModuleIDs = records.highlightModuleIDs(in: source)
+        // Built from the sets that *exist*, not from the whole mapping.
+        //
+        // `forget(path:)` clears a file's record and leaves the set mapping
+        // alone, so a set deleted here leaves its entry behind — and the
+        // phone names a new set on the same translation `<translation>-
+        // highlights` again, so the same module ID comes back pointing at a
+        // different set. Inverting the whole mapping then resolves that module
+        // ID to whichever entry Dictionary happened to yield first, which is
+        // unordered and seeded per process: the same library would delete the
+        // right set on one run and silently delete nothing on the next.
+        let setIDsByModule = LampSyncHighlightModules.setIDsByModule(
+            highlightModuleIDs,
+            existingSetIDs: try await library.highlightSets().map(\.id)
+        )
         let passLibrary = LampSyncMacPassLibrary(
             library: library, workspace: staging, fileManager: fileManager, learned: learned,
-            highlightSetIDsByModule: Dictionary(
-                highlightModuleIDs.map { ($0.value, $0.key) },
-                uniquingKeysWith: { first, _ in first }
-            )
+            highlightSetIDsByModule: setIDsByModule
         ) { path in
             guard let file = try await store.read(path: path) else {
                 throw LibrarySyncError.incompleteRemoteImport([path])

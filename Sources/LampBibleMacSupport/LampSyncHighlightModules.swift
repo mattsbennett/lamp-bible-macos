@@ -74,3 +74,34 @@ public enum LampSyncHighlightModules {
         return "\(base)-\(UUID().uuidString.prefix(8).lowercased())"
     }
 }
+
+public extension LampSyncHighlightModules {
+    /// Which highlight set each module ID stands for, for a pass that has to
+    /// act on a path rather than a set.
+    ///
+    /// Built from the sets that **exist**, not from the whole recorded
+    /// mapping, because the mapping outlives the sets in it. A record of a
+    /// file is forgotten when the file goes; a set's module ID is not, so a
+    /// set deleted here leaves its entry behind. Meanwhile the phone names a
+    /// new set on the same translation `<translation>-highlights` again — the
+    /// `-2` suffix is only used while a module of that ID still exists there
+    /// — so the same module ID comes back pointing at a different set.
+    ///
+    /// Inverting the whole mapping then leaves that module ID resolving to
+    /// whichever entry came out of the dictionary first, which is unordered
+    /// and seeded per process: the same library would act on the right set
+    /// one run and on a set that no longer exists the next, reporting success
+    /// either way. Restricting it to live sets makes the stale entry
+    /// unreachable rather than merely unlikely.
+    static func setIDsByModule(
+        _ moduleIDsBySet: [String: String],
+        existingSetIDs: some Sequence<String>
+    ) -> [String: String] {
+        Dictionary(
+            existingSetIDs.compactMap { setID in
+                moduleIDsBySet[setID].map { ($0, setID) }
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
+    }
+}

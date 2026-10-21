@@ -77,3 +77,54 @@ private struct HighlightsStore: LampSyncRemoteStore {
         _ data: Data, to path: String, condition: LampSyncWriteCondition
     ) async throws -> String? { nil }
 }
+
+/// A recorded set-to-module mapping outlives the sets in it, and the phone
+/// reuses a module ID as soon as the set holding it goes. Together those make
+/// one module ID point at two sets, one of them gone — and a pass that acts on
+/// a path has to pick the live one every time, not most of the time.
+struct HighlightSetIDsByModuleTests {
+    @Test func thesetAModuleStandsForIsTheOneThatStillExists() {
+        // The phone's naming: delete a YLT set, make another, and it is
+        // `ylt-highlights` again. The Mac learned both.
+        let mapping = [
+            "set-deleted-earlier": "ylt-highlights",
+            "set-made-just-now": "ylt-highlights",
+        ]
+
+        let resolved = LampSyncHighlightModules.setIDsByModule(
+            mapping, existingSetIDs: ["set-made-just-now"]
+        )
+
+        #expect(
+            resolved["ylt-highlights"] == "set-made-just-now",
+            "inverting the whole mapping picks whichever came out first, which is unordered"
+        )
+    }
+
+    /// Run it enough times to catch an answer that depends on dictionary
+    /// order. A per-process hash seed means one run proves nothing: the
+    /// version this replaced passed and failed the same assertion on
+    /// different launches.
+    @Test func theanswerDoesNotDependOnDictionaryOrder() {
+        for index in 0..<200 {
+            let stale = "set-deleted-\(index)"
+            let live = "set-live-\(index)"
+            let resolved = LampSyncHighlightModules.setIDsByModule(
+                [stale: "ylt-highlights", live: "ylt-highlights"],
+                existingSetIDs: [live]
+            )
+            #expect(resolved["ylt-highlights"] == live)
+        }
+    }
+
+    /// A set with no recorded module ID contributes nothing rather than an
+    /// empty or guessed entry: the pass must not be handed a module ID it
+    /// cannot justify.
+    @Test func asetWithNoRecordedModuleIsLeftOut() {
+        let resolved = LampSyncHighlightModules.setIDsByModule(
+            ["mapped": "esvs-highlights"], existingSetIDs: ["mapped", "never-synced"]
+        )
+
+        #expect(resolved == ["esvs-highlights": "mapped"])
+    }
+}
