@@ -341,7 +341,7 @@ final class LibraryModel: ObservableObject {
         language: String
     ) {
         guard !isImporting else { return }
-        let destination = TranslationImportSupport.destination(abbreviation: abbreviation, installed: modules)
+        let destination = LampTranslationImporter.destination(abbreviation: abbreviation, installed: modules)
         let translation = pending.translation
         isImporting = true
         errorMessage = nil
@@ -363,10 +363,9 @@ final class LibraryModel: ObservableObject {
                 let module = try await library.install(from: compiled.outputURL)
                 selectedTranslationID = module.id
                 await refreshLibrary()
-                translationImportMessage = TranslationImportSupport.completionMessage(
-                    name: name,
-                    report: translation.report,
-                    replaced: destination.replacing != nil
+                translationImportMessage = translation.report.completionMessage(
+                    translationName: name,
+                    replaced: destination.replacedModuleID != nil
                 )
             } catch {
                 errorMessage = error.localizedDescription

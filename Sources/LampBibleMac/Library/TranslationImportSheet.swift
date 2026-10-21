@@ -1,7 +1,4 @@
 import LampCore
-#if canImport(LampBibleMacSupport)
-import LampBibleMacSupport
-#endif
 import LampModuleKit
 import SwiftUI
 
@@ -40,8 +37,12 @@ struct TranslationImportSheet: View {
     private var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var trimmedAbbreviation: String { abbreviation.trimmingCharacters(in: .whitespacesAndNewlines) }
 
-    private var destination: TranslationImportSupport.Destination {
-        TranslationImportSupport.destination(abbreviation: trimmedAbbreviation, installed: installed)
+    private var destination: LampTranslationImportDestination {
+        LampTranslationImporter.destination(abbreviation: trimmedAbbreviation, installed: installed)
+    }
+
+    private var replacing: LampInstalledModule? {
+        installed.first { $0.id == destination.replacedModuleID }
     }
 
     var body: some View {
@@ -50,7 +51,7 @@ struct TranslationImportSheet: View {
                 Text("Import \(pending.sourceName)")
                     .font(.title2.bold())
                     .lineLimit(2)
-                Text("\(pending.translation.format.displayName) · \(TranslationImportSupport.contentsLine(pending.translation.report))")
+                Text("\(pending.translation.format.displayName) · \(pending.translation.report.contentsDescription)")
                     .foregroundStyle(.secondary)
             }
 
@@ -58,21 +59,21 @@ struct TranslationImportSheet: View {
                 TextField("Name", text: $name, prompt: Text("New American Standard Bible"))
                 TextField("Abbreviation", text: $abbreviation, prompt: Text("NASB"))
                 Picker("Language", selection: $language) {
-                    ForEach(TranslationImportSupport.languageOptions(including: language), id: \.code) { option in
+                    ForEach(LampTranslationImporter.languageOptions(including: language), id: \.code) { option in
                         Text(option.name).tag(option.code)
                     }
                 }
             }
             .formStyle(.columns)
 
-            if let replacing = destination.replacing {
+            if let replacing {
                 Label(
                     "Replaces “\(replacing.name)”, imported earlier as \(replacing.abbreviation ?? trimmedAbbreviation).",
                     systemImage: "arrow.triangle.2.circlepath"
                 )
                 .foregroundStyle(.secondary)
-            } else if let sharing = TranslationImportSupport.translationSharingAbbreviation(
-                trimmedAbbreviation,
+            } else if let sharing = LampTranslationImporter.translation(
+                sharingAbbreviation: trimmedAbbreviation,
                 installed: installed,
                 except: destination
             ) {
@@ -83,7 +84,7 @@ struct TranslationImportSheet: View {
                 .foregroundStyle(.secondary)
             }
 
-            let notices = TranslationImportSupport.noticeLines(pending.translation.report)
+            let notices = pending.translation.report.notices
             if !notices.isEmpty {
                 GroupBox {
                     VStack(alignment: .leading, spacing: 6) {
@@ -115,7 +116,7 @@ struct TranslationImportSheet: View {
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                Button(destination.replacing == nil ? "Import" : "Replace") {
+                Button(destination.replacedModuleID == nil ? "Import" : "Replace") {
                     onImport(trimmedName, trimmedAbbreviation, language)
                     dismiss()
                 }
