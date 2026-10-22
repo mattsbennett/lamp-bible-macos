@@ -287,6 +287,11 @@ private struct NotesInspectorView: View {
             VerseHighlightEditorView(verse: verse)
                 .environmentObject(model)
         }
+        // A note editor waiting before a verse is chosen, and after each one,
+        // so choosing one never waits for a web view.
+        .onAppear {
+            TipTapEditorPool.shared.prewarm(libraryRootURL: model.library.rootURL, compact: true)
+        }
     }
 
     @ViewBuilder
@@ -847,6 +852,7 @@ private struct PersonalNoteEditor: View {
                 libraryRootURL: model.library.rootURL,
                 isVisible: true,
                 compactLayout: true,
+                placeholder: "Add your notes...",
                 onCoordinatorReady: { coordinator in
                     editorCoordinator = coordinator
                     editorIsReady = true

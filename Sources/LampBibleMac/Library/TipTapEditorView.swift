@@ -47,6 +47,8 @@ struct TipTapEditorView: NSViewRepresentable {
     /// place the editor inside their own scrolling column rather than giving it
     /// a pane of its own. See `TipTapEditorCoordinator.applyCompactLayout`.
     var compactLayout = false
+    /// What the empty editor says, when not the bundle's own.
+    var placeholder: String?
     var onCoordinatorReady: (TipTapEditorCoordinator) -> Void
 
     func makeCoordinator() -> TipTapEditorCoordinator {
@@ -57,48 +59,16 @@ struct TipTapEditorView: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> WKWebView {
-        let configuration = WKWebViewConfiguration()
         let coordinator = context.coordinator
-
-        configuration.userContentController.add(coordinator, name: "tiptapBridge")
-
-        // The page's own stylesheet paints pure black before any host message can
-        // reach it, which reads as a flash of black as the editor opens. Injecting
-        // the host colour at document start means the very first paint is already
-        // the right one — waiting for `ready` is far too late.
-        let initialBackground = cssColor(
-            for: .windowBackgroundColor,
-            in: NSApp?.effectiveAppearance ?? .currentDrawing()
-        )
-        configuration.userContentController.addUserScript(
-            WKUserScript(
-                source: TipTapEditorCoordinator.backgroundStyleScript(cssColor: initialBackground),
-                injectionTime: .atDocumentStart,
-                forMainFrameOnly: true
-            )
-        )
-        configuration.userContentController.addUserScript(
-            WKUserScript(
-                source: TipTapEditorCoordinator.firstPaintScript,
-                injectionTime: .atDocumentStart,
-                forMainFrameOnly: true
-            )
-        )
-
-        let webView = WKWebView(frame: .zero, configuration: configuration)
-        webView.navigationDelegate = coordinator
-        webView.allowsBackForwardNavigationGestures = false
+        // A page already loaded and waiting, when the pool has one: making a
+        // web view costs tens of milliseconds and tens of megabytes, and a
+        // note inspector made one every time a verse was selected.
+        let page = TipTapEditorPool.shared.page(libraryRootURL: libraryRootURL, compact: compactLayout)
+        let webView = page.webView
         webView.setContentHuggingPriority(.defaultLow, for: .horizontal)
         webView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        // A web view is opaque white until its first paint, and no amount of page
-        // styling reaches that frame — the page has not started drawing yet. Stay
-        // hidden until there is something to show; the host's own background sits
-        // behind and is already the right colour.
-        webView.isHidden = true
-        webView.underPageBackgroundColor = .windowBackgroundColor
-        coordinator.hostWantsVisible = isVisible
 
-        coordinator.webView = webView
+        coordinator.hostWantsVisible = isVisible
         coordinator.updateMediaScopeID(mediaScopeID)
         coordinator.updateRichMediaIDs(Set(mediaReferences.map(\.id)))
         coordinator.onContentChanged = bindingUpdater
@@ -107,23 +77,11 @@ struct TipTapEditorView: NSViewRepresentable {
         coordinator.setContent(markdownContent)
         coordinator.setFontSize(fontSize)
         coordinator.setTheme(isDark: context.environment.colorScheme == .dark)
-        applyBackgroundColor(to: webView, coordinator: coordinator)
+        coordinator.setPlaceholder(placeholder)
         coordinator.onReady = { onCoordinatorReady(coordinator) }
-
-        do {
-            let editorURL = try Self.cachedEditorURL(in: libraryRootURL)
-            webView.loadFileURL(editorURL, allowingReadAccessTo: libraryRootURL)
-        } catch {
-            let message = error.localizedDescription
-                .replacingOccurrences(of: "&", with: "&amp;")
-                .replacingOccurrences(of: "<", with: "&lt;")
-                .replacingOccurrences(of: ">", with: "&gt;")
-            webView.loadHTMLString(
-                "<body style='font: 14px -apple-system; padding: 24px'>Visual editor unavailable.<br><small>\(message)</small></body>",
-                baseURL: nil
-            )
-        }
-
+        // Last: a page that is already ready takes everything above at once.
+        coordinator.attach(page)
+        applyBackgroundColor(to: webView, coordinator: coordinator)
         return webView
     }
 
@@ -150,9 +108,7 @@ struct TipTapEditorView: NSViewRepresentable {
         _ webView: WKWebView,
         coordinator: TipTapEditorCoordinator
     ) {
-        webView.configuration.userContentController.removeScriptMessageHandler(forName: "tiptapBridge")
-        webView.navigationDelegate = nil
-        coordinator.webView = nil
+        coordinator.detach()
     }
 
     /// The Markdown surface is a text view that draws no background of its own, so
@@ -168,9 +124,13 @@ struct TipTapEditorView: NSViewRepresentable {
         coordinator.setBackgroundColor(cssColor(for: color, in: webView.effectiveAppearance))
     }
 
+    private func cssColor(for color: NSColor, in appearance: NSAppearance) -> String {
+        Self.cssColor(for: color, in: appearance)
+    }
+
     /// Dynamic system colours have no fixed value until they are resolved against
     /// an appearance, and CSS needs a literal.
-    private func cssColor(for color: NSColor, in appearance: NSAppearance) -> String {
+    fileprivate static func cssColor(for color: NSColor, in appearance: NSAppearance) -> String {
         var resolved = color
         appearance.performAsCurrentDrawingAppearance {
             resolved = color.usingColorSpace(.sRGB) ?? color
@@ -215,7 +175,7 @@ struct TipTapEditorView: NSViewRepresentable {
     /// WKWebView grants local-file access relative to the loaded document. Cache
     /// the bundled single-file editor under the library root so it can also render
     /// devotional media without granting access to unrelated folders.
-    private static func cachedEditorURL(in libraryRootURL: URL) throws -> URL {
+    fileprivate static func cachedEditorURL(in libraryRootURL: URL) throws -> URL {
         #if SWIFT_PACKAGE
         let resourceBundle = Bundle.module
         #else
@@ -256,6 +216,17 @@ private enum TipTapEditorError: LocalizedError {
 
 final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     weak var webView: WKWebView?
+    /// The pooled page this editor is showing, while it holds one.
+    private(set) var page: TipTapEditorPage?
+    /// Whether the page shows this editor's text yet: set when the read-back
+    /// after its own text went in returns. A pooled page holds the last
+    /// document until then, and the editor serialises what is on the page, so
+    /// before this nothing is read from the page — content comes from Swift's
+    /// own copy instead, and a change the page reports is not this text's.
+    private var hasLoadedContent = false
+    /// The first text after taking a page starts a fresh undo history, so
+    /// nothing of the page's last document can be undone back into.
+    private var needsFreshHistory = true
 
     var onContentChanged: ((String) -> Void)?
     var onSelectionChanged: ((TipTapSelectionState) -> Void)?
@@ -277,7 +248,19 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     /// Whether the text has been edited since the editor was last given text.
     private var hasEdits = false
     private var pendingMediaMap: [String: String]?
+    private var loadAttempts = 0
+    /// What the page should show besides its text, kept so a page started
+    /// again after a failed load is given it again.
+    private var shownMediaMap: [String: String]?
+    private var shownFontSize: Double?
+    private var shownPlaceholder: String?
+    private var shownTheme: Bool?
+    private var shownBackgroundColor: String?
+    /// Which text the last read-back answers for: one from an earlier text
+    /// arriving after a newer one went in says nothing about the page now.
+    private var loadGeneration = 0
     private var pendingFontSize: Double?
+    private var pendingPlaceholder: String?
     private var pendingTheme: Bool?
     private var pendingBackgroundColor: String?
     private var appliedBackgroundColor: String?
@@ -325,8 +308,10 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         }
     }
 
+    /// Hidden until the page shows this editor's own text: a pooled page holds
+    /// the last document until then, and nothing should be typed into that.
     private func updateVisibility() {
-        webView?.isHidden = !(hostWantsVisible && hasPainted)
+        webView?.isHidden = !(hostWantsVisible && hasPainted && hasLoadedContent)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -358,35 +343,81 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
 
         switch type {
         case "ready":
-            isReady = true
-            if usesCompactLayout { applyCompactLayout() }
-            if let mediaMap = pendingMediaMap {
-                pendingMediaMap = nil
-                setMediaMap(mediaMap)
-            }
-            if let content = pendingContent {
-                pendingContent = nil
-                setContent(content)
-            }
-            if let fontSize = pendingFontSize {
-                pendingFontSize = nil
-                setFontSize(fontSize)
-            }
-            if let isDark = pendingTheme {
-                pendingTheme = nil
-                setTheme(isDark: isDark)
-            }
-            if let color = pendingBackgroundColor {
-                pendingBackgroundColor = nil
-                setBackgroundColor(color)
-            }
-            onReady?()
+            becomeReady()
 
         case "painted":
             markPainted()
 
+        default:
+            receiveFromReadyPage(type: type, body: body)
+        }
+    }
+
+    /// Shows this editor in a pooled page, which may already be loaded.
+    @MainActor
+    func attach(_ page: TipTapEditorPage) {
+        self.page = page
+        webView = page.webView
+        needsFreshHistory = true
+        page.owner = self
+        if page.isReady { becomeReady() }
+        if page.hasPainted {
+            markPainted()
+        } else if page.hasFinishedLoading {
+            scheduleRevealFallback()
+        }
+        updateVisibility()
+    }
+
+    /// Gives the page back to the pool. Nothing this editor sent the page is
+    /// read after this, and nothing the page reports reaches this editor.
+    @MainActor
+    func detach() {
+        guard let page else { return }
+        page.owner = nil
+        self.page = nil
+        webView = nil
+        hasLoadedContent = false
+        TipTapEditorPool.shared.giveBack(page)
+    }
+
+    private func becomeReady() {
+        guard !isReady else { return }
+        isReady = true
+        if usesCompactLayout { applyCompactLayout() }
+        if let mediaMap = pendingMediaMap {
+            pendingMediaMap = nil
+            setMediaMap(mediaMap)
+        }
+        if let content = pendingContent {
+            pendingContent = nil
+            setContent(content)
+        }
+        if let fontSize = pendingFontSize {
+            pendingFontSize = nil
+            setFontSize(fontSize)
+        }
+        if let placeholder = pendingPlaceholder {
+            pendingPlaceholder = nil
+            setPlaceholder(placeholder)
+        }
+        if let isDark = pendingTheme {
+            pendingTheme = nil
+            setTheme(isDark: isDark)
+        }
+        if let color = pendingBackgroundColor {
+            pendingBackgroundColor = nil
+            setBackgroundColor(color)
+        }
+        onReady?()
+    }
+
+    private func receiveFromReadyPage(type: String, body: [String: Any]) {
+        switch type {
         case "contentChanged":
-            guard let editorMarkdown = body["markdown"] as? String else { return }
+            // Before this editor's own text is on the page, a change is the last
+            // document's, never an edit to this one.
+            guard hasLoadedContent, let editorMarkdown = body["markdown"] as? String else { return }
             let markdown = portableMarkdown(from: editorMarkdown)
             // Soon after it is given text, the editor reports its own restyling
             // of it — list markers, escapes, spacing — as a change. Until
@@ -422,69 +453,89 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     }
 
     /// Frees the page from viewport-sized layout so the editor is exactly as tall
-    /// as what has been written, then reports that height and caret focus back.
+    /// as what has been written, and has it report that height and caret focus.
     ///
     /// The bundle sizes itself for a full pane — `100vh` minimums and a deep
     /// bottom padding for the on-screen keyboard — which inside a host's own
     /// scrolling column would leave an empty webview swallowing scroll events.
+    /// `load` reports the height of the text it puts in, even when unchanged, so
+    /// an editor given a pooled page learns its height.
     private func applyCompactLayout() {
-        evaluate("""
-            (function () {
-                if (window.__lampCompactLayout) { return; }
-                window.__lampCompactLayout = true;
-                var root = document.getElementById('tiptap-editor');
-                if (!root) { return; }
-                root.style.setProperty('min-height', '0', 'important');
-                root.style.setProperty('padding', '10px 12px', 'important');
-                document.documentElement.style.height = 'auto';
-                document.body.style.height = 'auto';
-                var post = function (type, payload) {
-                    try {
-                        window.webkit.messageHandlers.tiptapBridge.postMessage(
-                            Object.assign({ type: type }, payload)
-                        );
-                    } catch (error) {}
-                };
-                var content = root.querySelector('.tiptap');
-                if (content) {
-                    content.style.setProperty('min-height', '0', 'important');
-                }
-                var measure = function () {
-                    // Measured to the document top, so any margin above the editor
-                    // is counted rather than clipped.
-                    var bottom = root.getBoundingClientRect().bottom + window.scrollY;
-                    post('contentHeight', { height: Math.ceil(bottom) });
-                };
-                new ResizeObserver(measure).observe(root);
-                document.addEventListener('focusin', function () {
-                    post('focusChanged', { focused: true });
-                });
-                document.addEventListener('focusout', function () {
-                    post('focusChanged', { focused: false });
-                });
-                measure();
-            })();
-            """)
+        evaluate("window.editorAPI.setReportsHeight(true)")
     }
 
     func setContent(_ markdown: String) {
         lastKnownMarkdown = markdown
         markdownAsLoaded = nil
         hasEdits = false
+        hasLoadedContent = false
+        loadGeneration += 1
+        updateVisibility()
         guard isReady else {
             pendingContent = markdown
             return
         }
-        evaluate("window.editorAPI.setContent(\(Self.javascriptString(editorMarkdown(from: markdown))))")
-        // Read straight back, before there is any edit to read.
-        evaluate("window.editorAPI.getContent()") { [weak self] result in
-            guard let self, let editorMarkdown = result as? String else { return }
+        let generation = loadGeneration
+        // The first text an editor gives its page starts a fresh undo history
+        // where the bundle can, so neither the page's last document nor an empty
+        // page is one undo away. Later text replaces in place, as an edit would.
+        let content = Self.javascriptString(editorMarkdown(from: markdown))
+        let replace = needsFreshHistory
+            ? "if (window.editorAPI.load) { window.editorAPI.load(\(content)); } else { window.editorAPI.setContent(\(content)); }"
+            : "window.editorAPI.setContent(\(content));"
+        needsFreshHistory = false
+        // Text and read-back in one script, so no keystroke can fall between
+        // them and be taken for the text as it was given.
+        evaluate("""
+            \(replace)
+            window.editorAPI.getContent();
+            """) { [weak self] result in
+            guard let self, self.loadGeneration == generation else { return }
+            guard let editorMarkdown = result as? String else {
+                self.recoverFromFailedLoad()
+                return
+            }
             self.markdownAsLoaded = self.portableMarkdown(from: editorMarkdown)
+            self.hasLoadedContent = true
+            self.loadAttempts = 0
+            self.updateVisibility()
         }
     }
 
+    /// The text did not go in, or the page's process died: start the page again
+    /// and give it the text once more. A fresh page holds no other document, so
+    /// if the second attempt fails too its text is still only ever this
+    /// editor's, and it is shown rather than held back for ever.
+    private func recoverFromFailedLoad() {
+        guard let webView else { return }
+        loadAttempts += 1
+        page?.markUnfitForReuse()
+        guard loadAttempts <= 1 else {
+            hasLoadedContent = true
+            updateVisibility()
+            return
+        }
+        isReady = false
+        hasPainted = false
+        appliedTheme = nil
+        appliedBackgroundColor = nil
+        needsFreshHistory = true
+        pendingContent = lastKnownMarkdown
+        pendingMediaMap = shownMediaMap
+        pendingFontSize = shownFontSize
+        pendingPlaceholder = shownPlaceholder
+        pendingTheme = shownTheme
+        pendingBackgroundColor = shownBackgroundColor
+        page?.prepareForReload()
+        webView.reload()
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        recoverFromFailedLoad()
+    }
+
     func getContent(completion: @escaping (String) -> Void) {
-        guard webView != nil, isReady else {
+        guard webView != nil, isReady, hasLoadedContent else {
             completion(lastKnownMarkdown)
             return
         }
@@ -509,7 +560,7 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     /// differing from what it was given doesn't by itself mean an edit; this
     /// lets a document that was only looked at stay exactly as it was written.
     func getEditedContent(completion: @escaping (String?) -> Void) {
-        guard webView != nil, isReady else {
+        guard webView != nil, isReady, hasLoadedContent else {
             completion(hasEdits ? lastKnownMarkdown : nil)
             return
         }
@@ -605,6 +656,7 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     }
 
     func setMediaMap(_ map: [String: String]) {
+        shownMediaMap = map
         guard isReady else {
             pendingMediaMap = map
             return
@@ -614,7 +666,20 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         evaluate("window.editorAPI.setMediaMap(\(json))")
     }
 
+    /// Pages are pooled per kind of editor, and every editor of one kind says
+    /// the same thing, so one without its own leaves the bundle's default.
+    func setPlaceholder(_ text: String?) {
+        guard let text else { return }
+        shownPlaceholder = text
+        guard isReady else {
+            pendingPlaceholder = text
+            return
+        }
+        evaluate("window.editorAPI.setPlaceholder(\(Self.javascriptString(text)))")
+    }
+
     func setFontSize(_ size: Double) {
+        shownFontSize = size
         guard isReady else {
             pendingFontSize = size
             return
@@ -623,6 +688,7 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     }
 
     func setTheme(isDark: Bool) {
+        shownTheme = isDark
         guard isReady else {
             pendingTheme = isDark
             return
@@ -642,18 +708,20 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     /// Only needed when the appearance changes after load; the same style is
     /// already injected at document start so the first paint never flashes.
     func setBackgroundColor(_ cssColor: String) {
+        shownBackgroundColor = cssColor
         guard isReady else {
             pendingBackgroundColor = cssColor
             return
         }
         guard appliedBackgroundColor != cssColor else { return }
         appliedBackgroundColor = cssColor
-        evaluate(Self.backgroundStyleScript(cssColor: cssColor))
+        evaluate("window.editorAPI.setBackgroundColor(\(Self.javascriptString(cssColor)))")
     }
 
     /// Overrides the stylesheet's `--bg-color` from a `<style>` element the host
-    /// owns. `!important` is what lets one rule survive the theme class being
-    /// toggled underneath it, so the colour never has to be re-applied.
+    /// owns, at document start, before the bundle's own `setBackgroundColor` can
+    /// run. It writes the same element. `!important` is what lets one rule
+    /// survive the theme class being toggled underneath it.
     static func backgroundStyleScript(cssColor: String) -> String {
         """
         (function () {
@@ -722,5 +790,196 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         guard let data = try? JSONEncoder().encode(value),
               let result = String(data: data, encoding: .utf8) else { return "\"\"" }
         return result
+    }
+}
+
+/// One loaded editor page, kept apart from the view showing it, so a pool can
+/// hand it from one note to the next instead of making a web view each time.
+///
+/// It receives the page's messages and navigation and passes them to whichever
+/// coordinator holds it now, and remembers what the page has already said —
+/// ready, painted, finished loading — for a coordinator that takes it later.
+final class TipTapEditorPage: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
+    let webView: WKWebView
+    let key: TipTapEditorPool.Key
+    weak var owner: TipTapEditorCoordinator?
+    private(set) var isReady = false
+    private(set) var hasPainted = false
+    private(set) var hasFinishedLoading = false
+    /// Whether the bundle can replace its document with a fresh undo history,
+    /// which giving the page to another document needs.
+    private(set) var canLoad = false
+    /// Set once a load in this page failed or its process died; such a page is
+    /// never handed to another document.
+    private(set) var isUnfitForReuse = false
+
+    init(webView: WKWebView, key: TipTapEditorPool.Key) {
+        self.webView = webView
+        self.key = key
+    }
+
+    func markUnfitForReuse() { isUnfitForReuse = true }
+
+    func prepareForReload() {
+        isReady = false
+        hasPainted = false
+        hasFinishedLoading = false
+    }
+
+    /// Breaks the cycle the content controller's handler makes with this page.
+    func tearDown() {
+        owner = nil
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "tiptapBridge")
+        webView.navigationDelegate = nil
+        webView.stopLoading()
+    }
+
+    func userContentController(
+        _ userContentController: WKUserContentController,
+        didReceive message: WKScriptMessage
+    ) {
+        if let body = message.body as? [String: Any], let type = body["type"] as? String {
+            switch type {
+            case "ready":
+                isReady = true
+                webView.evaluateJavaScript("typeof window.editorAPI.load === 'function'") { [weak self] result, _ in
+                    self?.canLoad = (result as? Bool) == true
+                }
+            case "painted":
+                hasPainted = true
+            default:
+                break
+            }
+        }
+        owner?.userContentController(userContentController, didReceive: message)
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        hasFinishedLoading = true
+        owner?.webView(webView, didFinish: navigation)
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        hasFinishedLoading = true
+        owner?.webView(webView, didFail: navigation, withError: error)
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        didFailProvisionalNavigation navigation: WKNavigation!,
+        withError error: Error
+    ) {
+        hasFinishedLoading = true
+        owner?.webView(webView, didFailProvisionalNavigation: navigation, withError: error)
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        isUnfitForReuse = true
+        owner?.webViewWebContentProcessDidTerminate(webView)
+    }
+}
+
+/// Editor pages kept loaded and ready, so opening a note or switching to the
+/// next one does not wait for a web view.
+///
+/// Measured on a Mac: a new editor page is ready in 60–76 ms, 314 ms for the
+/// first in a launch, and holds about 48 MB; giving a loaded page new text
+/// takes about a millisecond. So one page is kept warm for each kind of editor
+/// that has asked to be, and the page a closed editor gives back is kept in
+/// its place when the bundle can start it on a fresh undo history.
+@MainActor
+final class TipTapEditorPool {
+    static let shared = TipTapEditorPool()
+
+    struct Key: Hashable {
+        let libraryRootURL: URL
+        let compact: Bool
+    }
+
+    private var spares: [Key: TipTapEditorPage] = [:]
+    /// Kinds of editor someone asked to have warm, so the pool replaces the
+    /// spare each time one is taken.
+    private var warmKeys: Set<Key> = []
+
+    /// Starts a page loading for this kind of editor, if none is waiting, so
+    /// the next one opened is ready at once. Deferred to the next turn of the
+    /// run loop: it is never worth delaying what is being drawn now.
+    func prewarm(libraryRootURL: URL, compact: Bool) {
+        let key = Key(libraryRootURL: libraryRootURL, compact: compact)
+        warmKeys.insert(key)
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.spares[key] == nil else { return }
+            self.spares[key] = self.makePage(for: key)
+        }
+    }
+
+    /// A page for one editor: the one waiting, or a new one loading.
+    func page(libraryRootURL: URL, compact: Bool) -> TipTapEditorPage {
+        let key = Key(libraryRootURL: libraryRootURL, compact: compact)
+        let page = spares.removeValue(forKey: key) ?? makePage(for: key)
+        if warmKeys.contains(key) { prewarm(libraryRootURL: libraryRootURL, compact: compact) }
+        return page
+    }
+
+    /// Takes back a page its editor no longer shows. Kept only when the bundle
+    /// can give it the next document on a fresh undo history and nothing is
+    /// waiting already; emptied first, so no note's text sits in a spare.
+    func giveBack(_ page: TipTapEditorPage) {
+        page.owner = nil
+        guard page.canLoad, page.isReady, !page.isUnfitForReuse, spares[page.key] == nil else {
+            page.tearDown()
+            return
+        }
+        page.webView.evaluateJavaScript("window.editorAPI.load('')")
+        spares[page.key] = page
+    }
+
+    private func makePage(for key: Key) -> TipTapEditorPage {
+        let configuration = WKWebViewConfiguration()
+        // The page's own stylesheet paints pure black before any host message can
+        // reach it, which reads as a flash of black as the editor opens. Injecting
+        // the host colour at document start means the very first paint is already
+        // the right one — waiting for `ready` is far too late.
+        let initialBackground = TipTapEditorView.cssColor(
+            for: .windowBackgroundColor,
+            in: NSApp?.effectiveAppearance ?? .currentDrawing()
+        )
+        configuration.userContentController.addUserScript(WKUserScript(
+            source: TipTapEditorCoordinator.backgroundStyleScript(cssColor: initialBackground),
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        ))
+        configuration.userContentController.addUserScript(WKUserScript(
+            source: TipTapEditorCoordinator.firstPaintScript,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        ))
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        let page = TipTapEditorPage(webView: webView, key: key)
+        configuration.userContentController.add(page, name: "tiptapBridge")
+        webView.navigationDelegate = page
+        webView.allowsBackForwardNavigationGestures = false
+        // A web view is opaque white until its first paint, and no amount of page
+        // styling reaches that frame — the page has not started drawing yet. Stay
+        // hidden until there is something to show; the host's own background sits
+        // behind and is already the right colour.
+        webView.isHidden = true
+        webView.underPageBackgroundColor = .windowBackgroundColor
+
+        do {
+            let editorURL = try TipTapEditorView.cachedEditorURL(in: key.libraryRootURL)
+            webView.loadFileURL(editorURL, allowingReadAccessTo: key.libraryRootURL)
+        } catch {
+            page.markUnfitForReuse()
+            let message = error.localizedDescription
+                .replacingOccurrences(of: "&", with: "&amp;")
+                .replacingOccurrences(of: "<", with: "&lt;")
+                .replacingOccurrences(of: ">", with: "&gt;")
+            webView.loadHTMLString(
+                "<body style='font: 14px -apple-system; padding: 24px'>Visual editor unavailable.<br><small>\(message)</small></body>",
+                baseURL: nil
+            )
+        }
+        return page
     }
 }
