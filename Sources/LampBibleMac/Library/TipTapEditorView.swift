@@ -219,10 +219,11 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     /// The pooled page this editor is showing, while it holds one.
     private(set) var page: TipTapEditorPage?
     /// Whether the page shows this editor's text yet: set when the read-back
-    /// after its own text went in returns. A pooled page holds the last
-    /// document until then, and the editor serialises what is on the page, so
-    /// before this nothing is read from the page — content comes from Swift's
-    /// own copy instead, and a change the page reports is not this text's.
+    /// after the first text it gave the page returns. A pooled page holds the
+    /// last document until then, and the editor serialises what is on the
+    /// page, so before this nothing is read from the page — content comes from
+    /// Swift's own copy instead, and a change the page reports is not this
+    /// editor's.
     private var hasLoadedContent = false
     /// The first text after taking a page starts a fresh undo history, so
     /// nothing of the page's last document can be undone back into.
@@ -468,9 +469,15 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         lastKnownMarkdown = markdown
         markdownAsLoaded = nil
         hasEdits = false
-        hasLoadedContent = false
         loadGeneration += 1
-        updateVisibility()
+        // Only the first text in a page waits to be shown and read: before it,
+        // the page may hold another document. Later text replaces this
+        // editor's own — from the Markdown editor, say — and reads after it are
+        // ordered after it, so hiding the editor then would only flicker.
+        if needsFreshHistory {
+            hasLoadedContent = false
+            updateVisibility()
+        }
         guard isReady else {
             pendingContent = markdown
             return

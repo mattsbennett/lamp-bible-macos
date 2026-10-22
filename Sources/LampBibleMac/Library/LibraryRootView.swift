@@ -122,7 +122,11 @@ struct LibraryRootView: View {
             model.start()
         }
         .onChange(of: model.hasLoadedInitialContent, initial: true) { _, loaded in
-            if loaded { restoreReaderTabs() }
+            guard loaded else { return }
+            restoreReaderTabs()
+            // A writing editor waiting from the start, so the first writing
+            // opened shows at once rather than after its web view loads.
+            TipTapEditorPool.shared.prewarm(libraryRootURL: model.library.rootURL, compact: false)
         }
         .onChange(of: model.isRefreshing) { _, refreshing in
             if !refreshing { restoreReaderTabs() }
