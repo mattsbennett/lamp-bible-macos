@@ -49,6 +49,10 @@ struct TipTapEditorView: NSViewRepresentable {
     var compactLayout = false
     /// What the empty editor says, when not the bundle's own.
     var placeholder: String?
+    /// Whether a single line break is a line break rather than a space. Notes
+    /// are plain lines as often as Markdown: typed on the phone, each line is
+    /// its own, and read as Markdown they would run together on save.
+    var lineBreaks = false
     var onCoordinatorReady: (TipTapEditorCoordinator) -> Void
 
     func makeCoordinator() -> TipTapEditorCoordinator {
@@ -73,6 +77,7 @@ struct TipTapEditorView: NSViewRepresentable {
         coordinator.updateRichMediaIDs(Set(mediaReferences.map(\.id)))
         coordinator.onContentChanged = bindingUpdater
         coordinator.usesCompactLayout = compactLayout
+        coordinator.usesLineBreaks = lineBreaks
         coordinator.setMediaMap(mediaMap)
         coordinator.setContent(markdownContent)
         coordinator.setFontSize(fontSize)
@@ -238,6 +243,8 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     /// The web view is opaque to `@FocusState`, so caret focus is reported out.
     var onFocusChanged: ((Bool) -> Void)?
     var usesCompactLayout = false
+    /// Set before the first text, since it decides how that text is read.
+    var usesLineBreaks = false
 
     private(set) var lastKnownMarkdown = ""
     private var mediaScopeID: String
@@ -260,6 +267,11 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     /// Which text the last read-back answers for: one from an earlier text
     /// arriving after a newer one went in says nothing about the page now.
     private var loadGeneration = 0
+    /// The token this editor's last `load` gave its document, which the page
+    /// returns on every message about it. Unique across editors, so a message
+    /// still in flight from a page's last document never matches the next.
+    private var documentToken: Int?
+    private static var nextDocumentToken = 0
     private var pendingFontSize: Double?
     private var pendingPlaceholder: String?
     private var pendingTheme: Bool?
@@ -386,6 +398,7 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         guard !isReady else { return }
         isReady = true
         if usesCompactLayout { applyCompactLayout() }
+        evaluate("window.editorAPI.setLineBreaks(\(usesLineBreaks))")
         if let mediaMap = pendingMediaMap {
             pendingMediaMap = nil
             setMediaMap(mediaMap)
@@ -414,6 +427,8 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     }
 
     private func receiveFromReadyPage(type: String, body: [String: Any]) {
+        // About another document: one this page held before, still in flight.
+        if let token = body["token"] as? Int, token != documentToken { return }
         switch type {
         case "contentChanged":
             // Before this editor's own text is on the page, a change is the last
@@ -487,9 +502,14 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         // where the bundle can, so neither the page's last document nor an empty
         // page is one undo away. Later text replaces in place, as an edit would.
         let content = Self.javascriptString(editorMarkdown(from: markdown))
-        let replace = needsFreshHistory
-            ? "if (window.editorAPI.load) { window.editorAPI.load(\(content)); } else { window.editorAPI.setContent(\(content)); }"
-            : "window.editorAPI.setContent(\(content));"
+        let replace: String
+        if needsFreshHistory {
+            Self.nextDocumentToken += 1
+            documentToken = Self.nextDocumentToken
+            replace = "if (window.editorAPI.load) { window.editorAPI.load(\(content), \(Self.nextDocumentToken)); } else { window.editorAPI.setContent(\(content)); }"
+        } else {
+            replace = "window.editorAPI.setContent(\(content));"
+        }
         needsFreshHistory = false
         // Text and read-back in one script, so no keystroke can fall between
         // them and be taken for the text as it was given.

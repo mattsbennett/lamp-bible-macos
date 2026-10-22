@@ -607,31 +607,25 @@ private struct PersonalNoteEditor: View {
                 }
             }
 
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
+            // Notes don't add footnotes; one a note already has stays here to
+            // edit or remove, so nothing written is hidden.
+            if !personalFootnotes.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
                     Label("Footnotes", systemImage: "text.append")
                         .font(.subheadline.weight(.semibold))
-                    Spacer()
-                    Button("Add Footnote", systemImage: "plus") {
-                        personalFootnotes.append(NoteFootnoteDraft(
-                            id: nextFootnoteID,
-                            kind: "study",
-                            content: ""
-                        ))
-                    }
-                }
-                ForEach($personalFootnotes) { $footnote in
-                    HStack(alignment: .top, spacing: 8) {
-                        TextField("ID", text: $footnote.id)
-                            .frame(width: 52)
-                        TextField("Footnote", text: $footnote.content, axis: .vertical)
-                            .lineLimit(2...5)
-                            .focused($focusedField, equals: .footnote(footnote.uuid))
-                        Button("Remove", systemImage: "minus.circle", role: .destructive) {
-                            personalFootnotes.removeAll { $0.uuid == footnote.uuid }
+                    ForEach($personalFootnotes) { $footnote in
+                        HStack(alignment: .top, spacing: 8) {
+                            TextField("ID", text: $footnote.footnoteID)
+                                .frame(width: 52)
+                            TextField("Footnote", text: $footnote.content, axis: .vertical)
+                                .lineLimit(2...5)
+                                .focused($focusedField, equals: .footnote(footnote.id))
+                            Button("Remove", systemImage: "minus.circle", role: .destructive) {
+                                personalFootnotes.removeAll { $0.id == footnote.id }
+                            }
+                            .labelStyle(.iconOnly)
+                            .buttonStyle(.borderless)
                         }
-                        .labelStyle(.iconOnly)
-                        .buttonStyle(.borderless)
                     }
                 }
             }
@@ -795,12 +789,6 @@ private struct PersonalNoteEditor: View {
         }
     }
 
-    private var nextFootnoteID: String {
-        var candidate = personalFootnotes.count + 1
-        while personalFootnotes.contains(where: { $0.id == String(candidate) }) { candidate += 1 }
-        return String(candidate)
-    }
-
     /// The same visual editor the devotional editor uses, in its compact layout so
     /// it grows with the note instead of scrolling inside the notes column.
     private var noteEditor: some View {
@@ -853,6 +841,7 @@ private struct PersonalNoteEditor: View {
                 isVisible: true,
                 compactLayout: true,
                 placeholder: "Add your notes...",
+                lineBreaks: true,
                 onCoordinatorReady: { coordinator in
                     editorCoordinator = coordinator
                     editorIsReady = true
@@ -925,28 +914,29 @@ private enum NoteEditorMetrics {
     }
 }
 
+/// A footnote the note was loaded with, as the inspector edits it. Until it is
+/// edited it saves exactly as loaded: an imported footnote can have no text,
+/// and a save that dropped it would write back less than it read. Rows are
+/// keyed by `id`, not the footnote ID the user types, which an import doesn't
+/// keep unique.
 private struct NoteFootnoteDraft: Identifiable, Equatable {
-    let uuid: UUID
-    var id: String
-    var kind: String
+    let id = UUID()
+    let loaded: LampVerseFootnote
+    var footnoteID: String
     var content: String
 
-    init(uuid: UUID = UUID(), id: String, kind: String = "study", content: String) {
-        self.uuid = uuid
-        self.id = id
-        self.kind = kind
-        self.content = content
-    }
-
     init(_ footnote: LampVerseFootnote) {
-        self.init(id: footnote.id, kind: footnote.kind ?? "study", content: footnote.content)
+        loaded = footnote
+        footnoteID = footnote.id
+        content = footnote.content
     }
 
     var lampFootnote: LampVerseFootnote? {
-        let trimmedID = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard footnoteID != loaded.id || content != loaded.content else { return loaded }
+        let trimmedID = footnoteID.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedID.isEmpty, !trimmedContent.isEmpty else { return nil }
-        return LampVerseFootnote(id: trimmedID, kind: kind, content: content)
+        return LampVerseFootnote(id: trimmedID, kind: loaded.kind, content: content)
     }
 }
 
