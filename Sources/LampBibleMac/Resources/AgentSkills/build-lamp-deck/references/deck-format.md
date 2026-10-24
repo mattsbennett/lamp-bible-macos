@@ -16,7 +16,7 @@
 
 ## Theme
 
-Theme fields are `id`, `backgroundColor`, `foregroundColor`, `accentColor`, and optional `typeface`. Colours use `#RRGGBB`. `typeface` applies presentation-wide; use `system-sans`, `system-serif`, or an installed font family name, and omit it for Lamp Rounded. Prefer one of the built-in themes:
+Theme fields are `id`, `backgroundColor`, `foregroundColor`, `accentColor`, and optional `typeface` and `highlights` (see Emphasis). Colours use `#RRGGBB`. `typeface` applies presentation-wide; use `system-sans`, `system-serif`, or an installed font family name, and omit it for Lamp Rounded. Prefer one of the built-in themes:
 
 ```json
 {
@@ -129,7 +129,7 @@ size of the type.
 
 ## Content block
 
-Every block has `id`, `kind`, and `text`. It may also contain `assetPath`, `altText`, `placement`, `listStyle`, or `scriptureReference`. Supported kinds are:
+Every block has `id`, `kind`, and `text`. It may also contain `assetPath`, `altText`, `placement`, `listStyle`, `scriptureReference`, or `emphasis`. Supported kinds are:
 
 - `title`
 - `subtitle`
@@ -196,6 +196,56 @@ A citation closes the passage above it. Two passages from two places are two
 quotations, each with its own citation directly after it, and each is drawn with
 its own accent rule. Two passages from the same place are one quotation, joined
 with an ellipsis, with a single citation.
+
+## Emphasis
+
+To draw key words bold and in colour, list them in the block's `emphasis`. Each
+entry names words in the block's `text`; the text itself stays the words alone,
+so a quotation is still checked against its translation and manuscript.
+
+A key detail needs nothing more, and is drawn in the theme's accent colour:
+
+```json
+"text": "On the third day there was a wedding at Cana in Galilee",
+"emphasis": [{ "text": "third day" }, { "text": "Cana" }]
+```
+
+To set ideas, people or sides of a contrast apart, name a colour for each in the
+theme's `highlights` and give the name in an entry's `highlight`:
+
+```json
+"theme": { "id": "lamp-dark", "backgroundColor": "#111827", "foregroundColor": "#F9FAFB",
+           "accentColor": "#F59E0B", "highlights": { "grace": "#60A5FA", "law": "#F87171" } },
+…
+"text": "For the law was given through Moses; grace and truth came through Jesus Christ.",
+"emphasis": [
+  { "text": "law", "highlight": "law" },
+  { "text": "grace and truth", "highlight": "grace" },
+  { "text": "Jesus Christ" }
+]
+```
+
+One slide can mix both. How an entry matches:
+
+- Exactly as the text has it: case, punctuation and line breaks included. An
+  accent typed composed or decomposed is the same letter.
+- Whole words only, so `law` does not emphasise part of `lawless`, and a word
+  is not matched in part where a combining mark follows it.
+- Every appearance, unless `occurrence` names one, counting from 1:
+  `{ "text": "holy", "occurrence": 2 }`.
+- Where two entries cover the same words, the earlier one is drawn.
+
+Lamp adds no emphasis of its own, and the quotation marks and ellipses it adds
+are never emphasised. Use it sparingly: a few words a slide, or none.
+
+Highlight colours use `#RRGGBB` and should reach 3:1 against the background,
+like the accent. Over a picture behind the slide, a highlight that would not
+read there is drawn in the words' colour, still bold.
+
+An entry that draws nothing — words the text does not have, an `occurrence` past
+the last one, a highlight the theme does not name, words an earlier entry
+already covers — is a warning, not an error, so the deck still imports. Fix
+every one: otherwise the words are simply drawn plain.
 
 ## Scripture references
 

@@ -887,8 +887,12 @@ struct SlideStudioView: View {
         }
     }
 
+    /// Changes the deck's colours and keeps what the author chose besides
+    /// them: the typeface, and the highlights emphasised words name, which the
+    /// validator then holds to the new background.
     private func applyTheme(_ themeID: String) {
         let typeface = deck?.theme.typeface
+        let highlights = deck?.theme.highlights
         var newTheme: LampPresentationTheme
         switch themeID {
         case LampPresentationTheme.parchment.id:
@@ -897,6 +901,7 @@ struct SlideStudioView: View {
             newTheme = .lampDark
         }
         newTheme.typeface = typeface
+        newTheme.highlights = highlights
         deck?.theme = newTheme
     }
 

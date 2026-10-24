@@ -34,6 +34,9 @@ enum LampDeckPreview {
     struct BackgroundReport: Codable {
         var text: String
         var accent: String
+        /// Each theme highlight as drawn over the picture: its own colour, or
+        /// the text colour where it would not read. Absent with none.
+        var highlights: [String: String]?
         var scrim: String
         /// From 0, the picture left alone, to 1, the picture hidden.
         var scrimOpacity: Double
@@ -224,6 +227,7 @@ enum LampDeckPreview {
                     BackgroundReport(
                         text: $0.text,
                         accent: $0.accent,
+                        highlights: $0.highlights.isEmpty ? nil : $0.highlights,
                         scrim: $0.scrim,
                         scrimOpacity: $0.scrimOpacity,
                         contrast: ($0.contrast * 10).rounded() / 10

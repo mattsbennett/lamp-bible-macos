@@ -227,6 +227,55 @@ struct DeckValidatorAgreementTests {
                 .init(kind: .citation, text: "A source"),
             ]),
         ]),
+        // Every way an emphasised phrase fails to draw as written, beside
+        // entries that draw, and a highlight too dim for the background.
+        LampPresentationDeck(
+            title: "Emphasis",
+            theme: .init(
+                id: "lamp-dark",
+                backgroundColor: "#111827",
+                foregroundColor: "#F9FAFB",
+                accentColor: "#F59E0B",
+                highlights: ["grace": "#60A5FA", "dim": "#1E3A8A"]
+            ),
+            slides: [
+                .init(layout: .scripture, blocks: [
+                    .init(kind: .scripture, text: "the law and the law, by grace", emphasis: [
+                        .init(text: "grace", highlight: "grace"),
+                        .init(text: ""),
+                        .init(text: "mercy"),
+                        .init(text: "Law"),
+                        .init(text: "law", occurrence: 0),
+                        .init(text: "law", occurrence: 3),
+                        .init(text: "law", highlight: "torah", occurrence: 2),
+                        .init(text: "the law"),
+                        .init(text: "aw"),
+                    ]),
+                    .init(kind: .citation, text: "A source"),
+                ]),
+                .init(layout: .image, blocks: [
+                    .init(kind: .image, assetPath: "Assets/a.jpg", altText: "A city", emphasis: [.init(text: "city")]),
+                ]),
+            ]
+        ),
+        // Where Swift's characters and Python's code points part: a composed
+        // phrase in decomposed text, which matches; a word running on past a
+        // combining mark, which does not; and pointed Hebrew, which matches.
+        LampPresentationDeck(title: "Unicode", slides: [
+            .init(layout: .titleAndBody, blocks: [
+                .init(kind: .title, text: "Heading"),
+                .init(kind: .body, text: "the cafe\u{0301} door", emphasis: [.init(text: "caf\u{00E9}")]),
+                .init(kind: .body, text: "grace\u{0301}d", emphasis: [.init(text: "grace")]),
+                .init(
+                    kind: .body,
+                    text: "\u{05D1}\u{05B0}\u{05BC}\u{05E8}\u{05B5}\u{05D0}\u{05E9}\u{05B4}\u{05C1}\u{05D9}\u{05EA} \u{05D1}\u{05B8}\u{05BC}\u{05E8}\u{05B8}\u{05D0}",
+                    emphasis: [
+                        .init(text: "\u{05D1}\u{05B0}\u{05BC}\u{05E8}\u{05B5}\u{05D0}\u{05E9}\u{05B4}\u{05C1}\u{05D9}\u{05EA}"),
+                        .init(text: "\u{05D1}"),
+                    ]
+                ),
+            ]),
+        ]),
         // Nothing to say about a well-formed deck.
         LampPresentationDeck(title: "Clean", slides: [
             .init(layout: .titleAndBody, blocks: [

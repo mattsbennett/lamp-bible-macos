@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import unicodedata
 from pathlib import Path
 
 
@@ -107,6 +108,131 @@ def quote_groups(blocks: list) -> list[tuple[int, int]]:
     if pending:
         groups.append((pending, 0))
     return groups
+
+
+def characters(text: str) -> list[str]:
+    """`text` as Lamp reads it to find emphasised words: composed (NFC), with
+    each combining mark kept with the letter before it.
+
+    Swift compares grapheme clusters by canonical equivalence and Python
+    compares code points, so without this the two disagree on a decomposed
+    accent, and on pointed Hebrew, which has no composed forms.
+
+    Emoji sequences are the known gap: Swift keeps a joined family, a flag or
+    a skin tone as one character, and this splits them. The two disagree only
+    when emphasis names part of one, and full segmentation needs a module the
+    standard library lacks.
+    """
+    result: list[str] = []
+    for ch in unicodedata.normalize("NFC", text):
+        if result and unicodedata.category(ch).startswith("M"):
+            result[-1] += ch
+        else:
+            result.append(ch)
+    return result
+
+
+def is_word_character(character: str) -> bool:
+    return character[:1].isalnum()
+
+
+def emphasis_matches(phrase: str, text: str) -> list[range]:
+    """Where `phrase` appears in `text` as whole words, as character offsets,
+    left to right and never overlapping. Mirrors `LampPresentationEmphasis`."""
+    words = characters(phrase)
+    chars = characters(text)
+    if not words:
+        return []
+    found: list[range] = []
+    start = 0
+    while start + len(words) <= len(chars):
+        end = start + len(words)
+        if (
+            chars[start:end] == words
+            and not (start > 0 and is_word_character(chars[start - 1]) and is_word_character(words[0]))
+            and not (end < len(chars) and is_word_character(chars[end]) and is_word_character(words[-1]))
+        ):
+            found.append(range(start, end))
+            start = end
+        else:
+            start += 1
+    return found
+
+
+def emphasis_issues(block: dict, highlight_names: set[str]) -> tuple[list[str], list[str]]:
+    """Errors for emphasis Lamp cannot read, and warnings, by the path of the
+    entry within the block, for emphasis that will not be drawn as written.
+
+    The second are warnings, never errors: Lamp refuses to save or sync a deck
+    with errors, and rewording a slide must not make its deck unsavable.
+    """
+    emphasis = block.get("emphasis")
+    if emphasis is None:
+        return [], []
+    if not isinstance(emphasis, list):
+        return ["emphasis: expected an array of entries"], []
+    errors: list[str] = []
+    for index, entry in enumerate(emphasis):
+        path = f"emphasis[{index}]"
+        if not isinstance(entry, dict):
+            errors.append(f"{path}: expected an object")
+            continue
+        if not isinstance(entry.get("text"), str):
+            errors.append(f"{path}.text: expected the words to emphasise")
+        if entry.get("highlight") is not None and not isinstance(entry.get("highlight"), str):
+            errors.append(f"{path}.highlight: expected the name of a theme highlight")
+        occurrence = entry.get("occurrence")
+        if occurrence is not None and (not isinstance(occurrence, int) or isinstance(occurrence, bool)):
+            errors.append(f"{path}.occurrence: expected a whole number")
+    if errors or not emphasis:
+        return errors, []
+    if block.get("kind") == "image":
+        return [], ["emphasis: emphasis is drawn on words, and an image block has none"]
+
+    warnings: list[str] = []
+    text = block.get("text") if isinstance(block.get("text"), str) else ""
+    taken = [False] * len(characters(text))
+    for index, entry in enumerate(emphasis):
+        path = f"emphasis[{index}]"
+        phrase = entry["text"]
+        if not phrase:
+            warnings.append(f"{path}: name the words to emphasise")
+            continue
+        name = entry.get("highlight")
+        if name is not None and name not in highlight_names:
+            warnings.append(
+                f"{path}: the theme has no highlight named {name!r}, so these words "
+                "take the accent colour"
+            )
+        matches = emphasis_matches(phrase, text)
+        if not matches:
+            warnings.append(
+                f"{path}: {phrase!r} is not in this block's text as whole words, so "
+                "nothing is emphasised; copy the words exactly as the text has them"
+            )
+            continue
+        occurrence = entry.get("occurrence")
+        if occurrence is not None and not 1 <= occurrence <= len(matches):
+            warnings.append(
+                f"{path}: count occurrences from 1" if occurrence < 1 else
+                f"{path}: {phrase!r} appears {len(matches)} time(s) in this block's text, "
+                f"so occurrence {occurrence} emphasises nothing"
+            )
+            continue
+        drawn = matches if occurrence is None else [matches[occurrence - 1]]
+        overlaps = False
+        for match in drawn:
+            if any(taken[offset] for offset in match):
+                overlaps = True
+            else:
+                for offset in match:
+                    taken[offset] = True
+        if overlaps:
+            warnings.append(
+                f"{path}: {phrase!r} overlaps words an earlier entry emphasises, so it "
+                "is not drawn there"
+            )
+    return [], warnings
 
 
 def relative_luminance(value: str) -> float | None:
@@ -338,6 +464,25 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
                     f"theme.{key}: contrasts with the background at only {ratio:.1f}:1; "
                     f"aim for {floor:.1f}:1 or more"
                 )
+        highlights = theme.get("highlights")
+        if highlights is not None and not isinstance(highlights, dict):
+            errors.append("theme.highlights: expected an object of names and #RRGGBB colours")
+        elif isinstance(highlights, dict):
+            # Held to the accent's 3:1, WCAG's level for large and bold text,
+            # which emphasised words on a slide always are.
+            for name in sorted(highlights):
+                value = highlights[name]
+                if not name.strip():
+                    errors.append("theme.highlights: a highlight needs a name for emphasis to give")
+                elif not isinstance(value, str) or HEX_COLOR.fullmatch(value) is None:
+                    errors.append(f"theme.highlights.{name}: expected #RRGGBB")
+                else:
+                    ratio = contrast_ratio(value, background)
+                    if ratio is not None and ratio < 3.0:
+                        warnings.append(
+                            f"theme.highlights.{name}: highlighted words contrast with the "
+                            f"background at only {ratio:.1f}:1; aim for 3.0:1 or more"
+                        )
 
     notes_source = deck.get("speakerNotesSource")
     follows_manuscript = notes_source == "manuscript"
@@ -358,6 +503,9 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
                 f"speakerNotesSource: notes can only follow a devotional or writing "
                 f"source, and this deck's is {kind!r}"
             )
+
+    theme_highlights = theme.get("highlights") if isinstance(theme, dict) else None
+    highlight_names = set(theme_highlights) if isinstance(theme_highlights, dict) else set()
 
     slides = deck.get("slides")
     if not isinstance(slides, list) or not slides:
@@ -487,6 +635,9 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
                         f"{block_path}.manuscriptCheck: only quotation and scripture "
                         "content is checked against the manuscript, so this has no effect"
                     )
+            emphasis_errors, emphasis_warnings = emphasis_issues(block, highlight_names)
+            errors.extend(f"{block_path}.{issue}" for issue in emphasis_errors)
+            warnings.extend(f"{block_path}.{issue}" for issue in emphasis_warnings)
 
         # Images the deck names but nobody delivered. They render as
         # placeholders rather than failing, so this is a warning.
