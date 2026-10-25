@@ -27,6 +27,50 @@ private enum WritingGroupBy: String, CaseIterable, Identifiable {
     var id: Self { self }
 }
 
+/// Each writing's row snippet and reading statistics, worked out once for the
+/// writing as it stands. Both read the whole text, and for writing made on the
+/// phone that first means turning its blocks into Markdown, while the list
+/// draws every row again each time it is shown.
+private final class WritingRowSummaries {
+    private struct Entry {
+        let content: String
+        let contentJSON: String?
+        let summary: String?
+        let snippet: String?
+        let statistics: WritingStatistics
+    }
+
+    private var entries: [String: Entry] = [:]
+
+    func snippet(for devotional: LampDevotional) -> String? {
+        entry(for: devotional).snippet
+    }
+
+    func statistics(for devotional: LampDevotional) -> WritingStatistics {
+        entry(for: devotional).statistics
+    }
+
+    private func entry(for devotional: LampDevotional) -> Entry {
+        if let entry = entries[devotional.id],
+           entry.content == devotional.content,
+           entry.contentJSON == devotional.contentJSON,
+           entry.summary == devotional.summary {
+            return entry
+        }
+        let source = devotional.summary?.isEmpty == false ? devotional.summary! : devotional.content
+        let snippet = WritingStatistics.snippet(from: source, limit: 120)
+        let entry = Entry(
+            content: devotional.content,
+            contentJSON: devotional.contentJSON,
+            summary: devotional.summary,
+            snippet: snippet.isEmpty ? nil : snippet,
+            statistics: WritingStatistics.measuring(markdown: devotional.displayMarkdown)
+        )
+        entries[devotional.id] = entry
+        return entry
+    }
+}
+
 private struct WritingListSection: Identifiable {
     let id: String
     let title: String?
@@ -78,6 +122,7 @@ struct DevotionalsView: View {
     @State private var devotionalPendingDeletion: LampDevotional?
     @State private var exportedURL: URL?
     @State private var presentationDecksByDevotionalID: [String: [LampPresentationDeck]] = [:]
+    @State private var rowSummaries = WritingRowSummaries()
 
     let showImporter: () -> Void
     let openReference: (Int) -> Void
@@ -622,11 +667,7 @@ struct DevotionalsView: View {
     }
 
     private func rowSnippet(for devotional: LampDevotional) -> String? {
-        let source = devotional.summary?.isEmpty == false
-            ? devotional.summary!
-            : devotional.content
-        let snippet = WritingStatistics.snippet(from: source, limit: 120)
-        return snippet.isEmpty ? nil : snippet
+        rowSummaries.snippet(for: devotional)
     }
 
     /// What distinguishes one entry from another at a glance. The collection name
@@ -642,7 +683,7 @@ struct DevotionalsView: View {
         if let date = devotional.date, !date.isEmpty {
             parts.append(formattedDate(date))
         }
-        let statistics = WritingStatistics.measuring(markdown: devotional.displayMarkdown)
+        let statistics = rowSummaries.statistics(for: devotional)
         if statistics.wordCount > 0 {
             // A row is not a control, but it answers the same question, so it
             // answers it at whichever pace was chosen.
@@ -658,7 +699,7 @@ struct DevotionalsView: View {
     /// are written to a length, and "how long is this" is part of choosing what
     /// to read next.
     private func detailMetadata(_ devotional: LampDevotional) -> some View {
-        let statistics = WritingStatistics.measuring(markdown: devotional.displayMarkdown)
+        let statistics = rowSummaries.statistics(for: devotional)
         return WrappingRow(spacing: 12) {
             if let author = devotional.author, !author.isEmpty {
                 Label(author, systemImage: "person")
