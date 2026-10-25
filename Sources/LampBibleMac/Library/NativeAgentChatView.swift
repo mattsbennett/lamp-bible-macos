@@ -320,7 +320,7 @@ private struct AgentToolApprovalCard: View {
             }
             if let rule = request.alwaysAllowRule {
                 // Said in full, since it outlasts this chat.
-                Text("Always Allow saves the rule \(rule.description) for this writing on this Mac.")
+                Text("Always Allow saves permission for \(rule.description) in this writing, on this Mac.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
@@ -331,7 +331,7 @@ private struct AgentToolApprovalCard: View {
                 Button("Deny") { answer(.deny) }
                 if let rule = request.alwaysAllowRule {
                     Button("Always Allow") { answer(.alwaysAllow(rule)) }
-                        .help("Allow this, and don't ask about it again in this writing")
+                        .help("Saves \(rule.ruleText) to this writing's settings")
                 }
                 Button("Allow") { answer(.allow) }
                     .buttonStyle(.borderedProminent)

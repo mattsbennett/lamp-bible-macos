@@ -77,7 +77,8 @@ struct AgentToolApprovalSupportTests {
                 ],
             ],
         ]))?.alwaysAllowRule)
-        #expect(suggested.description == "Bash(npm run *)")
+        #expect(suggested.ruleText == "Bash(npm run *)")
+        #expect(suggested.description == "running any command that starts with “npm run”")
         let entry = try #require(json(Data(suggested.entryJSON.utf8)))
         // Each message is its own run, so a session rule would end with it.
         #expect(entry["destination"] as? String == "localSettings")
@@ -92,15 +93,51 @@ struct AgentToolApprovalSupportTests {
     @Test func withoutASuggestionOnlyANarrowRuleIsOffered() {
         func rule(_ tool: String, _ input: [String: Any]) -> String? {
             AgentToolApprovalRequest(id: "x", hookPayload: payload(["tool_name": tool, "tool_input": input]))?
-                .alwaysAllowRule?.description
+                .alwaysAllowRule?.ruleText
         }
         #expect(rule("Bash", ["command": "sw_vers -productVersion"]) == "Bash(sw_vers -productVersion)")
         #expect(rule("Bash", ["command": "echo a\necho b"]) == nil)
+        // In a rule a `*` is a wildcard, so the exact command can't be saved.
+        #expect(rule("Bash", ["command": "rm *.tmp"]) == nil)
         #expect(rule("WebFetch", ["url": "https://www.esv.org/John+3/"]) == "WebFetch(domain:www.esv.org)")
         #expect(rule("WebSearch", ["query": "grace"]) == "WebSearch")
         #expect(rule("mcp__notes__save", [:]) == "mcp__notes__save")
         // A rule for every write would be far broader than the one asked about.
         #expect(rule("Write", ["file_path": "/tmp/a.md", "content": "x"]) == nil)
+    }
+
+    @Test func aSuggestionTooBroadToSayPlainlyIsNotOffered() throws {
+        func offered(_ suggestion: [String: Any], command: String = "git status") -> AgentToolAlwaysAllowRule? {
+            AgentToolApprovalRequest(id: "x", hookPayload: payload([
+                "tool_name": "Bash",
+                "tool_input": ["command": command],
+                "permission_suggestions": [suggestion],
+            ]))?.alwaysAllowRule
+        }
+        func addRules(_ rules: [[String: Any]]) -> [String: Any] {
+            ["type": "addRules", "rules": rules, "behavior": "allow", "destination": "localSettings"]
+        }
+        // Every command, which would read as the single word "Bash": the
+        // exact command is offered instead.
+        let everything = try #require(offered(addRules([["toolName": "Bash"]])))
+        #expect(everything.ruleText == "Bash(git status)")
+        #expect(everything.description == "running “git status”")
+        // A wildcard before the end isn't a prefix and isn't offered.
+        #expect(offered(addRules([["toolName": "Bash", "ruleContent": "* --version"]]))?.ruleText == "Bash(git status)")
+        #expect(offered(addRules([["toolName": "Edit", "ruleContent": "/**"]]))?.ruleText == "Bash(git status)")
+
+        // Several narrow rules are each said.
+        let two = try #require(offered(addRules([
+            ["toolName": "Bash", "ruleContent": "git status:*"],
+            ["toolName": "WebFetch", "ruleContent": "domain:github.com"],
+        ])))
+        #expect(two.description
+            == "running any command that starts with “git status” and fetching pages from github.com")
+
+        #expect(AgentToolAlwaysAllowRule.plainDescription(of: ["toolName": "mcp__lamp__read_passage"])
+            == "using read_passage from lamp")
+        #expect(AgentToolAlwaysAllowRule.plainDescription(of: ["toolName": "mcp__lamp__*"]) == nil)
+        #expect(AgentToolAlwaysAllowRule.plainDescription(of: ["toolName": "Write"]) == nil)
     }
 
     @Test func aStaleOrUnreadableRequestIsNeverShown() throws {

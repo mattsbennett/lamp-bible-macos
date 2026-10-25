@@ -71,56 +71,111 @@ public struct AgentToolApprovalRequest: Equatable, Sendable, Identifiable {
 /// not its `.claude` folder.
 ///
 /// Claude Code's own suggestion for the request is used when it makes one,
-/// as its permission dialog would. Otherwise a rule is made only where the
-/// documented rule syntax allows a narrow one: the exact command, the site's
-/// domain, the one MCP tool. Anything broader isn't offered.
+/// as its permission dialog would, but only if every rule in it is narrow
+/// enough to say plainly: a rule with no content for a tool that takes one
+/// grants all of that tool, and reads as a single harmless word. Otherwise
+/// a rule is made only where the documented rule syntax allows a narrow one:
+/// the exact command, the site's domain, the one MCP tool. Anything broader
+/// isn't offered.
 public struct AgentToolAlwaysAllowRule: Equatable, Sendable {
     /// The `addRules` permission update entry, as JSON text.
     public let entryJSON: String
-    /// The rules as Claude Code's settings write them: `Bash(sw_vers)`.
+    /// What the rules permit, in words: running “sw_vers -productVersion”.
     public let description: String
+    /// The rules as Claude Code's settings write them: `Bash(sw_vers)`.
+    public let ruleText: String
 
     init?(toolName: String, toolInput: [String: Any], suggestions: [[String: Any]]?) {
-        var entry: [String: Any]
-        if let suggestion = suggestions?.first(where: {
+        let suggested = suggestions?.first {
             $0["type"] as? String == "addRules"
                 && $0["behavior"] as? String == "allow"
-                && ($0["rules"] as? [[String: Any]])?.isEmpty == false
-        }) {
-            entry = suggestion
-        } else {
-            let rule: [String: Any]
-            switch toolName {
-            case "Bash":
-                guard let command = toolInput["command"] as? String,
-                      !command.isEmpty, !command.contains("\n") else { return nil }
-                rule = ["toolName": "Bash", "ruleContent": command]
-            case "WebFetch":
-                guard let host = (toolInput["url"] as? String).flatMap(URL.init(string:))?.host,
-                      !host.isEmpty else { return nil }
-                rule = ["toolName": "WebFetch", "ruleContent": "domain:\(host)"]
-            case "WebSearch":
-                rule = ["toolName": "WebSearch"]
-            default:
-                guard toolName.hasPrefix("mcp__") else { return nil }
-                rule = ["toolName": toolName]
-            }
-            entry = ["type": "addRules", "rules": [rule], "behavior": "allow"]
+                && Self.plainDescriptions(of: $0["rules"]) != nil
         }
+        guard var entry = suggested ?? Self.narrowEntry(toolName: toolName, toolInput: toolInput),
+              let rules = entry["rules"] as? [[String: Any]],
+              let descriptions = Self.plainDescriptions(of: rules)
+        else { return nil }
         // A session rule would end with the run, and each message is a run.
         entry["destination"] = "localSettings"
-        guard let rules = entry["rules"] as? [[String: Any]],
-              let data = try? JSONSerialization.data(
-                  withJSONObject: entry,
-                  options: [.sortedKeys, .withoutEscapingSlashes]
-              )
-        else { return nil }
+        guard let data = try? JSONSerialization.data(
+            withJSONObject: entry,
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        ) else { return nil }
         entryJSON = String(decoding: data, as: UTF8.self)
-        description = rules.compactMap { rule -> String? in
+        description = ListFormatter.localizedString(byJoining: descriptions)
+        ruleText = rules.compactMap { rule -> String? in
             guard let tool = rule["toolName"] as? String else { return nil }
             guard let content = rule["ruleContent"] as? String, !content.isEmpty else { return tool }
             return "\(tool)(\(content))"
         }.joined(separator: ", ")
+    }
+
+    /// The narrowest rule the documented syntax gives for this call, or none.
+    private static func narrowEntry(toolName: String, toolInput: [String: Any]) -> [String: Any]? {
+        let rule: [String: Any]
+        switch toolName {
+        case "Bash":
+            guard let command = toolInput["command"] as? String,
+                  !command.isEmpty, !command.contains("\n"), !command.contains("*") else { return nil }
+            rule = ["toolName": "Bash", "ruleContent": command]
+        case "WebFetch":
+            guard let host = (toolInput["url"] as? String).flatMap(URL.init(string:))?.host,
+                  !host.isEmpty else { return nil }
+            rule = ["toolName": "WebFetch", "ruleContent": "domain:\(host)"]
+        case "WebSearch":
+            rule = ["toolName": "WebSearch"]
+        default:
+            guard toolName.hasPrefix("mcp__") else { return nil }
+            rule = ["toolName": toolName]
+        }
+        return ["type": "addRules", "rules": [rule], "behavior": "allow"]
+    }
+
+    /// Each rule in words, or nil if any of them is too broad to offer.
+    private static func plainDescriptions(of rules: Any?) -> [String]? {
+        guard let rules = rules as? [[String: Any]], !rules.isEmpty else { return nil }
+        var descriptions: [String] = []
+        for rule in rules {
+            guard let description = plainDescription(of: rule) else { return nil }
+            descriptions.append(description)
+        }
+        return descriptions
+    }
+
+    /// One rule in words. Nil for a rule that grants more than one plain
+    /// phrase can honestly say: all of a tool that takes content, or a
+    /// pattern with a wildcard anywhere but the end of a command.
+    static func plainDescription(of rule: [String: Any]) -> String? {
+        guard let tool = rule["toolName"] as? String, !tool.isEmpty else { return nil }
+        let content = (rule["ruleContent"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        guard let content else {
+            if tool == "WebSearch" { return "searching the web" }
+            // `mcp__server__tool`, naming one tool; a server's own name may
+            // contain underscores.
+            let parts = tool.components(separatedBy: "__")
+            guard parts.count >= 3, parts[0] == "mcp", !tool.contains("*") else { return nil }
+            return "using \(parts.dropFirst(2).joined(separator: "__")) from \(parts[1])"
+        }
+        switch tool {
+        case "Bash":
+            if !content.contains("*") { return "running “\(content)”" }
+            // A trailing wildcard, written either way, is a command prefix.
+            for suffix in [" *", ":*"] where content.hasSuffix(suffix) {
+                let prefix = String(content.dropLast(suffix.count))
+                guard !prefix.isEmpty, !prefix.contains("*") else { return nil }
+                return "running any command that starts with “\(prefix)”"
+            }
+            return nil
+        case "WebFetch":
+            guard content.hasPrefix("domain:"), !content.contains("*") else { return nil }
+            return "fetching pages from \(content.dropFirst("domain:".count))"
+        case "Read", "Edit", "MultiEdit", "Write", "NotebookEdit":
+            guard !content.contains("*") else { return nil }
+            let verb = tool == "Read" ? "reading" : tool == "Write" ? "writing" : "editing"
+            return "\(verb) “\(content)”"
+        default:
+            return nil
+        }
     }
 }
 
