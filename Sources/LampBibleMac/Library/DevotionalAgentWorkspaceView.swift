@@ -887,6 +887,8 @@ struct DevotionalAgentWorkspaceView: View {
 
     @AppStorage("devotional.agent.provider") private var providerID = AIProviderCLI.codex.rawValue
     @AppStorage("devotional.agent.sessionMode") private var sessionModeID = AgentSessionDisplayMode.native.rawValue
+    /// How tall the draft, context and skills sit above the chat or terminal.
+    @AppStorage("devotional.agent.workspaceHeight") private var workspaceSectionHeight = 310.0
     @State private var workspaceURL: URL?
     /// Whether the chat pane is waiting on a reply. It stays mounted while it
     /// is, so changing mode doesn't stop the run.
@@ -930,36 +932,52 @@ struct DevotionalAgentWorkspaceView: View {
         VStack(spacing: 0) {
             agentToolbar
             Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    draftSection
-                    contextSection
-                    skillsSection
-                    if let errorMessage {
-                        HStack(alignment: .firstTextBaseline, spacing: 6) {
-                            Label(errorMessage, systemImage: "exclamationmark.triangle")
-                                .font(.caption)
-                                .foregroundStyle(.red)
-                                .textSelection(.enabled)
-                            Spacer()
-                            Button("Dismiss", systemImage: "xmark.circle") {
-                                self.errorMessage = nil
+            GeometryReader { geometry in
+                // The chat or terminal keeps room for a few lines of its own,
+                // however far the line is dragged.
+                let minimumSection = 60.0
+                let maximumSection = max(minimumSection, Double(geometry.size.height) - 240)
+                let sectionHeight = min(max(workspaceSectionHeight, minimumSection), maximumSection)
+                VStack(spacing: 0) {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 18) {
+                            draftSection
+                            contextSection
+                            skillsSection
+                            if let errorMessage {
+                                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                    Label(errorMessage, systemImage: "exclamationmark.triangle")
+                                        .font(.caption)
+                                        .foregroundStyle(.red)
+                                        .textSelection(.enabled)
+                                    Spacer()
+                                    Button("Dismiss", systemImage: "xmark.circle") {
+                                        self.errorMessage = nil
+                                    }
+                                    .labelStyle(.iconOnly)
+                                    .buttonStyle(.borderless)
+                                }
                             }
-                            .labelStyle(.iconOnly)
-                            .buttonStyle(.borderless)
+                            if let refreshErrorMessage {
+                                Label(refreshErrorMessage, systemImage: "exclamationmark.triangle")
+                                    .font(.caption)
+                                    .foregroundStyle(.red)
+                            }
                         }
+                        .padding(12)
                     }
-                    if let refreshErrorMessage {
-                        Label(refreshErrorMessage, systemImage: "exclamationmark.triangle")
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                    }
+                    .frame(height: sectionHeight)
+                    PaneResizeHandle(
+                        axis: .vertical,
+                        resizes: .before,
+                        preferredSize: $workspaceSectionHeight,
+                        displayedSize: sectionHeight,
+                        minimumSize: minimumSection,
+                        maximumSize: maximumSection
+                    )
+                    sessionPane
                 }
-                .padding(12)
             }
-            .frame(maxHeight: 310)
-            Divider()
-            sessionPane
         }
         .background(SwiftUI.Color(nsColor: .windowBackgroundColor))
         .task(id: "\(libraryRootURL.path)|\(devotionalID)") {

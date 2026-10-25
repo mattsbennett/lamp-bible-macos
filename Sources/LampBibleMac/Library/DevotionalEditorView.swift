@@ -173,24 +173,38 @@ private enum DevotionalEditorMode: String, CaseIterable, Identifiable {
     }
 }
 
-private struct DevotionalSidebarResizeHandle: View {
-    @Binding var preferredWidth: Double
-    let displayedWidth: Double
-    let minimumWidth: Double
-    let maximumWidth: Double
+/// The line between two panes, dragged to resize one of them. The pane it
+/// resizes is the one after it — to the right, or below — unless it says the
+/// one before.
+///
+/// The size the person chose and the size shown are kept apart: a smaller
+/// window clamps what's shown without touching the choice, so the pane comes
+/// back to it when there's room again. A drag starts from what's shown.
+struct PaneResizeHandle: View {
+    enum ResizedPane {
+        case before
+        case after
+    }
 
-    @State private var widthAtDragStart: Double?
+    let axis: Axis
+    var resizes: ResizedPane = .after
+    @Binding var preferredSize: Double
+    let displayedSize: Double
+    let minimumSize: Double
+    let maximumSize: Double
+
+    @State private var sizeAtDragStart: Double?
     @State private var isShowingResizeCursor = false
 
     var body: some View {
         Divider()
-            .frame(width: 1)
-            .frame(maxHeight: .infinity)
+            .frame(width: axis == .horizontal ? 1 : nil, height: axis == .vertical ? 1 : nil)
+            .frame(maxWidth: axis == .vertical ? .infinity : nil, maxHeight: axis == .horizontal ? .infinity : nil)
             .overlay {
                 // Keep the separator visually light while making it forgiving
                 // enough to grab beside a text editor or terminal.
                 Color.clear
-                    .frame(width: 9)
+                    .frame(width: axis == .horizontal ? 9 : nil, height: axis == .vertical ? 9 : nil)
                     .contentShape(Rectangle())
                     .onHover { isHovering in
                         setResizeCursor(isHovering)
@@ -198,14 +212,15 @@ private struct DevotionalSidebarResizeHandle: View {
                     .gesture(
                         DragGesture(coordinateSpace: .global)
                             .onChanged { value in
-                                let start = widthAtDragStart ?? displayedWidth
-                                widthAtDragStart = start
-                                preferredWidth = min(
-                                    max(start - value.translation.width, minimumWidth),
-                                    maximumWidth
+                                let start = sizeAtDragStart ?? displayedSize
+                                sizeAtDragStart = start
+                                let moved = axis == .horizontal ? value.translation.width : value.translation.height
+                                preferredSize = min(
+                                    max(resizes == .after ? start - moved : start + moved, minimumSize),
+                                    maximumSize
                                 )
                             }
-                            .onEnded { _ in widthAtDragStart = nil }
+                            .onEnded { _ in sizeAtDragStart = nil }
                     )
                     .onDisappear { setResizeCursor(false) }
             }
@@ -216,7 +231,7 @@ private struct DevotionalSidebarResizeHandle: View {
         guard isShowing != isShowingResizeCursor else { return }
         isShowingResizeCursor = isShowing
         if isShowing {
-            NSCursor.resizeLeftRight.push()
+            (axis == .horizontal ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown).push()
         } else {
             NSCursor.pop()
         }
@@ -535,11 +550,12 @@ struct DevotionalEditorView: View {
                     .frame(width: editorWidth, height: geometry.size.height)
                     .clipped()
                 if usesSidePane {
-                    DevotionalSidebarResizeHandle(
-                        preferredWidth: showingAgentWorkspace ? $agentWidth : $detailsWidth,
-                        displayedWidth: sidebarWidth,
-                        minimumWidth: minimumSidebarWidth,
-                        maximumWidth: maximumSidebarWidth
+                    PaneResizeHandle(
+                        axis: .horizontal,
+                        preferredSize: showingAgentWorkspace ? $agentWidth : $detailsWidth,
+                        displayedSize: sidebarWidth,
+                        minimumSize: minimumSidebarWidth,
+                        maximumSize: maximumSidebarWidth
                     )
                     Group {
                         if showingAgentWorkspace {
@@ -807,11 +823,12 @@ struct DevotionalEditorView: View {
             editorPane
                 .frame(width: resolvedEditorWidth)
                 .clipped()
-            DevotionalSidebarResizeHandle(
-                preferredWidth: $previewWidth,
-                displayedWidth: resolvedPreviewWidth,
-                minimumWidth: minimumPreviewWidth,
-                maximumWidth: maximumPreviewWidth
+            PaneResizeHandle(
+                axis: .horizontal,
+                preferredSize: $previewWidth,
+                displayedSize: resolvedPreviewWidth,
+                minimumSize: minimumPreviewWidth,
+                maximumSize: maximumPreviewWidth
             )
             previewPane
                 .frame(width: resolvedPreviewWidth)
