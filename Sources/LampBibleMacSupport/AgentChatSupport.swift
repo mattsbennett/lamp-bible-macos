@@ -22,7 +22,8 @@ public enum AgentChatLaunchArguments {
         prompt: String,
         sessionID: String?,
         proposedSessionID: String?,
-        mode: AgentChatMode = .writing
+        mode: AgentChatMode = .writing,
+        permissionHookSettings: String? = nil
     ) -> [String] {
         switch provider {
         case .codex:
@@ -49,6 +50,10 @@ public enum AgentChatLaunchArguments {
                     "--strict-mcp-config", "--mcp-config", configuration.claudeJSON,
                     "--disable-slash-commands",
                 ]
+            } else if let permissionHookSettings {
+                // Asks the person about a tool call the run would otherwise
+                // deny; see `ClaudePermissionHook`.
+                arguments += ["--settings", permissionHookSettings]
             }
             if let sessionID {
                 arguments += ["--resume", sessionID]

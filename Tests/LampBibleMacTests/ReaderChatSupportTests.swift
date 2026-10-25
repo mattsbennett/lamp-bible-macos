@@ -75,6 +75,24 @@ struct ReaderChatSupportTests {
         #expect(!openCode.contains("--agent"))
     }
 
+    @Test func writingAsksAboutToolCallsOnlyWhereItCanAnswer() {
+        let settings = #"{"hooks":{}}"#
+        let claude = AgentChatLaunchArguments.make(
+            provider: .claude, prompt: "Write", sessionID: nil, proposedSessionID: nil,
+            permissionHookSettings: settings
+        )
+        #expect(value(after: "--settings", in: claude) == settings)
+        // The prompt itself stays last, after `--`.
+        #expect(claude.suffix(2) == ["--", "Write"])
+
+        // A reader chat is read-only and asks about nothing.
+        let reader = AgentChatLaunchArguments.make(
+            provider: .claude, prompt: "Read", sessionID: nil, proposedSessionID: nil,
+            mode: .reader(configuration), permissionHookSettings: settings
+        )
+        #expect(!reader.contains("--settings"))
+    }
+
     @Test func readerWorkspacePreservesHistoryAndRestrictsOpenCodeTools() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

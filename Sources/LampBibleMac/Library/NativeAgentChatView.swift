@@ -284,6 +284,77 @@ private struct PersonMessageView: View {
     }
 }
 
+/// A tool call the reply is waiting on, put to the person: what the agent
+/// wants to do, in full, and whether to let it.
+private struct AgentToolApprovalCard: View {
+    let request: AgentToolApprovalRequest
+    let providerName: String
+    let waitingCount: Int
+    let answer: (AgentToolApprovalAnswer) -> Void
+
+    var body: some View {
+        let summary = AgentToolApprovalSummary.of(request)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Label("\(providerName) wants to \(summary.title.lowercasedFirst)", systemImage: "hand.raised")
+                    .font(.callout.weight(.semibold))
+                Spacer()
+                if waitingCount > 1 {
+                    Text("1 of \(waitingCount)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+            }
+            if let detail = summary.detail {
+                ScrollView {
+                    Text(detail)
+                        .font(.system(.callout, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 180)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(8)
+                .background(.background.secondary, in: RoundedRectangle(cornerRadius: 6))
+            }
+            if let rule = request.alwaysAllowRule {
+                // Said in full, since it outlasts this chat.
+                Text("Always Allow saves the rule \(rule.description) for this writing on this Mac.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                Spacer()
+                Button("Deny") { answer(.deny) }
+                if let rule = request.alwaysAllowRule {
+                    Button("Always Allow") { answer(.alwaysAllow(rule)) }
+                        .help("Allow this, and don't ask about it again in this writing")
+                }
+                Button("Allow") { answer(.allow) }
+                    .buttonStyle(.borderedProminent)
+                    .help("Allow this once")
+            }
+        }
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.accentColor.opacity(0.5)))
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(providerName) is asking permission")
+    }
+}
+
+private extension String {
+    var lowercasedFirst: String {
+        guard let first else { return self }
+        return first.lowercased() + dropFirst()
+    }
+}
+
 private struct NativeAgentChatInputView: View {
     @Binding var message: String
     let placeholder: String
@@ -359,6 +430,9 @@ private final class NativeAgentChatModel: ObservableObject {
     /// anything went wrong, so the pane can say so without the language — or
     /// the colour — of a failure.
     @Published private(set) var stoppedNotice: String?
+    /// Tool calls the running reply is waiting on the person for, oldest
+    /// first. Only a Claude writing chat asks; see `ClaudePermissionHook`.
+    @Published private(set) var pendingApprovals: [AgentToolApprovalRequest] = []
 
     let provider: AIProviderCLI
     private let workspace: URL
@@ -377,6 +451,7 @@ private final class NativeAgentChatModel: ObservableObject {
     private var knownModificationDate: Date?
     private var cancelRequested = false
     private var loadingMessageID: UUID?
+    private var approvalChannel: AgentToolApprovalChannel?
 
     private let person = NativeAgentChatUser(
         id: "lamp-user",
@@ -533,6 +608,18 @@ private final class NativeAgentChatModel: ObservableObject {
     private func run(prompt: String, resuming resumedSessionID: String?) async -> RunOutcome {
         let proposedSessionID = provider == .claude && resumedSessionID == nil
             ? UUID().uuidString.lowercased() : nil
+        // Without a channel the run goes ahead as before: a call its
+        // permissions don't allow is denied without asking.
+        let channel = provider == .claude && !mode.isReadOnly
+            ? try? AgentToolApprovalChannel.makeForRun() : nil
+        approvalChannel = channel
+        let watching = channel.map { watchForApprovals(in: $0) }
+        defer {
+            watching?.cancel()
+            channel?.close()
+            approvalChannel = nil
+            pendingApprovals = []
+        }
         let result = await runner.run(
             executableName: provider.executable,
             arguments: AgentChatLaunchArguments.make(
@@ -540,7 +627,8 @@ private final class NativeAgentChatModel: ObservableObject {
                 prompt: prompt,
                 sessionID: resumedSessionID,
                 proposedSessionID: proposedSessionID,
-                mode: mode
+                mode: mode,
+                permissionHookSettings: channel.map { ClaudePermissionHook.settingsJSON(for: $0) }
             ),
             workingDirectory: workspace
         )
@@ -549,6 +637,32 @@ private final class NativeAgentChatModel: ObservableObject {
             proposedSessionID: proposedSessionID,
             resumedSessionID: resumedSessionID
         )
+    }
+
+    /// Looks for new requests a few times a second while the reply runs. The
+    /// folder is read off the main thread; only a change is published.
+    private func watchForApprovals(in channel: AgentToolApprovalChannel) -> Task<Void, Never> {
+        Task { [weak self] in
+            while !Task.isCancelled {
+                let pending = await Task.detached { channel.pendingRequests() }.value
+                guard let self, !Task.isCancelled else { return }
+                if pending != self.pendingApprovals { self.pendingApprovals = pending }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+        }
+    }
+
+    /// Gives the waiting hook the person's answer.
+    func answer(_ request: AgentToolApprovalRequest, with answer: AgentToolApprovalAnswer) {
+        guard let approvalChannel else { return }
+        do {
+            try approvalChannel.answer(request.id, with: answer)
+        } catch let error as AgentToolApprovalChannel.AnswerError {
+            errorMessage = error.localizedDescription
+        } catch {
+            errorMessage = "Could not give \(provider.shortName) your answer: \(error.localizedDescription)"
+        }
+        pendingApprovals.removeAll { $0.id == request.id }
     }
 
     private func finish(_ outcome: RunOutcome) {
@@ -751,6 +865,17 @@ struct NativeAgentChatView: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
                     .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            // Under the header, beside Stop, rather than in the chat's input
+            // slot: SwiftyChat lays that out at the input's own height.
+            if let request = model.pendingApprovals.first {
+                AgentToolApprovalCard(
+                    request: request,
+                    providerName: provider.shortName,
+                    waitingCount: model.pendingApprovals.count
+                ) { answer in
+                    model.answer(request, with: answer)
+                }
             }
             Divider()
             ZStack {

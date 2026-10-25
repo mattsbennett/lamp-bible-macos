@@ -45,7 +45,7 @@ This repository intentionally contains Mac-specific application lifecycle and UI
 - Native Slide Studio with semantic layouts, speaker notes, linked writing decks, `.lampdeck` import/export, validation, autosave, and indexed full-screen presentation
 - Bonjour presentation discovery with QR-first, challenge-bound encrypted pairing and synchronized iPhone/iPad controls for current/next slide, notes, timing, navigation, and blackout
 - A bundled agent skill that turns devotional workspaces into validated Slide Studio decks without writable module access
-- Native devotional agent chat (powered by the Apache-2.0 SwiftyChat UI) with resumable Codex, Claude Code, and OpenCode sessions, browser sign-in, and a terminal-mode toggle
+- Native devotional agent chat (powered by the Apache-2.0 SwiftyChat UI) with resumable Codex, Claude Code, and OpenCode sessions, browser sign-in, Allow, Always Allow, or Deny for Claude Code tool calls that need permission, and a terminal-mode toggle
 - Resizable reader chat sidebar using the same provider accounts and chat UI, with read-only module research, per-message chapter context, and separate saved conversations for each reader window
 - Actual-word-count reading estimates, daily notifications, and external Bible app links
 - Default, visibility, and ordering preferences for translations, dictionaries, and commentaries
