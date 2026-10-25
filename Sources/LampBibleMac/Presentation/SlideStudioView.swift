@@ -1,4 +1,5 @@
 import AppKit
+import CoreText
 import LampCore
 import LampPresentationUI
 #if canImport(LampBibleMacSupport)
@@ -36,6 +37,9 @@ struct SlideStudioView: View {
     /// Whether the slide list has the keyboard. Arrow keys step between slides
     /// only while it does, so they still move the caret in the editors.
     @FocusState private var slideListFocused: Bool
+    @AppStorage("slideStudio.inspectorWidth") private var inspectorWidth = 340.0
+    /// Empty until the list arrives from `PresentationTypefaces`.
+    @State private var typefaceFamilies: [String] = []
     @State private var saveTask: Task<Void, Never>?
     @State private var statusMessage = ""
     @State private var errorMessage: String?
@@ -54,9 +58,18 @@ struct SlideStudioView: View {
         LampPresentationDeckStore(rootURL: model.library.rootURL)
     }
 
-    private var presentationTypefaceFamilies: [String] {
-        NSFontManager.shared.availableFontFamilies.sorted {
-            $0.localizedStandardCompare($1) == .orderedAscending
+    /// The remembered width, held to the range the handle allows, so a stored
+    /// value from elsewhere can't size the inspector outside it.
+    private var shownInspectorWidth: Double {
+        min(max(inspectorWidth, 300), 430)
+    }
+
+    private func typefaceName(_ typeface: String?) -> String {
+        switch typeface {
+        case nil, "": "Lamp Rounded"
+        case "system-sans": "System Sans"
+        case "system-serif": "System Serif"
+        case let family?: family
         }
     }
 
@@ -99,9 +112,14 @@ struct SlideStudioView: View {
         .toolbar { studioToolbar }
         .task(id: request) { loadInitialDeck() }
         .task {
+            typefaceFamilies = await Task.detached(priority: .utility) {
+                PresentationTypefaces.families
+            }.value
+        }
+        .task {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
-                refreshDecksFromDisk()
+                await refreshDecksFromDisk()
             }
         }
         .onChange(of: selectedDeckID) { _, deckID in selectDeck(deckID) }
@@ -312,7 +330,7 @@ struct SlideStudioView: View {
 
     private func editor(deck deckBinding: Binding<LampPresentationDeck>) -> some View {
         VStack(spacing: 0) {
-            HSplitView {
+            HStack(spacing: 0) {
                 VStack(spacing: 0) {
                     ZStack {
                         Color(nsColor: .underPageBackgroundColor)
@@ -334,8 +352,15 @@ struct SlideStudioView: View {
                         .frame(minHeight: 135, idealHeight: 170, maxHeight: 240)
                 }
 
+                PaneResizeHandle(
+                    axis: .horizontal,
+                    preferredSize: $inspectorWidth,
+                    displayedSize: shownInspectorWidth,
+                    minimumSize: 300,
+                    maximumSize: 430
+                )
                 inspector(deck: deckBinding)
-                    .frame(minWidth: 300, idealWidth: 340, maxWidth: 430)
+                    .frame(width: shownInspectorWidth)
             }
 
             Divider()
@@ -366,16 +391,29 @@ struct SlideStudioView: View {
                                 Text(deckBinding.wrappedValue.theme.id).tag(deckBinding.wrappedValue.theme.id)
                             }
                         }
-                        Picker("Typeface", selection: Binding(
-                            get: { deckBinding.wrappedValue.theme.typeface ?? "" },
-                            set: { deckBinding.theme.typeface.wrappedValue = $0.isEmpty ? nil : $0 }
-                        )) {
-                            Text("Lamp Rounded").tag("")
-                            Text("System Sans").tag("system-sans")
-                            Text("System Serif").tag("system-serif")
-                            Divider()
-                            ForEach(presentationTypefaceFamilies, id: \.self) { family in
-                                Text(family).tag(family)
+                        LabeledContent("Typeface") {
+                            Menu(typefaceName(deckBinding.wrappedValue.theme.typeface)) {
+                                Picker("Typeface", selection: Binding(
+                                    get: { deckBinding.wrappedValue.theme.typeface ?? "" },
+                                    set: { deckBinding.theme.typeface.wrappedValue = $0.isEmpty ? nil : $0 }
+                                )) {
+                                    Text("Lamp Rounded").tag("")
+                                    Text("System Sans").tag("system-sans")
+                                    Text("System Serif").tag("system-serif")
+                                    Divider()
+                                    ForEach(typefaceFamilies, id: \.self) { family in
+                                        Text(family).tag(family)
+                                    }
+                                    // Before the list arrives, and for a family this
+                                    // Mac doesn't have, the deck's own still needs a tag.
+                                    if let family = deckBinding.wrappedValue.theme.typeface,
+                                       !["", "system-sans", "system-serif"].contains(family),
+                                       !typefaceFamilies.contains(family) {
+                                        Text(family).tag(family)
+                                    }
+                                }
+                                .pickerStyle(.inline)
+                                .labelsHidden()
                             }
                         }
                     }
@@ -667,11 +705,24 @@ struct SlideStudioView: View {
         }
     }
 
-    private func refreshDecksFromDisk() {
+    private func refreshDecksFromDisk() async {
         guard !isLoading else { return }
+        // Read and decoded off the main thread: every deck, every second,
+        // is long enough there to drop a frame while someone types.
+        let store = store
+        let knownDecks = decks
+        let knownSavedDeck = savedDeck
+        let result = await Task.detached(priority: .utility) {
+            Result { () throws -> [LampPresentationDeck]? in
+                let refreshed = try store.decks()
+                return refreshed == knownDecks ? nil : refreshed
+            }
+        }.value
+        // A save or a deck change while it was read makes what was read
+        // older than what's here: taking it would put the save back.
+        guard !Task.isCancelled, !isLoading, decks == knownDecks, savedDeck == knownSavedDeck else { return }
         do {
-            let refreshed = try store.decks()
-            guard refreshed != decks else { return }
+            guard let refreshed = try result.get() else { return }
             if let selectedDeckID,
                let diskDeck = refreshed.first(where: { $0.id == selectedDeckID }),
                deck == savedDeck,
@@ -1338,4 +1389,11 @@ private struct LampSlideScripturePicker: View {
         block.text = selectedVerses.map(\.text).joined(separator: " ")
         updateCitation("\(selectedBook.name) \(chapterNumber):\(verseRange) (\(translationName))")
     }
+}
+
+/// Every font family on this Mac, listed once for the app and off the main
+/// thread: the first ask costs tens of milliseconds, for a menu few open.
+private enum PresentationTypefaces {
+    static let families: [String] = (CTFontManagerCopyAvailableFontFamilyNames() as? [String] ?? [])
+        .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
 }

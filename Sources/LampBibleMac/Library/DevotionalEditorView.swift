@@ -225,6 +225,20 @@ struct PaneResizeHandle: View {
                     .onDisappear { setResizeCursor(false) }
             }
             .zIndex(1)
+            // Dragging is the only other way to size the pane, so VoiceOver
+            // and Full Keyboard Access get the same range as a slider.
+            .accessibilityRepresentation {
+                Slider(
+                    value: Binding(
+                        get: { displayedSize },
+                        set: { preferredSize = min(max($0, minimumSize), maximumSize) }
+                    ),
+                    in: minimumSize...max(minimumSize, maximumSize),
+                    step: 10
+                ) {
+                    Text(axis == .horizontal ? "Pane width" : "Pane height")
+                }
+            }
     }
 
     private func setResizeCursor(_ isShowing: Bool) {
