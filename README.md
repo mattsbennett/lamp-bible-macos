@@ -41,7 +41,7 @@ This repository intentionally contains Mac-specific application lifecycle and UI
 - Read Aloud with system voices, adjustable rate, pause/resume, and verse follow-along
 - Exact text-range highlights with styles, named sets, and reusable themes
 - Verse-range Markdown notes with editable footnotes
-- Personal devotional authoring, images, audio attachment/recording/playback, presentation, import, export, and sharing
+- Personal devotional authoring with find and replace in both the visual and Markdown editors, images, audio attachment/recording/playback, presentation, import, export, and sharing
 - Native Slide Studio with semantic layouts, speaker notes, linked writing decks, `.lampdeck` import/export, validation, autosave, and indexed full-screen presentation
 - Bonjour presentation discovery with QR-first, challenge-bound encrypted pairing and synchronized iPhone/iPad controls for current/next slide, notes, timing, navigation, and blackout
 - A bundled agent skill that turns devotional workspaces into validated Slide Studio decks without writable module access

@@ -16,7 +16,7 @@ This matrix tracks user-facing capability rather than identical UI. Touch-only i
 | Highlights | Exact spans, colors, underline styles, sets, themes, import/export | AppKit text selection, four styles, named sets/themes, canonical JSON/`.lamp` transfer | Complete |
 | Search | Scripture and module search with filters/history | Unified search across all nine module kinds plus personal notes/highlights, filters, previews, and persistent history | Complete |
 | Plans | Selected plans, Today, completion, dates, estimates, reminders, external apps | Today and plan views, year-scoped completion, actual word-count estimates, notifications, five external Bible targets | Complete |
-| Devotionals | Browse, search, author/edit, scripture links, rich text, images, audio, recording, import/export/share | Search/filter, Markdown authoring, key scriptures, images, audio playback/recording, presentation, JSON/`.lamp` import/export and sharing; linked Slide Studio decks with notes and agent generation | Complete |
+| Devotionals | Browse, search, author/edit, scripture links, rich text, images, audio, recording, import/export/share | Search/filter, Markdown authoring with find and replace, key scriptures, images, audio playback/recording, presentation, JSON/`.lamp` import/export and sharing; linked Slide Studio decks with notes and agent generation | Complete |
 | Devotional agents | Not an iOS feature | Embedded Codex CLI, Claude Code, and OpenCode workspaces with live draft sync, context files, skills, revisions, provider accounts, and policy-scoped read-only access to every module kind | macOS addition |
 | Quizzes | Plan/day/age-group questions and answer reveal | Module/day/age-group picker, saved age preference, reveal and scripture links | Complete |
 | Module preferences | Default/hidden translations, lexicon ordering/hiding, Strong’s hints | Type-specific defaults, per-language dictionary defaults, visibility, hints, and canonical cross-reference order | Complete |
@@ -36,5 +36,5 @@ This matrix tracks user-facing capability rather than identical UI. Touch-only i
 ## Verification
 
 - `lamp-bible-core`: compiler/schema/library tests cover all module kinds, search, plans, editable study data, devotionals, portable backups, media, set/theme preservation, and conflicts.
-- `lamp-bible-macos`: support tests cover Studio documents, reading/search history, Unicode span conversion, read-aloud queues, external links, reading estimates/reminders, deep links, devotional and book media/content parsing, per-book reading state, workspace merges, sync archives, and WebDAV requests.
+- `lamp-bible-macos`: support tests cover Studio documents, reading/search history, Unicode span conversion, read-aloud queues, external links, reading estimates/reminders, deep links, devotional and book media/content parsing, finding text in writing, per-book reading state, workspace merges, sync archives, and WebDAV requests.
 - The signed Xcode application is built with the `Lamp Bible` scheme and smoke-tested by launching a real window and opening a `lampbible://read` URL.

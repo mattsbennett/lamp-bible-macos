@@ -41,6 +41,8 @@
 		A1000000000000000000001B /* ScrollLinkSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001A /* ScrollLinkSupport.swift */; };
 		A1000000000000000000001C /* MarkdownTextEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001B /* MarkdownTextEditor.swift */; };
 		A1000000000000000000001D /* MarkdownEditing.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001C /* MarkdownEditing.swift */; };
+		A10000000000000000000112 /* WritingFindSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000112 /* WritingFindSupport.swift */; };
+		A10000000000000000000113 /* WritingFindBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000113 /* WritingFindBar.swift */; };
 		A1000000000000000000001E /* TipTapEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001D /* TipTapEditorView.swift */; };
 		A1000000000000000000001F /* TipTapEditor in Resources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001E /* TipTapEditor */; };
 		A10000000000000000000020 /* CalendarDateSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001F /* CalendarDateSupport.swift */; };
@@ -140,6 +142,8 @@
 		B1000000000000000000001A /* ScrollLinkSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/ScrollLinkSupport.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000001B /* MarkdownTextEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/MarkdownTextEditor.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000001C /* MarkdownEditing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/MarkdownEditing.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000112 /* WritingFindSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/WritingFindSupport.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000113 /* WritingFindBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/WritingFindBar.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000001D /* TipTapEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/TipTapEditorView.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000001E /* TipTapEditor */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Sources/LampBibleMac/Resources/TipTapEditor; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000001F /* CalendarDateSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/CalendarDateSupport.swift; sourceTree = SOURCE_ROOT; };
@@ -307,6 +311,8 @@
 				B10000000000000000000019 /* ReaderScrollLink.swift */,
 				B1000000000000000000001C /* MarkdownEditing.swift */,
 				B1000000000000000000001B /* MarkdownTextEditor.swift */,
+				B10000000000000000000112 /* WritingFindSupport.swift */,
+				B10000000000000000000113 /* WritingFindBar.swift */,
 				B1000000000000000000001D /* TipTapEditorView.swift */,
 				B1000000000000000000001F /* CalendarDateSupport.swift */,
 				B10000000000000000000020 /* CalendarDateField.swift */,
@@ -532,6 +538,8 @@
 				A1000000000000000000001A /* ReaderScrollLink.swift in Sources */,
 				A1000000000000000000001D /* MarkdownEditing.swift in Sources */,
 				A1000000000000000000001C /* MarkdownTextEditor.swift in Sources */,
+				A10000000000000000000112 /* WritingFindSupport.swift in Sources */,
+				A10000000000000000000113 /* WritingFindBar.swift in Sources */,
 				A1000000000000000000001E /* TipTapEditorView.swift in Sources */,
 				A10000000000000000000020 /* CalendarDateSupport.swift in Sources */,
 				A10000000000000000000021 /* CalendarDateField.swift in Sources */,

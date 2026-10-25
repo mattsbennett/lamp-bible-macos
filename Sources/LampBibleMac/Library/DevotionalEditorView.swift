@@ -372,6 +372,8 @@ struct DevotionalEditorView: View {
     @State private var tipTapCoordinator: TipTapEditorCoordinator?
     @State private var tipTapSelection = TipTapSelectionState()
     @State private var visualEditorIsReady = false
+    @State private var find = WritingFindController()
+    @State private var markdownFinder = MarkdownTextFinder()
     @State private var saveState: DevotionalSaveState = .idle
     @State private var showingAudioRecorder = false
     @State private var hasLoaded = false
@@ -610,6 +612,10 @@ struct DevotionalEditorView: View {
             refreshPreview()
         }
         .focusedSceneValue(\.writingPreviewPlacement, previewPlacementBinding)
+        .focusedSceneValue(\.writingFind, previewPlacement == .full ? nil : find)
+        .onChange(of: activeFindTarget.map(ObjectIdentifier.init), initial: true) {
+            find.attach(activeFindTarget)
+        }
         .sheet(isPresented: $showingAudioRecorder) {
             DevotionalAudioRecorderView(devotionalID: identifier) { storedURL in
                 insertStoredAudio(storedURL)
@@ -813,22 +819,34 @@ struct DevotionalEditorView: View {
         }
     }
 
-    @ViewBuilder
     private var editorPane: some View {
-        if activeDocumentSupportsVisual {
-            ZStack {
-                visualEditorPane
-                    // Each document gets an editor of its own: giving one editor
-                    // new text adds it to that editor's undo history, where Undo
-                    // would bring back the document that was there before.
-                    .id(selectedWorkspaceDocumentID ?? "")
-                if editorMode == .markdown {
-                    markdownEditorPane
-                }
+        VStack(spacing: 0) {
+            if find.isVisible {
+                WritingFindBar(controller: find)
+                Divider()
             }
-        } else {
-            markdownEditorPane
+            if activeDocumentSupportsVisual {
+                ZStack {
+                    visualEditorPane
+                        // Each document gets an editor of its own: giving one editor
+                        // new text adds it to that editor's undo history, where Undo
+                        // would bring back the document that was there before.
+                        .id(selectedWorkspaceDocumentID ?? "")
+                    if editorMode == .markdown {
+                        markdownEditorPane
+                    }
+                }
+            } else {
+                markdownEditorPane
+            }
         }
+    }
+
+    /// The surface the find bar searches: the one on screen, or none while the
+    /// preview fills the window.
+    private var activeFindTarget: (any WritingFindTarget)? {
+        guard previewPlacement != .full else { return nil }
+        return isEditingVisually ? tipTapCoordinator : markdownFinder
     }
 
     // MARK: - Panes
@@ -854,6 +872,15 @@ struct DevotionalEditorView: View {
                             tipTapSelection = selection
                         }
                     }
+                    // Nothing should reach this editor's text once it has gone.
+                    // The editor for the next document can report in first, so
+                    // only the editor still held is let go.
+                    coordinator.onDetached = { [weak coordinator] in
+                        guard let coordinator, tipTapCoordinator === coordinator else { return }
+                        tipTapCoordinator = nil
+                        visualEditorIsReady = false
+                        tipTapSelection = TipTapSelectionState()
+                    }
                 }
             )
         }
@@ -861,13 +888,6 @@ struct DevotionalEditorView: View {
         // it thereafter. Same colour the page is told to paint, so the reveal is
         // invisible.
         .background(Color(nsColor: .windowBackgroundColor))
-        .onDisappear {
-            // Its replacement, for another document, reports in once it has
-            // loaded; until then nothing should reach this one's text through it.
-            tipTapCoordinator = nil
-            visualEditorIsReady = false
-            tipTapSelection = TipTapSelectionState()
-        }
     }
 
     private var visualFormattingToolbar: some View {
@@ -1025,7 +1045,8 @@ struct DevotionalEditorView: View {
                 fontSize: editorFontSize,
                 onScrollFractionChanged: previewPlacement == .split
                     ? { editorScrollFraction = $0 }
-                    : nil
+                    : nil,
+                finder: markdownFinder
             )
             // The text view draws no background of its own, so without this it
             // shows whatever happens to be behind the window — which is close to

@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(LampBibleMacSupport)
+import LampBibleMacSupport
+#endif
 import LampModuleKit
 import SwiftUI
 import WebKit
@@ -83,7 +86,7 @@ struct TipTapEditorView: NSViewRepresentable {
         coordinator.setFontSize(fontSize)
         coordinator.setTheme(isDark: context.environment.colorScheme == .dark)
         coordinator.setPlaceholder(placeholder)
-        coordinator.onReady = { onCoordinatorReady(coordinator) }
+        coordinator.onReady = { [weak coordinator] in coordinator.map(onCoordinatorReady) }
         // Last: a page that is already ready takes everything above at once.
         coordinator.attach(page)
         applyBackgroundColor(to: webView, coordinator: coordinator)
@@ -236,12 +239,19 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
 
     var onContentChanged: ((String) -> Void)?
     var onSelectionChanged: ((TipTapSelectionState) -> Void)?
+    /// Called once the editor can take commands, on a later turn of the run
+    /// loop than the one that made it ready. See `reportReady`.
     var onReady: (() -> Void)?
+    /// Called once the editor has given its page back, also on a later turn,
+    /// so a host can let go of it. Another editor may have reported ready
+    /// first, so a host clears only the editor it still holds.
+    var onDetached: (() -> Void)?
     /// Reported by the compact layout only, so a host that lets the editor grow
     /// can size it to its text.
     var onContentHeightChanged: ((Double) -> Void)?
     /// The web view is opaque to `@FocusState`, so caret focus is reported out.
     var onFocusChanged: ((Bool) -> Void)?
+    var onFindStatusChanged: ((WritingFindStatus) -> Void)?
     var usesCompactLayout = false
     /// Set before the first text, since it decides how that text is read.
     var usesLineBreaks = false
@@ -392,6 +402,10 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         webView = nil
         hasLoadedContent = false
         TipTapEditorPool.shared.giveBack(page)
+        // Detaching happens as SwiftUI takes the view down, inside a view
+        // update, where state a host sets is dropped.
+        let report = onDetached
+        DispatchQueue.main.async { report?() }
     }
 
     private func becomeReady() {
@@ -423,7 +437,18 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
             pendingBackgroundColor = nil
             setBackgroundColor(color)
         }
-        onReady?()
+        reportReady()
+    }
+
+    /// A pooled page is ready as it is attached, which is inside SwiftUI's view
+    /// update, and a host told then sets state that SwiftUI drops: its toolbar
+    /// stays disabled and its commands go nowhere. So the host is told on the
+    /// next turn, and not at all if the editor has given its page back by then.
+    private func reportReady() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.page != nil, self.isReady else { return }
+            self.onReady?()
+        }
     }
 
     private func receiveFromReadyPage(type: String, body: [String: Any]) {
@@ -462,6 +487,9 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
 
         case "focusChanged":
             onFocusChanged?(body["focused"] as? Bool ?? false)
+
+        case "searchChanged":
+            onFindStatusChanged?(Self.findStatus(from: body))
 
         default:
             break
@@ -818,6 +846,66 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
               let result = String(data: data, encoding: .utf8) else { return "\"\"" }
         return result
     }
+
+    /// The page's `{ count, current }`. Anything else, such as a script that
+    /// failed, finds nothing.
+    fileprivate static func findStatus(from result: Any?) -> WritingFindStatus {
+        guard let result = result as? [String: Any] else { return .noMatches }
+        return WritingFindStatus(
+            count: (result["count"] as? Int) ?? 0,
+            current: (result["current"] as? Int) ?? 0
+        )
+    }
+}
+
+/// The bundle searches the document as it is shown, a block at a time, so
+/// what the find bar finds in the visual editor is the text a reader sees.
+extension TipTapEditorCoordinator: WritingFindTarget {
+    func setSearch(
+        _ query: String,
+        options: WritingFindOptions,
+        completion: @escaping (WritingFindStatus) -> Void
+    ) {
+        guard isReady else { return completion(.noMatches) }
+        let options = "{ caseSensitive: \(options.matchesCase), wholeWord: \(options.wholeWords) }"
+        evaluate("window.editorAPI.setSearch(\(Self.javascriptString(query)), \(options))") {
+            completion(Self.findStatus(from: $0))
+        }
+    }
+
+    func findNext(completion: @escaping (WritingFindStatus) -> Void) {
+        guard isReady else { return completion(.noMatches) }
+        evaluate("window.editorAPI.findNext()") { completion(Self.findStatus(from: $0)) }
+    }
+
+    func findPrevious(completion: @escaping (WritingFindStatus) -> Void) {
+        guard isReady else { return completion(.noMatches) }
+        evaluate("window.editorAPI.findPrevious()") { completion(Self.findStatus(from: $0)) }
+    }
+
+    func replaceCurrent(with replacement: String, completion: @escaping (WritingFindStatus) -> Void) {
+        guard isReady else { return completion(.noMatches) }
+        evaluate("window.editorAPI.replaceCurrent(\(Self.javascriptString(replacement)))") {
+            completion(Self.findStatus(from: $0))
+        }
+    }
+
+    func replaceAll(with replacement: String, completion: @escaping (Int) -> Void) {
+        guard isReady else { return completion(0) }
+        evaluate("window.editorAPI.replaceAll(\(Self.javascriptString(replacement)))") {
+            completion(($0 as? Int) ?? 0)
+        }
+    }
+
+    func endSearch(selectingCurrent: Bool) {
+        guard isReady else { return }
+        if selectingCurrent, let webView {
+            webView.window?.makeFirstResponder(webView)
+            evaluate("window.editorAPI.selectCurrentMatch(); window.editorAPI.clearSearch()")
+        } else {
+            evaluate("window.editorAPI.clearSearch()")
+        }
+    }
 }
 
 /// One loaded editor page, kept apart from the view showing it, so a pool can
@@ -950,14 +1038,15 @@ final class TipTapEditorPool {
 
     /// Takes back a page its editor no longer shows. Kept only when the bundle
     /// can give it the next document on a fresh undo history and nothing is
-    /// waiting already; emptied first, so no note's text sits in a spare.
+    /// waiting already; emptied first, so no note's text sits in a spare, and
+    /// its search ended, since a search lasts from one document to the next.
     func giveBack(_ page: TipTapEditorPage) {
         page.owner = nil
         guard page.canLoad, page.isReady, !page.isUnfitForReuse, spares[page.key] == nil else {
             page.tearDown()
             return
         }
-        page.webView.evaluateJavaScript("window.editorAPI.load('')")
+        page.webView.evaluateJavaScript("window.editorAPI.clearSearch?.(); window.editorAPI.load('')")
         spares[page.key] = page
     }
 

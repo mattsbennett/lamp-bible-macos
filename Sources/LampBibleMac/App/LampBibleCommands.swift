@@ -11,6 +11,10 @@ private struct WritingPreviewPlacementKey: FocusedValueKey {
     typealias Value = Binding<WritingPreviewPlacement>
 }
 
+private struct WritingFindKey: FocusedValueKey {
+    typealias Value = WritingFindController
+}
+
 private struct ImportStudyDataActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
@@ -40,6 +44,11 @@ extension FocusedValues {
         get { self[WritingPreviewPlacementKey.self] }
         set { self[WritingPreviewPlacementKey.self] = newValue }
     }
+
+    var writingFind: WritingFindController? {
+        get { self[WritingFindKey.self] }
+        set { self[WritingFindKey.self] = newValue }
+    }
 }
 
 struct LampBibleCommands: Commands {
@@ -48,6 +57,7 @@ struct LampBibleCommands: Commands {
     @FocusedValue(\.importStudyDataAction) private var importStudyData
     @FocusedValue(\.newReaderTabAction) private var newReaderTab
     @FocusedValue(\.writingPreviewPlacement) private var writingPreviewPlacement
+    @FocusedValue(\.writingFind) private var writingFind
     @FocusedObject private var scrollLink: ReaderScrollLink?
 
     let softwareUpdater: SoftwareUpdater
@@ -99,6 +109,22 @@ struct LampBibleCommands: Commands {
                 openWindow(id: "add-to-library")
             }
             .keyboardShortcut("m", modifiers: [.command, .shift])
+        }
+
+        // Only a writing window has a find bar, so elsewhere these stay off.
+        CommandGroup(after: .textEditing) {
+            Menu("Find") {
+                Button("Find…") { writingFind?.show(replacing: false) }
+                    .keyboardShortcut("f", modifiers: .command)
+                Button("Find and Replace…") { writingFind?.show(replacing: true) }
+                    .keyboardShortcut("f", modifiers: [.command, .option])
+                Divider()
+                Button("Find Next") { writingFind?.findNext() }
+                    .keyboardShortcut("g", modifiers: .command)
+                Button("Find Previous") { writingFind?.findPrevious() }
+                    .keyboardShortcut("g", modifiers: [.command, .shift])
+            }
+            .disabled(writingFind == nil)
         }
 
         CommandGroup(after: .sidebar) {
