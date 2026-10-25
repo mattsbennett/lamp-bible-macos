@@ -31,7 +31,14 @@ private enum WritingGroupBy: String, CaseIterable, Identifiable {
 /// writing as it stands. Both read the whole text, and for writing made on the
 /// phone that first means turning its blocks into Markdown, while the list
 /// draws every row again each time it is shown.
+///
+/// One for the app rather than one per appearance of the list: the list is
+/// rebuilt every time Writing is chosen in the sidebar, and its rows haven't
+/// changed. Each entry is checked against the writing it was made from.
+@MainActor
 private final class WritingRowSummaries {
+    static let shared = WritingRowSummaries()
+
     private struct Entry {
         let content: String
         let contentJSON: String?
@@ -55,7 +62,18 @@ private final class WritingRowSummaries {
            entry.content == devotional.content,
            entry.contentJSON == devotional.contentJSON,
            entry.summary == devotional.summary {
-            return entry
+            // Equal but freshly loaded text is a second copy of it: keep the
+            // library's instead, so the cache never holds text of its own and
+            // the next comparison is the quick one between identical strings.
+            let current = Entry(
+                content: devotional.content,
+                contentJSON: devotional.contentJSON,
+                summary: devotional.summary,
+                snippet: entry.snippet,
+                statistics: entry.statistics
+            )
+            entries[devotional.id] = current
+            return current
         }
         let source = devotional.summary?.isEmpty == false ? devotional.summary! : devotional.content
         let snippet = WritingStatistics.snippet(from: source, limit: 120)
@@ -122,7 +140,7 @@ struct DevotionalsView: View {
     @State private var devotionalPendingDeletion: LampDevotional?
     @State private var exportedURL: URL?
     @State private var presentationDecksByDevotionalID: [String: [LampPresentationDeck]] = [:]
-    @State private var rowSummaries = WritingRowSummaries()
+    private let rowSummaries = WritingRowSummaries.shared
 
     let showImporter: () -> Void
     let openReference: (Int) -> Void

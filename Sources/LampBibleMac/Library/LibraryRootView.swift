@@ -1619,6 +1619,76 @@ private struct ReaderPassageChapter: Identifiable {
     }
 }
 
+/// The fonts the reader has asked for. Every paragraph asks for several, and
+/// making one from a descriptor each time is a third of what building a
+/// paragraph costs. A handful of sizes and weights is all there ever is.
+@MainActor
+private enum ReaderFonts {
+    struct Key: Hashable {
+        let size: CGFloat
+        let weight: CGFloat
+        let traits: UInt
+        let serif: Bool
+    }
+
+    static var made: [Key: NSFont] = [:]
+}
+
+/// The heights reader text sets to, kept. SwiftUI asks a row its size several
+/// times a layout, and again each time the reader is shown, and typesetting
+/// the text to answer was most of what showing the reader cost. A height
+/// depends only on the text, attributes included, and the width.
+private enum ReaderTextHeights {
+    private final class Key: NSObject {
+        let text: NSAttributedString
+        let width: CGFloat
+
+        init(text: NSAttributedString, width: CGFloat) {
+            // A copy, so a mutable string changed later can't change a key
+            // already in the cache. An immutable one copies as itself.
+            self.text = text.copy() as! NSAttributedString
+            self.width = width
+        }
+
+        override var hash: Int {
+            text.string.hash ^ width.hashValue
+        }
+
+        override func isEqual(_ object: Any?) -> Bool {
+            guard let other = object as? Key else { return false }
+            return width == other.width && (text === other.text || text.isEqual(to: other.text))
+        }
+    }
+
+    /// Each key keeps its text alive, and only what's on screen or near it
+    /// is ever asked about again, so a few hundred is plenty.
+    private static let cache: NSCache<Key, NSNumber> = {
+        let cache = NSCache<Key, NSNumber>()
+        cache.countLimit = 500
+        return cache
+    }()
+
+    static func height(of text: NSAttributedString, width: CGFloat) -> CGFloat {
+        let key = Key(text: text, width: width)
+        if let height = cache.object(forKey: key) {
+            return CGFloat(height.doubleValue)
+        }
+        // Measurement must be observational. Resizing the live text container
+        // causes NSTextView to invalidate its hosted size while SwiftUI's
+        // LazyVStack is still asking for that size. The lazy stack then places
+        // the row again, which measures it again, and so on without settling.
+        // NSAttributedString's bounding calculation uses an independent layout
+        // context and cannot feed back into the represented view.
+        let bounds = text.boundingRect(
+            with: NSSize(width: width, height: CGFloat.greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading]
+        )
+        let height = max(ceil(bounds.height), 1)
+        cache.setObject(NSNumber(value: Double(height)), forKey: key)
+        return height
+    }
+}
+
 /// Reader scripture uses AppKit selection directly. SwiftUI's `.textSelection`
 /// installs a `SelectionOverlay` that can enter an unbounded update loop when a
 /// lazy scroll view materialises attributed text containing many metadata runs.
@@ -1672,22 +1742,9 @@ private struct ReaderSelectableText: NSViewRepresentable {
     ) -> CGSize? {
         guard let width = proposal.width, width > 0 else { return nil }
 
-        // Measurement must be observational. Resizing the live text container
-        // here causes NSTextView to invalidate its hosted size while SwiftUI's
-        // LazyVStack is still asking for that size. The lazy stack then places
-        // the row again, which measures it again, and so on without settling.
-        // NSAttributedString's bounding calculation uses an independent layout
-        // context and cannot feed back into the represented view.
-        let bounds = attributedText.boundingRect(
-            with: NSSize(
-                width: width,
-                height: CGFloat.greatestFiniteMagnitude
-            ),
-            options: [.usesLineFragmentOrigin, .usesFontLeading]
-        )
         return CGSize(
             width: width,
-            height: max(ceil(bounds.height), 1)
+            height: ReaderTextHeights.height(of: attributedText, width: width)
         )
     }
 
@@ -3744,6 +3801,8 @@ private struct TranslationReaderView: View {
         weight: NSFont.Weight = .regular,
         traits: NSFontTraitMask = []
     ) -> NSFont {
+        let key = ReaderFonts.Key(size: size, weight: weight.rawValue, traits: traits.rawValue, serif: typeface == .serif)
+        if let font = ReaderFonts.made[key] { return font }
         let systemFont = NSFont.systemFont(ofSize: size, weight: weight)
         let designedFont: NSFont
         if typeface == .serif,
@@ -3753,8 +3812,9 @@ private struct TranslationReaderView: View {
         } else {
             designedFont = systemFont
         }
-        guard !traits.isEmpty else { return designedFont }
-        return NSFontManager.shared.convert(designedFont, toHaveTrait: traits)
+        let font = traits.isEmpty ? designedFont : NSFontManager.shared.convert(designedFont, toHaveTrait: traits)
+        ReaderFonts.made[key] = font
+        return font
     }
 
     private func readerColor(hex value: String) -> NSColor? {
