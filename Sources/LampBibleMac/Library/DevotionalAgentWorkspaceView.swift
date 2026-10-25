@@ -2200,6 +2200,10 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
         terminal.nativeBackgroundColor = .textBackgroundColor
         terminal.nativeForegroundColor = .textColor
         terminal.optionAsMetaKey = true
+        // Scrolling is SwiftTerm's own. On the alternate buffer the agents'
+        // full-screen interfaces draw on, it sends the wheel as the application
+        // asked for it — wheel codes when it tracks the mouse, cursor keys when
+        // not — at the rate the system's scroll setting gives.
         terminal.allowMouseReporting = true
 
         let configuredShell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
@@ -2214,7 +2218,6 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
                 currentDirectory: workingDirectory.path
             )
             coordinator.watchForExit(of: terminal.process.shellPid)
-            coordinator.watchForWheelScrolling(in: terminal)
             coordinator.watchForEditingKeys(in: terminal)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak terminal] in
                 guard let terminal, terminal.process.running else { return }
@@ -2231,7 +2234,7 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ nsView: LocalProcessTerminalView, coordinator: Coordinator) {
-        coordinator.stopWatchingWheelScrolling()
+        coordinator.stopWatching()
         if nsView.process.running { nsView.terminate() }
         let onDismantle = coordinator.onDismantle
         DispatchQueue.main.async { onDismantle() }
@@ -2242,7 +2245,6 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
         var onDismantle: () -> Void
         private var exitSource: DispatchSourceProcess?
         private var reportedExit = false
-        private var wheelMonitor: Any?
         private var editingKeyMonitor: Any?
         private var isDismantled = false
         private weak var terminal: LocalProcessTerminalView?
@@ -2252,29 +2254,8 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
             self.onDismantle = onDismantle
         }
 
-        /// SwiftTerm's own wheel handling moves only its scrollback, and a
-        /// full-screen TUI — which is what `claude`, `codex`, and `opencode`
-        /// are — draws on the alternate buffer, where there is no scrollback to
-        /// move, so the wheel does nothing at all. `scrollWheel` isn't open to
-        /// override from here, so the event is taken before the terminal sees
-        /// it and forwarded the way a real terminal forwards it.
-        func watchForWheelScrolling(in terminal: LocalProcessTerminalView) {
-            // `makeNSView` installs this from an async block, which can land
-            // after a quick teardown; without this the monitor would outlive
-            // the terminal it serves.
-            guard wheelMonitor == nil, !isDismantled else { return }
-            self.terminal = terminal
-            wheelMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
-                guard let terminal = self?.terminal,
-                      Self.wheelEvent(event, belongsTo: terminal) else { return event }
-                return Self.forward(event, to: terminal) ? nil : event
-            }
-        }
-
-        func stopWatchingWheelScrolling() {
+        func stopWatching() {
             isDismantled = true
-            if let wheelMonitor { NSEvent.removeMonitor(wheelMonitor) }
-            wheelMonitor = nil
             if let editingKeyMonitor { NSEvent.removeMonitor(editingKeyMonitor) }
             editingKeyMonitor = nil
             terminal = nil
@@ -2323,88 +2304,6 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
                   let responder = window.firstResponder as? NSView
             else { return false }
             return responder === terminal || responder.isDescendant(of: terminal)
-        }
-
-        /// The monitor sees every scroll in the app, so everything that isn't
-        /// the pointer genuinely over this live terminal is handed straight back.
-        private static func wheelEvent(
-            _ event: NSEvent,
-            belongsTo terminal: LocalProcessTerminalView
-        ) -> Bool {
-            guard let window = terminal.window,
-                  event.window === window,
-                  !terminal.isHiddenOrHasHiddenAncestor,
-                  terminal.bounds.contains(terminal.convert(event.locationInWindow, from: nil)),
-                  let hit = window.contentView?.hitTest(event.locationInWindow),
-                  hit === terminal || hit.isDescendant(of: terminal)
-            else { return false }
-            // The normal buffer has real scrollback; SwiftTerm handles that well.
-            return terminal.getTerminal().isCurrentBufferAlternate
-        }
-
-        /// Returns whether the event was consumed.
-        private static func forward(
-            _ event: NSEvent,
-            to view: LocalProcessTerminalView
-        ) -> Bool {
-            let terminal = view.getTerminal()
-            let lines = wheelLines(for: event)
-            guard lines != 0, view.process.running else { return false }
-            let isUp = lines > 0
-
-            if view.allowMouseReporting, terminal.mouseMode != .off {
-                // The Cb wheel codes xterm reports, at the cell under the
-                // pointer, so a TUI with panes scrolls the one pointed at.
-                let cell = self.cell(under: event, in: view, terminal: terminal)
-                for _ in 0..<abs(lines) {
-                    terminal.sendEvent(buttonFlags: isUp ? 64 : 65, x: cell.col, y: cell.row)
-                }
-                return true
-            }
-
-            // xterm's `alternateScroll`: with no mouse reporting the wheel
-            // moves whatever the application moves with the cursor keys.
-            let key: [UInt8] = terminal.applicationCursor
-                ? (isUp ? [0x1B, 0x4F, 0x41] : [0x1B, 0x4F, 0x42])
-                : (isUp ? [0x1B, 0x5B, 0x41] : [0x1B, 0x5B, 0x42])
-            for _ in 0..<abs(lines) { view.process.send(data: key[...]) }
-            return true
-        }
-
-        private static func wheelLines(for event: NSEvent) -> Int {
-            let delta = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.deltaY
-            guard delta != 0 else { return 0 }
-            let magnitude = abs(delta)
-            let lines: Int
-            if event.hasPreciseScrollingDeltas {
-                // Trackpad momentum arrives as a stream of small events; a low
-                // cap per event keeps one flick from flying through everything.
-                lines = max(1, min(5, Int((magnitude / 12).rounded())))
-            } else if magnitude > 9 {
-                lines = 10
-            } else if magnitude > 5 {
-                lines = 5
-            } else if magnitude > 1 {
-                lines = 3
-            } else {
-                lines = 1
-            }
-            return delta > 0 ? lines : -lines
-        }
-
-        private static func cell(
-            under event: NSEvent,
-            in view: NSView,
-            terminal: Terminal
-        ) -> (col: Int, row: Int) {
-            let cols = max(1, terminal.cols)
-            let rows = max(1, terminal.rows)
-            guard view.bounds.width > 0, view.bounds.height > 0 else { return (0, 0) }
-            let point = view.convert(event.locationInWindow, from: nil)
-            let col = Int(point.x / (view.bounds.width / CGFloat(cols)))
-            // AppKit measures from the bottom; terminal rows count from the top.
-            let row = Int((view.bounds.height - point.y) / (view.bounds.height / CGFloat(rows)))
-            return (min(cols - 1, max(0, col)), min(rows - 1, max(0, row)))
         }
 
         /// SwiftTerm stops watching the process as soon as the terminal reads
