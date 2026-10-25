@@ -186,6 +186,8 @@ struct SlideStudioView: View {
                     forget: { remoteHost.forget($0) },
                     forgetAll: { remoteHost.forgetAllRemotes() }
                 )
+                // Read when the list is about to be shown, never at launch.
+                .onAppear { remoteHost.refreshRememberedRemotes() }
             }
             .help("Pair an iPhone or iPad before presenting")
             Button("Play", systemImage: "play.fill") { presentDeck() }

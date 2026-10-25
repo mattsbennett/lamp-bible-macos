@@ -33,8 +33,20 @@ final class LampPresentationRemoteHost: ObservableObject {
 
     var commandHandler: ((LampPresentationRemoteCommand) -> Void)?
 
-    init() {
-        rememberedRemotes = trust.remotes()
+    /// Reads what this Mac remembers, off the main thread.
+    ///
+    /// Deliberately not done when the host is made. The host is a
+    /// `@StateObject` of the app itself, so its initialiser runs at launch
+    /// before there is a window — and reading the keychain there can raise a
+    /// system prompt with nothing on screen to explain it, or block the main
+    /// thread waiting for one. A build signed differently from the one that
+    /// wrote the item is prompted every time, which is anyone switching
+    /// between Debug and Release builds. Nothing is read until someone turns
+    /// the remote on or opens pairing.
+    func refreshRememberedRemotes() {
+        queue.async { [weak self] in
+            self?.publishRememberedRemotes()
+        }
     }
 
     /// Stops letting one remote in. It must pair by QR again, and until the
@@ -86,6 +98,7 @@ final class LampPresentationRemoteHost: ObservableObject {
     func start() {
         guard listener == nil else { return }
         status = .starting
+        refreshRememberedRemotes()
 
         do {
             let parameters = NWParameters.tcp

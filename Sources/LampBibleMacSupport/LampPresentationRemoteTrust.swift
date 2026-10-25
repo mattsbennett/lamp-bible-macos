@@ -80,8 +80,12 @@ public final class LampPresentationRemoteTrustStore {
             }
             replacedCorrupt = true
         }
+        // Not written here. Looking at what is remembered should leave the
+        // keychain alone: a presenter nobody has paired a remote with has
+        // nothing worth storing, and writing on a mere read would put an item
+        // in the keychain of every person who never uses the remote at all.
+        // It is written the first time a remote is actually remembered.
         let fresh = LampPresentationRemoteTrust()
-        try? persist(fresh)
         cached = fresh
         return fresh
     }

@@ -126,6 +126,34 @@ struct LampPresentationRemoteTrustTests {
         #expect(Set(trust.trustedCodes()) == Set([first.deviceCode, second.deviceCode]))
     }
 
+    /// Looking at what is remembered must not write anything.
+    ///
+    /// The presenter host is made when the app launches, so anything it
+    /// reads is read before there is a window. A write there would put a
+    /// keychain item on every Mac whose owner never uses the remote — and
+    /// asking the keychain at all can raise a system prompt, which with no
+    /// window on screen is a hang nobody can explain.
+    @Test func readingWhatIsRememberedWritesNothing() {
+        final class Counting: LampPresentationRemoteTrustStorage {
+            var reads = 0
+            var writes = 0
+            func read() throws -> Data? { reads += 1; return nil }
+            func write(_ data: Data) throws { writes += 1 }
+            func removeAll() throws {}
+        }
+        let storage = Counting()
+        let store = LampPresentationRemoteTrustStore(storage: storage)
+
+        _ = store.remotes()
+        _ = store.trustedCodes()
+        _ = store.presenterHint(challenge: LampPresentationRemotePairing.generateChallenge())
+        #expect(storage.writes == 0, "nothing is stored until a remote is actually remembered")
+
+        // And the first real pairing does write.
+        _ = store.remember(clientName: "iPhone")
+        #expect(storage.writes == 1)
+    }
+
     /// A keychain that cannot be read is not an empty keychain.
     ///
     /// This is the one that would have cost the person every remote they had
