@@ -6,6 +6,11 @@ import SwiftUI
 
 struct SlideRemotePairingView: View {
     let pairingCode: String
+    /// Remotes this Mac already knows, and what to do about them. A device
+    /// listed here never sees the code above again.
+    var remembered: [LampPresentationTrustedRemote] = []
+    var forget: (LampPresentationTrustedRemote) -> Void = { _ in }
+    var forgetAll: () -> Void = {}
 
     var body: some View {
         VStack(spacing: 16) {
@@ -44,9 +49,54 @@ struct SlideRemotePairingView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
             .multilineTextAlignment(.center)
+
+            if !remembered.isEmpty {
+                Divider()
+                rememberedSection
+            }
         }
         .padding(24)
         .frame(width: 320)
+    }
+
+    /// What this Mac will let in without the code being scanned again.
+    ///
+    /// Shown because a lasting pairing is otherwise invisible: without this
+    /// there is no way to see that a device you no longer have can still
+    /// drive your presentation.
+    private var rememberedSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Remembered Remotes")
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                Button("Forget All", action: forgetAll)
+                    .buttonStyle(.link)
+                    .font(.caption)
+            }
+
+            ForEach(remembered) { remote in
+                HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(remote.clientName ?? "Unnamed remote")
+                            .font(.callout)
+                        Text("Paired \(remote.pairedAt.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Forget") { forget(remote) }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                        .accessibilityLabel("Forget \(remote.clientName ?? "this remote")")
+                }
+            }
+
+            Text("Forgetting every remote also stops them recognising this Mac.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var qrImage: NSImage? {

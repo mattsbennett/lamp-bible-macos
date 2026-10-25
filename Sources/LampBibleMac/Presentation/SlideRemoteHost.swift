@@ -1,6 +1,9 @@
 import Combine
 import Foundation
 import LampCore
+#if canImport(LampBibleMacSupport)
+import LampBibleMacSupport
+#endif
 import Network
 
 final class LampPresentationRemoteHost: ObservableObject {
@@ -25,8 +28,36 @@ final class LampPresentationRemoteHost: ObservableObject {
     @Published private(set) var status: Status = .stopped
     @Published private(set) var pairingCode = LampPresentationRemotePairing.generateCode()
     @Published private(set) var connectedClientNames: [String] = []
+    /// Remotes this Mac has paired before and will let straight in.
+    @Published private(set) var rememberedRemotes: [LampPresentationTrustedRemote] = []
 
     var commandHandler: ((LampPresentationRemoteCommand) -> Void)?
+
+    init() {
+        rememberedRemotes = trust.remotes()
+    }
+
+    /// Stops letting one remote in. It must pair by QR again, and until the
+    /// last remote is forgotten it can still tell this Mac apart from
+    /// another — see `forgetAllRemotes`.
+    func forget(_ remote: LampPresentationTrustedRemote) {
+        trust.forget(deviceCode: remote.deviceCode)
+        publishRememberedRemotes()
+    }
+
+    /// Forgets every remote and mints a new presenter secret, so no device
+    /// that was paired can connect to this Mac or recognise it again.
+    func forgetAllRemotes() {
+        trust.forgetAll()
+        publishRememberedRemotes()
+    }
+
+    private func publishRememberedRemotes() {
+        let remotes = trust.remotes().sorted { $0.pairedAt > $1.pairedAt }
+        DispatchQueue.main.async { [weak self] in
+            self?.rememberedRemotes = remotes
+        }
+    }
 
     private final class Peer {
         let connection: NWConnection
@@ -34,12 +65,19 @@ final class LampPresentationRemoteHost: ObservableObject {
         var clientName = "Remote"
         var isAuthorized = false
         let pairingChallenge = LampPresentationRemotePairing.generateChallenge()
+        /// The code this peer's frames are sealed under: the session code for
+        /// a device pairing by QR, or its own code for one that has paired
+        /// before. Settled by the first frame that opens.
+        var code: String?
 
         init(connection: NWConnection) {
             self.connection = connection
         }
     }
 
+    /// The remotes this presenter has paired before. In the keychain, never
+    /// in the library, which syncs.
+    private let trust = LampPresentationRemoteTrustStore()
     private let queue = DispatchQueue(label: "com.neus.lamp-bible.presentation-remote")
     private var listener: NWListener?
     private var peers: [ObjectIdentifier: Peer] = [:]
@@ -129,7 +167,13 @@ final class LampPresentationRemoteHost: ObservableObject {
             }
         }
         connection.start(queue: queue)
-        sendPlaintext(.hello(pairingChallenge: peer.pairingChallenge), to: peer)
+        sendPlaintext(
+            .hello(
+                pairingChallenge: peer.pairingChallenge,
+                presenterHint: trust.presenterHint(challenge: peer.pairingChallenge)
+            ),
+            to: peer
+        )
         receive(from: peer)
     }
 
@@ -143,10 +187,7 @@ final class LampPresentationRemoteHost: ObservableObject {
             if let data, !data.isEmpty {
                 peer.buffer.append(data)
                 do {
-                    let messages = try LampPresentationRemoteSecureFrameCodec.decodeFrames(
-                        from: &peer.buffer,
-                        pairingCode: self.pairingCode
-                    )
+                    let messages = try self.decodeFrames(from: peer)
                     messages.forEach { self.handle($0, from: peer) }
                 } catch {
                     peer.connection.cancel()
@@ -162,6 +203,37 @@ final class LampPresentationRemoteHost: ObservableObject {
         }
     }
 
+    /// This peer's frames, opened under whichever code it is using.
+    ///
+    /// A device pairing by QR seals its frames under the session code; one
+    /// that has paired before uses the code minted for it then. Which it is
+    /// is not announced, so the first frame is tried against each in turn —
+    /// on a copy of the buffer, because the codec consumes a frame before it
+    /// finds out whether it can open it. Only a frame that actually opens
+    /// settles the question, so an incomplete frame leaves it open.
+    private func decodeFrames(from peer: Peer) throws -> [LampPresentationRemoteMessage] {
+        if let code = peer.code {
+            return try LampPresentationRemoteSecureFrameCodec.decodeFrames(
+                from: &peer.buffer,
+                pairingCode: code
+            )
+        }
+        for candidate in [pairingCode] + trust.trustedCodes() {
+            var attempt = peer.buffer
+            guard let messages = try? LampPresentationRemoteSecureFrameCodec.decodeFrames(
+                from: &attempt,
+                pairingCode: candidate
+            ), !messages.isEmpty else { continue }
+            peer.buffer = attempt
+            peer.code = candidate
+            return messages
+        }
+        // Nothing opened it. Either the frame has not all arrived, or this is
+        // not a device we know; waiting is right for the first and harmless
+        // for the second, which never gets past `pair`.
+        return []
+    }
+
     private func handle(_ message: LampPresentationRemoteMessage, from peer: Peer) {
         guard message.protocolVersion == LampPresentationRemoteProtocol.currentVersion else {
             send(.rejected("This remote uses an incompatible protocol version."), to: peer)
@@ -175,13 +247,31 @@ final class LampPresentationRemoteHost: ObservableObject {
                 peer.clientName = String(name.prefix(80))
             }
         case .pair:
-            guard message.pairingCode == pairingCode,
+            // The code must be the one that opened the frame, so a device
+            // cannot name one code and speak under another, and the challenge
+            // must be this connection's own, so a recorded pairing cannot be
+            // replayed on a later one.
+            guard let code = peer.code,
+                  message.pairingCode == code,
                   message.pairingChallenge == peer.pairingChallenge else {
                 send(.rejected("That pairing code is not correct."), to: peer)
                 return
             }
             peer.isAuthorized = true
-            send(.accepted(), to: peer)
+            if code == pairingCode {
+                // Paired by QR: mint this device a code of its own so it is
+                // not asked again. Both go back inside `accepted`, which is
+                // sealed, so neither is ever in the clear.
+                let minted = trust.remember(clientName: message.clientName ?? peer.clientName)
+                publishRememberedRemotes()
+                send(
+                    .accepted(deviceCode: minted.deviceCode, presenterSecret: minted.presenterSecret),
+                    to: peer
+                )
+            } else {
+                // A device we already know, let straight in.
+                send(.accepted(), to: peer)
+            }
             if let latestState { send(.state(latestState), to: peer) }
             publishConnectedPeers()
         case .command:
@@ -197,9 +287,11 @@ final class LampPresentationRemoteHost: ObservableObject {
     }
 
     private func send(_ message: LampPresentationRemoteMessage, to peer: Peer) {
+        // Answered under the code this peer is speaking: a device that has
+        // paired before is using its own, not the session's.
         guard let frame = try? LampPresentationRemoteSecureFrameCodec.encode(
             message,
-            pairingCode: pairingCode
+            pairingCode: peer.code ?? pairingCode
         ) else { return }
         peer.connection.send(content: frame, completion: .contentProcessed { _ in })
     }

@@ -180,7 +180,12 @@ struct SlideStudioView: View {
                 showingRemotePairing = true
             }
             .popover(isPresented: $showingRemotePairing, arrowEdge: .bottom) {
-                SlideRemotePairingView(pairingCode: remoteHost.pairingCode)
+                SlideRemotePairingView(
+                    pairingCode: remoteHost.pairingCode,
+                    remembered: remoteHost.rememberedRemotes,
+                    forget: { remoteHost.forget($0) },
+                    forgetAll: { remoteHost.forgetAllRemotes() }
+                )
             }
             .help("Pair an iPhone or iPad before presenting")
             Button("Play", systemImage: "play.fill") { presentDeck() }
