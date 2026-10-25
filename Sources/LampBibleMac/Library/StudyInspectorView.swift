@@ -7,13 +7,25 @@ import LampModuleKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-struct ReaderReferenceActions {
+struct ReaderReferenceActions: Equatable {
+    /// The library view that made the actions; nil for the default, which does
+    /// nothing. A view's actions reach its own state, which is the same however
+    /// often it is redrawn, so each redraw's actions do what the last did.
+    /// Compared by owner, a redraw isn't an environment change for every view
+    /// beneath it. That holds only while every action reaches state: one that
+    /// captured a plain value would keep the first value it was made with.
+    let owner: ObjectIdentifier?
     let openInCurrent: (Int) -> Void
     let openInNewTab: (Int) -> Void
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.owner == rhs.owner
+    }
 }
 
 private struct ReaderReferenceActionsKey: EnvironmentKey {
     static let defaultValue = ReaderReferenceActions(
+        owner: nil,
         openInCurrent: { _ in },
         openInNewTab: { _ in }
     )

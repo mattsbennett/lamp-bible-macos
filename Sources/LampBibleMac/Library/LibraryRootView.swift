@@ -78,6 +78,11 @@ struct LibraryRootView: View {
     @State private var readerSidebarRevealedWidth: Double = 0
     @State private var isReaderSidebarContentReady = false
     @State private var isReaderSidebarTransitioning = false
+    /// Set when leaving the reader closed its study column. The reader takes no
+    /// updates while it's out of sight, so the column is still drawn open there,
+    /// and the close reaches it only as it's shown again: where it mustn't
+    /// animate, or the column would be seen closing.
+    @State private var readerSidebarClosedOutOfSight = false
     @State private var planReadingMode: PlanReadingMode?
     // Keep hover mutations out of this view's observation graph. Only the small
     // readout observes the store, so moving between words cannot rebuild the
@@ -85,8 +90,6 @@ struct LibraryRootView: View {
     @State private var readerLexicalHoverStore = ReaderLexicalHoverStore()
     @AppStorage("studyInspector.width") private var studyInspectorWidth = StudyInspectorMetrics.defaultWidth
     @AppStorage("studyInspector.tab") private var selectedStudyTab = "commentary"
-
-    private enum ReaderSidebar { case study, chat }
 
     private var showingStudyInspector: Binding<Bool> {
         Binding(
@@ -197,6 +200,8 @@ struct LibraryRootView: View {
         .focusedValue(\.importStudyDataAction, { showingStudyDataImporter = true })
         .focusedValue(\.newReaderTabAction, { presentNewReaderTabChooser() })
         .environment(\.readerReferenceActions, ReaderReferenceActions(
+            // Any object this view keeps for as long as it lives will do.
+            owner: ObjectIdentifier(readerLexicalHoverStore),
             openInCurrent: { openReferenceInCurrentTab($0) },
             openInNewTab: { openReferenceInNewTab($0) }
         ))
@@ -206,7 +211,21 @@ struct LibraryRootView: View {
                 model.selectTranslation(moduleID)
             }
             if !isReaderSelection(newValue) {
+                if readerSidebar != nil || isReaderSidebarMounted {
+                    readerSidebarClosedOutOfSight = true
+                }
+                // Closed outright rather than by the column's animated task,
+                // which would run only once the reader is shown again.
                 readerSidebar = nil
+                isReaderSidebarMounted = false
+                isReaderSidebarContentReady = false
+                isReaderSidebarTransitioning = false
+                readerSidebarRevealedWidth = 0
+                // Its popover hangs from the reader's tab bar.
+                showingNewReaderTab = false
+            } else if readerSidebarClosedOutOfSight {
+                // Shown again, and the update that showed it closed the column.
+                readerSidebarClosedOutOfSight = false
             }
         }
         .onChange(of: model.readerLocation) { _, location in
@@ -445,178 +464,210 @@ struct LibraryRootView: View {
         )
     }
 
-    @ViewBuilder
+    /// The reader is built once and kept, out of sight, while another section
+    /// is shown: coming back is then showing it, not typesetting the passage
+    /// and laying it out again. `TranslationReaderView.readerDidLeave()` and
+    /// `readerDidReturn()` hold what being rebuilt used to do for it.
     private var detail: some View {
-        switch selection {
-        case .section(.reader), .translation:
-            VStack(spacing: 0) {
-                if planReadingMode == nil {
-                    ReaderTabBar(
-                        tabs: readerTabs.tabs,
-                        selectedID: readerTabs.selectedID,
-                        currentLocation: model.readerLocation,
-                        showingNewTab: $showingNewReaderTab,
-                        select: selectReaderTab,
-                        close: closeReaderTab,
-                        duplicate: duplicateCurrentReaderTab,
-                        openLocation: { openReaderTab(at: $0) }
-                    )
-                    Divider()
-                }
-                // Laid out beside the reader rather than with `.inspector`, whose
-                // column is chrome for the whole window: it rounds its top corners
-                // for the titlebar it expects to meet, and takes the tab bar's
-                // divider with it. Here the tab bar spans the window and the study
-                // column starts underneath it.
-                //
-                // Every frame between here and the reader's ScrollView is measured
-                // in exact points, and that is what keeps the app responsive. A
-                // flexible frame (`maxWidth: .infinity`) has to ask its child how
-                // big it wants to be, and a ScrollView answers that by measuring its
-                // content — which makes the lazy passage lay out every paragraph.
-                // Several nested flexible stacks each re-asking turns one layout
-                // pass into minutes of spinning on the main thread.
-                //
-                // The GeometryReader supplies the real numbers: it reports its own
-                // size without consulting its children, so sizing stops here and
-                // everything below is told its size rather than asked for it.
-                GeometryReader { geometry in
-                    let columnWidth = StudyInspectorMetrics.totalWidth(studyInspectorWidth)
-                    // The animated value only governs while the column is actually
-                    // moving. Once it has settled the width tracks the column
-                    // exactly, so dragging the resize handle widens the column
-                    // rather than leaving a stale reveal behind it — which showed
-                    // the pane spilling over the quiz panel, half faded, with the
-                    // handle no longer hit-testable because the reveal was short of
-                    // its own width.
-                    let revealedWidth = isReaderSidebarTransitioning
-                        ? min(max(readerSidebarRevealedWidth, 0), columnWidth)
-                        : (readerSidebar != nil ? columnWidth : 0)
-                    let revealProgress = columnWidth > 0 ? revealedWidth / columnWidth : 0
-                    // A plain row, not an overlay: the column is a sibling of the
-                    // reader so the layout itself decides where it sits.
-                    HStack(spacing: 0) {
-                        TranslationReaderView(
-                            planReadingMode: $planReadingMode,
-                            showingStudyInspector: showingStudyInspector,
-                            showingReaderChat: showingReaderChat,
-                            lexicalHoverStore: readerLexicalHoverStore,
-                            isSidebarTransitioning: isReaderSidebarTransitioning,
-                            showImporter: { showingImporter = true }
-                        )
-                        // Animated, and the passage re-wraps as it goes — the same
-                        // thing the plan-reading quiz panel does, which is smooth.
-                        // The reflow was never the expensive part; measuring the
-                        // passage to *derive* a width was, and the exact frames here
-                        // and around the ScrollView are what stop that happening.
-                        .frame(
-                            width: max(geometry.size.width - revealedWidth, 0),
-                            height: geometry.size.height
-                        )
-                        // No blur or opacity on the reader. Both force a full window
-                        // of text into an offscreen buffer for every frame they are
-                        // animated over.
+        let showsReader = isReaderSelection(selection)
+        return ZStack {
+            OutOfSightUpdates(isShown: showsReader) {
+                readerDetail(isShown: showsReader)
+            }
+            .equatable()
+            .opacity(showsReader ? 1 : 0)
+            // Never faded: opacity part way puts a window of text through an
+            // offscreen buffer on every frame.
+            .animation(nil, value: showsReader)
+            .allowsHitTesting(showsReader)
+            .disabled(!showsReader)
+            .accessibilityHidden(!showsReader)
+            if !showsReader {
+                sectionDetail
+            }
+        }
+    }
 
-                        if isReaderSidebarMounted {
-                            StudyInspectorColumn(width: $studyInspectorWidth) {
-                                if isReaderSidebarContentReady {
-                                    if (readerSidebar ?? lastReaderSidebar) == .chat,
-                                       let windowID = UUID(uuidString: readerChatWindowID) {
-                                        ReaderChatSidebarView(
-                                            windowID: windowID,
-                                            close: { readerSidebar = nil }
-                                        )
-                                    } else {
-                                        StudyInspectorView(isPresented: showingStudyInspector)
-                                            .environmentObject(model)
-                                            .environmentObject(scrollLink)
-                                    }
-                                } else {
-                                    ProgressView("Opening Study Tools…")
-                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                }
-                            }
-                            // Laid out at full width and pinned to the trailing edge,
-                            // so the pane itself never moves — the gap opens around
-                            // it and it fades up in place.
-                            //
-                            // It must not move. This column contains `ScrollView`s,
-                            // which on macOS are `NSScrollView`s, and SwiftUI sets a
-                            // hosted AppKit view's frame once at the end of an
-                            // animation rather than on each frame. Slide the column
-                            // by any means — offset, padding, or its position in this
-                            // row — and the chrome travels while the entries snap
-                            // straight to where they will finish. Opacity has no such
-                            // problem: it is a layer property, and the hosted views
-                            // inherit it.
-                            .frame(width: columnWidth, height: geometry.size.height)
-                            .frame(width: revealedWidth, alignment: .trailing)
-                            .opacity(revealProgress)
-                            .allowsHitTesting(revealProgress > 0.99)
-                        }
-                    }
-                    // Owned by the view rather than driven by `withAnimation` at the
-                    // call site: the change happens inside an async `.task`, and a
-                    // transaction opened there does not reliably reach the update
-                    // that renders it.
-                    .animation(
-                        .smooth(duration: StudyInspectorMetrics.revealDuration),
-                        value: revealedWidth
+    private func readerDetail(isShown: Bool) -> some View {
+        VStack(spacing: 0) {
+            if planReadingMode == nil {
+                ReaderTabBar(
+                    tabs: readerTabs.tabs,
+                    selectedID: readerTabs.selectedID,
+                    currentLocation: model.readerLocation,
+                    showingNewTab: $showingNewReaderTab,
+                    select: selectReaderTab,
+                    close: closeReaderTab,
+                    duplicate: duplicateCurrentReaderTab,
+                    openLocation: { openReaderTab(at: $0) }
+                )
+                Divider()
+            }
+            // Laid out beside the reader rather than with `.inspector`, whose
+            // column is chrome for the whole window: it rounds its top corners
+            // for the titlebar it expects to meet, and takes the tab bar's
+            // divider with it. Here the tab bar spans the window and the study
+            // column starts underneath it.
+            //
+            // Every frame between here and the reader's ScrollView is measured
+            // in exact points, and that is what keeps the app responsive. A
+            // flexible frame (`maxWidth: .infinity`) has to ask its child how
+            // big it wants to be, and a ScrollView answers that by measuring its
+            // content — which makes the lazy passage lay out every paragraph.
+            // Several nested flexible stacks each re-asking turns one layout
+            // pass into minutes of spinning on the main thread.
+            //
+            // The GeometryReader supplies the real numbers: it reports its own
+            // size without consulting its children, so sizing stops here and
+            // everything below is told its size rather than asked for it.
+            GeometryReader { geometry in
+                let columnWidth = StudyInspectorMetrics.totalWidth(studyInspectorWidth)
+                // The animated value only governs while the column is actually
+                // moving. Once it has settled the width tracks the column
+                // exactly, so dragging the resize handle widens the column
+                // rather than leaving a stale reveal behind it — which showed
+                // the pane spilling over the quiz panel, half faded, with the
+                // handle no longer hit-testable because the reveal was short of
+                // its own width.
+                let revealedWidth = isReaderSidebarTransitioning
+                    ? min(max(readerSidebarRevealedWidth, 0), columnWidth)
+                    : (readerSidebar != nil ? columnWidth : 0)
+                let revealProgress = columnWidth > 0 ? revealedWidth / columnWidth : 0
+                // A plain row, not an overlay: the column is a sibling of the
+                // reader so the layout itself decides where it sits.
+                HStack(spacing: 0) {
+                    TranslationReaderView(
+                        model: model,
+                        isShown: isShown,
+                        planReadingMode: $planReadingMode,
+                        readerSidebar: $readerSidebar,
+                        lexicalHoverStore: readerLexicalHoverStore,
+                        isSidebarTransitioning: isReaderSidebarTransitioning,
+                        showImporter: { showingImporter = true }
                     )
-                    .frame(width: geometry.size.width, height: geometry.size.height)
-                    .clipped()
-                    .overlay(alignment: .bottomLeading) {
-                        ReaderLexicalHoverDetailsView(store: readerLexicalHoverStore)
+                    .equatable()
+                    // Animated, and the passage re-wraps as it goes — the same
+                    // thing the plan-reading quiz panel does, which is smooth.
+                    // The reflow was never the expensive part; measuring the
+                    // passage to *derive* a width was, and the exact frames here
+                    // and around the ScrollView are what stop that happening.
+                    .frame(
+                        width: max(geometry.size.width - revealedWidth, 0),
+                        height: geometry.size.height
+                    )
+                    // No blur or opacity on the reader. Both force a full window
+                    // of text into an offscreen buffer for every frame they are
+                    // animated over.
+
+                    if isReaderSidebarMounted {
+                        StudyInspectorColumn(width: $studyInspectorWidth) {
+                            if isReaderSidebarContentReady {
+                                if (readerSidebar ?? lastReaderSidebar) == .chat,
+                                   let windowID = UUID(uuidString: readerChatWindowID) {
+                                    ReaderChatSidebarView(
+                                        windowID: windowID,
+                                        close: { readerSidebar = nil }
+                                    )
+                                } else {
+                                    StudyInspectorView(isPresented: showingStudyInspector)
+                                        .environmentObject(model)
+                                        .environmentObject(scrollLink)
+                                }
+                            } else {
+                                ProgressView("Opening Study Tools…")
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            }
+                        }
+                        // Laid out at full width and pinned to the trailing edge,
+                        // so the pane itself never moves — the gap opens around
+                        // it and it fades up in place.
+                        //
+                        // It must not move. This column contains `ScrollView`s,
+                        // which on macOS are `NSScrollView`s, and SwiftUI sets a
+                        // hosted AppKit view's frame once at the end of an
+                        // animation rather than on each frame. Slide the column
+                        // by any means — offset, padding, or its position in this
+                        // row — and the chrome travels while the entries snap
+                        // straight to where they will finish. Opacity has no such
+                        // problem: it is a layer property, and the hosted views
+                        // inherit it.
+                        .frame(width: columnWidth, height: geometry.size.height)
+                        .frame(width: revealedWidth, alignment: .trailing)
+                        .opacity(revealProgress)
+                        .allowsHitTesting(revealProgress > 0.99)
                     }
-                    // One animated width drives the whole transition: the reader
-                    // slides aside as the gap opens, and the pane fades up in the
-                    // space without moving.
-                    .task(id: readerSidebar != nil) {
-                        let columnWidth = StudyInspectorMetrics.totalWidth(studyInspectorWidth)
-                        if readerSidebar == nil,
-                           !isReaderSidebarMounted,
-                           readerSidebarRevealedWidth == 0 {
-                            isReaderSidebarTransitioning = false
+                }
+                // Owned by the view rather than driven by `withAnimation` at the
+                // call site: the change happens inside an async `.task`, and a
+                // transaction opened there does not reliably reach the update
+                // that renders it.
+                .animation(
+                    readerSidebarClosedOutOfSight
+                        ? nil
+                        : .smooth(duration: StudyInspectorMetrics.revealDuration),
+                    value: revealedWidth
+                )
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .clipped()
+                .overlay(alignment: .bottomLeading) {
+                    ReaderLexicalHoverDetailsView(store: readerLexicalHoverStore)
+                }
+                // One animated width drives the whole transition: the reader
+                // slides aside as the gap opens, and the pane fades up in the
+                // space without moving.
+                .task(id: readerSidebar != nil) {
+                    let columnWidth = StudyInspectorMetrics.totalWidth(studyInspectorWidth)
+                    if readerSidebar == nil,
+                       !isReaderSidebarMounted,
+                       readerSidebarRevealedWidth == 0 {
+                        isReaderSidebarTransitioning = false
+                        return
+                    }
+                    let duration = StudyInspectorMetrics.revealDuration
+                    isReaderSidebarTransitioning = true
+                    if readerSidebar != nil {
+                        // Mount before moving. SwiftUI does not animate a view's
+                        // first layout, so mounting and revealing in one pass
+                        // would always look like a jump.
+                        isReaderSidebarMounted = true
+                        // Mount the real inspector immediately so a lookup made by
+                        // the click that opens this column is adopted while the
+                        // column arrives, rather than after the animation ends.
+                        isReaderSidebarContentReady = true
+                        await Task.yield()
+                        guard !Task.isCancelled, readerSidebar != nil else { return }
+
+                        // No `withAnimation`: the row carries its own.
+                        readerSidebarRevealedWidth = columnWidth
+                        do {
+                            try await Task.sleep(for: .seconds(duration))
+                        } catch {
                             return
                         }
-                        let duration = StudyInspectorMetrics.revealDuration
-                        isReaderSidebarTransitioning = true
-                        if readerSidebar != nil {
-                            // Mount before moving. SwiftUI does not animate a view's
-                            // first layout, so mounting and revealing in one pass
-                            // would always look like a jump.
-                            isReaderSidebarMounted = true
-                            // Mount the real inspector immediately so a lookup made by
-                            // the click that opens this column is adopted while the
-                            // column arrives, rather than after the animation ends.
-                            isReaderSidebarContentReady = true
-                            await Task.yield()
-                            guard !Task.isCancelled, readerSidebar != nil else { return }
-
-                            // No `withAnimation`: the row carries its own.
-                            readerSidebarRevealedWidth = columnWidth
-                            do {
-                                try await Task.sleep(for: .seconds(duration))
-                            } catch {
-                                return
-                            }
-                            guard !Task.isCancelled, readerSidebar != nil else { return }
-                            isReaderSidebarTransitioning = false
-                        } else {
-                            readerSidebarRevealedWidth = 0
-                            do {
-                                try await Task.sleep(for: .seconds(duration))
-                            } catch {
-                                return
-                            }
-                            guard readerSidebar == nil else { return }
-                            isReaderSidebarMounted = false
-                            isReaderSidebarContentReady = false
-                            isReaderSidebarTransitioning = false
+                        guard !Task.isCancelled, readerSidebar != nil else { return }
+                        isReaderSidebarTransitioning = false
+                    } else {
+                        readerSidebarRevealedWidth = 0
+                        do {
+                            try await Task.sleep(for: .seconds(duration))
+                        } catch {
+                            return
                         }
+                        guard readerSidebar == nil else { return }
+                        isReaderSidebarMounted = false
+                        isReaderSidebarContentReady = false
+                        isReaderSidebarTransitioning = false
                     }
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var sectionDetail: some View {
+        switch selection {
+        case .section(.reader), .translation:
+            EmptyView()
         case .section(.today):
             TodayPlansView(
                 showImporter: { showingImporter = true },
@@ -693,6 +744,23 @@ struct LibraryRootView: View {
         }
     }
 
+}
+
+/// The column open beside the reader, when one is.
+private enum ReaderSidebar { case study, chat }
+
+/// Content that takes no updates while it is out of sight, and is brought up to
+/// date as it comes back into view. Without it the reader's tab bar and frame
+/// were rebuilt, unseen, on every library change made from another section.
+private struct OutOfSightUpdates<Content: View>: View, Equatable {
+    let isShown: Bool
+    @ViewBuilder let content: () -> Content
+
+    var body: some View { content() }
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        !lhs.isShown && !rhs.isShown
+    }
 }
 
 /// Shown while the library is being read, in place of an interface that would
@@ -1939,7 +2007,7 @@ private final class ReaderLexicalHoverStore: ObservableObject {
         for candidate in ReaderLexicalHoverRowRegistry.registeredRows(in: window) {
             guard let row = candidate as?
                     ReaderNativeContextMenuAugmenter.ContextMenuObservationView,
-                  isEffectivelyVisible(row) else { continue }
+                  Self.isEffectivelyVisible(row) else { continue }
             let localPoint = row.convert(windowPoint, from: nil)
             guard row.visibleRect.insetBy(dx: -2, dy: -2).contains(localPoint) else { continue }
             if let hit = row.textHit(at: windowPoint, in: window) {
@@ -1949,7 +2017,10 @@ private final class ReaderLexicalHoverStore: ObservableObject {
         return nil
     }
 
-    private func isEffectivelyVisible(_ view: NSView) -> Bool {
+    /// Whether `view` can be seen. SwiftUI hides a view at zero opacity, as the
+    /// reader is while another section is shown, by setting a container's
+    /// alpha, so the view itself still says it's visible.
+    static func isEffectivelyVisible(_ view: NSView) -> Bool {
         var candidate: NSView? = view
         while let current = candidate {
             if current.isHidden || current.alphaValue <= 0 { return false }
@@ -2300,8 +2371,12 @@ struct ReaderNativeContextMenuAugmenter: NSViewRepresentable {
             }
         }
 
+        /// Only where the row can be seen: a hidden reader's rows lie under
+        /// whatever section is shown, and must not take its clicks or add to
+        /// its context menus.
         private func contains(_ windowPoint: NSPoint) -> Bool {
             bounds.contains(convert(windowPoint, from: nil))
+                && ReaderLexicalHoverStore.isEffectivelyVisible(self)
         }
 
         private func updateLinkCursor(for event: NSEvent) {
@@ -2645,8 +2720,11 @@ private struct ReaderLocationPickerPopover: View {
     }
 }
 
-private struct TranslationReaderView: View {
-    @EnvironmentObject private var model: LibraryModel
+private struct TranslationReaderView: View, Equatable {
+    /// Handed in rather than observed: the reader takes the library's changes
+    /// from the view above it, which lets a hidden reader decline them (see
+    /// `==`). Shown, it updates whenever the library does, as before.
+    let model: LibraryModel
     @EnvironmentObject private var scrollLink: ReaderScrollLink
     @AppStorage("reader.fontSize") private var fontSize = LampTextScale.readerText.defaultValue
     @AppStorage("reader.lineSpacing") private var lineSpacing = LampTextScale.readerLineSpacing.defaultValue
@@ -2673,6 +2751,20 @@ private struct TranslationReaderView: View {
 
     /// The quiz panel and its leading divider.
     private static let quizPanelWidth: Double = 411
+
+    private var showingStudyInspector: Bool {
+        get { readerSidebar == .study }
+        nonmutating set {
+            if newValue { readerSidebar = .study } else if readerSidebar == .study { readerSidebar = nil }
+        }
+    }
+
+    private var showingReaderChat: Bool {
+        get { readerSidebar == .chat }
+        nonmutating set {
+            if newValue { readerSidebar = .chat } else if readerSidebar == .chat { readerSidebar = nil }
+        }
+    }
     @State private var showingReaderLocationPicker = false
     @State private var highlightVerse: LampVerse?
     @State private var planReadingChapters: [LampChapter] = []
@@ -2685,9 +2777,13 @@ private struct TranslationReaderView: View {
     @State private var linkActivationGate = ReaderLinkActivationGate()
     @State private var paragraphAnchors = ReaderParagraphAnchorStore()
     @Namespace private var readerScrollCoordinateSpace
+    /// False while another section of the library is shown in its place.
+    let isShown: Bool
     @Binding var planReadingMode: PlanReadingMode?
-    @Binding var showingStudyInspector: Bool
-    @Binding var showingReaderChat: Bool
+    /// The state itself, not a binding per column made from closures: SwiftUI
+    /// can't see that a made binding is unchanged, so it counts as a change on
+    /// every update, and the reader was redrawn under every section.
+    @Binding var readerSidebar: ReaderSidebar?
     let lexicalHoverStore: ReaderLexicalHoverStore
     let isSidebarTransitioning: Bool
     let showImporter: () -> Void
@@ -2765,9 +2861,13 @@ private struct TranslationReaderView: View {
             }
             isQuizTransitioning = false
         }
-        .toolbar { readerToolbar }
-        .toolbar(removing: .title)
-        .focusedObject(scrollLink)
+        // The window's toolbar and menus belong to whichever section is shown.
+        .toolbar { if isShown { readerToolbar } }
+        .toolbar(removing: isShown ? .title : nil)
+        .focusedObject(isShown ? scrollLink : nil)
+        .onChange(of: isShown) { _, isShown in
+            if isShown { readerDidReturn() } else { readerDidLeave() }
+        }
         .sheet(item: $highlightVerse) { verse in
             VerseHighlightEditorView(verse: verse)
                 .environmentObject(model)
@@ -2798,6 +2898,49 @@ private struct TranslationReaderView: View {
         .environment(\.openURL, OpenURLAction { url in
             handleReaderLink(url) ? .handled : .systemAction
         })
+    }
+
+    /// A hidden reader ignores everything handed to it until it is shown again.
+    /// Every library change would otherwise rebuild a passage nobody can see:
+    /// writing's autosave is one, and drawing the reader under it doubled what
+    /// each cost. Shown, or coming or going, it updates as any view does.
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        !lhs.isShown && !rhs.isShown
+    }
+
+    /// While another section is shown the reader is kept, not rebuilt, so what
+    /// rebuilding used to reset is reset here. Anything added to the reader that
+    /// shouldn't outlast its being left belongs in this list:
+    /// - reading aloud stops, as it does when the window closes;
+    /// - no word's details stay on screen;
+    /// - the location picker closes, as its toolbar button is going;
+    /// - a click's note not to scroll to its own selection is dropped, or the
+    ///   next verse opened from another section would never be scrolled to.
+    ///
+    /// The reader's rows answer the pointer only while they can be seen (see
+    /// `ReaderLexicalHoverStore.isEffectivelyVisible`), so nothing is needed for
+    /// hover, links or context menus. The quiz panel and its transition are the
+    /// reader's own state, which updates it even while hidden, so the panel is
+    /// left as it was and an animation under way finishes out of sight.
+    ///
+    /// `.onDisappear` repeats the first two for the window closing, which is the
+    /// one way the reader still goes away.
+    private func readerDidLeave() {
+        readAloud.stop()
+        lexicalHoverStore.details = nil
+        showingReaderLocationPicker = false
+        isSelectingVerseFromReader = false
+    }
+
+    /// Coming back, the reader is drawn from the library as it is now, which
+    /// takes in whatever changed while it was hidden: the passage, highlights,
+    /// notes, a verse chosen from search. A plan reading is the reader's own copy
+    /// of the library's text, so it is read again; the copy on screen stays until
+    /// the new one is in.
+    private func readerDidReturn() {
+        guard let request = planReadingChapterRequest,
+              loadedPlanReadingRequest == request else { return }
+        Task { await loadPlanReadingChapters(for: request, rereading: true) }
     }
 
     @ViewBuilder
@@ -2858,7 +3001,12 @@ private struct TranslationReaderView: View {
         return model.chapter.map { [$0] } ?? []
     }
 
-    private func loadPlanReadingChapters(for request: PlanReadingChapterRequest?) async {
+    /// `rereading` reads again a reading already on screen, which stays there
+    /// until the new copy is in.
+    private func loadPlanReadingChapters(
+        for request: PlanReadingChapterRequest?,
+        rereading: Bool = false
+    ) async {
         guard let request else {
             planReadingChapters = []
             loadedPlanReadingRequest = nil
@@ -2866,10 +3014,11 @@ private struct TranslationReaderView: View {
             planReadingError = nil
             return
         }
-        if loadedPlanReadingRequest == request, !planReadingChapters.isEmpty { return }
-
-        isLoadingPlanReading = true
-        planReadingError = nil
+        if !rereading {
+            if loadedPlanReadingRequest == request, !planReadingChapters.isEmpty { return }
+            isLoadingPlanReading = true
+            planReadingError = nil
+        }
         do {
             let books = try await model.library.translationBooks(moduleID: request.translationID)
             try Task.checkCancellation()
@@ -2920,7 +3069,9 @@ private struct TranslationReaderView: View {
                 isLoadingPlanReading = false
                 return
             }
-            planReadingChapters = loaded
+            // Unchanged, as a reread nearly always is, it is left alone rather
+            // than drawn again.
+            if planReadingChapters != loaded { planReadingChapters = loaded }
             loadedPlanReadingRequest = request
             isLoadingPlanReading = false
         } catch is CancellationError {
