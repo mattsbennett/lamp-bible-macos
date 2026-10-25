@@ -39,8 +39,15 @@ HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
 # A value is the set of block kinds drawn, with how many of each. `None` means
 # every block of that kind is drawn.
 LAYOUT_CAPACITY: dict[str, dict[str, int | None]] = {
-    "title": {"title": 1, "subtitle": 1, "body": 1},
-    "closing": {"title": 1, "subtitle": 1, "body": 1},
+    # A heading, one line under it, and any passages beneath those.
+    "title": {
+        "title": 1, "subtitle": 1, "body": 1, "scripture": None,
+        "quotation": None, "citation": None,
+    },
+    "closing": {
+        "title": 1, "subtitle": 1, "body": 1, "scripture": None,
+        "quotation": None, "citation": None,
+    },
     "title-and-body": {
         "title": 1, "subtitle": None, "body": None, "scripture": None,
         "quotation": None, "citation": None, "image": 1, "caption": 1,
@@ -73,9 +80,13 @@ MANUSCRIPT_SOURCE_KINDS = {"devotional", "writing"}
 TYPOGRAPHY = {"verbatim"}
 PLACEMENTS = {"background"}
 # Lamp sets quotations on these layouts, so it adds the marks itself.
-QUOTE_TYPOGRAPHY_LAYOUTS = {"quotation", "scripture", "title-and-body", "two-column"}
+QUOTE_TYPOGRAPHY_LAYOUTS = {
+    "quotation", "scripture", "title-and-body", "two-column", "title", "closing",
+}
 # Layouts that read their prose as passages, each closed by its citation.
-QUOTE_GROUP_LAYOUTS = {"quotation", "scripture", "title-and-body"}
+QUOTE_GROUP_LAYOUTS = {"quotation", "scripture", "title-and-body", "title", "closing"}
+# Passages under a title share the slide with its heading.
+UNDER_TITLE_LAYOUTS = {"title", "closing"}
 COLUMN_PROSE = {"body", "scripture", "quotation"}
 QUOTE_MARKS = {'"', "\u201c", "\u201d"}
 
@@ -674,11 +685,17 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
                         "give each its own, directly after it"
                     )
 
+            under_title = slide.get("layout") in UNDER_TITLE_LAYOUTS
+            # A title's body block is the line under its heading, not prose.
+            counted = (
+                {"scripture", "quotation", "citation"}
+                if under_title
+                else {"body", "scripture", "quotation", "citation"}
+            )
             drawn_text = sum(
                 len(block.get("text", ""))
                 for block in blocks
-                if isinstance(block, dict)
-                and block.get("kind") in {"body", "scripture", "quotation", "citation"}
+                if isinstance(block, dict) and block.get("kind") in counted
             )
             # A picture behind the slide leaves the prose the whole slide.
             has_image = any(
@@ -686,9 +703,14 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
                 and not is_background(block)
                 for block in blocks
             )
-            ceiling = CROWDING_CEILING // 2 if has_image else CROWDING_CEILING
+            ceiling = CROWDING_CEILING // 2 if has_image or under_title else CROWDING_CEILING
             if drawn_text > ceiling:
-                where = "the half of this slide left by its image" if has_image else "this slide"
+                if under_title:
+                    where = "the passages under this slide's title"
+                elif has_image:
+                    where = "the half of this slide left by its image"
+                else:
+                    where = "this slide"
                 warnings.append(
                     f"{path}.blocks: about {drawn_text} characters of text for {where}; "
                     "text shrinks to fit before it is clipped, so split this across slides"

@@ -276,6 +276,31 @@ struct DeckValidatorAgreementTests {
                 ),
             ]),
         ]),
+        // Passages under a title: one drawn as it should be; two sharing a
+        // citation, beside a second line the heading has no room for; and a
+        // closing slide whose passage crowds it.
+        LampPresentationDeck(title: "Epigraph", slides: [
+            .init(layout: .title, blocks: [
+                .init(kind: .title, text: "Has Mankind Evolved?"),
+                .init(kind: .subtitle, text: "A talk"),
+                .init(kind: .scripture, text: "But where shall wisdom be found?"),
+                .init(kind: .citation, text: "Job 28:12 (ESV)"),
+            ]),
+            .init(layout: .title, blocks: [
+                .init(kind: .title, text: "Title"),
+                .init(kind: .subtitle, text: "One line"),
+                .init(kind: .body, text: "Another"),
+                .init(kind: .scripture, text: "But where shall wisdom be found?"),
+                .init(kind: .scripture, text: "Behold, the fear of the Lord, that is wisdom"),
+                .init(kind: .citation, text: "Job 28 (ESV)"),
+            ]),
+            .init(layout: .closing, blocks: [
+                .init(kind: .title, text: "Closing"),
+                .init(kind: .body, text: "A line under the heading"),
+                .init(kind: .scripture, text: String(repeating: "wisdom ", count: 80)),
+                .init(kind: .citation, text: "Job 28 (ESV)"),
+            ]),
+        ]),
         // Nothing to say about a well-formed deck.
         LampPresentationDeck(title: "Clean", slides: [
             .init(layout: .titleAndBody, blocks: [

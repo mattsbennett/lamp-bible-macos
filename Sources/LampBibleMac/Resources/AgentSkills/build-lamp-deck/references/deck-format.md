@@ -43,13 +43,13 @@ Supported layouts:
 
 | Layout | Intended use |
 | --- | --- |
-| `title` | Opening title and subtitle |
+| `title` | Opening title and subtitle, with any passages beneath |
 | `title-and-body` | Heading with body text, optionally beside a picture |
 | `scripture` | Scripture text with citations, optionally beside a picture |
 | `quotation` | Quotation with attribution, optionally beside a picture |
 | `two-column` | Two related or contrasting columns, each with an optional heading and citation |
 | `image` | Image-led slide with optional title, caption, and citations |
-| `closing` | Reflection, response, or closing thought |
+| `closing` | Reflection, response, or closing thought, with any passages beneath |
 | `blank` | Deliberate free ordering of supported blocks |
 
 ### What each layout draws
@@ -66,10 +66,15 @@ beside the prose, with a `caption` block beneath it — which is what a cover
 image wants, rather than a separate image slide under a headline. Use the
 `image` layout when the picture itself is the slide.
 
-`title` and `closing` are deliberately sparing: they draw a title and one
-subtitle, and drop anything further. Put it on its own slide. Like every
-layout, they can also carry a picture behind them (see "A picture behind the
-slide").
+`title` and `closing` draw a title, one subtitle (or one body line in its
+place), and then any `scripture` or `quotation` blocks, each followed by its
+`citation`. The passages are set centred under the heading in much smaller
+type, never larger than 32 units against the title's 76, so the slide keeps
+the look of a title while a verse waits on screen before a talk begins, or
+closes it. A second subtitle or body line is not drawn. Keep the passages
+short: past about 450 characters they shrink, and the validator says so. Like
+every layout, they can also carry a picture behind them (see "A picture
+behind the slide").
 
 ### Two columns
 
@@ -308,10 +313,13 @@ whole slide behind everything else, on any layout:
   cropped: a portrait picture loses its top and bottom.
 - Lamp chooses the colour of the words. It reads the picture where the words
   fall and sets them in whichever of the theme's two ground colours needs less
-  of it covered, then darkens or lightens the picture behind them, in a band
-  the width of the slide, only as far as it takes to reach 4.5:1. The rest of
-  the picture is left as it is. Citations and rules keep the accent colour
-  while it still reads, and take the words' colour where it does not.
+  of it covered. Behind the words it blurs the picture slightly, so fine
+  detail does not compete with the letters, then darkens or lightens it, in a
+  fade the width of the slide, only as far as each block of words needs to
+  reach 4.5:1 — a small credit in a dark corner is covered more there without
+  the scrim behind the title growing to match. The rest of the picture is left
+  as it is. Citations and rules keep the accent colour while it still reads,
+  and take the words' colour where it does not.
 - A background is not the picture beside the prose. A slide may carry one of
   each; a second background is not drawn.
 - With no picture beside the prose, a `caption` credits the background. It is
