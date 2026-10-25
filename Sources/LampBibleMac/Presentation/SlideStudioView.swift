@@ -42,6 +42,13 @@ struct SlideStudioView: View {
     @State private var isLoading = true
     @State private var showingDeleteConfirmation = false
     @State private var showingRemotePairing = false
+    /// How the writing splits across the slides, kept rather than worked out
+    /// in `body`: splitting it reads the whole writing, and the notes pane
+    /// asked on every redraw. Refreshed when what it depends on changes.
+    @State private var resolution: LampPresentationManuscriptNotes.Resolution?
+    /// What `resolution` was worked out from, so a change it already reflects
+    /// isn't split again.
+    @State private var resolvedInputs: ManuscriptNotesInputs?
 
     private var store: LampPresentationDeckStore {
         LampPresentationDeckStore(rootURL: model.library.rootURL)
@@ -99,6 +106,23 @@ struct SlideStudioView: View {
         }
         .onChange(of: selectedDeckID) { _, deckID in selectDeck(deckID) }
         .onChange(of: deck) { _, updatedDeck in scheduleAutosave(updatedDeck) }
+        // Off the main thread: a long writing over many slides takes a while
+        // to split, and opening a deck waited for it.
+        .task(id: manuscriptNotesInputs) {
+            let inputs = manuscriptNotesInputs
+            guard inputs != resolvedInputs else { return }
+            guard let deck, deck.followsManuscript, let manuscript = inputs.manuscript else {
+                resolution = nil
+                resolvedInputs = inputs
+                return
+            }
+            let resolved = await Task.detached(priority: .userInitiated) {
+                LampPresentationManuscriptNotes.resolve(deck: deck, manuscript: manuscript)
+            }.value
+            guard !Task.isCancelled else { return }
+            resolution = resolved
+            resolvedInputs = inputs
+        }
         .alert("Slide Studio", isPresented: Binding(
             get: { errorMessage != nil },
             set: { if !$0 { errorMessage = nil } }
@@ -446,7 +470,11 @@ struct SlideStudioView: View {
     private func manuscriptNotes(
         for slideBinding: Binding<LampPresentationSlide>
     ) -> some View {
-        let anchorFound = resolution?.notesBySlideID[slideBinding.wrappedValue.id] != nil
+        // Found until the split says otherwise, so the warning never flashes
+        // while it is still being worked out; not found when there is no
+        // writing to find it in.
+        let anchorFound = resolution.map { $0.notesBySlideID[slideBinding.wrappedValue.id] != nil }
+            ?? (resolvedInputs.map { $0.manuscript != nil } ?? true)
         let anchor = (slideBinding.wrappedValue.notesAnchor ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let hasAnchor = !anchor.isEmpty
@@ -459,8 +487,11 @@ struct SlideStudioView: View {
                     text: Binding(
                         get: { slideBinding.wrappedValue.notesAnchor ?? "" },
                         set: { anchor in
-                            slideBinding.wrappedValue.notesAnchor =
-                                anchor.isEmpty ? nil : anchor
+                            let typed = anchor.isEmpty ? nil : anchor
+                            // The field writes back what it shows as it takes
+                            // focus, which is not a change to split for.
+                            guard typed != slideBinding.wrappedValue.notesAnchor else { return }
+                            slideBinding.wrappedValue.notesAnchor = typed
                             // Re-split as the phrase is typed, so the passage
                             // below is always what this anchor actually claims.
                             resolveNotesFromManuscript()
@@ -506,9 +537,25 @@ struct SlideStudioView: View {
         return devotional.displayMarkdown
     }
 
-    private var resolution: LampPresentationManuscriptNotes.Resolution? {
-        guard let deck, deck.followsManuscript, let manuscript else { return nil }
-        return LampPresentationManuscriptNotes.resolve(deck: deck, manuscript: manuscript)
+    /// What the split depends on: the writing, and each slide's anchor in
+    /// order. Not the notes, which the split itself writes.
+    private struct ManuscriptNotesInputs: Equatable {
+        let manuscript: String?
+        let anchors: [String]
+    }
+
+    private var manuscriptNotesInputs: ManuscriptNotesInputs {
+        manuscriptNotesInputs(for: deck)
+    }
+
+    private func manuscriptNotesInputs(for deck: LampPresentationDeck?) -> ManuscriptNotesInputs {
+        guard let deck, deck.followsManuscript else {
+            return ManuscriptNotesInputs(manuscript: nil, anchors: [])
+        }
+        return ManuscriptNotesInputs(
+            manuscript: manuscript,
+            anchors: deck.slides.map { "\($0.id)\u{0}\($0.notesAnchor ?? "")" }
+        )
     }
 
     private var followsManuscriptBinding: Binding<Bool> {
@@ -528,10 +575,10 @@ struct SlideStudioView: View {
     /// Re-splits the writing across the slides.
     private func resolveNotesFromManuscript() {
         guard let current = deck, current.followsManuscript, let manuscript else { return }
-        deck = LampPresentationManuscriptNotes.applying(
-            LampPresentationManuscriptNotes.resolve(deck: current, manuscript: manuscript),
-            to: current
-        )
+        let resolved = LampPresentationManuscriptNotes.resolve(deck: current, manuscript: manuscript)
+        resolution = resolved
+        resolvedInputs = manuscriptNotesInputs(for: current)
+        deck = LampPresentationManuscriptNotes.applying(resolved, to: current)
     }
 
     private var validationBar: some View {
