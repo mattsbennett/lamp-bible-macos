@@ -401,6 +401,10 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         self.page = nil
         webView = nil
         hasLoadedContent = false
+        // Not ready for anything any more: the host lets go of this editor a
+        // turn later, and a command in that turn should be answered as one
+        // to an editor that isn't ready, not sent to a page it no longer has.
+        isReady = false
         TipTapEditorPool.shared.giveBack(page)
         // Detaching happens as SwiftUI takes the view down, inside a view
         // update, where state a host sets is dropped.
@@ -832,8 +836,15 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         )
     }
 
+    /// Runs `script` in the page. Without a page there is no result, and the
+    /// completion is still called, with none: a caller waiting on an answer
+    /// must always get one.
     private func evaluate(_ script: String, completion: ((Any?) -> Void)? = nil) {
-        webView?.evaluateJavaScript(script) { result, error in
+        guard let webView else {
+            completion?(nil)
+            return
+        }
+        webView.evaluateJavaScript(script) { result, error in
             if let error {
                 NSLog("TipTap JavaScript error: %@", error.localizedDescription)
             }
