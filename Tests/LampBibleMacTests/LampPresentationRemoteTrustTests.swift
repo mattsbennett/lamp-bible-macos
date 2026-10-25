@@ -131,3 +131,93 @@ struct LampPresentationRemoteTrustTests {
         #expect(trust.remotes().first?.clientName == nil)
     }
 }
+
+/// Working out which code a connection is speaking.
+///
+/// This is the part of pairing with the most room to be subtly wrong: the
+/// codec takes a frame out of the buffer before it discovers whether it can
+/// open it, so a careless attempt destroys the frame the next candidate
+/// needed — and a frame that has not all arrived decodes to nothing under
+/// every code, which must not be read as agreement.
+struct LampPresentationRemoteFrameOpenerTests {
+    private let session = LampPresentationRemotePairing.generateCode()
+    private let device = LampPresentationRemotePairing.generateCode()
+    private let message = LampPresentationRemoteMessage.command(.init(action: .next))
+
+    private func frame(under code: String) throws -> Data {
+        try LampPresentationRemoteSecureFrameCodec.encode(message, pairingCode: code)
+    }
+
+    @Test func adevicePairingByQRIsOpenedUnderTheSessionCode() throws {
+        var buffer = try frame(under: session)
+        let opened = try LampPresentationRemoteFrameOpener.open(
+            buffer: &buffer, settled: nil, candidates: [session, device]
+        )
+        #expect(opened.code == session)
+        #expect(opened.messages == [message])
+        #expect(buffer.isEmpty)
+    }
+
+    /// The session code is tried first and fails, which is exactly the case
+    /// that would eat the frame if the attempt were made on the buffer.
+    @Test func areturningDeviceIsOpenedUnderItsOwnCode() throws {
+        var buffer = try frame(under: device)
+        let opened = try LampPresentationRemoteFrameOpener.open(
+            buffer: &buffer, settled: nil, candidates: [session, device]
+        )
+        #expect(opened.code == device)
+        #expect(opened.messages == [message])
+        #expect(buffer.isEmpty)
+    }
+
+    /// Half a frame says nothing about which code it is under, so nothing is
+    /// settled and the bytes are kept for the rest to arrive.
+    @Test func afameStillArrivingSettlesNothingAndIsKept() throws {
+        let whole = try frame(under: device)
+        var buffer = whole.prefix(whole.count / 2)
+        let opened = try LampPresentationRemoteFrameOpener.open(
+            buffer: &buffer, settled: nil, candidates: [session, device]
+        )
+        #expect(opened.code == nil, "a frame that has not all arrived must not pick a code")
+        #expect(opened.messages.isEmpty)
+        #expect(buffer.count == whole.count / 2, "the bytes so far must be kept")
+
+        // The rest arrives and it opens under the right code.
+        buffer.append(whole.suffix(from: whole.count / 2))
+        let then = try LampPresentationRemoteFrameOpener.open(
+            buffer: &buffer, settled: nil, candidates: [session, device]
+        )
+        #expect(then.code == device)
+        #expect(then.messages == [message])
+    }
+
+    @Test func acodeNobodyKnowsOpensNothing() throws {
+        var buffer = try frame(under: LampPresentationRemotePairing.generateCode())
+        let opened = try LampPresentationRemoteFrameOpener.open(
+            buffer: &buffer, settled: nil, candidates: [session, device]
+        )
+        #expect(opened.code == nil)
+        #expect(opened.messages.isEmpty)
+    }
+
+    /// Once the code is settled, a frame that will not open is an error
+    /// rather than silence: the connection is speaking something else.
+    @Test func afailureAfterTheCodeIsSettledIsAnError() throws {
+        var buffer = try frame(under: session)
+        #expect(throws: (any Error).self) {
+            _ = try LampPresentationRemoteFrameOpener.open(
+                buffer: &buffer, settled: device, candidates: [session, device]
+            )
+        }
+    }
+
+    @Test func severalFramesInOneReadAllOpen() throws {
+        var buffer = try frame(under: device) + (try frame(under: device))
+        let opened = try LampPresentationRemoteFrameOpener.open(
+            buffer: &buffer, settled: nil, candidates: [session, device]
+        )
+        #expect(opened.code == device)
+        #expect(opened.messages == [message, message])
+        #expect(buffer.isEmpty)
+    }
+}

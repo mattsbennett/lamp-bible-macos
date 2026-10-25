@@ -136,6 +136,63 @@ public final class LampPresentationRemoteTrustStore {
     }
 }
 
+/// Opening a connection's frames when which code it speaks is not announced.
+///
+/// A device pairing by QR seals its frames under the session code; one that
+/// has paired before uses the code minted for it then. Nothing in the clear
+/// says which, so the first frame is tried against each in turn.
+public enum LampPresentationRemoteFrameOpener {
+    public struct Opened: Equatable, Sendable {
+        public var messages: [LampPresentationRemoteMessage]
+        /// The code that opened the frames, once one has. Nil while nothing
+        /// has opened yet, which is also true of a frame still arriving.
+        public var code: String?
+
+        public init(messages: [LampPresentationRemoteMessage] = [], code: String? = nil) {
+            self.messages = messages
+            self.code = code
+        }
+    }
+
+    /// Takes every complete frame `buffer` holds.
+    ///
+    /// Once `settled` is known the buffer is read directly, so a later frame
+    /// that fails to open is the error it should be. Before that, each
+    /// candidate is tried on a **copy**: the codec takes a frame out of the
+    /// buffer before it finds out whether it can open it, so a failed attempt
+    /// on the buffer itself would eat the frame the next candidate needs.
+    ///
+    /// Only frames that actually open settle the question. A frame that has
+    /// not all arrived decodes to nothing under every candidate, and must not
+    /// be read as "the first candidate worked" — that would key the whole
+    /// connection on a code chosen by nothing at all.
+    public static func open(
+        buffer: inout Data,
+        settled: String?,
+        candidates: [String]
+    ) throws -> Opened {
+        if let settled {
+            return Opened(
+                messages: try LampPresentationRemoteSecureFrameCodec.decodeFrames(
+                    from: &buffer,
+                    pairingCode: settled
+                ),
+                code: settled
+            )
+        }
+        for candidate in candidates {
+            var attempt = buffer
+            guard let messages = try? LampPresentationRemoteSecureFrameCodec.decodeFrames(
+                from: &attempt,
+                pairingCode: candidate
+            ), !messages.isEmpty else { continue }
+            buffer = attempt
+            return Opened(messages: messages, code: candidate)
+        }
+        return Opened()
+    }
+}
+
 /// The keychain, as the trust store writes to it.
 public final class LampPresentationRemoteKeychain: LampPresentationRemoteTrustStorage {
     public static let defaultService = "com.neus.Lamp-Bible.presentation-remote"

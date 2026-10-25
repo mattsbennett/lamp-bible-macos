@@ -203,35 +203,17 @@ final class LampPresentationRemoteHost: ObservableObject {
         }
     }
 
-    /// This peer's frames, opened under whichever code it is using.
-    ///
-    /// A device pairing by QR seals its frames under the session code; one
-    /// that has paired before uses the code minted for it then. Which it is
-    /// is not announced, so the first frame is tried against each in turn —
-    /// on a copy of the buffer, because the codec consumes a frame before it
-    /// finds out whether it can open it. Only a frame that actually opens
-    /// settles the question, so an incomplete frame leaves it open.
+    /// This peer's frames, opened under whichever code it is using, with the
+    /// rules in `LampPresentationRemoteFrameOpener` — which is where they are
+    /// tested, since this host cannot be reached from tests.
     private func decodeFrames(from peer: Peer) throws -> [LampPresentationRemoteMessage] {
-        if let code = peer.code {
-            return try LampPresentationRemoteSecureFrameCodec.decodeFrames(
-                from: &peer.buffer,
-                pairingCode: code
-            )
-        }
-        for candidate in [pairingCode] + trust.trustedCodes() {
-            var attempt = peer.buffer
-            guard let messages = try? LampPresentationRemoteSecureFrameCodec.decodeFrames(
-                from: &attempt,
-                pairingCode: candidate
-            ), !messages.isEmpty else { continue }
-            peer.buffer = attempt
-            peer.code = candidate
-            return messages
-        }
-        // Nothing opened it. Either the frame has not all arrived, or this is
-        // not a device we know; waiting is right for the first and harmless
-        // for the second, which never gets past `pair`.
-        return []
+        let opened = try LampPresentationRemoteFrameOpener.open(
+            buffer: &peer.buffer,
+            settled: peer.code,
+            candidates: [pairingCode] + trust.trustedCodes()
+        )
+        if peer.code == nil { peer.code = opened.code }
+        return opened.messages
     }
 
     private func handle(_ message: LampPresentationRemoteMessage, from peer: Peer) {
