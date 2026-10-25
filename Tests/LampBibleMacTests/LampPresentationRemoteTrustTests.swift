@@ -112,14 +112,58 @@ struct LampPresentationRemoteTrustTests {
         ))
     }
 
-    /// Pairing the same device again replaces its record, so a remote
-    /// re-paired after being forgotten is not listed twice.
-    @Test func pairingTheSameDeviceAgainReplacesIt() {
+    /// Two devices with the same name are two devices.
+    ///
+    /// The name is chosen by the device, and phones are called "iPhone" often
+    /// enough that matching on it would quietly stop remembering one of them
+    /// — and would let anyone who can pair evict a remote by copying its
+    /// name.
+    @Test func twoDevicesNamedAlikeAreBothRemembered() {
         let trust = store()
         let first = trust.remember(clientName: "iPhone")
         let second = trust.remember(clientName: "iPhone")
-        #expect(trust.trustedCodes() == [second.deviceCode])
-        #expect(!trust.trustedCodes().contains(first.deviceCode))
+        #expect(first.deviceCode != second.deviceCode)
+        #expect(Set(trust.trustedCodes()) == Set([first.deviceCode, second.deviceCode]))
+    }
+
+    /// A keychain that cannot be read is not an empty keychain.
+    ///
+    /// This is the one that would have cost the person every remote they had
+    /// paired: a locked keychain, a refused ACL, or a differently signed
+    /// build, and the store would have written a fresh trust over the top.
+    @Test func anunreadableStoreIsNeverWrittenOver() throws {
+        let existing = LampPresentationRemoteTrustStore(storage: LampPresentationRemoteTrustMemory())
+        let minted = existing.remember(clientName: "iPhone")
+
+        final class Unreadable: LampPresentationRemoteTrustStorage {
+            var written: [Data] = []
+            func read() throws -> Data? { throw CocoaError(.fileReadNoPermission) }
+            func write(_ data: Data) throws { written.append(data) }
+            func removeAll() throws {}
+        }
+        let storage = Unreadable()
+        let store = LampPresentationRemoteTrustStore(storage: storage)
+
+        #expect(!store.isReadable)
+        #expect(store.trustedCodes().isEmpty, "nothing readable means nothing to offer this run")
+
+        // The point of the test: it must not write.
+        _ = store.remember(clientName: "iPad")
+        store.forgetAll()
+        #expect(storage.written.isEmpty, "an unreadable store must never be written over")
+
+        // And the real data is still there for a run that can read it.
+        #expect(existing.trustedCodes() == [minted.deviceCode])
+    }
+
+    /// Stored data that cannot be understood is different: nothing will ever
+    /// make sense of it, so it is replaced — but the store says so.
+    @Test func corruptStoredTrustIsReplacedAndSaidSo() {
+        let storage = LampPresentationRemoteTrustMemory(data: Data("not trust at all".utf8))
+        let store = LampPresentationRemoteTrustStore(storage: storage)
+        #expect(store.trustedCodes().isEmpty)
+        #expect(store.isReadable)
+        #expect(store.corruptTrustWasReplaced)
     }
 
     /// A device that gave no name still gets remembered; it just has nothing
@@ -191,15 +235,6 @@ struct LampPresentationRemoteFrameOpenerTests {
         #expect(then.messages == [message])
     }
 
-    @Test func acodeNobodyKnowsOpensNothing() throws {
-        var buffer = try frame(under: LampPresentationRemotePairing.generateCode())
-        let opened = try LampPresentationRemoteFrameOpener.open(
-            buffer: &buffer, settled: nil, candidates: [session, device]
-        )
-        #expect(opened.code == nil)
-        #expect(opened.messages.isEmpty)
-    }
-
     /// Once the code is settled, a frame that will not open is an error
     /// rather than silence: the connection is speaking something else.
     @Test func afailureAfterTheCodeIsSettledIsAnError() throws {
@@ -207,6 +242,20 @@ struct LampPresentationRemoteFrameOpenerTests {
         #expect(throws: (any Error).self) {
             _ = try LampPresentationRemoteFrameOpener.open(
                 buffer: &buffer, settled: device, candidates: [session, device]
+            )
+        }
+    }
+
+    /// The counterpart to the incomplete-frame test, and the one that was
+    /// missing: a frame that is all here and opens under nothing we know is
+    /// a device we do not know, not a device still talking. Swallowing it
+    /// would leave the bytes to be retried against every code on every read,
+    /// and the buffer would only grow.
+    @Test func acompleteFrameUnderAnUnknownCodeIsRefused() throws {
+        var buffer = try frame(under: LampPresentationRemotePairing.generateCode())
+        #expect(throws: (any Error).self) {
+            _ = try LampPresentationRemoteFrameOpener.open(
+                buffer: &buffer, settled: nil, candidates: [session, device]
             )
         }
     }

@@ -49,20 +49,60 @@ public final class LampPresentationRemoteTrustStore {
         self.init(storage: LampPresentationRemoteKeychain(service: service))
     }
 
+    /// What is remembered, read once and then kept.
+    ///
+    /// The three cases are deliberately kept apart, because treating them
+    /// alike loses data. **Nothing there** is a first run, so a new trust is
+    /// written. **Something unreadable** — a locked keychain, a refused ACL,
+    /// a build this item does not belong to — is not an empty keychain: it
+    /// is one that cannot be read *now*, and writing over it would throw away
+    /// every remembered remote and rotate the secret. So this run carries on
+    /// in memory and writes nothing, which costs the person one re-pair
+    /// rather than all of them. **Something unreadable as trust** is corrupt
+    /// data that nothing else will ever make sense of, so it is replaced.
     private func trust() -> LampPresentationRemoteTrust {
         if let cached { return cached }
-        let loaded = (try? storage.read())
-            .flatMap { $0 }
-            .flatMap { try? JSONDecoder().decode(LampPresentationRemoteTrust.self, from: $0) }
-        let trust = loaded ?? LampPresentationRemoteTrust()
-        if loaded == nil { try? persist(trust) }
-        cached = trust
-        return trust
+        let stored: Data?
+        do {
+            stored = try storage.read()
+        } catch {
+            readable = false
+            let fallback = LampPresentationRemoteTrust()
+            cached = fallback
+            return fallback
+        }
+        if let stored {
+            if let decoded = try? JSONDecoder().decode(
+                LampPresentationRemoteTrust.self, from: stored
+            ) {
+                cached = decoded
+                return decoded
+            }
+            replacedCorrupt = true
+        }
+        let fresh = LampPresentationRemoteTrust()
+        try? persist(fresh)
+        cached = fresh
+        return fresh
     }
 
+    /// Whether what is remembered could be read at all this run. False means
+    /// nothing is written, so an unreadable keychain is never overwritten.
+    ///
+    /// Reading it loads the trust, so it answers about this run whenever it
+    /// is asked rather than only after something else has looked.
+    public var isReadable: Bool { lock.withLock { _ = trust(); return readable } }
+    /// Whether stored trust was there but could not be understood, so a
+    /// caller can say so rather than silently starting again.
+    public var corruptTrustWasReplaced: Bool { lock.withLock { _ = trust(); return replacedCorrupt } }
+
+    private var readable = true
+    private var replacedCorrupt = false
+
     private func persist(_ trust: LampPresentationRemoteTrust) throws {
-        try storage.write(try JSONEncoder().encode(trust))
         cached = trust
+        guard readable else { return }
+        try storage.write(try JSONEncoder().encode(trust))
     }
 
     /// What goes on the public challenge so a device that has paired can
@@ -88,15 +128,18 @@ public final class LampPresentationRemoteTrustStore {
     /// Mints this device a code of its own and remembers it, returning what
     /// to send inside `accepted`.
     ///
-    /// Pairing the same device again replaces its record rather than adding a
-    /// second, so a remote re-paired after being forgotten appears once.
+    /// Pairing the same device again adds a second record rather than
+    /// replacing the first. The name comes from the device, and two phones
+    /// are both called "iPhone" often enough that matching on it would drop
+    /// one of them — and would let anyone who can pair evict a remote by
+    /// copying its name. A record nothing holds the code for is harmless and
+    /// can be forgotten from the list.
     @discardableResult
     public func remember(clientName: String?, now: Date = Date()) -> (deviceCode: String, presenterSecret: String) {
         lock.withLock {
             var current = trust()
             let code = LampPresentationRemotePairing.generateCode()
             let name = clientName?.trimmingCharacters(in: .whitespacesAndNewlines)
-            current.remotes.removeAll { $0.clientName == name && name?.isEmpty == false }
             current.remotes.append(
                 LampPresentationTrustedRemote(
                     deviceCode: code,
@@ -180,15 +223,29 @@ public enum LampPresentationRemoteFrameOpener {
                 code: settled
             )
         }
+        var refusal: (any Error)?
         for candidate in candidates {
             var attempt = buffer
-            guard let messages = try? LampPresentationRemoteSecureFrameCodec.decodeFrames(
-                from: &attempt,
-                pairingCode: candidate
-            ), !messages.isEmpty else { continue }
-            buffer = attempt
-            return Opened(messages: messages, code: candidate)
+            do {
+                let messages = try LampPresentationRemoteSecureFrameCodec.decodeFrames(
+                    from: &attempt,
+                    pairingCode: candidate
+                )
+                // Nothing came out and nothing was wrong: the frame has not
+                // all arrived. How much has is the same under every code, so
+                // there is no point trying the rest.
+                guard !messages.isEmpty else { return Opened() }
+                buffer = attempt
+                return Opened(messages: messages, code: candidate)
+            } catch {
+                refusal = error
+            }
         }
+        // Every code refused a frame that was complete. This is not a device
+        // we know, so it is told apart from one still being heard: keeping
+        // the bytes would leave them to be retried against every code on
+        // every read, and the buffer would only grow.
+        if let refusal { throw refusal }
         return Opened()
     }
 }
@@ -226,9 +283,12 @@ public final class LampPresentationRemoteKeychain: LampPresentationRemoteTrustSt
     public func write(_ data: Data) throws {
         let attributes: [String: Any] = [
             kSecValueData as String: data,
-            // Usable once the Mac has been unlocked after a restart, and not
-            // carried to the person's other devices: a remote paired with
-            // this Mac is paired with this Mac.
+            // Asked for, though macOS applies it only to the data
+            // protection keychain, which needs entitlements an ad-hoc build
+            // does not have. Without it the item goes to the login keychain,
+            // which does not sync either — so a remote paired with this Mac
+            // stays paired with this Mac, by a different route than this
+            // attribute.
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
         let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
