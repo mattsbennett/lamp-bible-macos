@@ -77,6 +77,14 @@ public struct AgentToolApprovalRequest: Equatable, Sendable, Identifiable {
 /// a rule is made only where the documented rule syntax allows a narrow one:
 /// the exact command, the site's domain, the one MCP tool. Anything broader
 /// isn't offered.
+///
+/// File rules aren't offered at all. Claude Code matches `Read` and `Edit`
+/// paths as gitignore patterns, so a folder's path covers everything in it
+/// with no wildcard to show for it, and a single leading `/` means the
+/// settings' own folder rather than the disk's root; and it never matches a
+/// `Write` or `NotebookEdit` path rule. None of that can be said plainly in
+/// a card, and in a writing chat a file call only asks when it reaches
+/// outside the workspace, which is where a lasting grant matters most.
 public struct AgentToolAlwaysAllowRule: Equatable, Sendable {
     /// The `addRules` permission update entry, as JSON text.
     public let entryJSON: String
@@ -143,8 +151,8 @@ public struct AgentToolAlwaysAllowRule: Equatable, Sendable {
     }
 
     /// One rule in words. Nil for a rule that grants more than one plain
-    /// phrase can honestly say: all of a tool that takes content, or a
-    /// pattern with a wildcard anywhere but the end of a command.
+    /// phrase can honestly say: all of a tool that takes content, a pattern
+    /// with a wildcard anywhere but the end of a command, or any file rule.
     static func plainDescription(of rule: [String: Any]) -> String? {
         guard let tool = rule["toolName"] as? String, !tool.isEmpty else { return nil }
         let content = (rule["ruleContent"] as? String).flatMap { $0.isEmpty ? nil : $0 }
@@ -169,10 +177,6 @@ public struct AgentToolAlwaysAllowRule: Equatable, Sendable {
         case "WebFetch":
             guard content.hasPrefix("domain:"), !content.contains("*") else { return nil }
             return "fetching pages from \(content.dropFirst("domain:".count))"
-        case "Read", "Edit", "MultiEdit", "Write", "NotebookEdit":
-            guard !content.contains("*") else { return nil }
-            let verb = tool == "Read" ? "reading" : tool == "Write" ? "writing" : "editing"
-            return "\(verb) “\(content)”"
         default:
             return nil
         }

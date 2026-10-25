@@ -138,6 +138,9 @@ struct AgentToolApprovalSupportTests {
             == "using read_passage from lamp")
         #expect(AgentToolAlwaysAllowRule.plainDescription(of: ["toolName": "mcp__lamp__*"]) == nil)
         #expect(AgentToolAlwaysAllowRule.plainDescription(of: ["toolName": "Write"]) == nil)
+        // A folder's path covers all of it, with no wildcard to show.
+        #expect(AgentToolAlwaysAllowRule.plainDescription(of: ["toolName": "Edit", "ruleContent": "~/Documents"]) == nil)
+        #expect(AgentToolAlwaysAllowRule.plainDescription(of: ["toolName": "Read", "ruleContent": "notes.md"]) == nil)
     }
 
     @Test func aStaleOrUnreadableRequestIsNeverShown() throws {
