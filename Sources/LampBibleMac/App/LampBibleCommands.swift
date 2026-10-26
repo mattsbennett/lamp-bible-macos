@@ -7,10 +7,6 @@ private struct InstallModuleActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
-private struct WritingPreviewPlacementKey: FocusedValueKey {
-    typealias Value = Binding<WritingPreviewPlacement>
-}
-
 private struct WritingFindKey: FocusedValueKey {
     typealias Value = WritingFindController
 }
@@ -40,11 +36,6 @@ extension FocusedValues {
         set { self[NewReaderTabActionKey.self] = newValue }
     }
 
-    var writingPreviewPlacement: Binding<WritingPreviewPlacement>? {
-        get { self[WritingPreviewPlacementKey.self] }
-        set { self[WritingPreviewPlacementKey.self] = newValue }
-    }
-
     var writingFind: WritingFindController? {
         get { self[WritingFindKey.self] }
         set { self[WritingFindKey.self] = newValue }
@@ -56,7 +47,6 @@ struct LampBibleCommands: Commands {
     @FocusedValue(\.installModuleAction) private var installModule
     @FocusedValue(\.importStudyDataAction) private var importStudyData
     @FocusedValue(\.newReaderTabAction) private var newReaderTab
-    @FocusedValue(\.writingPreviewPlacement) private var writingPreviewPlacement
     @FocusedValue(\.writingFind) private var writingFind
     @FocusedObject private var scrollLink: ReaderScrollLink?
 
@@ -134,28 +124,6 @@ struct LampBibleCommands: Commands {
             ))
             .keyboardShortcut("l", modifiers: [.command, .shift])
             .disabled(scrollLink == nil)
-
-            // ⌘E is the binding Obsidian uses to swap between writing and reading,
-            // and listing both here is what makes them findable at all.
-            Button(writingPreviewPlacement?.wrappedValue.isVisible == true
-                ? "Hide Writing Preview"
-                : "Show Writing Preview") {
-                guard let writingPreviewPlacement else { return }
-                writingPreviewPlacement.wrappedValue = writingPreviewPlacement.wrappedValue.toggled()
-            }
-            .keyboardShortcut("e", modifiers: .command)
-            .disabled(writingPreviewPlacement == nil)
-
-            Button(writingPreviewPlacement?.wrappedValue == .full
-                ? "Show Preview Beside Editor"
-                : "Show Full-Width Preview") {
-                guard let writingPreviewPlacement else { return }
-                writingPreviewPlacement.wrappedValue = writingPreviewPlacement
-                    .wrappedValue
-                    .cycledPlacement()
-            }
-            .keyboardShortcut("e", modifiers: [.command, .shift])
-            .disabled(writingPreviewPlacement == nil)
         }
 
         CommandGroup(after: .help) {

@@ -58,7 +58,6 @@ private struct DevotionalWorkspaceEditorDocument: Identifiable, Equatable {
     }
 
     var id: String { relativePath }
-    var previewTitle: String { url.deletingPathExtension().lastPathComponent }
     var isDirty: Bool { text != persistedText }
     var hasExternalConflict: Bool { externalText != nil || wasRemovedExternally }
 }
@@ -147,10 +146,7 @@ private struct NewWorkspaceMarkdownDocumentSheet: View {
     }
 }
 
-/// Which surface the author types on. Preview is deliberately not one of these:
-/// it answers "am I writing or reading?", which is a different question from
-/// "which editor am I typing in", and folding the two into one picker is what made
-/// the old three-way control hard to read.
+/// Which surface the author types on.
 private enum DevotionalEditorMode: String, CaseIterable, Identifiable {
     case visual
     case markdown
@@ -352,16 +348,6 @@ struct DevotionalEditorView: View {
     @AppStorage("devotional.editor.showsDetails") private var showsDetails = true
     @AppStorage("devotional.editor.detailsWidth") private var detailsWidth = 320.0
     @AppStorage("devotional.editor.agentWidth") private var agentWidth = 480.0
-    /// The placement a newly opened editor inherits. Writing it is how a choice
-    /// carries to the next window; it is deliberately *not* what any open window
-    /// reads, because two editors sharing one live value fight over it — a
-    /// restored window with content re-asserting `.full` was enough to undo the
-    /// fallback a new, empty window had just applied to itself.
-    @AppStorage("writing.preview.placement")
-    private var storedPreviewPlacement = WritingPreviewPlacement.hidden
-    /// This window's own placement, seeded from the stored one when it opens.
-    @State private var windowPreviewPlacement: WritingPreviewPlacement?
-    @AppStorage("writing.preview.width") private var previewWidth = 460.0
     @AppStorage("agent.moduleAccess.enabled") private var agentModuleAccessEnabled = true
     @AppStorage("agent.moduleAccess.scope") private var agentModuleAccessScope = AgentModuleAccessScope.enabledModules.rawValue
     @AppStorage("agent.moduleAccess.personal") private var agentPersonalContentEnabled = false
@@ -381,9 +367,6 @@ struct DevotionalEditorView: View {
     /// Visual editing is deliberately the approachable default; Markdown is the
     /// source surface behind it.
     @State private var editorMode: DevotionalEditorMode = .visual
-    /// How far the Markdown surface is scrolled, mirrored into a split preview so
-    /// the rendered prose stays beside the paragraph being written.
-    @State private var editorScrollFraction: Double?
     @State private var identifier = UUID().uuidString
     @State private var createdDate: Date?
     @State private var title = ""
@@ -416,8 +399,6 @@ struct DevotionalEditorView: View {
     /// the live fields — a snapshot rather than a flag, so no ordering between
     /// loading and change-tracking can leave a freshly opened devotional "edited".
     @State private var savedFields: [String] = []
-    /// Debounced so the preview isn't re-parsed on every keystroke.
-    @State private var previewContent = ""
 
     /// Every value a save would persist.
     private var editedFields: [String] {
@@ -519,22 +500,6 @@ struct DevotionalEditorView: View {
         workspaceDocuments.map { "\($0.id)\u{0}\($0.text)" }
     }
 
-    private var previewPlacement: WritingPreviewPlacement {
-        windowPreviewPlacement ?? storedPreviewPlacement
-    }
-
-    /// Changing placement from a control updates this window and the inherited
-    /// default together, so the next editor opens the way this one was left.
-    private var previewPlacementBinding: Binding<WritingPreviewPlacement> {
-        Binding(
-            get: { previewPlacement },
-            set: { newPlacement in
-                windowPreviewPlacement = newPlacement
-                storedPreviewPlacement = newPlacement
-            }
-        )
-    }
-
     private var hasSavableContent: Bool {
         [title, subtitle, author, tags, seriesName, summary, content, footnotes]
             .contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -561,7 +526,7 @@ struct DevotionalEditorView: View {
                 0
             )
             HStack(spacing: 0) {
-                contentColumn(width: editorWidth)
+                contentColumn
                     // Horizontal editor toolbars have a much wider intrinsic
                     // content size than the document. Give the complete editor
                     // column its exact share of the split so those ScrollViews
@@ -591,7 +556,6 @@ struct DevotionalEditorView: View {
                                 contextDocument: agentContextDocument,
                                 importDraft: { importedDraft in
                                     content = importedDraft
-                                    previewContent = importedDraft
                                 }
                             )
                             .id(identifier)
@@ -613,10 +577,6 @@ struct DevotionalEditorView: View {
         .task(id: request) {
             editorMode = .visual
             load()
-            // Seeds this window only. Writing the stored default here would push
-            // the fallback onto every other open editor too.
-            windowPreviewPlacement = storedPreviewPlacement
-                .opening(hasContent: hasSavableContent)
         }
         .task(id: identifier) { await monitorLinkedPresentationDecks() }
         .task(id: identifier) { await monitorWorkspaceDocuments() }
@@ -628,11 +588,6 @@ struct DevotionalEditorView: View {
             guard !Task.isCancelled else { return }
             save()
         }
-        .task(id: content) {
-            try? await Task.sleep(for: .milliseconds(300))
-            guard !Task.isCancelled else { return }
-            previewContent = content
-        }
         .task(id: workspaceDocumentEditTrigger) {
             guard workspaceDocuments.contains(where: { $0.isDirty && !$0.hasExternalConflict }) else {
                 return
@@ -641,14 +596,7 @@ struct DevotionalEditorView: View {
             guard !Task.isCancelled else { return }
             saveDirtyWorkspaceDocuments()
         }
-        // Opening the preview should show the draft as it stands, not whatever the
-        // debounce last caught.
-        .onChange(of: previewPlacement) { _, placement in
-            guard placement.isVisible else { return }
-            refreshPreview()
-        }
-        .focusedSceneValue(\.writingPreviewPlacement, previewPlacementBinding)
-        .focusedSceneValue(\.writingFind, previewPlacement == .full ? nil : find)
+        .focusedSceneValue(\.writingFind, find)
         .onChange(of: activeFindTarget.map(ObjectIdentifier.init), initial: true) {
             find.attach(activeFindTarget)
         }
@@ -673,23 +621,15 @@ struct DevotionalEditorView: View {
         }
     }
 
-    /// Everything that belongs to the document itself: the writing surface, the
-    /// preview when it is on screen, and the status bar beneath both. The details
-    /// and agent sidebars sit outside this, since they are about the document
-    /// rather than part of it.
-    private func contentColumn(width: Double) -> some View {
+    /// Everything that belongs to the document itself: the writing surface and
+    /// the status bar beneath it. The details and agent sidebars sit outside
+    /// this, since they are about the document rather than part of it.
+    private var contentColumn: some View {
         VStack(spacing: 0) {
             documentTabBar
             Divider()
 
-            switch previewPlacement {
-            case .hidden:
-                editorPane
-            case .full:
-                previewPane
-            case .split:
-                splitEditorAndPreview(totalWidth: width)
-            }
+            editorPane
 
             Divider()
             statusBar
@@ -824,36 +764,6 @@ struct DevotionalEditorView: View {
         guard selectedWorkspaceDocumentID != id else { return }
         collectVisualEditorText()
         selectedWorkspaceDocumentID = id
-        editorScrollFraction = nil
-    }
-
-    private func splitEditorAndPreview(totalWidth: Double) -> some View {
-        let dividerWidth = 1.0
-        let minimumEditorWidth = 320.0
-        let desiredMinimumPreviewWidth = 280.0
-        let maximumPreviewWidth = max(totalWidth - minimumEditorWidth - dividerWidth, 0)
-        let minimumPreviewWidth = min(desiredMinimumPreviewWidth, maximumPreviewWidth)
-        let resolvedPreviewWidth = min(
-            max(previewWidth, minimumPreviewWidth),
-            maximumPreviewWidth
-        )
-        let resolvedEditorWidth = max(totalWidth - resolvedPreviewWidth - dividerWidth, 0)
-
-        return HStack(spacing: 0) {
-            editorPane
-                .frame(width: resolvedEditorWidth)
-                .clipped()
-            PaneResizeHandle(
-                axis: .horizontal,
-                preferredSize: $previewWidth,
-                displayedSize: resolvedPreviewWidth,
-                minimumSize: minimumPreviewWidth,
-                maximumSize: maximumPreviewWidth
-            )
-            previewPane
-                .frame(width: resolvedPreviewWidth)
-                .clipped()
-        }
     }
 
     private var editorPane: some View {
@@ -879,11 +789,9 @@ struct DevotionalEditorView: View {
         }
     }
 
-    /// The surface the find bar searches: the one on screen, or none while the
-    /// preview fills the window.
+    /// The surface the find bar searches: the one on screen.
     private var activeFindTarget: (any WritingFindTarget)? {
-        guard previewPlacement != .full else { return nil }
-        return isEditingVisually ? tipTapCoordinator : markdownFinder
+        isEditingVisually ? tipTapCoordinator : markdownFinder
     }
 
     // MARK: - Panes
@@ -1080,9 +988,6 @@ struct DevotionalEditorView: View {
                 text: activeTextBinding,
                 selection: activeSelectionBinding,
                 fontSize: editorFontSize,
-                onScrollFractionChanged: previewPlacement == .split
-                    ? { editorScrollFraction = $0 }
-                    : nil,
                 finder: markdownFinder
             )
             // The text view draws no background of its own, so without this it
@@ -1091,24 +996,6 @@ struct DevotionalEditorView: View {
             // Naming the colour here makes the two surfaces match by construction.
             .background(Color(nsColor: .windowBackgroundColor))
         }
-    }
-
-    private var previewPane: some View {
-        WritingPreviewPane(
-            title: activeWorkspaceDocument?.previewTitle ?? title,
-            subtitle: isEditingPrimaryDocument ? subtitle : "",
-            summary: isEditingPrimaryDocument ? summary : "",
-            keyScriptures: isEditingPrimaryDocument ? keyScriptures : [],
-            markdown: activeWorkspaceDocument?.text ?? previewContent,
-            footnotes: isEditingPrimaryDocument ? footnotes : "",
-            libraryRootURL: model.library.rootURL,
-            devotionalID: identifier,
-            mediaReferences: mediaReferences,
-            placement: previewPlacementBinding,
-            // The visual surface is a web view whose scrolling this side cannot
-            // see, so only the Markdown surface offers a position to follow.
-            followedScrollFraction: activeEditorMode == .markdown ? editorScrollFraction : nil
-        )
     }
 
     private var statusBar: some View {
@@ -1243,7 +1130,7 @@ struct DevotionalEditorView: View {
         ToolbarItem {
             Picker("Writing Surface", selection: editorSurfaceSelection) {
                 ForEach(DevotionalEditorMode.allCases) { mode in
-                    Text(mode.title).tag(Optional(mode))
+                    Text(mode.title).tag(mode)
                 }
             }
             .pickerStyle(.segmented)
@@ -1251,14 +1138,8 @@ struct DevotionalEditorView: View {
             .fixedSize(horizontal: true, vertical: false)
             .disabled(!activeDocumentSupportsVisual)
             .help(activeDocumentSupportsVisual
-                ? previewPlacement == .full
-                    ? "Choose a writing surface to return to writing"
-                    : "Choose the writing surface"
+                ? "Choose the writing surface"
                 : "Plain text files use the Markdown editor")
-        }
-
-        ToolbarItem {
-            previewToolbarControl
         }
 
         ToolbarItem {
@@ -1290,29 +1171,6 @@ struct DevotionalEditorView: View {
         ToolbarItem {
             presentationToolbarControl
         }
-    }
-
-    /// Clicking swaps between writing and reading the way ⌘E does in Obsidian; the
-    /// menu beside it chooses where the preview sits. One control, so the toolbar
-    /// never implies that "preview" is a third kind of editor.
-    private var previewToolbarControl: some View {
-        Menu {
-            Picker("Preview", selection: previewPlacementBinding) {
-                ForEach(WritingPreviewPlacement.allCases, id: \.self) { placement in
-                    Label(placement.title, systemImage: placement.systemImage)
-                        .tag(placement)
-                }
-            }
-            .pickerStyle(.inline)
-            .labelsHidden()
-        } label: {
-            Label("Preview", systemImage: previewPlacement.isVisible ? "book.fill" : "book")
-        } primaryAction: {
-            previewPlacementBinding.wrappedValue = previewPlacement.toggled()
-        }
-        .help(previewPlacement.isVisible
-            ? "Hide the preview (⌘E)"
-            : "Preview this writing beside the editor (⌘E)")
     }
 
     @ViewBuilder
@@ -1442,20 +1300,10 @@ struct DevotionalEditorView: View {
         )
     }
 
-    /// Nil while the preview fills the window, because no writing surface is on
-    /// screen for the control to be reporting. Leaving it unselected also means
-    /// either segment is a genuine change, so tapping the one that *was* chosen
-    /// still brings the editor back — where a disabled control simply sat there,
-    /// and a plain binding would have ignored the tap as a no-op.
-    private var editorSurfaceSelection: Binding<DevotionalEditorMode?> {
+    private var editorSurfaceSelection: Binding<DevotionalEditorMode> {
         Binding(
-            get: { previewPlacement == .full ? nil : activeEditorMode },
-            set: { newMode in
-                guard let newMode, activeDocumentSupportsVisual else { return }
-                // Choosing a surface means "show me that", so make room for it.
-                if previewPlacement == .full { previewPlacementBinding.wrappedValue = .split }
-                switchEditorMode(to: newMode)
-            }
+            get: { activeEditorMode },
+            set: { switchEditorMode(to: $0) }
         )
     }
 
@@ -1467,8 +1315,6 @@ struct DevotionalEditorView: View {
         guard activeDocumentSupportsVisual, newMode != editorMode else { return }
         collectVisualEditorText()
         editorMode = newMode
-        // Leaving the Markdown surface leaves its scroll position behind with it.
-        editorScrollFraction = nil
     }
 
     /// Brings the visual editor's latest text into the document it is editing,
@@ -1486,7 +1332,6 @@ struct DevotionalEditorView: View {
                     // into the Markdown surface.
                     if let latestMarkdown, content == textBefore {
                         content = latestMarkdown
-                        previewContent = latestMarkdown
                     }
                 }
             }
@@ -1500,24 +1345,6 @@ struct DevotionalEditorView: View {
                 else { return }
                 workspaceDocuments[index].text = latestMarkdown
                 workspaceDocuments[index].errorMessage = nil
-            }
-        }
-    }
-
-    /// Brings the preview up to the current draft immediately. The visual surface
-    /// holds the authoritative text inside a web view, so it has to be asked.
-    private func refreshPreview() {
-        guard isEditingPrimaryDocument else { return }
-        guard editorMode == .visual, let coordinator = tipTapCoordinator else {
-            previewContent = content
-            return
-        }
-        previewContent = content
-        coordinator.getEditedContent { latestMarkdown in
-            guard let latestMarkdown else { return }
-            DispatchQueue.main.async {
-                content = latestMarkdown
-                previewContent = latestMarkdown
             }
         }
     }
@@ -1869,7 +1696,6 @@ struct DevotionalEditorView: View {
                     in: workspace
                 )
                 content = markdown
-                previewContent = markdown
                 save()
             } catch {
                 saveState = .failed(error.localizedDescription)
@@ -2283,7 +2109,6 @@ struct DevotionalEditorView: View {
         originalPlainContent = devotional.content
         originalProjectedMarkdown = devotional.displayMarkdown
         mediaJSON = devotional.mediaJSON
-        previewContent = devotional.displayMarkdown
         footnotes = devotional.footnotes ?? ""
         keyScriptures = devotional.keyScriptures
         saveState = .idle

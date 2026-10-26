@@ -167,21 +167,13 @@ private struct ReaderSettingsView: View {
     @State private var selectedSettingsSection = ReaderSettingsSection.reader
     @State private var selectedModuleType = ConfigurableModuleType.translations
     @AppStorage("devotional.fontSize")
-    private var devotionalFontSize = LampTextScale.writingPreviewText.defaultValue
+    private var devotionalFontSize = LampTextScale.writingReadingText.defaultValue
     @AppStorage("devotional.lineSpacing")
-    private var devotionalLineSpacing = LampTextScale.writingPreviewLineSpacing.defaultValue
+    private var devotionalLineSpacing = LampTextScale.writingReadingLineSpacing.defaultValue
     @AppStorage("devotional.typeface")
     private var devotionalTypeface = ProseTypeface.readerDefault
     @AppStorage("devotional.editor.fontSize")
     private var writingEditorFontSize = LampTextScale.writingEditorText.defaultValue
-    @AppStorage("writing.preview.fontSize")
-    private var writingPreviewFontSize = LampTextScale.writingPreviewText.defaultValue
-    @AppStorage("writing.preview.lineSpacing")
-    private var writingPreviewLineSpacing = LampTextScale.writingPreviewLineSpacing.defaultValue
-    @AppStorage("writing.preview.typeface")
-    private var writingPreviewTypeface = ProseTypeface.readerDefault
-    @AppStorage("writing.preview.followsEditorScrolling")
-    private var writingPreviewFollowsEditorScrolling = true
     @AppStorage("quiz.defaultAgeGroup") private var defaultQuizAgeGroup = ""
     @AppStorage("agent.moduleAccess.enabled") private var agentModuleAccessEnabled = true
     @AppStorage("agent.moduleAccess.scope") private var agentModuleAccessScope = AgentModuleAccessScope.enabledModules.rawValue
@@ -394,12 +386,12 @@ private struct ReaderSettingsView: View {
                         metricSlider(
                             "Devotional Text Size",
                             value: $devotionalFontSize,
-                            scale: .writingPreviewText
+                            scale: .writingReadingText
                         )
                         metricSlider(
                             "Devotional Line Spacing",
                             value: $devotionalLineSpacing,
-                            scale: .writingPreviewLineSpacing
+                            scale: .writingReadingLineSpacing
                         )
                         Picker("Devotional Typeface", selection: $devotionalTypeface) {
                             ForEach(ProseTypeface.allCases) { option in
@@ -415,25 +407,6 @@ private struct ReaderSettingsView: View {
                             "Editor Text Size",
                             value: $writingEditorFontSize,
                             scale: .writingEditorText
-                        )
-                        metricSlider(
-                            "Preview Text Size",
-                            value: $writingPreviewFontSize,
-                            scale: .writingPreviewText
-                        )
-                        metricSlider(
-                            "Preview Line Spacing",
-                            value: $writingPreviewLineSpacing,
-                            scale: .writingPreviewLineSpacing
-                        )
-                        Picker("Preview Typeface", selection: $writingPreviewTypeface) {
-                            ForEach(ProseTypeface.allCases) { option in
-                                Text(option.title).tag(option)
-                            }
-                        }
-                        Toggle(
-                            "Preview follows the editor while writing",
-                            isOn: $writingPreviewFollowsEditorScrolling
                         )
                         // A talk is written to be spoken and a devotional to be
                         // read, and the same words take half as long again out
@@ -453,10 +426,6 @@ private struct ReaderSettingsView: View {
                         )
                         Button("Restore Writing Defaults") {
                             writingEditorFontSize = LampTextScale.writingEditorText.defaultValue
-                            writingPreviewFontSize = LampTextScale.writingPreviewText.defaultValue
-                            writingPreviewLineSpacing = LampTextScale.writingPreviewLineSpacing.defaultValue
-                            writingPreviewTypeface = ProseTypeface.readerDefault
-                            writingPreviewFollowsEditorScrolling = true
                             silentWordsPerMinute = LampReadingMode.silent.defaultWordsPerMinute
                             aloudWordsPerMinute = LampReadingMode.aloud.defaultWordsPerMinute
                         }

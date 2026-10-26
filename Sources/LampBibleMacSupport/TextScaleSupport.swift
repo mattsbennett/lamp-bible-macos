@@ -97,18 +97,17 @@ public extension LampTextScale {
         defaultValue: 5
     )
 
-    /// The writing preview shows a draft as its readers will meet it, so it starts
-    /// at the same size the published devotional view uses and stretches as far as
-    /// scripture does — a writer proofreading their own prose zooms in further
+    /// A writing as its readers meet it, on its own page. It stretches as far as
+    /// scripture does: a writer proofreading their own prose zooms in further
     /// than a reader ever does.
-    static let writingPreviewText = LampTextScale(
+    static let writingReadingText = LampTextScale(
         minimum: 13,
         maximum: 32,
         step: 1,
         defaultValue: 17
     )
 
-    static let writingPreviewLineSpacing = LampTextScale(
+    static let writingReadingLineSpacing = LampTextScale(
         minimum: 0,
         maximum: 16,
         step: 1,
@@ -116,7 +115,7 @@ public extension LampTextScale {
     )
 
     /// The Markdown source surface. Monospaced text reads smaller than prose at the
-    /// same point size, so it starts below the preview beside it.
+    /// same point size, so it starts below the size the writing is read at.
     static let writingEditorText = LampTextScale(
         minimum: 11,
         maximum: 24,

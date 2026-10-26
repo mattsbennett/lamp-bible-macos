@@ -121,9 +121,9 @@ struct DevotionalsView: View {
     @Environment(\.openWindow) private var openWindow
     @EnvironmentObject private var model: LibraryModel
     @AppStorage("devotional.fontSize")
-    private var devotionalFontSize = LampTextScale.writingPreviewText.defaultValue
+    private var devotionalFontSize = LampTextScale.writingReadingText.defaultValue
     @AppStorage("devotional.lineSpacing")
-    private var devotionalLineSpacing = LampTextScale.writingPreviewLineSpacing.defaultValue
+    private var devotionalLineSpacing = LampTextScale.writingReadingLineSpacing.defaultValue
     @AppStorage("devotional.typeface")
     private var devotionalTypeface = ProseTypeface.readerDefault
     @State private var selection: String?
@@ -138,6 +138,7 @@ struct DevotionalsView: View {
     @AppStorage("writing.sortOrder") private var sortOrderRawValue = WritingSortOrder.titleAscending.rawValue
     @AppStorage("writing.groupBy") private var groupByRawValue = WritingGroupBy.none.rawValue
     @State private var devotionalPendingDeletion: LampDevotional?
+    @State private var footnoteHighlight = DevotionalFootnoteHighlight()
     @State private var exportedURL: URL?
     @State private var presentationDecksByDevotionalID: [String: [LampPresentationDeck]] = [:]
     private let rowSummaries = WritingRowSummaries.shared
@@ -281,8 +282,8 @@ struct DevotionalsView: View {
                     lineSpacing: $devotionalLineSpacing,
                     typeface: $devotionalTypeface,
                     defaultTypeface: ProseTypeface.readerDefault,
-                    fontScale: .writingPreviewText,
-                    lineSpacingScale: .writingPreviewLineSpacing,
+                    fontScale: .writingReadingText,
+                    lineSpacingScale: .writingReadingLineSpacing,
                     help: "Adjust the reading typeface, text size, and line spacing"
                 )
                 if let devotional = selectedDevotional {
@@ -553,6 +554,24 @@ struct DevotionalsView: View {
     }
 
     private func devotionalDetail(_ devotional: LampDevotional) -> some View {
+        ScrollViewReader { proxy in
+            devotionalDocument(devotional)
+                // A marker in the prose is a link to its note. Every other link
+                // is one the writer put there and opens as it would anywhere else.
+                .environment(\.openURL, OpenURLAction { url in
+                    guard let number = LampDevotionalFootnotes.markerNumber(in: url) else {
+                        return .systemAction
+                    }
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        proxy.scrollTo(DevotionalFootnoteAnchor(number: number), anchor: .center)
+                    }
+                    footnoteHighlight.show(number)
+                    return .handled
+                })
+        }
+    }
+
+    private func devotionalDocument(_ devotional: LampDevotional) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 7) {
@@ -613,7 +632,7 @@ struct DevotionalsView: View {
                     footnotes: devotional.footnotes
                 )
                 DevotionalContentView(
-                    markdown: LampDevotionalFootnotes.displayContent(numbered),
+                    markdown: LampDevotionalFootnotes.displayContent(numbered, linkingMarkers: true),
                     libraryRootURL: model.library.rootURL,
                     devotionalID: devotional.id,
                     mediaReferences: devotional.mediaReferences,
@@ -626,23 +645,33 @@ struct DevotionalsView: View {
                     titleShownAbove: devotional.title
                 )
 
-                let shownFootnotes = LampDevotionalFootnotes.displayFootnotes(numbered)
-                if !shownFootnotes.isEmpty {
+                if !numbered.footnotes.isEmpty || !numbered.preamble.isEmpty {
                     Divider()
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Footnotes")
                             .font(.headline)
-                        DevotionalContentView(
-                            markdown: shownFootnotes,
-                            libraryRootURL: model.library.rootURL,
-                            devotionalID: devotional.id,
-                            mediaReferences: devotional.mediaReferences,
+                        // Anything the writer put above the definitions is theirs
+                        // and is shown as the writing it is.
+                        if !numbered.preamble.isEmpty {
+                            DevotionalContentView(
+                                markdown: numbered.preamble,
+                                libraryRootURL: model.library.rootURL,
+                                devotionalID: devotional.id,
+                                mediaReferences: devotional.mediaReferences,
+                                fontSize: max(devotionalFontSize - 2, 11),
+                                lineSpacing: devotionalLineSpacing,
+                                typeface: devotionalTypeface
+                            )
+                        }
+                        DevotionalFootnoteList(
+                            footnotes: numbered.footnotes,
                             fontSize: max(devotionalFontSize - 2, 11),
                             lineSpacing: devotionalLineSpacing,
-                            typeface: devotionalTypeface
+                            typeface: devotionalTypeface,
+                            highlight: footnoteHighlight
                         )
-                        .foregroundStyle(.secondary)
                     }
+                    .foregroundStyle(.secondary)
                 }
 
                 if !devotional.tags.isEmpty {
@@ -979,13 +1008,29 @@ struct DevotionalPresentationView: View {
                     .padding(24)
                     Divider()
                     ScrollView {
-                        DevotionalContentView(
-                            markdown: devotional.displayMarkdown,
-                            libraryRootURL: model.library.rootURL,
-                            devotionalID: devotional.id,
-                            mediaReferences: devotional.mediaReferences,
-                            fontSize: devotionalFontSize + 5
+                        let numbered = LampDevotionalFootnotes.numbered(
+                            content: devotional.displayMarkdown,
+                            footnotes: devotional.footnotes
                         )
+                        VStack(alignment: .leading, spacing: 24) {
+                            DevotionalContentView(
+                                markdown: LampDevotionalFootnotes.displayContent(numbered),
+                                libraryRootURL: model.library.rootURL,
+                                devotionalID: devotional.id,
+                                mediaReferences: devotional.mediaReferences,
+                                fontSize: devotionalFontSize + 5
+                            )
+                            if !numbered.footnotes.isEmpty {
+                                Divider()
+                                DevotionalFootnoteList(
+                                    footnotes: numbered.footnotes,
+                                    fontSize: devotionalFontSize + 2,
+                                    lineSpacing: 6,
+                                    typeface: .serif
+                                )
+                                .foregroundStyle(.secondary)
+                            }
+                        }
                         .frame(maxWidth: 920, alignment: .leading)
                         .padding(48)
                         .frame(maxWidth: .infinity, alignment: .top)

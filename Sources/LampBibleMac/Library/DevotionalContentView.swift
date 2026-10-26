@@ -170,18 +170,15 @@ struct DevotionalContentView: View {
         _ items: [RenderedProseItem],
         marker: @escaping (Int) -> String
     ) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: DevotionalListRow.spacing) {
             ForEach(Array(items.enumerated()), id: \.offset) { index, item in
-                HStack(alignment: .firstTextBaseline, spacing: 9) {
-                    Text(marker(index))
-                        .font(.system(size: fontSize, design: typeface.design))
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                    renderedText(item)
-                        .font(.system(size: fontSize, design: typeface.design))
-                        .lineSpacing(lineSpacing)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                DevotionalListRow(
+                    marker: marker(index),
+                    item: item,
+                    fontSize: fontSize,
+                    lineSpacing: lineSpacing,
+                    typeface: typeface
+                )
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -229,16 +226,8 @@ struct DevotionalContentView: View {
         }
     }
 
-    @ViewBuilder
     private func renderedText(_ item: RenderedProseItem) -> some View {
-        if let attributed = item.attributed {
-            // The writing's own links, and the footnote markers, are drawn in
-            // the tint. Without this they take the app's accent, which belongs
-            // to controls rather than to anything in the text.
-            Text(attributed).tint(.lampLink)
-        } else {
-            Text(item.plain)
-        }
+        RenderedText(item: item)
     }
 
     private func unavailableMedia(_ label: String, systemImage: String) -> some View {
@@ -256,6 +245,140 @@ struct DevotionalContentView: View {
         )
     }
 
+}
+
+/// A run of the writing's prose, its inline Markdown resolved.
+private struct RenderedText: View {
+    let item: RenderedProseItem
+
+    var body: some View {
+        if let attributed = item.attributed {
+            // The writing's own links, and the footnote markers, are drawn in
+            // the tint. Without this they take the app's accent, which belongs
+            // to controls rather than to anything in the text.
+            Text(attributed).tint(.lampLink)
+        } else {
+            Text(item.plain)
+        }
+    }
+}
+
+/// One item of a list as the writing sets it: the marker in a column of its
+/// own, and the item's lines aligned beside it rather than under the marker.
+private struct DevotionalListRow: View {
+    static let spacing = 7.0
+
+    let marker: String
+    let item: RenderedProseItem
+    let fontSize: Double
+    let lineSpacing: Double
+    let typeface: ProseTypeface
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 9) {
+            Text(marker)
+                .font(.system(size: fontSize, design: typeface.design))
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+            RenderedText(item: item)
+                .font(.system(size: fontSize, design: typeface.design))
+                .lineSpacing(lineSpacing)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// The notes beneath a writing, set as the writing sets a numbered list, each
+/// a row a marker's link can be taken to.
+///
+/// Drawn here rather than handed to the renderer as a Markdown list: a list is
+/// one block, and a line inside it has no identity to scroll to.
+struct DevotionalFootnoteList: View {
+    let footnotes: [LampDevotionalFootnotes.Footnote]
+    let fontSize: Double
+    let lineSpacing: Double
+    let typeface: ProseTypeface
+    /// Which note was just asked for. Nil where the markers are not links.
+    var highlight: DevotionalFootnoteHighlight?
+
+    /// The notes with their inline Markdown resolved. Parsed off the main actor
+    /// and only when the notes themselves change: a talk can carry thirty-five.
+    @State private var rows: [Row] = []
+
+    private struct Row: Identifiable, Sendable {
+        let id: Int
+        let item: RenderedProseItem
+
+        init(_ footnote: LampDevotionalFootnotes.Footnote) {
+            id = footnote.number
+            item = RenderedProseItem(LampDevotionalFootnotes.displayText(of: footnote))
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DevotionalListRow.spacing) {
+            ForEach(rows) { row in
+                DevotionalListRow(
+                    marker: "\(row.id).",
+                    item: row.item,
+                    fontSize: fontSize,
+                    lineSpacing: lineSpacing,
+                    typeface: typeface
+                )
+                // Drawn out past the text so the tint does not crowd it, and
+                // taken back so the rows still line up with the prose above.
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(Color.lampLink.opacity(highlight?.number == row.id ? 0.14 : 0))
+                )
+                .padding(.horizontal, -6)
+                .padding(.vertical, -3)
+                .id(DevotionalFootnoteAnchor(number: row.id))
+            }
+        }
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .task(id: footnotes) {
+            let notes = footnotes
+            let parsed = await Task.detached(priority: .userInitiated) {
+                notes.map(Row.init)
+            }.value
+            guard !Task.isCancelled else { return }
+            rows = parsed
+        }
+    }
+}
+
+/// What a marker's link scrolls to.
+///
+/// A type of its own, so a note's number cannot collide with the identity of
+/// anything else on the page: footnote 3 is not block 3.
+struct DevotionalFootnoteAnchor: Hashable {
+    let number: Int
+}
+
+/// The note a marker was just clicked for, tinted while the reader's eye
+/// arrives at it: landing among thirty numbered lines, the scroll alone does
+/// not say which of them was asked for.
+///
+/// An object rather than state of the page, so that only the list redraws as
+/// the tint comes and goes.
+@MainActor @Observable
+final class DevotionalFootnoteHighlight {
+    private(set) var number: Int?
+    @ObservationIgnored private var clearing: Task<Void, Never>?
+
+    func show(_ number: Int) {
+        withAnimation(.easeInOut(duration: 0.25)) { self.number = number }
+        clearing?.cancel()
+        clearing = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(1_600))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.4)) { self?.number = nil }
+        }
+    }
 }
 
 private struct RenderedDevotionalContent {

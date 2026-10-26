@@ -91,7 +91,6 @@
 		A10000000000000000000036 /* SlideRemoteHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000032 /* SlideRemoteHost.swift */; };
 		A10000000000000000000037 /* SlideRemotePairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000033 /* SlideRemotePairingView.swift */; };
 		A10000000000000000000038 /* WritingPreviewSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000034 /* WritingPreviewSupport.swift */; };
-		A10000000000000000000039 /* WritingPreviewPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000035 /* WritingPreviewPane.swift */; };
 		A1000000000000000000020F /* LampColors.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000210 /* LampColors.swift */; };
 		A1000000000000000000003A /* WrappingRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000036 /* WrappingRow.swift */; };
 		A1000000000000000000003B /* NativeAgentChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000037 /* NativeAgentChatView.swift */; };
@@ -194,7 +193,6 @@
 		B10000000000000000000032 /* SlideRemoteHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Presentation/SlideRemoteHost.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000033 /* SlideRemotePairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Presentation/SlideRemotePairingView.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000034 /* WritingPreviewSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/WritingPreviewSupport.swift; sourceTree = SOURCE_ROOT; };
-		B10000000000000000000035 /* WritingPreviewPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/WritingPreviewPane.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000210 /* LampColors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/LampColors.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000036 /* WrappingRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/WrappingRow.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000037 /* NativeAgentChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/NativeAgentChatView.swift; sourceTree = SOURCE_ROOT; };
@@ -300,7 +298,6 @@
 				B10000000000000000000032 /* SlideRemoteHost.swift */,
 				B10000000000000000000033 /* SlideRemotePairingView.swift */,
 				B10000000000000000000034 /* WritingPreviewSupport.swift */,
-				B10000000000000000000035 /* WritingPreviewPane.swift */,
 				B10000000000000000000210 /* LampColors.swift */,
 				B10000000000000000000036 /* WrappingRow.swift */,
 				B10000000000000000000010 /* DevotionalEditorView.swift */,
@@ -537,7 +534,6 @@
 				A10000000000000000000036 /* SlideRemoteHost.swift in Sources */,
 				A10000000000000000000037 /* SlideRemotePairingView.swift in Sources */,
 				A10000000000000000000038 /* WritingPreviewSupport.swift in Sources */,
-				A10000000000000000000039 /* WritingPreviewPane.swift in Sources */,
 				A1000000000000000000020F /* LampColors.swift in Sources */,
 				A1000000000000000000003A /* WrappingRow.swift in Sources */,
 				A10000000000000000000005 /* ReadingPlansView.swift in Sources */,
