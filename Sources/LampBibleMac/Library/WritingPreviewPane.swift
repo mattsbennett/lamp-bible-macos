@@ -37,6 +37,9 @@ struct WritingPreviewPane: View {
 
     @State private var scrollPosition = ScrollPosition(y: 0)
     @State private var geometry = PreviewScrollGeometry()
+    /// The note a marker was just clicked for, marked while the writer's eye
+    /// arrives at it.
+    @State private var highlightedFootnote: Int?
 
     private var canFollowScrolling: Bool {
         placement == .split && followedScrollFraction != nil
@@ -157,10 +160,35 @@ struct WritingPreviewPane: View {
         } action: { _, updated in
             geometry = updated
         }
+        // A marker in the prose is a link to its note. Every other link is one
+        // the writer put there and opens as it would anywhere else.
+        .environment(\.openURL, OpenURLAction { url in
+            guard let number = LampDevotionalFootnotes.markerNumber(in: url) else {
+                return .systemAction
+            }
+            show(footnote: number)
+            return .handled
+        })
+    }
+
+    /// Takes the writer to the note a marker refers to, and marks it for a
+    /// moment: arriving in the middle of thirty-five numbered lines, the scroll
+    /// by itself does not say which of them was asked for.
+    private func show(footnote number: Int) {
+        withAnimation(.easeInOut(duration: 0.25)) {
+            scrollPosition.scrollTo(id: WritingFootnoteAnchor(number: number), anchor: .center)
+            highlightedFootnote = number
+        }
+        Task {
+            try? await Task.sleep(for: .milliseconds(1_600))
+            guard highlightedFootnote == number else { return }
+            withAnimation(.easeOut(duration: 0.4)) { highlightedFootnote = nil }
+        }
     }
 
     private var document: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        let footnoting = numberedFootnotes
+        return VStack(alignment: .leading, spacing: 18) {
             if hasFrontMatter {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(title.isEmpty ? "Untitled" : title)
@@ -189,7 +217,9 @@ struct WritingPreviewPane: View {
             }
 
             DevotionalContentView(
-                markdown: LampDevotionalFootnotes.displayContent(numberedFootnotes),
+                markdown: LampDevotionalFootnotes.displayContent(
+                    footnoting, linkingMarkers: true
+                ),
                 libraryRootURL: libraryRootURL,
                 devotionalID: devotionalID,
                 mediaReferences: mediaReferences,
@@ -202,18 +232,32 @@ struct WritingPreviewPane: View {
                 titleShownAbove: hasFrontMatter ? title : nil
             )
 
-            let shownFootnotes = LampDevotionalFootnotes.displayFootnotes(numberedFootnotes)
-            if !shownFootnotes.isEmpty {
+            if !footnoting.footnotes.isEmpty || !footnoting.preamble.isEmpty {
                 Divider()
-                DevotionalContentView(
-                    markdown: shownFootnotes,
-                    libraryRootURL: libraryRootURL,
-                    devotionalID: devotionalID,
-                    mediaReferences: mediaReferences,
-                    fontSize: max(fontSize - 2, 11),
-                    lineSpacing: lineSpacing,
-                    typeface: typeface
-                )
+                VStack(alignment: .leading, spacing: 12) {
+                    // Anything the writer put above the definitions is theirs
+                    // and is shown as the writing it is.
+                    if !footnoting.preamble.isEmpty {
+                        DevotionalContentView(
+                            markdown: footnoting.preamble,
+                            libraryRootURL: libraryRootURL,
+                            devotionalID: devotionalID,
+                            mediaReferences: mediaReferences,
+                            fontSize: max(fontSize - 2, 11),
+                            lineSpacing: lineSpacing,
+                            typeface: typeface
+                        )
+                    }
+                    if !footnoting.footnotes.isEmpty {
+                        WritingFootnoteList(
+                            footnotes: footnoting.footnotes,
+                            fontSize: max(fontSize - 2, 11),
+                            lineSpacing: lineSpacing,
+                            typeface: typeface,
+                            highlighted: highlightedFootnote
+                        )
+                    }
+                }
                 .foregroundStyle(.secondary)
             }
         }
@@ -262,4 +306,79 @@ struct WritingPreviewPane: View {
 private struct PreviewScrollGeometry: Equatable {
     var contentHeight: Double = 0
     var viewportHeight: Double = 0
+}
+
+/// What a marker's link scrolls to.
+///
+/// A type of its own, so a footnote's number cannot collide with the identity
+/// of anything else in the document — the blocks above it are identified by
+/// their position, and footnote 3 is not block 3.
+private struct WritingFootnoteAnchor: Hashable {
+    let number: Int
+}
+
+/// The notes beneath the writing, each on a row of its own.
+///
+/// Drawn here rather than handed to the renderer as a Markdown list, which is
+/// how they used to be shown: a list is one block, and a line inside it has no
+/// identity for a marker to scroll to.
+private struct WritingFootnoteList: View {
+    let footnotes: [LampDevotionalFootnotes.Footnote]
+    let fontSize: Double
+    let lineSpacing: Double
+    let typeface: ProseTypeface
+    /// The note just asked for, tinted until the writer has found it.
+    let highlighted: Int?
+
+    /// The notes with their inline Markdown resolved. Parsed off the main actor
+    /// and only when the notes themselves change: the preview is rebuilt as the
+    /// prose is typed, and a talk can carry thirty-five notes.
+    @State private var rows: [Row] = []
+
+    struct Row: Identifiable, Sendable {
+        let id: Int
+        let text: AttributedString
+
+        init(_ footnote: LampDevotionalFootnotes.Footnote) {
+            id = footnote.number
+            let source = LampDevotionalFootnotes.displayText(of: footnote)
+            text = (try? AttributedString(
+                markdown: source,
+                options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+            )) ?? AttributedString(source)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(rows) { row in
+                HStack(alignment: .firstTextBaseline, spacing: 9) {
+                    Text("\(row.id).")
+                        .monospacedDigit()
+                        .foregroundStyle(.tertiary)
+                    Text(row.text)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(Color.accentColor.opacity(highlighted == row.id ? 0.16 : 0))
+                )
+                .id(WritingFootnoteAnchor(number: row.id))
+            }
+        }
+        .font(.system(size: fontSize, design: typeface.design))
+        .lineSpacing(lineSpacing)
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .task(id: footnotes) {
+            let notes = footnotes
+            let parsed = await Task.detached(priority: .userInitiated) {
+                notes.map(Row.init)
+            }.value
+            guard !Task.isCancelled else { return }
+            rows = parsed
+        }
+    }
 }
