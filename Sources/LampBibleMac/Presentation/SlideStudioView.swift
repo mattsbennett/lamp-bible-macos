@@ -38,6 +38,9 @@ struct SlideStudioView: View {
     /// only while it does, so they still move the caret in the editors.
     @FocusState private var slideListFocused: Bool
     @AppStorage("slideStudio.inspectorWidth") private var inspectorWidth = 340.0
+    /// Remembered between exports: whoever wants a notes PDF usually wants one
+    /// every time, and whoever wants slides to hand out never does.
+    @AppStorage("slideStudio.pdfIncludesSpeakerNotes") private var pdfIncludesSpeakerNotes = false
     /// Empty until the list arrives from `PresentationTypefaces`.
     @State private var typefaceFamilies: [String] = []
     @State private var saveTask: Task<Void, Never>?
@@ -46,6 +49,10 @@ struct SlideStudioView: View {
     @State private var isLoading = true
     @State private var showingDeleteConfirmation = false
     @State private var showingRemotePairing = false
+    /// A PDF export is drawing. Drawing is main-actor work that yields between
+    /// pages, so the window stays live and a second export could otherwise be
+    /// started on top of the first.
+    @State private var isExportingPDF = false
     /// How the writing splits across the slides, kept rather than worked out
     /// in `body`: splitting it reads the whole writing, and the notes pane
     /// asked on every redraw. Refreshed when what it depends on changes.
@@ -181,6 +188,9 @@ struct SlideStudioView: View {
             Button("Export Deck…", systemImage: "square.and.arrow.up") { exportDeck() }
                 .disabled(deck == nil || hasErrors)
                 .help("Export the editable deck document")
+            Button("Export PDF…", systemImage: "doc.richtext") { exportPDF() }
+                .disabled(deck == nil || hasErrors || isExportingPDF)
+                .help("Export the slides as a PDF, one slide to a page")
             Button("Delete Deck", systemImage: "trash", role: .destructive) {
                 showingDeleteConfirmation = true
             }
@@ -1029,6 +1039,55 @@ struct SlideStudioView: View {
             statusMessage = "Exported \(destination.lastPathComponent)"
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Writes the slides to a PDF, one to a page.
+    ///
+    /// The save panel is answered before any drawing starts, so the export is
+    /// never waiting behind a sheet. Drawing then runs on the main actor —
+    /// `ImageRenderer` is main-isolated — yielding between pages so a long deck
+    /// does not stop the window answering, which is why the button disables
+    /// itself for the duration rather than relying on it being quick.
+    private func exportPDF() {
+        guard let deck else { return }
+        let panel = NSSavePanel()
+        panel.title = "Export Slides as PDF"
+        panel.nameFieldStringValue = "\(sanitizedFilename(deck.title)).pdf"
+        panel.allowedContentTypes = [.pdf]
+
+        // In the panel rather than beside the button: it is a property of the
+        // file being written, and it is the moment the person is deciding who
+        // the PDF is for — an audience, or themselves at a lectern.
+        let notesToggle = NSButton(
+            checkboxWithTitle: "Include speaker notes", target: nil, action: nil
+        )
+        notesToggle.state = pdfIncludesSpeakerNotes ? .on : .off
+        notesToggle.frame = NSRect(x: 20, y: 12, width: 260, height: 20)
+        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 44))
+        accessory.addSubview(notesToggle)
+        panel.accessoryView = accessory
+
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        let includesNotes = notesToggle.state == .on
+        pdfIncludesSpeakerNotes = includesNotes
+        isExportingPDF = true
+        Task {
+            do {
+                try await LampPresentationPDFExport.write(
+                    deck: deck,
+                    store: store,
+                    to: destination,
+                    options: .init(includesSpeakerNotes: includesNotes),
+                    progress: { page, total in
+                        statusMessage = "Exporting slide \(page) of \(total)…"
+                    }
+                )
+                statusMessage = "Exported \(destination.lastPathComponent)"
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isExportingPDF = false
         }
     }
 

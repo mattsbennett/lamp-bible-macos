@@ -28,6 +28,7 @@ let package = Package(
             dependencies: [
                 .product(name: "LampCore", package: "lamp-bible-core"),
                 .product(name: "LampModuleKit", package: "lamp-bible-core"),
+                .product(name: "LampPresentationUI", package: "lamp-bible-core"),
             ]
         ),
         .executableTarget(

@@ -56,6 +56,7 @@
 		A10000000000000000000027 /* AgentRevisionSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000025 /* AgentRevisionSupport.swift */; };
 		A100000000000000000000F9 /* AgentProseTextSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000F9 /* AgentProseTextSupport.swift */; };
 		A10000000000000000000049 /* PresentationDeckSyncSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000043 /* PresentationDeckSyncSupport.swift */; };
+		A1000000000000000000020C /* PresentationPDFExportSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000020D /* PresentationPDFExportSupport.swift */; };
 		A10000000000000000000048 /* AgentTerminalSessionSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000042 /* AgentTerminalSessionSupport.swift */; };
 		A10000000000000000000047 /* LampSyncSettingsCommit.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000041 /* LampSyncSettingsCommit.swift */; };
 		A100000000000000000000FC /* LampSyncLocalFiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000FD /* LampSyncLocalFiles.swift */; };
@@ -158,6 +159,7 @@
 		B10000000000000000000025 /* AgentRevisionSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/AgentRevisionSupport.swift; sourceTree = SOURCE_ROOT; };
 		B100000000000000000000F9 /* AgentProseTextSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/AgentProseTextSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000043 /* PresentationDeckSyncSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/PresentationDeckSyncSupport.swift; sourceTree = SOURCE_ROOT; };
+		B1000000000000000000020D /* PresentationPDFExportSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/PresentationPDFExportSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000042 /* AgentTerminalSessionSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/AgentTerminalSessionSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000041 /* LampSyncSettingsCommit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/LampSyncSettingsCommit.swift; sourceTree = SOURCE_ROOT; };
 		B100000000000000000000FD /* LampSyncLocalFiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/LampSyncLocalFiles.swift; sourceTree = SOURCE_ROOT; };
@@ -342,6 +344,7 @@
 				B10000000000000000000025 /* AgentRevisionSupport.swift */,
 				B100000000000000000000F9 /* AgentProseTextSupport.swift */,
 				B10000000000000000000043 /* PresentationDeckSyncSupport.swift */,
+				B1000000000000000000020D /* PresentationPDFExportSupport.swift */,
 				B10000000000000000000042 /* AgentTerminalSessionSupport.swift */,
 				B10000000000000000000041 /* LampSyncSettingsCommit.swift */,
 				B100000000000000000000FD /* LampSyncLocalFiles.swift */,
@@ -571,6 +574,7 @@
 				A10000000000000000000027 /* AgentRevisionSupport.swift in Sources */,
 				A100000000000000000000F9 /* AgentProseTextSupport.swift in Sources */,
 				A10000000000000000000049 /* PresentationDeckSyncSupport.swift in Sources */,
+				A1000000000000000000020C /* PresentationPDFExportSupport.swift in Sources */,
 				A10000000000000000000048 /* AgentTerminalSessionSupport.swift in Sources */,
 				A10000000000000000000047 /* LampSyncSettingsCommit.swift in Sources */,
 				A100000000000000000000FC /* LampSyncLocalFiles.swift in Sources */,
