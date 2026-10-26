@@ -1,3 +1,5 @@
+import AppKit
+import CoreGraphics
 import Foundation
 import LampCore
 import PDFKit
@@ -134,6 +136,134 @@ struct PresentationPDFExportTests {
                 to: root.appendingPathComponent("deck.pdf")
             )
         }
+    }
+
+    // MARK: - A picture behind the words
+
+    /// Writes a backdrop that forces Lamp to lay a scrim: light and dark in the
+    /// same band, so no single ink colour can be read over all of it. A flat
+    /// picture simply flips the words to dark and needs no scrim, and it was
+    /// exactly such a picture that made this bug look fixed when it was not.
+    private func backdropNeedingAScrim(in store: LampPresentationDeckStore) throws {
+        try FileManager.default.createDirectory(
+            at: store.assetsDirectoryURL, withIntermediateDirectories: true
+        )
+        let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 1_600, pixelsHigh: 900,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        )!
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        for x in stride(from: 0, to: 1_600, by: 40) {
+            let value = (x / 40) % 2 == 0 ? 0.05 : 0.85
+            NSColor(calibratedRed: value, green: value * 0.95, blue: value * 0.9, alpha: 1).setFill()
+            NSRect(x: x, y: 0, width: 40, height: 900).fill()
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        try rep.representation(using: .png, properties: [:])!
+            .write(to: store.assetsDirectoryURL.appendingPathComponent("bg.png"))
+    }
+
+    private func deckOverAPicture() -> LampPresentationDeck {
+        var deck = LampPresentationDeck.starter(title: "Over A Picture")
+        deck.slides = [
+            LampPresentationSlide(layout: .titleAndBody, blocks: [
+                .init(
+                    kind: .image, text: "", assetPath: "Assets/bg.png",
+                    altText: "Stripes", placement: .background
+                ),
+                .init(kind: .title, text: "Words Over A Picture"),
+                .init(kind: .body, text: "The picture must still be visible behind these words."),
+            ]),
+        ]
+        return deck
+    }
+
+    /// How many distinct colours a page draws, sampled. A page that lost its
+    /// picture is one flat colour with words on it; a page that kept it is
+    /// hundreds.
+    private func sampledColours(_ pdf: PDFDocument, page index: Int) throws -> Int {
+        let url = try #require(pdf.documentURL)
+        let document = try #require(CGPDFDocument(url as CFURL))
+        let page = try #require(document.page(at: index + 1))
+        let box = page.getBoxRect(.mediaBox)
+        let width = Int(box.width), height = Int(box.height)
+        let context = try #require(CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+        ))
+        context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.drawPDFPage(page)
+        let image = try #require(context.makeImage())
+        let rep = NSBitmapImageRep(cgImage: image)
+        var seen = Set<Int>()
+        for x in stride(from: 4, to: width, by: 11) {
+            for y in stride(from: 4, to: height, by: 11) {
+                guard let colour = rep.colorAt(x: x, y: y) else { continue }
+                seen.insert(
+                    Int(colour.redComponent * 255) << 16
+                        | Int(colour.greenComponent * 255) << 8
+                        | Int(colour.blueComponent * 255)
+                )
+            }
+        }
+        return seen.count
+    }
+
+    /// The bug this guards: Lamp sets words over a picture with feathered
+    /// gradients, those lose their transparency when drawn into a PDF context
+    /// and paint flat edge to edge, and the page came out one colour with the
+    /// picture embedded in the file but never visible.
+    @Test func apictureBehindTheWordsIsStillVisibleOnThePage() async throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LampPresentationDeckStore(rootURL: root)
+        try backdropNeedingAScrim(in: store)
+
+        let pdf = try await export(deckOverAPicture(), in: root)
+
+        #expect(
+            try sampledColours(pdf, page: 0) > 50,
+            "the page is nearly one colour, so the picture behind the words was lost"
+        )
+    }
+
+    @Test func apictureBehindTheWordsSurvivesOnANotesPageToo() async throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LampPresentationDeckStore(rootURL: root)
+        try backdropNeedingAScrim(in: store)
+
+        let pdf = try await export(
+            deckOverAPicture(), in: root, options: .init(includesSpeakerNotes: true)
+        )
+
+        #expect(try sampledColours(pdf, page: 0) > 50)
+    }
+
+    /// The price of the above, written down so it is a decision rather than a
+    /// surprise: a slide with a picture behind it goes on the page as one
+    /// image, so its words are no longer selectable. Every other slide's are.
+    @Test func wordsOverAPictureAreNoLongerSelectableButEveryOtherSlidesAre() async throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LampPresentationDeckStore(rootURL: root)
+        try backdropNeedingAScrim(in: store)
+        var deck = deckOverAPicture()
+        deck.slides.append(
+            LampPresentationSlide(layout: .titleAndBody, blocks: [
+                .init(kind: .title, text: "An Ordinary Slide"),
+                .init(kind: .body, text: "No picture behind this one."),
+            ])
+        )
+
+        let text = flattened(try await export(deck, in: root))
+
+        #expect(text.contains("Words Over A Picture") == false)
+        #expect(text.contains("An Ordinary Slide"))
     }
 
     // MARK: - With speaker notes

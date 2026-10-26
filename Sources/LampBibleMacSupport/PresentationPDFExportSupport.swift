@@ -1,6 +1,8 @@
 import AppKit
 import CoreText
 import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 import LampCore
 import LampPresentationUI
 import SwiftUI
@@ -15,8 +17,10 @@ import SwiftUI
 /// Each page is drawn *into the PDF's own context* rather than rasterised and
 /// placed as an image. Text stays text: the page can be searched, selected,
 /// and printed at any size, and a deck is tens of kilobytes instead of tens of
-/// megabytes. A picture behind a slide is still a picture, and is embedded as
-/// one.
+/// megabytes.
+///
+/// A slide with a picture behind it is the exception and is drawn as one
+/// high-resolution image — see `rasterised(_:)` for why it has to be.
 public enum LampPresentationPDFExport {
     public enum ExportError: Error, Equatable, LocalizedError {
         /// A deck with no slides would produce a PDF with no pages, which no
@@ -106,18 +110,26 @@ public enum LampPresentationPDFExport {
             let canvas = LampPresentationSlideCanvas(slide: slide, deck: deck, store: store)
                 .frame(width: slideSize.width, height: slideSize.height)
             let renderer = ImageRenderer(content: canvas)
+            let overPicture = backgroundPicture(for: slide, store: store) != nil
 
             if options.includesSpeakerNotes {
                 writeNotesPages(
                     for: slide,
                     number: offset + 1,
                     renderer: renderer,
+                    overPicture: overPicture,
                     slideSize: slideSize,
                     into: context
                 )
             } else {
                 context.beginPDFPage(nil)
-                renderer.render { _, draw in draw(context) }
+                draw(
+                    renderer,
+                    overPicture: overPicture,
+                    in: CGRect(origin: .zero, size: slideSize),
+                    slideSize: slideSize,
+                    into: context
+                )
                 context.endPDFPage()
             }
 
@@ -126,6 +138,76 @@ public enum LampPresentationPDFExport {
         }
 
         context.closePDF()
+    }
+
+    /// The picture behind `slide`, when the deck names one and the file is
+    /// there. Its presence is what decides how the slide reaches the page.
+    private static func backgroundPicture(
+        for slide: LampPresentationSlide,
+        store: LampPresentationDeckStore
+    ) -> URL? {
+        guard let block = slide.plan.background,
+              let url = store.assetURL(for: block),
+              FileManager.default.fileExists(atPath: url.path)
+        else { return nil }
+        return url
+    }
+
+    /// Puts one slide on the page, as drawing or as picture.
+    @MainActor
+    private static func draw(
+        _ renderer: ImageRenderer<some View>,
+        overPicture: Bool,
+        in rect: CGRect,
+        slideSize: CGSize,
+        into context: CGContext
+    ) {
+        if overPicture, let image = rasterised(renderer) {
+            context.draw(image, in: rect)
+            return
+        }
+        context.saveGState()
+        context.translateBy(x: rect.minX, y: rect.minY)
+        context.scaleBy(x: rect.width / slideSize.width, y: rect.height / slideSize.height)
+        renderer.render { _, draw in draw(context) }
+        context.restoreGState()
+    }
+
+    /// A slide drawn to pixels, for the one case where it must be.
+    ///
+    /// Lamp sets words over a picture by laying a feathered gradient behind
+    /// each block — part scrim, part the picture blurred — so only the bands
+    /// under the words are covered and the rest of the picture is left alone.
+    /// Drawn into a PDF context those gradients lose their transparency and
+    /// paint flat, edge to edge, hiding the picture completely: the page came
+    /// out a single colour with the words on it, and the picture was embedded
+    /// in the file but never visible.
+    ///
+    /// So these slides are rendered to a bitmap, which composites them exactly
+    /// as the presenter does, and the bitmap goes on the page. The words on
+    /// such a slide stop being selectable text, which is the price. Every slide
+    /// without a picture behind it stays vector.
+    ///
+    /// Re-encoded as a JPEG before it goes in: a 1,920 x 1,080 slide is six
+    /// megabytes of pixels and a few hundred kilobytes of JPEG, and what is
+    /// being stored is a photograph.
+    @MainActor
+    private static func rasterised(_ renderer: ImageRenderer<some View>) -> CGImage? {
+        renderer.scale = 2
+        guard let image = renderer.cgImage else { return nil }
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            data, UTType.jpeg.identifier as CFString, 1, nil
+        ) else { return image }
+        CGImageDestinationAddImage(
+            destination, image,
+            [kCGImageDestinationLossyCompressionQuality: 0.9] as CFDictionary
+        )
+        guard CGImageDestinationFinalize(destination),
+              let source = CGImageSourceCreateWithData(data, nil),
+              let encoded = CGImageSourceCreateImageAtIndex(source, 0, nil)
+        else { return image }
+        return encoded
     }
 
     /// One page with the slide and as much of its notes as will fit, then a
@@ -142,6 +224,7 @@ public enum LampPresentationPDFExport {
         for slide: LampPresentationSlide,
         number: Int,
         renderer: ImageRenderer<some View>,
+        overPicture: Bool,
         slideSize: CGSize,
         into context: CGContext
     ) {
@@ -179,14 +262,13 @@ public enum LampPresentationPDFExport {
             context.beginPDFPage(nil)
 
             if isFirstPage {
-                context.saveGState()
-                context.translateBy(x: slideRect.minX, y: slideRect.minY)
-                context.scaleBy(
-                    x: slideRect.width / slideSize.width,
-                    y: slideRect.height / slideSize.height
+                draw(
+                    renderer,
+                    overPicture: overPicture,
+                    in: slideRect,
+                    slideSize: slideSize,
+                    into: context
                 )
-                renderer.render { _, draw in draw(context) }
-                context.restoreGState()
             }
 
             if let framesetter, drawn < attributed.length {

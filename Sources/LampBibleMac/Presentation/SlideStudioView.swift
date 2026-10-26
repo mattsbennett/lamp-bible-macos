@@ -38,9 +38,6 @@ struct SlideStudioView: View {
     /// only while it does, so they still move the caret in the editors.
     @FocusState private var slideListFocused: Bool
     @AppStorage("slideStudio.inspectorWidth") private var inspectorWidth = 340.0
-    /// Remembered between exports: whoever wants a notes PDF usually wants one
-    /// every time, and whoever wants slides to hand out never does.
-    @AppStorage("slideStudio.pdfIncludesSpeakerNotes") private var pdfIncludesSpeakerNotes = false
     /// Empty until the list arrives from `PresentationTypefaces`.
     @State private var typefaceFamilies: [String] = []
     @State private var saveTask: Task<Void, Never>?
@@ -188,9 +185,15 @@ struct SlideStudioView: View {
             Button("Export Deck…", systemImage: "square.and.arrow.up") { exportDeck() }
                 .disabled(deck == nil || hasErrors)
                 .help("Export the editable deck document")
-            Button("Export PDF…", systemImage: "doc.richtext") { exportPDF() }
-                .disabled(deck == nil || hasErrors || isExportingPDF)
-                .help("Export the slides as a PDF, one slide to a page")
+            Menu {
+                Button("Slides Only…") { exportPDF(includesSpeakerNotes: false) }
+                Button("Slides with Speaker Notes…") { exportPDF(includesSpeakerNotes: true) }
+            } label: {
+                Label("Export PDF", systemImage: "doc.richtext")
+            }
+            .menuIndicator(.visible)
+            .disabled(deck == nil || hasErrors || isExportingPDF)
+            .help("Export the slides as a PDF")
             Button("Delete Deck", systemImage: "trash", role: .destructive) {
                 showingDeleteConfirmation = true
             }
@@ -1042,35 +1045,29 @@ struct SlideStudioView: View {
         }
     }
 
-    /// Writes the slides to a PDF, one to a page.
+    /// Writes the slides to a PDF, one to a page, with or without the notes.
+    ///
+    /// Which of the two it is, is chosen in the menu rather than in the save
+    /// panel. A panel accessory view is easy to put there and easy not to see,
+    /// and this choice decides who the file is for — an audience, or the
+    /// speaker at a lectern — so it is named in full where it is picked.
     ///
     /// The save panel is answered before any drawing starts, so the export is
     /// never waiting behind a sheet. Drawing then runs on the main actor —
     /// `ImageRenderer` is main-isolated — yielding between pages so a long deck
     /// does not stop the window answering, which is why the button disables
     /// itself for the duration rather than relying on it being quick.
-    private func exportPDF() {
+    private func exportPDF(includesSpeakerNotes includesNotes: Bool) {
         guard let deck else { return }
         let panel = NSSavePanel()
-        panel.title = "Export Slides as PDF"
-        panel.nameFieldStringValue = "\(sanitizedFilename(deck.title)).pdf"
+        panel.title = includesNotes ? "Export Slides and Notes as PDF" : "Export Slides as PDF"
+        // Two files a person keeps apart — one to hand out, one to read from —
+        // so they are not offered the same name by default.
+        panel.nameFieldStringValue = includesNotes
+            ? "\(sanitizedFilename(deck.title)) (Notes).pdf"
+            : "\(sanitizedFilename(deck.title)).pdf"
         panel.allowedContentTypes = [.pdf]
-
-        // In the panel rather than beside the button: it is a property of the
-        // file being written, and it is the moment the person is deciding who
-        // the PDF is for — an audience, or themselves at a lectern.
-        let notesToggle = NSButton(
-            checkboxWithTitle: "Include speaker notes", target: nil, action: nil
-        )
-        notesToggle.state = pdfIncludesSpeakerNotes ? .on : .off
-        notesToggle.frame = NSRect(x: 20, y: 12, width: 260, height: 20)
-        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 44))
-        accessory.addSubview(notesToggle)
-        panel.accessoryView = accessory
-
         guard panel.runModal() == .OK, let destination = panel.url else { return }
-        let includesNotes = notesToggle.state == .on
-        pdfIncludesSpeakerNotes = includesNotes
         isExportingPDF = true
         Task {
             do {
