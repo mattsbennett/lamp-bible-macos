@@ -14,6 +14,10 @@ struct MarkdownTextEditor: NSViewRepresentable {
     @Binding var selection: NSRange
     var fontSize: Double = 15
     var isEditable: Bool = true
+    /// Bumped to put the caret in this text view and bring `selection` into
+    /// sight. A token rather than a flag: revealing the same line twice is two
+    /// requests, and a flag would only answer the first.
+    var revealToken: Int = 0
     /// What the writing editor's find bar searches this text view through.
     var finder: MarkdownTextFinder?
 
@@ -88,12 +92,27 @@ struct MarkdownTextEditor: NSViewRepresentable {
             guard selection.location >= 0, selection.location + selection.length <= limit else { return }
             context.coordinator.pendingSelection = selection
             textView.setSelectedRange(selection)
+            textView.scrollRangeToVisible(selection)
+        }
+
+        // Asked for by a host that has just moved the selection somewhere the
+        // writer hasn't looked — a footnote's line in the Footnotes field —
+        // where leaving the caret behind in another view would mean the line
+        // is selected and still not typeable.
+        if context.coordinator.revealedToken != revealToken {
+            context.coordinator.revealedToken = revealToken
+            textView.scrollRangeToVisible(textView.selectedRange())
+            if let window = textView.window, window.firstResponder !== textView {
+                window.makeFirstResponder(textView)
+            }
         }
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: MarkdownTextEditor
         var pendingSelection: NSRange?
+        /// The last reveal this view has answered.
+        var revealedToken = 0
 
         init(_ parent: MarkdownTextEditor) {
             self.parent = parent

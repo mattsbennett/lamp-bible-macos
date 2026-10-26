@@ -6,6 +6,20 @@ import LampModuleKit
 import SwiftUI
 import WebKit
 
+/// What a click on a footnote's marker does while writing.
+///
+/// The page's own default is `jump`, which is what the phone wants and what
+/// read mode has always done. Every editor says which it wants on attach
+/// rather than only the one that differs: pages are pooled, so an editor
+/// taking a page another has used would otherwise inherit its answer.
+enum TipTapFootnoteClicks: String {
+    /// The caret goes to the start of the note, where the note is on the page.
+    case jump
+    /// The note opens in a panel by its marker, to be written in there. A note
+    /// that isn't on the page is reported to the host instead.
+    case popover
+}
+
 /// The selection-dependent state reported by TipTap. Keeping this in Swift lets
 /// the native toolbar show which formatting is active without interpreting HTML.
 struct TipTapSelectionState: Equatable {
@@ -56,6 +70,8 @@ struct TipTapEditorView: NSViewRepresentable {
     /// are plain lines as often as Markdown: typed on the phone, each line is
     /// its own, and read as Markdown they would run together on save.
     var lineBreaks = false
+    /// What a click on a footnote's marker does here.
+    var footnoteClicks: TipTapFootnoteClicks = .jump
     var onCoordinatorReady: (TipTapEditorCoordinator) -> Void
 
     func makeCoordinator() -> TipTapEditorCoordinator {
@@ -81,6 +97,7 @@ struct TipTapEditorView: NSViewRepresentable {
         coordinator.onContentChanged = bindingUpdater
         coordinator.usesCompactLayout = compactLayout
         coordinator.usesLineBreaks = lineBreaks
+        coordinator.setFootnoteClicks(footnoteClicks)
         coordinator.setMediaMap(coordinator.mediaMap(
             scopeID: mediaScopeID,
             references: mediaReferences,
@@ -103,6 +120,7 @@ struct TipTapEditorView: NSViewRepresentable {
         coordinator.updateMediaScopeID(mediaScopeID)
         coordinator.updateRichMediaIDs(Set(mediaReferences.map(\.id)))
         coordinator.onContentChanged = bindingUpdater
+        coordinator.setFootnoteClicks(footnoteClicks)
         coordinator.setMediaMap(coordinator.mediaMap(
             scopeID: mediaScopeID,
             references: mediaReferences,
@@ -237,6 +255,10 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     var onContentHeightChanged: ((Double) -> Void)?
     /// The web view is opaque to `@FocusState`, so caret focus is reported out.
     var onFocusChanged: ((Bool) -> Void)?
+    /// A footnote's marker was clicked while writing and its note is not on
+    /// the page, so the page has done nothing and left it to the host. Carries
+    /// the writing's own label for the note, not the number a reader sees.
+    var onFootnoteNotInPage: ((String) -> Void)?
     var onFindStatusChanged: ((WritingFindStatus) -> Void)?
     var usesCompactLayout = false
     /// Set before the first text, since it decides how that text is read.
@@ -276,6 +298,9 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     private var appliedTheme: Bool?
     private var appliedMediaMap: [String: String]?
     private var appliedFontSize: Double?
+    private var shownFootnoteClicks: TipTapFootnoteClicks?
+    private var pendingFootnoteClicks: TipTapFootnoteClicks?
+    private var appliedFootnoteClicks: TipTapFootnoteClicks?
     /// The media listing and what it was listed from, so the folder is read
     /// again only when it could have changed.
     private var listedMedia: (source: MediaSource, map: [String: String])?
@@ -470,6 +495,10 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
             pendingContent = nil
             setContent(content)
         }
+        if let behaviour = pendingFootnoteClicks {
+            pendingFootnoteClicks = nil
+            setFootnoteClicks(behaviour)
+        }
         if let fontSize = pendingFontSize {
             pendingFontSize = nil
             setFontSize(fontSize)
@@ -536,6 +565,14 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
 
         case "focusChanged":
             onFocusChanged?(body["focused"] as? Bool ?? false)
+
+        case "footnoteTapped":
+            // Only the writing case is the host's: reading a devotional, the
+            // page takes a tap to the note itself.
+            guard body["editing"] as? Bool == true,
+                  let id = body["id"] as? String
+            else { return }
+            onFootnoteNotInPage?(id)
 
         case "searchChanged":
             onFindStatusChanged?(Self.findStatus(from: body))
@@ -625,10 +662,12 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         appliedBackgroundColor = nil
         appliedMediaMap = nil
         appliedFontSize = nil
+        appliedFootnoteClicks = nil
         needsFreshHistory = true
         pendingContent = lastKnownMarkdown
         pendingMediaMap = shownMediaMap
         pendingFontSize = shownFontSize
+        pendingFootnoteClicks = shownFootnoteClicks
         pendingPlaceholder = shownPlaceholder
         pendingTheme = shownTheme
         pendingBackgroundColor = shownBackgroundColor
@@ -786,6 +825,17 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
             return
         }
         evaluate("window.editorAPI.setPlaceholder(\(Self.javascriptString(text)))")
+    }
+
+    func setFootnoteClicks(_ behaviour: TipTapFootnoteClicks) {
+        shownFootnoteClicks = behaviour
+        guard isReady else {
+            pendingFootnoteClicks = behaviour
+            return
+        }
+        guard appliedFootnoteClicks != behaviour else { return }
+        appliedFootnoteClicks = behaviour
+        evaluate("window.editorAPI.setFootnoteClicks('\(behaviour.rawValue)')")
     }
 
     func setFontSize(_ size: Double) {

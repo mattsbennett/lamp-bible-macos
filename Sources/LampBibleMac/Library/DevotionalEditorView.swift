@@ -387,6 +387,10 @@ struct DevotionalEditorView: View {
     @State private var keyScriptures: [LampScriptureLink] = []
 
     @State private var contentSelection = NSRange(location: 0, length: 0)
+    /// Where the caret sits in the Footnotes field, so that clicking a marker
+    /// whose note is kept there can put the writer on that line.
+    @State private var footnotesSelection = NSRange(location: 0, length: 0)
+    @State private var footnotesRevealToken = 0
     @State private var tipTapCoordinator: TipTapEditorCoordinator?
     @State private var tipTapSelection = TipTapSelectionState()
     @State private var visualEditorIsReady = false
@@ -809,9 +813,17 @@ struct DevotionalEditorView: View {
                 libraryRootURL: model.library.rootURL,
                 isVisible: editorMode == .visual,
                 mediaReferences: mediaReferences,
+                // A note written beneath the prose opens in a panel by its
+                // marker, which the page draws itself. A note kept in the
+                // Footnotes field isn't on the page for it to open, so the
+                // page reports the click and `revealFootnote` answers it.
+                footnoteClicks: .popover,
                 onCoordinatorReady: { coordinator in
                     tipTapCoordinator = coordinator
                     visualEditorIsReady = true
+                    coordinator.onFootnoteNotInPage = { label in
+                        revealFootnote(label)
+                    }
                     coordinator.onSelectionChanged = { selection in
                         DispatchQueue.main.async {
                             tipTapSelection = selection
@@ -1096,9 +1108,16 @@ struct DevotionalEditorView: View {
             }
 
             Section("Footnotes (Markdown)") {
-                TextEditor(text: $footnotes)
-                    .font(.body)
-                    .frame(minHeight: 90)
+                // A text view rather than `TextEditor`, which has no selection
+                // to move: clicking a marker in the writing puts the caret on
+                // that note's line here.
+                MarkdownTextEditor(
+                    text: $footnotes,
+                    selection: $footnotesSelection,
+                    fontSize: 12,
+                    revealToken: footnotesRevealToken
+                )
+                .frame(minHeight: 90)
             }
         }
         .formStyle(.grouped)
@@ -2236,6 +2255,27 @@ struct DevotionalEditorView: View {
                 plainContent: LampPortableDevotionalContent.plainText(from: json) ?? ""
             )
         }.value
+    }
+
+    /// Takes the writer to the note a marker refers to, when that note is kept
+    /// in the Footnotes field rather than written beneath the prose.
+    ///
+    /// The caret goes to the start of what the note says, not over it: the
+    /// phone does the same for a note on the page, and a selected line would
+    /// be gone on the first keystroke.
+    ///
+    /// Nothing happens when the field has no definition for that label. The
+    /// marker is then one nothing defines anywhere, and opening the sidebar to
+    /// show the writer an absence would be worse than leaving the click alone.
+    private func revealFootnote(_ label: String) {
+        guard let found = LampFootnoteField.location(of: label, in: footnotes) else { return }
+        // The sidebar holds either the details or the agent's workspace, so
+        // showing the field means putting the details back. One click returns
+        // the workspace, and the writer asked to see this note.
+        showingAgentWorkspace = false
+        showsDetails = true
+        footnotesSelection = NSRange(location: found.content.location, length: 0)
+        footnotesRevealToken += 1
     }
 
     /// Writes the saved body to the workspace's history, after the devotional
