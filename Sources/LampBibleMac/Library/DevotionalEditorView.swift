@@ -931,6 +931,8 @@ struct DevotionalEditorView: View {
                         .help(model.selectedVerseReference == nil
                             ? "Open a verse in the reader to link it"
                             : "Link selected text, or insert the verse reference")
+                    Button("Footnote", systemImage: "text.badge.plus") { insertFootnote() }
+                        .help("Add a footnote here, and write the note in it")
                     Button("Media", systemImage: "paperclip") { attachMedia() }
                         .help("Attach an image or audio file")
                     Button("Record", systemImage: "mic") { showingAudioRecorder = true }
@@ -2255,6 +2257,23 @@ struct DevotionalEditorView: View {
                 plainContent: LampPortableDevotionalContent.plainText(from: json) ?? ""
             )
         }.value
+    }
+
+    /// Adds a footnote where the caret is: its marker in the prose, and an
+    /// empty definition with the writing's others beneath it.
+    ///
+    /// The label is a number nothing else has taken, counted across the prose
+    /// and the Footnotes field together — a new note must not collide with one
+    /// kept in the field, which the editor cannot see.
+    ///
+    /// The note is left empty for the writer to fill by clicking the marker,
+    /// which opens it. Asking for the text first, as the phone does with a
+    /// sheet, would be a heavier way in than the panel they now have.
+    private func insertFootnote() {
+        guard let coordinator = tipTapCoordinator else { return }
+        coordinator.insertFootnote(
+            id: LampFootnoteLabels.next(content: content, field: footnotes)
+        )
     }
 
     /// Takes the writer to the note a marker refers to, when that note is kept

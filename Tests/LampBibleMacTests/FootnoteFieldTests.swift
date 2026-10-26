@@ -66,3 +66,43 @@ struct FootnoteFieldTests {
         #expect(found.content.location == 9)
     }
 }
+
+/// A footnote being added needs a label nothing else has taken, wherever the
+/// writing keeps its notes.
+struct FootnoteLabelTests {
+    @Test func numbersOnFromTheWritingsOwnNumbers() {
+        #expect(LampFootnoteLabels.next(
+            content: "One[^1], two[^2], three[^3].", field: ""
+        ) == "4")
+    }
+
+    @Test func startsAtOneWhenTheLabelsAreWords() {
+        #expect(LampFootnoteLabels.next(
+            content: "A claim[^lewis].", field: "[^lewis]: Lewis, p. 26."
+        ) == "1")
+    }
+
+    /// The gap matters: a writing that has lost its second note should reuse
+    /// the number rather than leave it empty for ever.
+    @Test func fillsAGapRatherThanCountingPastIt() {
+        #expect(LampFootnoteLabels.next(content: "One[^1], three[^3].", field: "") == "2")
+    }
+
+    /// The field's labels count too, or a new note would collide with one the
+    /// editor cannot see.
+    @Test func doesNotTakeALabelTheFieldIsUsing() {
+        #expect(LampFootnoteLabels.next(content: "One[^1].", field: "[^2]: Kept aside.") == "3")
+    }
+
+    @Test func startsAtOneForAWritingWithNoFootnotes() {
+        #expect(LampFootnoteLabels.next(content: "Plain prose.", field: "") == "1")
+    }
+
+    @Test func readsLabelsFromMarkersAndDefinitionsAlike() {
+        let used = LampFootnoteLabels.used(
+            content: "Cited[^a] and[^b].\n\n[^a]: Here.",
+            field: "[^c]: And there."
+        )
+        #expect(used == ["a", "b", "c"])
+    }
+}

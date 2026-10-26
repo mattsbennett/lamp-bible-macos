@@ -785,6 +785,14 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         evaluate("window.editorAPI.insertAudioBlock(\(Self.javascriptString(mediaID)), \(Self.javascriptString(caption)))")
     }
 
+    /// Puts a footnote's marker where the caret is, and its definition with
+    /// the writing's others beneath the prose. An empty note is the ordinary
+    /// case: the panel opens on the new marker for it to be written in.
+    func insertFootnote(id: String, content: String = "") {
+        guard isReady else { return }
+        evaluate("window.editorAPI.insertFootnote(\(Self.javascriptString(id)), \(Self.javascriptString(content)))")
+    }
+
     func insertHorizontalRule() {
         guard isReady else { return }
         evaluate("window.editorAPI.insertHorizontalRule()")

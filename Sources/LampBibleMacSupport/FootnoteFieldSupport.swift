@@ -1,6 +1,7 @@
 import Foundation
 
-/// Finding one footnote's definition inside the Footnotes field.
+/// Reading a writing's footnotes: where one definition sits in the Footnotes
+/// field, and which label a new footnote can take.
 ///
 /// A writing can keep its notes in either of two places: as `[^label]:` lines
 /// beneath the prose, where the editor shows them itself, or in the Footnotes
@@ -83,5 +84,40 @@ public enum LampFootnoteField {
     /// was written in the prose instead.
     public static func location(of label: String, in field: String) -> Location? {
         locations(in: field).first { $0.label == label }
+    }
+}
+
+
+/// Choosing a label for a footnote being added.
+///
+/// A writing's labels can be any run of characters, and the number a reader
+/// sees comes from reading order rather than from the label — but a new one
+/// still has to be a label nothing else is using, in the prose or in the
+/// field. Numbers, as both apps have always written them.
+public enum LampFootnoteLabels {
+    private static let marker = try! NSRegularExpression(pattern: #"\[\^([^\]\s]+)\]"#)
+
+    /// Every label the writing uses, from its markers and from both places a
+    /// definition can be written.
+    public static func used(content: String, field: String) -> Set<String> {
+        var labels = Set(LampFootnoteField.locations(in: field).map(\.label))
+        for text in [content, field] where text.contains("[^") {
+            let range = NSRange(location: 0, length: (text as NSString).length)
+            for match in marker.matches(in: text, range: range) {
+                guard let found = Range(match.range(at: 1), in: text) else { continue }
+                labels.insert(String(text[found]))
+            }
+        }
+        return labels
+    }
+
+    /// The lowest number no label is using. A writing numbering its notes 1, 2,
+    /// 3 gets 4; one whose labels are words gets 1; one that has taken "3" for
+    /// something of its own is not given it twice.
+    public static func next(content: String, field: String) -> String {
+        let taken = used(content: content, field: field)
+        var candidate = 1
+        while taken.contains(String(candidate)) { candidate += 1 }
+        return String(candidate)
     }
 }
