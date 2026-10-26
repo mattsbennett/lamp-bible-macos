@@ -1644,6 +1644,9 @@ private struct VerseInspectorView: View {
                         openDictionary(strongs, annotation.text ?? annotation.lemma)
                     }
                     .buttonStyle(.link)
+                    // A Strong's number is a link, but of one kind, kept apart
+                    // from the verse references it sits among.
+                    .tint(.lampOriginalLanguage)
                 }
             }
             if let lemma = annotation.lemma, lemma != annotation.text {
@@ -2379,7 +2382,7 @@ private struct ScriptureLinkedText: View {
                   let attributedRange = attributedRange(for: stringRange, in: result),
                   let url = link.inlineURL else { continue }
             result[attributedRange].link = url
-            result[attributedRange].foregroundColor = .accentColor
+            result[attributedRange].foregroundColor = .lampLink
             result[attributedRange].underlineStyle = .single
             occupiedRanges.append(stringRange)
         }
@@ -2392,7 +2395,7 @@ private struct ScriptureLinkedText: View {
                   let attributedRange = attributedRange(for: stringRange, in: result),
                   let url = link.inlineURL else { continue }
             result[attributedRange].link = url
-            result[attributedRange].foregroundColor = .accentColor
+            result[attributedRange].foregroundColor = .lampLink
             result[attributedRange].underlineStyle = .single
             occupiedRanges.append(stringRange)
         }
@@ -2405,7 +2408,7 @@ private struct ScriptureLinkedText: View {
                 var label = AttributedString(link.inlineLabel)
                 if let url = link.inlineURL {
                     label.link = url
-                    label.foregroundColor = .accentColor
+                    label.foregroundColor = .lampLink
                     label.underlineStyle = .single
                 }
                 result.append(label)
@@ -2421,7 +2424,7 @@ private struct ScriptureLinkedText: View {
                 var label = AttributedString(link.inlineLabel)
                 if let url = link.inlineURL {
                     label.link = url
-                    label.foregroundColor = .accentColor
+                    label.foregroundColor = .lampLink
                     label.underlineStyle = .single
                 }
                 result.append(label)
@@ -2528,6 +2531,9 @@ struct ScriptureReferenceButton: View {
             isShowingPreview = true
         }
         .buttonStyle(.link)
+        // A reference sits in the text and opens the passage, so it is a link
+        // rather than one of the app's own controls.
+        .tint(.lampLink)
         .popover(isPresented: $isShowingPreview) {
             ScriptureReferencePopover(
                 link: link,

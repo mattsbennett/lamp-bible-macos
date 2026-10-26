@@ -3446,13 +3446,21 @@ private struct TranslationReaderView: View, Equatable {
         let verseURL = readerVerseURL(reference: verse.id)
         let isSelected = model.selectedVerseReference == verse.id
 
+        // The number stays quiet whether or not the verse is selected: nothing
+        // inside scripture takes the accent, where a red numeral next to
+        // red-letter text reads as part of the words of Christ. Selection is
+        // a tinted ground behind the number instead.
         var numberAttributes = markerTextAttributes(
             size: max(fontSize * 0.58, 10),
             weight: .semibold,
-            color: isSelected ? .controlAccentColor : .secondaryLabelColor,
+            color: .secondaryLabelColor,
             baselineOffset: max(fontSize * 0.28, 4)
         )
         numberAttributes[.link] = verseURL
+        if isSelected {
+            numberAttributes[.backgroundColor] = NSColor.controlAccentColor
+                .withAlphaComponent(0.22)
+        }
         result.append(NSAttributedString(
             string: verse.number.formatted(),
             attributes: numberAttributes
@@ -3462,7 +3470,8 @@ private struct TranslationReaderView: View, Equatable {
             var attributes = markerTextAttributes(
                 size: max(fontSize * 0.55, 10),
                 weight: .bold,
-                color: .controlAccentColor,
+                // The marker opens the note, so it reads as a link.
+                color: .lampLink,
                 baselineOffset: max(fontSize * 0.32, 5)
             )
             attributes[.link] = verseURL
@@ -3828,7 +3837,7 @@ private struct TranslationReaderView: View, Equatable {
             case "red-letter":
                 result.addAttribute(
                     .foregroundColor,
-                    value: NSColor.systemRed.withAlphaComponent(0.82),
+                    value: NSColor.lampWordsOfChrist,
                     range: range
                 )
             case "added", "selah":

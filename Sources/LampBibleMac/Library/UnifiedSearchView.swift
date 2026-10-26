@@ -393,8 +393,8 @@ struct UnifiedSearchView: View {
         while let opening = remaining.range(of: "<mark>"),
               let closing = remaining[opening.upperBound...].range(of: "</mark>") {
             rendered = rendered + Text(String(remaining[..<opening.lowerBound]))
-            rendered = rendered + Text(String(remaining[opening.upperBound..<closing.lowerBound]))
-                .bold().foregroundColor(.accentColor)
+            rendered = rendered
+                + Text.lampFindMatch(remaining[opening.upperBound..<closing.lowerBound])
             remaining = remaining[closing.upperBound...]
         }
         return rendered + Text(String(remaining))

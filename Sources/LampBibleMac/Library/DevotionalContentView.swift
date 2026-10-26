@@ -232,7 +232,10 @@ struct DevotionalContentView: View {
     @ViewBuilder
     private func renderedText(_ item: RenderedProseItem) -> some View {
         if let attributed = item.attributed {
-            Text(attributed)
+            // The writing's own links, and the footnote markers, are drawn in
+            // the tint. Without this they take the app's accent, which belongs
+            // to controls rather than to anything in the text.
+            Text(attributed).tint(.lampLink)
         } else {
             Text(item.plain)
         }

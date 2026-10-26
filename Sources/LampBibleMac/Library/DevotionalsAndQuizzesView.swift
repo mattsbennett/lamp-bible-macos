@@ -1384,6 +1384,9 @@ struct QuizQuestionCard: View {
         weight: Font.Weight
     ) -> some View {
         Text(attributedText(content, annotations: annotations))
+            // The scripture it quotes opens the passage, so it reads as a link
+            // rather than taking the app's accent.
+            .tint(.lampLink)
             .font(.system(
                 size: LampTextScale.quizText.clamped(fontSize),
                 weight: weight,

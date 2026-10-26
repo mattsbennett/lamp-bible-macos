@@ -1510,6 +1510,7 @@ private enum BookAttributedTextRenderer {
                 value[range].inlinePresentationIntent = .emphasized
             case "strongs", "greek", "hebrew":
                 value[range].underlineStyle = .single
+                value[range].foregroundColor = .lampOriginalLanguage
             default:
                 break
             }
@@ -1581,6 +1582,11 @@ private struct BookInlineText: View {
 
     var body: some View {
         Text(attributedText)
+            // References, web links and footnote markers in the text carry no
+            // colour of their own, so they are drawn in the tint. Without this
+            // they would take the app's accent and read as controls. A run
+            // with its own colour, such as a Strong's number, keeps it.
+            .tint(.lampLink)
             .onContinuousHover { phase in
                 switch phase {
                 case .active(let location):
