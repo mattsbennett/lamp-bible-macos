@@ -2266,9 +2266,9 @@ struct DevotionalEditorView: View {
     /// and the Footnotes field together — a new note must not collide with one
     /// kept in the field, which the editor cannot see.
     ///
-    /// The note is left empty for the writer to fill by clicking the marker,
-    /// which opens it. Asking for the text first, as the phone does with a
-    /// sheet, would be a heavier way in than the panel they now have.
+    /// The editor opens the new note's panel itself, empty and focused, so
+    /// adding a footnote and writing it are one gesture. Asking for the text
+    /// first, as the phone does with a sheet, would be a heavier way in.
     private func insertFootnote() {
         guard let coordinator = tipTapCoordinator else { return }
         coordinator.insertFootnote(
