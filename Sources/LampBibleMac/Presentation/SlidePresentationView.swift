@@ -207,9 +207,32 @@ private final class SlidePresentationWindowView: NSView {
     private var didEnterFullScreen = false
     private var eventMonitor: Any?
 
+    /// How long the pointer has to sit still before it comes off the slide.
+    ///
+    /// Long enough that a presenter reaching for the next click is not chasing
+    /// a pointer that keeps vanishing under their hand, short enough that one
+    /// left over a picture is gone before the room has read the slide.
+    private static let pointerIdleDelay: TimeInterval = 3
+    /// The pointer is watched by asking where it is rather than by a
+    /// mouse-moved monitor. Hiding it is a property of the whole application,
+    /// so what matters is where the pointer sits on the desktop, not which
+    /// window an event happened to be delivered to.
+    private static let pointerPollInterval: TimeInterval = 0.5
+
+    private var pointerTimer: Timer?
+    private var pointerLocation = NSEvent.mouseLocation
+    private var pointerRestingSince = Date()
+    private var isPointerHidden = false
+
     deinit {
         if let eventMonitor {
             NSEvent.removeMonitor(eventMonitor)
+        }
+        pointerTimer?.invalidate()
+        // Nothing of this view is left to ask, so the pointer is put back
+        // unconditionally rather than through `showPointer`.
+        if isPointerHidden {
+            DispatchQueue.main.async { NSCursor.setHiddenUntilMouseMoves(false) }
         }
     }
 
@@ -220,6 +243,7 @@ private final class SlidePresentationWindowView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         installKeyboardMonitorIfNeeded()
+        watchPointerIfNeeded()
         guard let window, !didEnterFullScreen else { return }
         didEnterFullScreen = true
         DispatchQueue.main.async {
@@ -232,6 +256,58 @@ private final class SlidePresentationWindowView: NSView {
                 window.toggleFullScreen(nil)
             }
         }
+    }
+
+    /// Starts watching the pointer. A presentation lasts as long as its window
+    /// does, so this runs for the whole of it rather than being started and
+    /// stopped around each still spell.
+    private func watchPointerIfNeeded() {
+        guard window != nil, pointerTimer == nil else { return }
+        pointerLocation = NSEvent.mouseLocation
+        pointerRestingSince = Date()
+        pointerTimer = Timer.scheduledTimer(
+            withTimeInterval: Self.pointerPollInterval,
+            repeats: true
+        ) { [weak self] _ in
+            self?.checkPointer()
+        }
+    }
+
+    /// Hides the pointer once it has been still long enough, and shows it again
+    /// the moment it moves or the show stops being the window in front.
+    ///
+    /// `setHiddenUntilMouseMoves` is what does the hiding, so the system brings
+    /// the pointer back itself on the first movement — this only has to decide
+    /// when it should go, and keep its own record of whether it is gone.
+    private func checkPointer() {
+        let location = NSEvent.mouseLocation
+        if location != pointerLocation {
+            pointerLocation = location
+            pointerRestingSince = Date()
+        }
+
+        // Only while the show is the window in front: the pointer is hidden
+        // for the whole application, and a presenter who has stepped over to
+        // the editor or their notes still needs theirs.
+        guard window?.isKeyWindow == true,
+              Date().timeIntervalSince(pointerRestingSince) >= Self.pointerIdleDelay
+        else {
+            showPointer()
+            return
+        }
+        hidePointer()
+    }
+
+    private func hidePointer() {
+        guard !isPointerHidden else { return }
+        isPointerHidden = true
+        NSCursor.setHiddenUntilMouseMoves(true)
+    }
+
+    private func showPointer() {
+        guard isPointerHidden else { return }
+        isPointerHidden = false
+        NSCursor.setHiddenUntilMouseMoves(false)
     }
 
     private func installKeyboardMonitorIfNeeded() {
