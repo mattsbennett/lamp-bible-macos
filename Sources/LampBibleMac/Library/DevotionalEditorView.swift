@@ -63,6 +63,12 @@ private struct DevotionalWorkspaceEditorDocument: Identifiable, Equatable {
     var hasExternalConflict: Bool { externalText != nil || wasRemovedExternally }
 }
 
+/// What a save writes as a devotional's body.
+private struct StoredDevotionalBody: Sendable {
+    let contentJSON: String?
+    let plainContent: String
+}
+
 /// A transition waiting to be written to a document's revision history.
 ///
 /// Recording walks the whole revision folder, so it happens off the main actor
@@ -2287,56 +2293,56 @@ struct DevotionalEditorView: View {
 
     private func save() {
         guard hasSavableContent, saveState != .saving else { return }
-        let submitted = editedFields
-        let previouslySavedContent = savedFields.indices.contains(9) ? savedFields[9] : ""
-        let bodyChanged = content != originalProjectedMarkdown
-        let contentJSON: String?
-        let plainContent: String
-        if bodyChanged, let originalContentJSON,
-           LampPortableDevotionalMedia.plainMarkdown(from: originalContentJSON) == nil {
+        saveState = .saving
+        Task {
+            let markdown = content
+            let body: StoredDevotionalBody
             do {
-                contentJSON = try LampPortableDevotionalContent.replacingMarkdown(
-                    content, in: originalContentJSON
+                body = try await Self.storedBody(
+                    markdown: markdown,
+                    originalJSON: originalContentJSON,
+                    originalPlainContent: originalPlainContent,
+                    bodyChanged: markdown != originalProjectedMarkdown
                 )
-                plainContent = contentJSON.flatMap(LampPortableDevotionalContent.plainText) ?? ""
             } catch {
                 saveState = .failed(error.localizedDescription)
                 return
             }
-        } else if bodyChanged {
-            contentJSON = nil
-            plainContent = content
-        } else {
-            contentJSON = originalContentJSON
-            plainContent = originalContentJSON == nil ? content : originalPlainContent
-        }
-        let devotional = LampDevotional(
-            id: identifier,
-            moduleID: "personal-devotionals",
-            moduleName: "My Writing",
-            title: title,
-            subtitle: subtitle,
-            author: author,
-            date: date,
-            tags: tags.split(separator: ",").map {
-                String($0).trimmingCharacters(in: .whitespacesAndNewlines)
-            }.filter { !$0.isEmpty },
-            category: category,
-            seriesName: seriesName,
-            seriesOrder: seriesName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? nil : seriesOrder,
-            keyScriptures: keyScriptures,
-            summary: summary,
-            content: plainContent,
-            contentJSON: contentJSON,
-            footnotes: footnotes,
-            mediaJSON: mediaJSON,
-            created: createdDate ?? Date(),
-            lastModified: Date(),
-            isEditable: true
-        )
-        saveState = .saving
-        Task {
+            // The writing moved on while the body was being worked out, so this
+            // save would write one document and record another as saved. The
+            // edit that overtook it has already started the next autosave.
+            guard content == markdown else {
+                saveState = .idle
+                return
+            }
+
+            let submitted = editedFields
+            let previouslySavedContent = savedFields.indices.contains(9) ? savedFields[9] : ""
+            let devotional = LampDevotional(
+                id: identifier,
+                moduleID: "personal-devotionals",
+                moduleName: "My Writing",
+                title: title,
+                subtitle: subtitle,
+                author: author,
+                date: date,
+                tags: tags.split(separator: ",").map {
+                    String($0).trimmingCharacters(in: .whitespacesAndNewlines)
+                }.filter { !$0.isEmpty },
+                category: category,
+                seriesName: seriesName,
+                seriesOrder: seriesName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? nil : seriesOrder,
+                keyScriptures: keyScriptures,
+                summary: summary,
+                content: body.plainContent,
+                contentJSON: body.contentJSON,
+                footnotes: footnotes,
+                mediaJSON: mediaJSON,
+                created: createdDate ?? Date(),
+                lastModified: Date(),
+                isEditable: true
+            )
             do {
                 let saved = try await model.savePersonalDevotional(devotional)
                 createdDate = saved.created
@@ -2363,6 +2369,48 @@ struct DevotionalEditorView: View {
                 saveState = .failed(error.localizedDescription)
             }
         }
+    }
+
+    /// A devotional's body as it will be stored: the Markdown projected back
+    /// into the rich JSON it came from, where there is any, and the plain text
+    /// the library searches.
+    ///
+    /// Worked out off the main actor. Projecting a talk-length manuscript back
+    /// into its JSON costs about twenty milliseconds on a Release build —
+    /// measured on nine thousand words — and it used to run on the keystroke
+    /// thread every time the autosave landed, which is what the writer felt as
+    /// the editor hesitating. `Task { }` on its own is no help here: `View` is
+    /// main-isolated, so everything a view starts stays on the main thread
+    /// unless it is detached.
+    private static func storedBody(
+        markdown: String,
+        originalJSON: String?,
+        originalPlainContent: String,
+        bodyChanged: Bool
+    ) async throws -> StoredDevotionalBody {
+        guard bodyChanged else {
+            return StoredDevotionalBody(
+                contentJSON: originalJSON,
+                plainContent: originalJSON == nil ? markdown : originalPlainContent
+            )
+        }
+        guard let originalJSON else {
+            return StoredDevotionalBody(contentJSON: nil, plainContent: markdown)
+        }
+        return try await Task.detached(priority: .userInitiated) {
+            // JSON that is only a carrier for Markdown has nothing structured
+            // to keep, so the writing itself is the body.
+            guard LampPortableDevotionalMedia.plainMarkdown(from: originalJSON) == nil else {
+                return StoredDevotionalBody(contentJSON: nil, plainContent: markdown)
+            }
+            let json = try LampPortableDevotionalContent.replacingMarkdown(
+                markdown, in: originalJSON
+            )
+            return StoredDevotionalBody(
+                contentJSON: json,
+                plainContent: LampPortableDevotionalContent.plainText(from: json) ?? ""
+            )
+        }.value
     }
 
     /// Writes the saved body to the workspace's history, after the devotional

@@ -81,7 +81,11 @@ struct TipTapEditorView: NSViewRepresentable {
         coordinator.onContentChanged = bindingUpdater
         coordinator.usesCompactLayout = compactLayout
         coordinator.usesLineBreaks = lineBreaks
-        coordinator.setMediaMap(mediaMap)
+        coordinator.setMediaMap(coordinator.mediaMap(
+            scopeID: mediaScopeID,
+            references: mediaReferences,
+            libraryRootURL: libraryRootURL
+        ))
         coordinator.setContent(markdownContent)
         coordinator.setFontSize(fontSize)
         coordinator.setTheme(isDark: context.environment.colorScheme == .dark)
@@ -99,7 +103,11 @@ struct TipTapEditorView: NSViewRepresentable {
         coordinator.updateMediaScopeID(mediaScopeID)
         coordinator.updateRichMediaIDs(Set(mediaReferences.map(\.id)))
         coordinator.onContentChanged = bindingUpdater
-        coordinator.setMediaMap(mediaMap)
+        coordinator.setMediaMap(coordinator.mediaMap(
+            scopeID: mediaScopeID,
+            references: mediaReferences,
+            libraryRootURL: libraryRootURL
+        ))
         coordinator.setFontSize(fontSize)
         coordinator.setTheme(isDark: context.environment.colorScheme == .dark)
         applyBackgroundColor(to: webView, coordinator: coordinator)
@@ -156,28 +164,6 @@ struct TipTapEditorView: NSViewRepresentable {
                 binding.wrappedValue = markdown
             }
         }
-    }
-
-    private var mediaMap: [String: String] {
-        let directory = libraryRootURL
-            .appendingPathComponent("Media/Devotionals", isDirectory: true)
-            .appendingPathComponent(mediaScopeID, isDirectory: true)
-        let files = (try? FileManager.default.contentsOfDirectory(
-            at: directory,
-            includingPropertiesForKeys: nil,
-            options: []
-        )) ?? []
-        var map = Dictionary(uniqueKeysWithValues: files.map {
-            ($0.lastPathComponent, $0.absoluteString)
-        })
-        for reference in mediaReferences where
-            LampPortableDevotionalMedia.isSafePathComponent(reference.filename) {
-            let url = directory.appendingPathComponent(reference.filename)
-            if FileManager.default.fileExists(atPath: url.path) {
-                map[reference.id] = url.absoluteString
-            }
-        }
-        return map
     }
 
     /// WKWebView grants local-file access relative to the loaded document. Cache
@@ -288,6 +274,11 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     private var pendingBackgroundColor: String?
     private var appliedBackgroundColor: String?
     private var appliedTheme: Bool?
+    private var appliedMediaMap: [String: String]?
+    private var appliedFontSize: Double?
+    /// The media listing and what it was listed from, so the folder is read
+    /// again only when it could have changed.
+    private var listedMedia: (source: MediaSource, map: [String: String])?
 
     /// Whether the host wants the editor on screen at all. Kept apart from
     /// `hasPainted` so switching surfaces never re-exposes an unpainted view.
@@ -310,6 +301,60 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
 
     func updateRichMediaIDs(_ ids: Set<String>) {
         richMediaIDs = ids
+    }
+
+    /// What the document's media folder holds, as the page addresses it: a map
+    /// from each filename, and from each reference's identifier, to a URL the
+    /// web view may load.
+    ///
+    /// Remembered against what it was listed from, because the host asks for
+    /// this on every update — which in the writing editor is several times a
+    /// second while the writer types, and again on every change anywhere in the
+    /// library. Reading the folder each of those times put the filesystem on
+    /// the keystroke path for an answer that almost never differs. The folder's
+    /// own change time is part of what is remembered, so a file put there by
+    /// anything other than Lamp still appears.
+    func mediaMap(
+        scopeID: String,
+        references: [LampDevotionalMediaReference],
+        libraryRootURL: URL
+    ) -> [String: String] {
+        let directory = libraryRootURL
+            .appendingPathComponent("Media/Devotionals", isDirectory: true)
+            .appendingPathComponent(scopeID, isDirectory: true)
+        let source = MediaSource(
+            directory: directory,
+            references: references,
+            changedAt: (try? directory.resourceValues(
+                forKeys: [.contentModificationDateKey]
+            ))?.contentModificationDate
+        )
+        if let listedMedia, listedMedia.source == source { return listedMedia.map }
+
+        let files = (try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil,
+            options: []
+        )) ?? []
+        var map = Dictionary(uniqueKeysWithValues: files.map {
+            ($0.lastPathComponent, $0.absoluteString)
+        })
+        for reference in references where
+            LampPortableDevotionalMedia.isSafePathComponent(reference.filename) {
+            let url = directory.appendingPathComponent(reference.filename)
+            if FileManager.default.fileExists(atPath: url.path) {
+                map[reference.id] = url.absoluteString
+            }
+        }
+        listedMedia = (source, map)
+        return map
+    }
+
+    /// Everything a media listing is drawn from.
+    struct MediaSource: Equatable {
+        let directory: URL
+        let references: [LampDevotionalMediaReference]
+        let changedAt: Date?
     }
 
     /// Driven by the page reporting that it has produced a frame. Neither `ready`
@@ -578,6 +623,8 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         hasPainted = false
         appliedTheme = nil
         appliedBackgroundColor = nil
+        appliedMediaMap = nil
+        appliedFontSize = nil
         needsFreshHistory = true
         pendingContent = lastKnownMarkdown
         pendingMediaMap = shownMediaMap
@@ -720,8 +767,12 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
             pendingMediaMap = map
             return
         }
+        // Every host update calls this; only a real change is worth a round
+        // trip into the page.
+        guard appliedMediaMap != map else { return }
         guard let data = try? JSONSerialization.data(withJSONObject: map),
               let json = String(data: data, encoding: .utf8) else { return }
+        appliedMediaMap = map
         evaluate("window.editorAPI.setMediaMap(\(json))")
     }
 
@@ -743,6 +794,8 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
             pendingFontSize = size
             return
         }
+        guard appliedFontSize != size else { return }
+        appliedFontSize = size
         evaluate("window.editorAPI.setFontSize(\(Int(size)))")
     }
 
