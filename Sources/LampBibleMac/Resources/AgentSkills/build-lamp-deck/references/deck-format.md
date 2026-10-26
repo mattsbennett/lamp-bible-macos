@@ -417,6 +417,7 @@ write to it.
 | `issues` | Everything the validator said, warnings included |
 | `speakerNotes` | When notes follow the manuscript: how many slides `resolved`, how many are `stale`, any `problems`, and `resolvedAt` |
 | `lastImport` | The last import that actually happened, kept through later checks that found nothing new |
+| `studioEdits` | What the writer has changed in Slide Studio since the last import. Absent when the two copies agree |
 
 A `slideIdentity` showing no reuse means every slide ID was rewritten, which
 discards the link between a slide and anything the user has done to it. When
@@ -428,6 +429,34 @@ and `lastImport` describing the artifact. So a reworded anchor shows up here as
 `stale` shortly after the writer types it, without the deck being touched. Each
 entry in `problems` names its `slide` by one-based position and by `slideID`,
 and `resolvedAt` says when the split was last taken.
+
+### What the writer has changed in Slide Studio
+
+There are three copies of a deck and only one of them is yours.
+`presentation.lampdeck` is the artifact you write. Slide Studio saves straight
+into the library and never touches your file. Lamp records what it put in the
+library at the last import, and `studioEdits` is the difference between that
+and what is there now.
+
+| Field | Meaning |
+| --- | --- |
+| `addedSlideIDs` | Slides the writer added, which your import did not put there |
+| `removedSlideIDs` | Slides your import put there and the writer has deleted |
+| `changedSlideIDs` | Slides in both copies that the writer has edited |
+| `reordered` | The shared slides are in a different order |
+| `deckSettingsChanged` | The deck's title, theme or aspect ratio |
+| `changedAt` | When the library's copy was last written |
+
+**When `studioEdits` is present, writing `presentation.lampdeck` from what you
+last wrote will discard every one of those edits on the next import.** Rewriting
+the whole artifact is the ordinary way to lose a writer's afternoon. Say what
+the file shows and ask, or rewrite only the slides it does not name — their IDs
+are given precisely so you can leave the rest alone.
+
+Speaker notes on a deck whose `speakerNotesSource` is `manuscript` are never
+reported here. Lamp derives those from the writing and rewrites the deck each
+time the prose is saved, so they are Lamp's changes and not the writer's. On a
+deck whose notes are `authored`, edited notes do count as the writer's.
 
 ## What has changed in the writing
 

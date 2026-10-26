@@ -138,6 +138,60 @@ public struct LampPresentationImportStatus: Codable, Equatable, Sendable {
 
     public var speakerNotes: SpeakerNotes?
 
+    /// How the deck in Slide Studio compares with the one Lamp last wrote
+    /// there, when they differ.
+    ///
+    /// Slide Studio saves straight into the library and never touches
+    /// `presentation.lampdeck`, so the two copies part company the moment the
+    /// writer edits a slide. An agent that regenerates the artifact from what
+    /// it last wrote then throws those edits away on the next import, without
+    /// either side noticing. This is where that shows, before the import rather
+    /// than after it.
+    ///
+    /// Absent means the two agree, or that there is nothing to compare yet.
+    public var studioEdits: StudioEdits?
+
+    /// What the writer has changed in Slide Studio since the last import.
+    ///
+    /// Named by slide, because the useful answer to "may I regenerate this
+    /// deck?" is rarely yes or no: it is which slides to leave alone.
+    public struct StudioEdits: Codable, Equatable, Sendable {
+        /// Slides in the library that the import did not put there.
+        public var addedSlideIDs: [String]
+        /// Slides the import put there and the writer has since deleted.
+        public var removedSlideIDs: [String]
+        /// Slides in both copies, edited since the import.
+        public var changedSlideIDs: [String]
+        /// The slides both copies share, in a different order.
+        public var reordered: Bool
+        /// The deck's title, theme or aspect ratio.
+        public var deckSettingsChanged: Bool
+        /// When the library's copy was last written.
+        public var changedAt: Date?
+
+        public init(
+            addedSlideIDs: [String] = [],
+            removedSlideIDs: [String] = [],
+            changedSlideIDs: [String] = [],
+            reordered: Bool = false,
+            deckSettingsChanged: Bool = false,
+            changedAt: Date? = nil
+        ) {
+            self.addedSlideIDs = addedSlideIDs
+            self.removedSlideIDs = removedSlideIDs
+            self.changedSlideIDs = changedSlideIDs
+            self.reordered = reordered
+            self.deckSettingsChanged = deckSettingsChanged
+            self.changedAt = changedAt
+        }
+
+        /// Whether the writer has changed nothing, so the copies still agree.
+        public var isEmpty: Bool {
+            addedSlideIDs.isEmpty && removedSlideIDs.isEmpty && changedSlideIDs.isEmpty
+                && !reordered && !deckSettingsChanged
+        }
+    }
+
     /// The last time a deck was actually taken, kept through every later check.
     ///
     /// `outcome` describes the most recent look at the artifact, and Lamp looks
@@ -192,7 +246,8 @@ public struct LampPresentationImportStatus: Codable, Equatable, Sendable {
         missingAssets: [String] = [],
         issues: [Issue] = [],
         lastImport: Completed? = nil,
-        speakerNotes: SpeakerNotes? = nil
+        speakerNotes: SpeakerNotes? = nil,
+        studioEdits: StudioEdits? = nil
     ) {
         self.outcome = outcome
         self.checkedAt = checkedAt
@@ -205,6 +260,7 @@ public struct LampPresentationImportStatus: Codable, Equatable, Sendable {
         self.missingAssets = missingAssets
         self.issues = issues
         self.speakerNotes = speakerNotes
+        self.studioEdits = studioEdits
         // Built from the fields above, so this must follow them.
         self.lastImport = lastImport
             ?? (outcome == .imported

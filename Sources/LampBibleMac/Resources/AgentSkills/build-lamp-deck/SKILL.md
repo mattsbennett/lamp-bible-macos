@@ -40,6 +40,8 @@ Create or revise `presentation.lampdeck` in the current devotional workspace. Tr
 
    When the writer has edited while you worked, `writing_changes` shows what they changed, as diffs, so you need not keep copies of `draft.md` to compare. What a slide *summarises* is not checked by anything: after a passage changes, read the slides that stood on it.
 
+   `studioEdits` is the same thing for the slides: what the writer has changed in Slide Studio since your last import, named slide by slide. Read it **before** you write the deck as well as after — see the authoring rules.
+
 Lamp Bible detects a valid changed artifact and imports it into Slide Studio automatically.
 
 ## Authoring rules
@@ -70,6 +72,7 @@ Lamp Bible detects a valid changed artifact and imports it into Slide Studio aut
 - Do not modify `draft.md` unless the user also asked to revise the writing.
 - Deliver images in an `Assets` folder beside `presentation.lampdeck`, and reference them as `Assets/name.jpg`. Lamp copies the ones the deck names into the library on import; do not write into the library yourself.
 - Treat `presentation-import.json` as Lamp's to write and yours to read.
+- **Read `presentation-import.json` before you write `presentation.lampdeck`, not only after.** Slide Studio saves into the library and never touches your file, so the writer's editing is invisible in the workspace. If `studioEdits` is there, rewriting the whole artifact discards every slide it names at the next import. Rewrite only the slides it does not name, or say what it shows and ask.
 - Do not write directly into Lamp Bible's library or `.lamp/` metadata directory.
 
 For a minimal conforming artifact, inspect [references/example.lampdeck](references/example.lampdeck).

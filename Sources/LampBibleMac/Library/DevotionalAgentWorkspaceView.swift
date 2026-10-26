@@ -919,6 +919,17 @@ struct DevotionalAgentWorkspaceView: View {
     @State private var terminalCapture = TerminalCaptureState()
     @State private var showingRevisionHistory = false
     @State private var presentationStatus: String?
+    /// The last answer about what Slide Studio has changed, and the state of
+    /// the library's deck file when it was worked out.
+    ///
+    /// The workspace is looked at several times a second and decoding a deck
+    /// with its notes in it is not cheap, so the file is read again only when
+    /// its size or modification date has moved.
+    @State private var studioEditCheck: (
+        deckID: String,
+        stamp: LampPresentationStudioEdits.Stamp,
+        edits: LampPresentationImportStatus.StudioEdits?
+    )?
 
     private var selectedProvider: AIProviderCLI {
         AIProviderCLI(rawValue: providerID) ?? .codex
@@ -1552,7 +1563,8 @@ struct DevotionalAgentWorkspaceView: View {
                         outcome: present ? .unchanged : .absent,
                         message: present
                             ? "No change since the last import."
-                            : "No presentation.lampdeck in this workspace."
+                            : "No presentation.lampdeck in this workspace.",
+                        studioEdits: studioEdits(in: workspace, store: store)
                     ),
                     in: workspace
                 )
@@ -1575,6 +1587,11 @@ struct DevotionalAgentWorkspaceView: View {
             )
             let destination = try store.save(imported)
             try DevotionalAgentWorkspaceStore.markPresentationImported(data, in: workspace)
+            // What went into the library, not what came out of the workspace:
+            // the two differ by everything Lamp derives, so only this can tell
+            // a later edit in Slide Studio from Lamp's own work.
+            LampPresentationStudioEdits.recordWritten(imported, in: workspace)
+            studioEditCheck = nil
 
             let issues = LampPresentationDeckValidator.validate(imported) { assetPath in
                 store.assetURL(forAssetPath: assetPath).map {
@@ -1609,15 +1626,47 @@ struct DevotionalAgentWorkspaceView: View {
             )
         } catch {
             presentationStatus = "Deck not imported: \(error.localizedDescription)"
-            LampPresentationImportStatusStore.writeIfChanged(
-                LampPresentationImportStatus(
-                    issues: presentationIssues(in: error),
-                    outcome: .failed,
-                    message: "Deck not imported: \(error.localizedDescription)"
-                ),
-                in: workspace
+            var status = LampPresentationImportStatus(
+                issues: presentationIssues(in: error),
+                outcome: .failed,
+                message: "Deck not imported: \(error.localizedDescription)"
             )
+            // A deck that would not import has not undone anything the writer
+            // did in the editor, so the warning has to survive the failure.
+            status.studioEdits = studioEdits(in: workspace, store: store)
+            LampPresentationImportStatusStore.writeIfChanged(status, in: workspace)
         }
+    }
+
+    /// What Slide Studio has changed since Lamp last wrote this workspace's
+    /// deck, or nil when the two still agree.
+    ///
+    /// Gated on the deck file's size and modification date. The workspace is
+    /// looked at several times a second, and a deck carrying a talk's notes is
+    /// not cheap to decode — so the file is read again only when it has moved,
+    /// and the last answer stands until then.
+    ///
+    /// Empty becomes nil deliberately: the status file says what the writer
+    /// has changed, and a section listing nothing would read as a warning
+    /// rather than the absence of one.
+    private func studioEdits(
+        in workspace: URL,
+        store: LampPresentationDeckStore
+    ) -> LampPresentationImportStatus.StudioEdits? {
+        guard let deckID = LampPresentationImportStatusStore.read(in: workspace)
+            .flatMap({ $0.deckID ?? $0.lastImport?.deckID }),
+            let stamp = LampPresentationStudioEdits.stamp(deckID: deckID, store: store)
+        else { return nil }
+
+        if let check = studioEditCheck, check.deckID == deckID, check.stamp == stamp {
+            return check.edits
+        }
+        let found = LampPresentationStudioEdits.edits(
+            in: workspace, deckID: deckID, store: store
+        )
+        let edits = (found?.isEmpty ?? true) ? nil : found
+        studioEditCheck = (deckID, stamp, edits)
+        return edits
     }
 
     /// Derives a manuscript-following deck's notes from the writing, in place.
