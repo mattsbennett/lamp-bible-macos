@@ -17,6 +17,12 @@ struct DevotionalEditorRequest: Codable, Hashable {
     }
 }
 
+/// A tab in the writing editor's rank, for tracking which one is under the
+/// pointer.
+private struct HoveredDocumentTab: Hashable {
+    let id: String?
+}
+
 private enum DevotionalSaveState: Equatable {
     case idle
     case saving
@@ -356,6 +362,11 @@ struct DevotionalEditorView: View {
     @State private var isOpeningPresentation = false
     @State private var workspaceDocuments: [DevotionalWorkspaceEditorDocument] = []
     @State private var selectedWorkspaceDocumentID: String?
+    /// Which tab the pointer is over. A wrapper, because a tab's id is itself
+    /// optional — the writing's own prose has none — and `String??` says
+    /// nothing a reader can follow.
+    @State private var hoveredDocumentTab: HoveredDocumentTab?
+    @State private var hoveredTabBarButton: String?
     @State private var workspaceIsAvailable = false
     @State private var workspaceDocumentsInitialized = false
     /// Why the last attempt to open a workspace file failed. Not a document's
@@ -640,64 +651,100 @@ struct DevotionalEditorView: View {
         }
     }
 
+    /// The documents open for this writing, drawn as the Reader draws its own
+    /// tabs: contiguous full-height cells divided by hairlines, so the row
+    /// reads as a rank of tabs rather than a row of floating buttons, with the
+    /// workspace controls riding at the end of the rank instead of across the
+    /// window, where they scroll away with the tabs they belong to.
+    /// The Reader's tab height, so the two ranks line up.
+    private static let tabHeight: CGFloat = 30
+
     private var documentTabBar: some View {
-        HStack(spacing: 0) {
-            ScrollView(.horizontal) {
-                HStack(spacing: 4) {
+        ScrollView(.horizontal) {
+            HStack(spacing: 0) {
+                documentTab(
+                    id: nil,
+                    title: "Main Prose",
+                    systemImage: "doc.text",
+                    isDirty: isDirty,
+                    hasConflict: false
+                )
+                tabSeparator
+                ForEach(workspaceDocuments) { document in
                     documentTab(
-                        id: nil,
-                        title: "Main Prose",
-                        systemImage: "doc.text",
-                        isDirty: isDirty,
-                        hasConflict: false
+                        id: document.id,
+                        title: title(of: document),
+                        systemImage: document.isHandOpened ? "doc" : "doc.plaintext",
+                        isDirty: document.isDirty,
+                        hasConflict: document.hasExternalConflict,
+                        canClose: document.isHandOpened
                     )
-                    ForEach(workspaceDocuments) { document in
-                        documentTab(
-                            id: document.id,
-                            title: title(of: document),
-                            systemImage: document.isHandOpened ? "doc" : "doc.plaintext",
-                            isDirty: document.isDirty,
-                            hasConflict: document.hasExternalConflict,
-                            canClose: document.isHandOpened
-                        )
-                    }
+                    tabSeparator
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
+
+                tabBarButton(
+                    "New Markdown File",
+                    systemImage: "plus",
+                    help: "Create a companion Markdown file"
+                ) { showingNewWorkspaceDocument = true }
+                tabSeparator
+                tabBarButton(
+                    "Open Workspace File",
+                    systemImage: "folder.badge.plus",
+                    help: "Open any file from this writing's workspace",
+                    isEnabled: workspaceIsAvailable
+                ) { openWorkspaceFile() }
+                tabSeparator
+                tabBarButton(
+                    "Reveal Workspace",
+                    systemImage: "folder",
+                    help: "Reveal the writing workspace in Finder",
+                    isEnabled: workspaceIsAvailable
+                ) { NSWorkspace.shared.activateFileViewerSelecting([workspaceURL]) }
+                tabSeparator
             }
-            .scrollIndicators(.hidden)
-
-            Divider()
-                .frame(height: 22)
-
-            HStack(spacing: 10) {
-                Button("New Markdown File", systemImage: "plus") {
-                    showingNewWorkspaceDocument = true
-                }
-                .labelStyle(.iconOnly)
-                .buttonStyle(.borderless)
-                .help("Create a companion Markdown file")
-
-                Button("Open Workspace File", systemImage: "folder.badge.plus") {
-                    openWorkspaceFile()
-                }
-                .labelStyle(.iconOnly)
-                .buttonStyle(.borderless)
-                .disabled(!workspaceIsAvailable)
-                .help("Open any file from this writing's workspace")
-
-                Button("Reveal Workspace", systemImage: "folder") {
-                    NSWorkspace.shared.activateFileViewerSelecting([workspaceURL])
-                }
-                .labelStyle(.iconOnly)
-                .buttonStyle(.borderless)
-                .disabled(!workspaceIsAvailable)
-                .help("Reveal the writing workspace in Finder")
-            }
-            .padding(.horizontal, 9)
+            .frame(height: Self.tabHeight)
         }
-        .frame(height: 36)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .scrollIndicators(.hidden)
+        .frame(height: Self.tabHeight)
+        .background(.bar)
+    }
+
+    private var tabSeparator: some View {
+        Rectangle()
+            .fill(.separator)
+            .frame(width: 1)
+    }
+
+    /// One of the workspace controls at the end of the rank, drawn as a cell of
+    /// the rank rather than as a button on top of it.
+    private func tabBarButton(
+        _ title: String,
+        systemImage: String,
+        help: String,
+        isEnabled: Bool = true,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 30, height: Self.tabHeight)
+                .background(
+                    hoveredTabBarButton == title
+                        ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear),
+                    ignoresSafeAreaEdges: []
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .disabled(!isEnabled)
+        .onHover { isHovering in
+            hoveredTabBarButton = isHovering
+                ? title : (hoveredTabBarButton == title ? nil : hoveredTabBarButton)
+        }
+        .help(help)
     }
 
     private func documentTab(
@@ -709,35 +756,74 @@ struct DevotionalEditorView: View {
         canClose: Bool = false
     ) -> some View {
         let isSelected = selectedWorkspaceDocumentID == id
-        return Button {
-            selectWorkspaceDocument(id)
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: systemImage)
-                    .foregroundStyle(isSelected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
-                Text(title)
-                    .lineLimit(1)
-                if hasConflict {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                        .accessibilityLabel("File conflict")
-                } else if isDirty {
-                    Circle()
-                        .fill(.secondary)
-                        .frame(width: 6, height: 6)
-                        .accessibilityLabel("Unsaved changes")
+        let isHovered = hoveredDocumentTab == HoveredDocumentTab(id: id)
+        // Siblings rather than a close button nested inside the tab button, as
+        // in the Reader: a Button inside another Button's label is a fight
+        // over the click.
+        return HStack(spacing: 5) {
+            Button {
+                selectWorkspaceDocument(id)
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: systemImage)
+                    Text(title)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 0)
+                    if hasConflict {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                            .accessibilityLabel("File conflict")
+                    } else if isDirty {
+                        Circle()
+                            .fill(.secondary)
+                            .frame(width: 6, height: 6)
+                            .accessibilityLabel("Unsaved changes")
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(height: Self.tabHeight)
+                .contentShape(Rectangle())
             }
-            .font(.callout)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(
-                isSelected ? Color.accentColor.opacity(0.18) : Color.clear,
-                in: RoundedRectangle(cornerRadius: 6)
-            )
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+
+            if canClose, let id {
+                Button("Close \(title)", systemImage: "xmark") {
+                    closeWorkspaceDocument(id)
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.plain)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                // Revealed on approach, so idle tabs stay titles rather than a
+                // row of crosses.
+                .opacity(isSelected || isHovered ? 1 : 0)
+                .disabled(isDirty)
+                .help(isDirty ? "Save this file before closing it" : "Close this file")
+            }
         }
-        .buttonStyle(.plain)
+        .font(.subheadline)
+        .foregroundStyle(isSelected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+        .padding(.horizontal, 10)
+        .frame(minWidth: 104, maxWidth: 190)
+        .frame(height: Self.tabHeight)
+        // A shape style fills the safe area too unless told not to, and the
+        // bar sits under the toolbar: the open tab's fill would rise behind it.
+        .background(
+            documentTabBackground(isSelected: isSelected, isHovered: isHovered),
+            ignoresSafeAreaEdges: []
+        )
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Color.accentColor)
+                .frame(height: 2)
+                .opacity(isSelected ? 1 : 0)
+        }
+        .onHover { isHovering in
+            let tab = HoveredDocumentTab(id: id)
+            hoveredDocumentTab = isHovering
+                ? tab : (hoveredDocumentTab == tab ? nil : hoveredDocumentTab)
+        }
         .help(title)
         .contextMenu {
             if canClose, let id {
@@ -749,6 +835,14 @@ struct DevotionalEditorView: View {
                     .help(isDirty ? "Save this file before closing it" : "")
             }
         }
+    }
+
+    private func documentTabBackground(isSelected: Bool, isHovered: Bool) -> some ShapeStyle {
+        if isSelected {
+            // The content colour, so the open tab reads as the page below it.
+            return AnyShapeStyle(.background)
+        }
+        return isHovered ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear)
     }
 
     /// Takes a hand-opened file back off the tab bar. Its contents are left
