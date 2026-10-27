@@ -1447,6 +1447,9 @@ private struct VerseStudyRequest: Hashable {
     let translationID: String?
     let bookNumber: Int?
     let chapterNumber: Int?
+    /// The verse being read. The pane shows that verse's notes alone, so a new
+    /// selection is a new request rather than a filter over what was fetched.
+    let reference: Int?
 }
 
 /// A verse's footnotes, original-language words and cross-references, kept together
@@ -1479,16 +1482,23 @@ private struct VerseInspectorView: View {
         VerseStudyRequest(
             translationID: model.selectedTranslationID,
             bookNumber: model.chapter?.book.id,
-            chapterNumber: model.chapter?.number
+            chapterNumber: model.chapter?.number,
+            reference: model.selectedVerseReference
         )
     }
 
     /// Built from the chapter already in memory — lexical annotations and
     /// cross-references ride along on every verse — so only footnote bodies need
     /// fetching, and only for the verses that advertise having any.
+    /// The verse being read, and only that one.
+    ///
+    /// This listed every annotated verse in the chapter and tinted the one
+    /// selected, which made a pane named for a verse into a chapter to search.
     private var groups: [VerseStudyGroup] {
-        guard let chapter = model.chapter else { return [] }
-        return chapter.verses.compactMap { verse in
+        guard let chapter = model.chapter,
+              let reference = model.selectedVerseReference
+        else { return [] }
+        return chapter.verses.filter { $0.id == reference }.compactMap { verse in
             let group = VerseStudyGroup(
                 id: verse.id,
                 title: "\(chapter.book.name) \(chapter.number):\(verse.number)",
@@ -1523,6 +1533,13 @@ private struct VerseInspectorView: View {
             } else if isLoading && footnotesByReference.isEmpty && groups.isEmpty {
                 ProgressView("Loading Verse Details…")
                     .studyPaneState()
+            } else if model.selectedVerseReference == nil {
+                ContentUnavailableView(
+                    "No Verse Chosen",
+                    systemImage: "hand.tap",
+                    description: Text("Click a verse in the reader to see its translation notes, original-language words and cross-references.")
+                )
+                .studyPaneState()
             } else if groups.isEmpty {
                 ContentUnavailableView(
                     "No Verse Notes",
@@ -1644,7 +1661,13 @@ private struct VerseInspectorView: View {
             errorMessage = nil
             return
         }
-        let references = chapter.verses.filter(\.hasFootnotes).map(\.id)
+        // The one verse the pane shows, rather than every annotated verse in
+        // the chapter: this used to ask the library once per footnoted verse
+        // on every chapter opened, for a pane that showed one of them at a
+        // time.
+        let references = chapter.verses
+            .filter { $0.id == model.selectedVerseReference && $0.hasFootnotes }
+            .map(\.id)
         guard !references.isEmpty else {
             footnotesByReference = [:]
             isLoading = false
@@ -1677,8 +1700,11 @@ private struct VerseInspectorView: View {
     }
 
     private var contextDescription: String {
-        guard let chapter = model.chapter else { return "the current chapter" }
-        return "\(chapter.book.name) \(chapter.number)"
+        guard let chapter = model.chapter else { return "the verse being read" }
+        guard let reference = model.selectedVerseReference,
+              let verse = chapter.verses.first(where: { $0.id == reference })
+        else { return "\(chapter.book.name) \(chapter.number)" }
+        return "\(chapter.book.name) \(chapter.number):\(verse.number)"
     }
 
     private func sortedScriptureAnnotations(
