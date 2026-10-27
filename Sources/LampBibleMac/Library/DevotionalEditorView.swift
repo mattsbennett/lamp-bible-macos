@@ -916,9 +916,9 @@ struct DevotionalEditorView: View {
                         Button("3 × 3 Table") { tipTapCoordinator?.insertTable(rows: 3, columns: 3) }
                         Button("4 × 4 Table") { tipTapCoordinator?.insertTable(rows: 4, columns: 4) }
                     } label: {
-                        Label("Table", systemImage: "tablecells")
+                        toolbarIcon("tablecells")
                     }
-                    .labelStyle(.iconOnly)
+                    .accessibilityLabel("Table")
                     .help("Insert table")
                 }
 
@@ -1387,10 +1387,12 @@ struct DevotionalEditorView: View {
     private var editorTextSizeControls: some View {
         let scale = LampTextScale.writingEditorText
         return editorControlGroup("Text Size") {
-            Button("Smaller", systemImage: "minus") {
+            Button {
                 editorFontSize = scale.stepped(editorFontSize, by: -1)
+            } label: {
+                toolbarIcon("minus")
             }
-            .labelStyle(.iconOnly)
+            .accessibilityLabel("Smaller")
             .disabled(!scale.canDecrease(editorFontSize))
             .help("Decrease editor text size")
 
@@ -1398,13 +1400,32 @@ struct DevotionalEditorView: View {
                 .monospacedDigit()
                 .frame(minWidth: 36)
 
-            Button("Larger", systemImage: "plus") {
+            Button {
                 editorFontSize = scale.stepped(editorFontSize, by: 1)
+            } label: {
+                toolbarIcon("plus")
             }
-            .labelStyle(.iconOnly)
+            .accessibilityLabel("Larger")
             .disabled(!scale.canIncrease(editorFontSize))
             .help("Increase editor text size")
         }
+    }
+
+    /// A toolbar button's icon, in a box of its own.
+    ///
+    /// A symbol's own height is what decides a bordered button's height, and
+    /// the symbols here are nothing like each other: `minus` drew a button
+    /// 15.5pt tall where `link` drew one of 28.5, with four more heights in
+    /// between and no two of the rest matching. Boxing every icon the same
+    /// makes every button the same.
+    ///
+    /// 16pt, because a bordered menu is 28pt tall whatever is in it and the
+    /// style and table controls are menus: at 14pt the buttons agreed with
+    /// each other at 26 and still sat below those two. At 16 the whole row is
+    /// one height.
+    private func toolbarIcon(_ systemImage: String) -> some View {
+        Image(systemName: systemImage)
+            .frame(width: 16, height: 16)
     }
 
     private func visualCommandButton(
@@ -1413,8 +1434,8 @@ struct DevotionalEditorView: View {
         isActive: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
-        Button(title, systemImage: systemImage, action: action)
-            .labelStyle(.iconOnly)
+        Button(action: action) { toolbarIcon(systemImage) }
+            .accessibilityLabel(title)
             .frame(minWidth: 24)
             .background(
                 isActive ? Color.accentColor.opacity(0.22) : Color.clear,
@@ -1424,10 +1445,12 @@ struct DevotionalEditorView: View {
     }
 
     private func markdownCommandButton(_ command: MarkdownCommand) -> some View {
-        Button(command.title, systemImage: command.systemImage) {
+        Button {
             apply(command)
+        } label: {
+            toolbarIcon(command.systemImage)
         }
-        .labelStyle(.iconOnly)
+        .accessibilityLabel(command.title)
         .frame(minWidth: 24)
         .help(command.title)
     }
