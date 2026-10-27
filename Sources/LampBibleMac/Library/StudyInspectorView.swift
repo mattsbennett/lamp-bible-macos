@@ -53,16 +53,18 @@ struct StudyInspectorView: View {
     /// the tab picker is arithmetic instead of a negotiation.
     private static let scrollLinkButtonWidth: CGFloat = 16
 
-    /// What the segmented picker is given, as opposed to what it would ask for.
+    /// What the tab strip is given.
     ///
-    /// Four spelled-out labels have an intrinsic width of 465pt. A hosted
-    /// `NSSegmentedControl` reports that intrinsic width to SwiftUI even when it
-    /// is proposed less, and the stack above adopts it, so the whole pane — tab
-    /// bar, search field, entries and all — drew wider than the column and spilled
-    /// over the reader. It only showed once a pane had real content in it, because
-    /// that is what triggers the pass where the control's intrinsic size wins.
-    /// A definite frame leaves nothing to win: the control is 364pt or wider,
-    /// which every allowed column width can hold.
+    /// This was a segmented `Picker`, and the number was fought over twice. A
+    /// hosted `NSSegmentedControl` reports the 465pt its four spelled-out
+    /// labels want even when it is proposed less; a definite frame stopped the
+    /// pane adopting that width, but the control went on *drawing* at it,
+    /// centred, spilling past both ends of its frame and under the scroll-link
+    /// button. How far it spilled depended on which label was selected, since
+    /// the selected one is set in a heavier weight — so the strip changed width
+    /// as the writer moved between tabs. `StudyToolPicker` is drawn here
+    /// instead, in equal shares of whatever width it is handed, which is a
+    /// width it cannot exceed.
     private var tabPickerWidth: CGFloat {
         StudyInspectorMetrics.clamped(columnWidth)
             - StudyPaneMetrics.contentInset * 2   // the row's own padding
@@ -79,15 +81,8 @@ struct StudyInspectorView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                Picker("Study Tool", selection: $selectedTab) {
-                    Text("Commentary").tag("commentary")
-                    Text("Verse").tag("verse")
-                    Text("Notes").tag("notes")
-                    Text("Dictionary").tag("dictionary")
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: tabPickerWidth)
+                StudyToolPicker(selection: $selectedTab)
+                    .frame(width: tabPickerWidth)
 
                 Button {
                     scrollLink.isLinked.toggle()
@@ -3059,5 +3054,58 @@ private struct DictionaryPopoverEntryView: View {
         .fontDesign(typeface.design)
         .lineSpacing(lineSpacing)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// The study column's tab strip: four tools in equal shares of the width it is
+/// given, the chosen one on the accent.
+///
+/// Drawn rather than hosted. A segmented `Picker` is an `NSSegmentedControl`,
+/// which draws at the width its labels want however little it is offered, and
+/// wants a different width depending on which label is selected — so the strip
+/// grew, shrank and spilled over the scroll-link button as tabs were chosen.
+/// Equal shares of a given width cannot do any of that, and at the narrowest
+/// column each share still holds its word.
+private struct StudyToolPicker: View {
+    @Binding var selection: String
+
+    private static let tools: [(id: String, title: String)] = [
+        ("commentary", "Commentary"),
+        ("verse", "Verse"),
+        ("notes", "Notes"),
+        ("dictionary", "Dictionary"),
+    ]
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(Self.tools, id: \.id) { tool in
+                let isSelected = selection == tool.id
+                Button {
+                    selection = tool.id
+                } label: {
+                    Text(tool.title)
+                        .lineLimit(1)
+                        // The narrowest column leaves each share about 72pt,
+                        // which holds every one of these words; the floor is
+                        // for a larger system text size rather than for them.
+                        .minimumScaleFactor(0.85)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 3)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .font(.subheadline.weight(isSelected ? .semibold : .regular))
+                .foregroundStyle(isSelected ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+                .background(
+                    isSelected ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.clear),
+                    in: RoundedRectangle(cornerRadius: 5)
+                )
+                .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+            }
+        }
+        .padding(2)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 7))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Study Tool")
     }
 }
