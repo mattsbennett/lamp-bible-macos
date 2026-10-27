@@ -106,3 +106,82 @@ struct FootnoteLabelTests {
         #expect(used == ["a", "b", "c"])
     }
 }
+
+/// A translation marks its notes at character offsets in a verse, and the
+/// reader draws that verse in runs. Putting each marker in the right run, at
+/// the right place in it, is counting that is easy to get wrong by one.
+struct ReaderFootnoteMarkTests {
+    private let verse = "In the beginning God created the heavens and the earth."
+
+    @Test func marksTheWholeVerseFurthestFirst() {
+        let found = LampReaderFootnoteMarks.insertions(
+            in: verse, from: 0, to: verse.count, markedAt: [3, 21]
+        )
+        #expect(found.map(\.index) == [1, 0], "the later marker is inserted first")
+        #expect(found.map(\.location) == [21, 3])
+    }
+
+    /// Inserting from the back is the whole point: done in the other order,
+    /// the second marker would land a character late.
+    @Test func everyLocationStillHoldsAfterTheOneBeforeIt() {
+        let found = LampReaderFootnoteMarks.insertions(
+            in: verse, from: 0, to: verse.count, markedAt: [3, 21]
+        )
+        let result = NSMutableAttributedString(string: verse)
+        for insertion in found {
+            result.insert(NSAttributedString(string: "·"), at: insertion.location)
+        }
+        // Offset 3 is the "t" of "the" and 21 the "c" of "created": a marker
+        // goes before the character its note is about.
+        #expect(result.string == "In ·the beginning God ·created the heavens and the earth.")
+    }
+
+    /// A verse drawn as poetry is several runs of one string, and a marker
+    /// belongs to exactly one of them.
+    @Test func keepsEachMarkerToTheRunItFallsIn() {
+        let first = LampReaderFootnoteMarks.insertions(
+            in: verse, from: 0, to: 18, markedAt: [3, 21]
+        )
+        let second = LampReaderFootnoteMarks.insertions(
+            in: verse, from: 18, to: verse.count, markedAt: [3, 21]
+        )
+        #expect(first.map(\.index) == [0])
+        #expect(second.map(\.index) == [1])
+        #expect(second.first?.location == 3, "counted from the start of its own run")
+    }
+
+    /// Offsets count characters and a text view counts UTF-16 units, which part
+    /// company at the first word that isn't plain ASCII.
+    @Test func countsCharactersWhereTheTextViewCountsUnits() {
+        let accented = "Sí, Yahweh 𝕲 said"        // 𝕲 is two UTF-16 units
+        let afterTheSymbol = LampReaderFootnoteMarks.insertions(
+            in: accented, from: 0, to: accented.count, markedAt: [13]
+        )
+        #expect(afterTheSymbol.first?.location == 14, "the symbol counts twice in a text view")
+
+        let result = NSMutableAttributedString(string: accented)
+        for insertion in afterTheSymbol {
+            result.insert(NSAttributedString(string: "a"), at: insertion.location)
+        }
+        #expect(result.string == "Sí, Yahweh 𝕲 asaid")
+    }
+
+    @Test func marksTheVeryStartAndTheVeryEnd() {
+        let found = LampReaderFootnoteMarks.insertions(
+            in: verse, from: 0, to: verse.count, markedAt: [0, verse.count - 1]
+        )
+        #expect(found.map(\.location) == [verse.count - 1, 0])
+    }
+
+    @Test func leavesOutWhatTheRunDoesNotHold() {
+        #expect(LampReaderFootnoteMarks.insertions(
+            in: verse, from: 0, to: 5, markedAt: [40]
+        ).isEmpty)
+        #expect(LampReaderFootnoteMarks.insertions(
+            in: verse, from: 0, to: verse.count, markedAt: [-1, 9_999]
+        ).isEmpty)
+        #expect(LampReaderFootnoteMarks.insertions(
+            in: "", from: 0, to: 0, markedAt: [0]
+        ).isEmpty)
+    }
+}

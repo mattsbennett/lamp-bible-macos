@@ -1566,6 +1566,13 @@ enum ReaderLayoutMode: String, CaseIterable, Identifiable {
     }
 }
 
+/// A translator's note the reader has opened: which verse, and which of that
+/// verse's notes.
+struct ReaderFootnoteKey: Equatable {
+    let verse: Int
+    let index: Int
+}
+
 struct ReaderParagraph: Identifiable {
     let verses: [LampVerse]
 
@@ -2765,6 +2772,12 @@ private struct TranslationReaderView: View, Equatable {
             if newValue { readerSidebar = .chat } else if readerSidebar == .chat { readerSidebar = nil }
         }
     }
+    /// The translator's notes for the passage on screen: what each says, and
+    /// where in its verse it belongs. Fetched after the text is drawn, since
+    /// most reading never opens one.
+    @State private var chapterFootnotes: [Int: LampVerseStudyData] = [:]
+    /// The note the reader has opened, by verse and by its place in that verse.
+    @State private var revealedFootnote: ReaderFootnoteKey?
     @State private var showingReaderLocationPicker = false
     @State private var highlightVerse: LampVerse?
     @State private var planReadingChapters: [LampChapter] = []
@@ -2958,6 +2971,9 @@ private struct TranslationReaderView: View, Equatable {
             if loadedPlanReadingRequest == request, !planReadingChapters.isEmpty {
                 passageView(planReadingChapters)
                     .id("plan:\(request.translationID):\(request.readingID)")
+                    .task(id: footnoteLoadKey(for: planReadingChapters)) {
+                        await loadFootnotes(for: planReadingChapters)
+                    }
             } else if let planReadingError, !isLoadingPlanReading {
                 ContentUnavailableView(
                     "Reading Failed to Load",
@@ -2970,6 +2986,9 @@ private struct TranslationReaderView: View, Equatable {
         } else if let chapter = model.chapter {
             passageView([chapter])
                 .id("\(chapter.book.id):\(chapter.number)")
+                .task(id: footnoteLoadKey(for: [chapter])) {
+                    await loadFootnotes(for: [chapter])
+                }
         } else if model.isLoadingChapter {
             ProgressView("Loading Chapter…")
         } else {
@@ -3411,10 +3430,52 @@ private struct TranslationReaderView: View, Equatable {
         if paragraph.verses.count == 1, let verse = paragraph.verses.first {
             renderedVerseText(for: verse)
         } else {
-            ReaderSelectableText(
-                attributedText: continuousText(for: paragraph.verses),
-                openLink: { _ = handleReaderLink($0) }
-            )
+            VStack(alignment: .leading, spacing: 0) {
+                ReaderSelectableText(
+                    attributedText: continuousText(for: paragraph.verses),
+                    openLink: { _ = handleReaderLink($0) }
+                )
+                revealedFootnoteNote(among: paragraph.verses)
+            }
+        }
+    }
+
+    /// The opened note, shown under the text that marks it.
+    ///
+    /// Under the verse rather than in a panel elsewhere: a translator's note
+    /// says what a word of this verse could also have been, and reading it
+    /// anywhere but beside that word means carrying the sentence there.
+    @ViewBuilder
+    private func revealedFootnoteNote(among verses: [LampVerse]) -> some View {
+        if let key = revealedFootnote,
+           verses.contains(where: { $0.id == key.verse }),
+           let data = chapterFootnotes[key.verse],
+           case let marks = footnoteMarks(for: key.verse),
+           marks.indices.contains(key.index),
+           let note = data.footnotes.first(where: { $0.id == marks[key.index].footnoteID }) {
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                Text(footnoteLabel(key.index))
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(Color(nsColor: .lampLink))
+                Text(note.content)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                Button("Close Note", systemImage: "xmark") {
+                    revealedFootnote = nil
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.plain)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 7))
+            .padding(.top, 6)
+            .padding(.horizontal, 8)
         }
     }
 
@@ -3466,17 +3527,6 @@ private struct TranslationReaderView: View, Equatable {
             attributes: numberAttributes
         ))
 
-        if verse.hasFootnotes {
-            var attributes = markerTextAttributes(
-                size: max(fontSize * 0.55, 10),
-                weight: .bold,
-                // The marker opens the note, so it reads as a link.
-                color: .lampLink,
-                baselineOffset: max(fontSize * 0.32, 5)
-            )
-            attributes[.link] = verseURL
-            result.append(NSAttributedString(string: "*", attributes: attributes))
-        }
 
         if model.hasPersonalNote(for: verse.id) {
             var attributes = markerTextAttributes(
@@ -3506,6 +3556,14 @@ private struct TranslationReaderView: View, Equatable {
 
     @ViewBuilder
     private func renderedVerseText(for verse: LampVerse) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            verseLines(for: verse)
+            revealedFootnoteNote(among: [verse])
+        }
+    }
+
+    @ViewBuilder
+    private func verseLines(for verse: LampVerse) -> some View {
         if let poetryRange = partialPoetryRange(for: verse) {
             VStack(alignment: .leading, spacing: 4) {
                 ReaderSelectableText(
@@ -3562,9 +3620,15 @@ private struct TranslationReaderView: View, Equatable {
         range: ReaderTextRange? = nil
     ) -> NSAttributedString {
         let text = styledText(for: verse)
-        guard let range else { return text }
-
         let characterIndices = Array(verse.text.indices) + [verse.text.endIndex]
+
+        guard let range else {
+            return markingFootnotes(
+                in: text, of: verse,
+                from: 0, to: verse.text.count
+            )
+        }
+
         guard range.startOffset >= 0,
               range.endOffset > range.startOffset,
               range.endOffset < characterIndices.count,
@@ -3575,7 +3639,55 @@ private struct TranslationReaderView: View, Equatable {
             characterIndices[range.startOffset]..<characterIndices[range.endOffset],
             in: verse.text
         )
-        return text.attributedSubstring(from: nativeRange)
+        return markingFootnotes(
+            in: text.attributedSubstring(from: nativeRange), of: verse,
+            from: range.startOffset, to: range.endOffset
+        )
+    }
+
+    /// Puts a letter in the text where each translator's note belongs.
+    ///
+    /// Done to the drawn text rather than inside `styledText`, and after any
+    /// range has been taken from it: every offset the verse carries — its
+    /// highlights, its red letter, the poetry split — counts the characters the
+    /// translation wrote, and a marker put among them earlier would move the
+    /// ones after it. Inserted from the back for the same reason.
+    private func markingFootnotes(
+        in body: NSAttributedString,
+        of verse: LampVerse,
+        from startOffset: Int,
+        to endOffset: Int
+    ) -> NSAttributedString {
+        let marks = footnoteMarks(for: verse.id)
+        guard !marks.isEmpty else { return body }
+
+        let insertions = LampReaderFootnoteMarks.insertions(
+            in: verse.text,
+            from: startOffset,
+            to: endOffset,
+            markedAt: marks.map(\.offset)
+        )
+        guard !insertions.isEmpty else { return body }
+
+        let result = NSMutableAttributedString(attributedString: body)
+        for insertion in insertions {
+            var attributes = markerTextAttributes(
+                size: max(fontSize * 0.55, 10),
+                weight: .semibold,
+                // It opens the note, so it reads as a link.
+                color: .lampLink,
+                baselineOffset: max(fontSize * 0.32, 5)
+            )
+            attributes[.link] = readerFootnoteURL(verse: verse.id, index: insertion.index)
+            guard insertion.location <= result.length else { continue }
+            result.insert(
+                NSAttributedString(
+                    string: footnoteLabel(insertion.index), attributes: attributes
+                ),
+                at: insertion.location
+            )
+        }
+        return result
     }
 
     private func partialPoetryRange(for verse: LampVerse) -> ReaderTextRange? {
@@ -3787,6 +3899,69 @@ private struct TranslationReaderView: View, Equatable {
             return
         }
         openVerseStudy(verse)
+    }
+
+    /// What the notes on screen were fetched for. A translation's notes are
+    /// its own, so a change of translation is a change of notes.
+    private func footnoteLoadKey(for chapters: [LampChapter]) -> String {
+        let passage = chapters
+            .map { "\($0.book.id).\($0.number)" }
+            .joined(separator: ",")
+        return "\(model.selectedTranslationID ?? "-"):\(passage)"
+    }
+
+    /// Reads the translator's notes for the verses that advertise having any.
+    ///
+    /// After the passage is on screen rather than before it: the text is what
+    /// the reader came for, and a chapter of Genesis asks the library once per
+    /// footnoted verse. The markers appear as the answers arrive.
+    private func loadFootnotes(for chapters: [LampChapter]) async {
+        guard let translationID = model.selectedTranslationID else {
+            chapterFootnotes = [:]
+            return
+        }
+        let references = chapters.flatMap(\.verses).filter(\.hasFootnotes).map(\.id)
+        guard !references.isEmpty else {
+            chapterFootnotes = [:]
+            return
+        }
+        var loaded: [Int: LampVerseStudyData] = [:]
+        for reference in references {
+            if Task.isCancelled { return }
+            guard let data = try? await model.library.verseStudyData(
+                moduleID: translationID,
+                reference: reference
+            ) else { continue }
+            guard !data.footnotes.isEmpty, !data.footnoteReferences.isEmpty else { continue }
+            loaded[reference] = data
+        }
+        guard !Task.isCancelled else { return }
+        chapterFootnotes = loaded
+        revealedFootnote = nil
+    }
+
+    /// A verse's notes in the order they are marked in its text.
+    private func footnoteMarks(for verse: Int) -> [LampVerseFootnoteReference] {
+        (chapterFootnotes[verse]?.footnoteReferences ?? []).sorted { $0.offset < $1.offset }
+    }
+
+    /// a, b, c — the letters a translation marks its notes with, rather than
+    /// numbers, which would read as verse numbers in the middle of a verse.
+    private func footnoteLabel(_ index: Int) -> String {
+        let letters = Array("abcdefghijklmnopqrstuvwxyz")
+        return String(letters[index % letters.count])
+    }
+
+    private func readerFootnoteURL(verse: Int, index: Int) -> URL? {
+        URL(string: "lamp-bible-footnote://\(verse)/\(index)")
+    }
+
+    private func readerFootnoteKey(from url: URL) -> ReaderFootnoteKey? {
+        guard url.scheme == "lamp-bible-footnote",
+              let host = url.host, let verse = Int(host),
+              let index = Int(url.lastPathComponent)
+        else { return nil }
+        return ReaderFootnoteKey(verse: verse, index: index)
     }
 
     private func prepareChapterForStudy(reference: Int) {
@@ -4012,13 +4187,18 @@ private struct TranslationReaderView: View, Equatable {
     }
 
     private func handleReaderLink(_ url: URL) -> Bool {
-        let isReaderLink = readerVerseReference(from: url) != nil || LexiconLookupLink(url: url) != nil
+        let isReaderLink = readerVerseReference(from: url) != nil
+            || readerFootnoteKey(from: url) != nil
+            || LexiconLookupLink(url: url) != nil
         guard isReaderLink else { return false }
         guard linkActivationGate.shouldActivate(url, at: ProcessInfo.processInfo.systemUptime) else {
             return true
         }
 
-        if let reference = readerVerseReference(from: url) {
+        if let footnote = readerFootnoteKey(from: url) {
+            // A second click on the same marker puts the note away again.
+            revealedFootnote = revealedFootnote == footnote ? nil : footnote
+        } else if let reference = readerVerseReference(from: url) {
             openVerseStudy(reference: reference)
         } else if let lookup = LexiconLookupLink(url: url) {
             openLexicon(lookup)

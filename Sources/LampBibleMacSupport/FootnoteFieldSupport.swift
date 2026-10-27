@@ -121,3 +121,61 @@ public enum LampFootnoteLabels {
         return String(candidate)
     }
 }
+
+/// Where a translator's notes are marked in a verse.
+///
+/// A translation anchors each note to a character offset in the verse's text,
+/// and the reader draws that verse in runs — a poetry line, its indented
+/// continuation, the rest — each a slice of the same string. Working out where
+/// a marker goes in a given run is counting of the kind that is wrong by one
+/// for a year: a verse's offsets count characters, a text view's positions
+/// count UTF-16 units, and the two part company at the first accented word.
+public enum LampReaderFootnoteMarks {
+    /// One marker to put in: where it goes in the run being drawn, and which
+    /// of the verse's notes it is.
+    public struct Insertion: Equatable, Sendable {
+        /// A UTF-16 offset into the run, which is what a text view counts in.
+        public let location: Int
+        /// The note's place among the verse's own, which decides its letter.
+        public let index: Int
+
+        public init(location: Int, index: Int) {
+            self.location = location
+            self.index = index
+        }
+    }
+
+    /// The markers belonging to the run of `text` between two character
+    /// offsets, furthest first.
+    ///
+    /// Furthest first because each one moves everything after it: inserted from
+    /// the back, every location still means what it meant when it was worked
+    /// out. A note marked outside this run belongs to another of the verse's
+    /// lines, which marks it itself, so it is left out rather than clamped to
+    /// an edge where it would sit against the wrong word.
+    public static func insertions(
+        in text: String,
+        from startOffset: Int,
+        to endOffset: Int,
+        markedAt offsets: [Int]
+    ) -> [Insertion] {
+        let indices = Array(text.indices) + [text.endIndex]
+        func location(of offset: Int) -> Int? {
+            guard offset >= 0, offset < indices.count else { return nil }
+            return NSRange(indices[offset]..<indices[offset], in: text).location
+        }
+        guard startOffset >= 0, startOffset < indices.count,
+              endOffset >= startOffset,
+              let runStart = location(of: startOffset)
+        else { return [] }
+
+        return offsets.enumerated()
+            .compactMap { index, offset -> Insertion? in
+                guard offset >= startOffset, offset < endOffset,
+                      let at = location(of: offset)
+                else { return nil }
+                return Insertion(location: at - runStart, index: index)
+            }
+            .sorted { $0.location > $1.location }
+    }
+}
