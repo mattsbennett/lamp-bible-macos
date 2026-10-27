@@ -3085,16 +3085,22 @@ private struct StudyToolPicker: View {
                 } label: {
                     Text(tool.title)
                         .lineLimit(1)
-                        // The narrowest column leaves each share about 72pt,
-                        // which holds every one of these words; the floor is
-                        // for a larger system text size rather than for them.
+                        // 13pt needs 81.5pt for "Commentary" in the chosen
+                        // weight, and a share is 93.5pt at the column's usual
+                        // width and 85.5 at its default — room to spare. Only
+                        // a column dragged to its 364pt minimum leaves 74,
+                        // where the longest word shrinks by a tenth rather
+                        // than losing its tail.
                         .minimumScaleFactor(0.85)
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 3)
+                        .padding(.vertical, 4)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .font(.subheadline.weight(isSelected ? .semibold : .regular))
+                // `.body`, which is the 13pt the segmented control it
+                // replaces was drawn at. `.subheadline` is 11pt on the Mac,
+                // and reads as small print beside everything around it.
+                .font(.body.weight(isSelected ? .semibold : .regular))
                 .foregroundStyle(isSelected ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
                 .background(
                     isSelected ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.clear),
