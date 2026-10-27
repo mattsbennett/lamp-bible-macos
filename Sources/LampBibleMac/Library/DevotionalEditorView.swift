@@ -651,15 +651,29 @@ struct DevotionalEditorView: View {
         }
     }
 
-    /// The documents open for this writing, drawn as the Reader draws its own
-    /// tabs: contiguous full-height cells divided by hairlines, so the row
-    /// reads as a rank of tabs rather than a row of floating buttons, with the
-    /// workspace controls riding at the end of the rank instead of across the
-    /// window, where they scroll away with the tabs they belong to.
     /// The Reader's tab height, so the two ranks line up.
     private static let tabHeight: CGFloat = 30
 
+    /// The documents open for this writing, drawn as the Reader draws its own
+    /// tabs: contiguous full-height cells divided by hairlines, so the row
+    /// reads as a rank of tabs rather than a row of floating buttons.
+    ///
+    /// Making a new file rides at the end of the rank, as the Reader's new-tab
+    /// button does, since it adds to the rank. Opening a file and revealing
+    /// the folder stay at the trailing edge: a cell in the rank says "this is
+    /// one of the documents", and neither of those is one.
     private var documentTabBar: some View {
+        HStack(spacing: 0) {
+            documentTabRank
+            Spacer(minLength: 0)
+            tabSeparator
+            workspaceControls
+        }
+        .frame(height: Self.tabHeight)
+        .background(.bar)
+    }
+
+    private var documentTabRank: some View {
         ScrollView(.horizontal) {
             HStack(spacing: 0) {
                 documentTab(
@@ -688,26 +702,34 @@ struct DevotionalEditorView: View {
                     help: "Create a companion Markdown file"
                 ) { showingNewWorkspaceDocument = true }
                 tabSeparator
-                tabBarButton(
-                    "Open Workspace File",
-                    systemImage: "folder.badge.plus",
-                    help: "Open any file from this writing's workspace",
-                    isEnabled: workspaceIsAvailable
-                ) { openWorkspaceFile() }
-                tabSeparator
-                tabBarButton(
-                    "Reveal Workspace",
-                    systemImage: "folder",
-                    help: "Reveal the writing workspace in Finder",
-                    isEnabled: workspaceIsAvailable
-                ) { NSWorkspace.shared.activateFileViewerSelecting([workspaceURL]) }
-                tabSeparator
             }
             .frame(height: Self.tabHeight)
         }
         .scrollIndicators(.hidden)
         .frame(height: Self.tabHeight)
-        .background(.bar)
+    }
+
+    /// What belongs to the workspace rather than to the rank, kept where it
+    /// cannot scroll out of reach: a file picker, and a trip to the Finder.
+    private var workspaceControls: some View {
+        HStack(spacing: 10) {
+            Button("Open Workspace File", systemImage: "folder.badge.plus") {
+                openWorkspaceFile()
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.borderless)
+            .disabled(!workspaceIsAvailable)
+            .help("Open any file from this writing's workspace")
+
+            Button("Reveal Workspace", systemImage: "folder") {
+                NSWorkspace.shared.activateFileViewerSelecting([workspaceURL])
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.borderless)
+            .disabled(!workspaceIsAvailable)
+            .help("Reveal the writing workspace in Finder")
+        }
+        .padding(.horizontal, 10)
     }
 
     private var tabSeparator: some View {
