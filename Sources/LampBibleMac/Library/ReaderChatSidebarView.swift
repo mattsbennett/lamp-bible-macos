@@ -8,6 +8,8 @@ struct ReaderChatSidebarView: View {
     @EnvironmentObject private var libraryModel: LibraryModel
     @AppStorage("reader.chat.provider") private var providerID = AIProviderCLI.codex.rawValue
     @AppStorage("agent.moduleAccess.enabled") private var moduleAccessEnabled = true
+    @AppStorage("agent.moduleAccess.scope")
+    private var moduleAccessScope = AgentModuleAccessScope.enabledModules.rawValue
     @AppStorage("agent.moduleAccess.personal") private var personalContentEnabled = false
     @State private var configuration: LampAgentMCPConfiguration?
     @State private var preparationError: String?
@@ -24,12 +26,26 @@ struct ReaderChatSidebarView: View {
     }
 
     private var accessPolicy: LampAgentAccessPolicy {
-        // Reader research spans the whole installed library, including modules
-        // hidden from the reader menus. Personal content retains its opt-in.
-        LampAgentAccessPolicy(
+        // Reader research used to span the whole installed library whatever the
+        // Module Access scope said, on the grounds that research wants breadth.
+        // But the scope exists so the reader decides, a module may be hidden
+        // for privacy rather than tidiness, and Settings offers it as one
+        // choice over agents with nothing to say this pane is exempt.
+        AgentModuleAccessPreferences.policy(
             isEnabled: moduleAccessEnabled,
-            includesPersonalContent: personalContentEnabled
+            scope: AgentModuleAccessScope(rawValue: moduleAccessScope) ?? .enabledModules,
+            includesPersonalContent: personalContentEnabled,
+            modules: libraryModel.modules,
+            hiddenModuleIDs: libraryModel.hiddenModuleIDs
         )
+    }
+
+    /// What the chat can reach, in the words the setting uses.
+    private var moduleAccessDescription: String {
+        guard moduleAccessEnabled else { return "Module access is off in AI & Agents settings" }
+        let scope = AgentModuleAccessScope(rawValue: moduleAccessScope) ?? .enabledModules
+        let modules = scope == .enabledModules ? "Enabled modules" : "All installed modules"
+        return personalContentEnabled ? "\(modules) and personal study content" : modules
     }
 
     private var context: ReaderChatContext? {
@@ -84,9 +100,7 @@ struct ReaderChatSidebarView: View {
                 }
 
                 HStack(alignment: .firstTextBaseline) {
-                    Text(moduleAccessEnabled
-                        ? (personalContentEnabled ? "All installed modules and personal study content" : "All installed modules")
-                        : "Module access is off in AI & Agents settings")
+                    Text(moduleAccessDescription)
                     Spacer(minLength: 4)
                     SettingsLink { Image(systemName: "gearshape") }
                         .help("AI provider and module access settings")
