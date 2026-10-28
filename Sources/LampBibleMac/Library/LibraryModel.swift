@@ -1185,27 +1185,38 @@ final class LibraryModel: ObservableObject {
         }
         var installedHighlights: [LampVerseHighlight] = []
         for highlightsModule in highlightModules {
-            let moduleHighlights = (try? await library.moduleVerseHighlights(
+            installedHighlights += (try? await library.moduleVerseHighlights(
                 moduleID: highlightsModule.id,
                 bookNumber: book,
                 chapterNumber: chapter
             )) ?? []
-            installedHighlights += moduleHighlights.filter { $0.translationID == moduleID }
         }
         guard !Task.isCancelled,
               selectedTranslationID == moduleID,
               selectedBookNumber == book,
               selectedChapterNumber == chapter else { return }
-        self.chapter = loadedChapter
-        highlightsByReference = Dictionary(grouping: loadedHighlights, by: \.reference)
-        installedHighlightsByReference = Dictionary(grouping: installedHighlights, by: \.reference)
-        noteReferences = Set(
-            loadedNotes
-                .filter { $0.moduleID == "personal-notes" }
-                .map(\.reference)
-        )
-        installedNotesByReference = Dictionary(grouping: installedNotes, by: \.reference)
+
+        // Gathered as one value: these are read together, replaced together,
+        // and half of one chapter beside half of another is never right. A
+        // reader window will hold one of these of its own.
+        apply(ReaderChapterContents(
+            chapter: loadedChapter,
+            translationID: moduleID,
+            highlights: loadedHighlights,
+            notes: loadedNotes,
+            installedHighlights: installedHighlights,
+            installedNotes: installedNotes
+        ))
         persistLocation()
+    }
+
+    /// Shows what was read for a chapter.
+    private func apply(_ contents: ReaderChapterContents) {
+        chapter = contents.chapter
+        highlightsByReference = contents.highlightsByReference
+        installedHighlightsByReference = contents.installedHighlightsByReference
+        noteReferences = contents.noteReferences
+        installedNotesByReference = contents.installedNotesByReference
     }
 
     private func persistLocation() {
