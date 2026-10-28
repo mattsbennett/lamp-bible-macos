@@ -17,6 +17,10 @@ struct ReaderReferenceActions: Equatable {
     let owner: ObjectIdentifier?
     let openInCurrent: (Int) -> Void
     let openInNewTab: (Int) -> Void
+    /// Whether this view can put a passage in a tab of its own. A standalone
+    /// window has no tabs to open one in, and a button that cannot do what it
+    /// says is worse than one that isn't there.
+    var opensTabs = true
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.owner == rhs.owner
@@ -2936,19 +2940,26 @@ struct ScriptureReferencePopover: View {
 
             Divider()
 
-            HStack {
-                Button("Open in Current View") {
-                    referenceActions.openInCurrent(link.startReference)
-                    dismiss()
+            // Offered only where something is listening. The default actions
+            // do nothing, so in a view that never supplied its own these were
+            // two buttons that looked like the way to the passage and were not.
+            if referenceActions.owner != nil {
+                HStack {
+                    Button("Open in Current View") {
+                        referenceActions.openInCurrent(link.startReference)
+                        dismiss()
+                    }
+                    if referenceActions.opensTabs {
+                        Spacer()
+                        Button("Open in New Tab", systemImage: "plus.square.on.square") {
+                            referenceActions.openInNewTab(link.startReference)
+                            dismiss()
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
                 }
-                Spacer()
-                Button("Open in New Tab", systemImage: "plus.square.on.square") {
-                    referenceActions.openInNewTab(link.startReference)
-                    dismiss()
-                }
-                .buttonStyle(.borderedProminent)
+                .padding(12)
             }
-            .padding(12)
         }
         .frame(width: 420)
         .task(id: loadID) {

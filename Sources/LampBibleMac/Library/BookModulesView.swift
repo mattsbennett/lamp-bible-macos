@@ -770,6 +770,14 @@ private struct BookSectionReaderView: View {
         }
         .sheet(item: $presentedImage) { item in
             VStack(spacing: 14) {
+                // A sheet with nothing to press is a sheet nobody can leave:
+                // this one had no Done and no key to close it, so opening a
+                // picture meant being stuck with it.
+                HStack {
+                    Spacer()
+                    Button("Done") { presentedImage = nil }
+                        .keyboardShortcut(.defaultAction)
+                }
                 Image(nsImage: item.image)
                     .resizable()
                     .scaledToFit()

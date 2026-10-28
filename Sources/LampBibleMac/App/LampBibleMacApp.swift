@@ -189,11 +189,25 @@ private struct StandaloneBookReaderView: View {
                 allowsStandaloneWindow: false,
                 showImporter: { openWindow(id: "add-to-library") },
                 openReference: { reference in
-                    model.openReference(reference)
-                    openWindow(id: "reader")
+                    openInReader(reference)
                 }
             )
         }
+        // A book's scripture popover reaches for these, and in this window
+        // nothing supplied them — so its buttons looked like the way to the
+        // passage and did nothing at all. There are no reader tabs here, so it
+        // offers the one thing this window can do.
+        .environment(\.readerReferenceActions, ReaderReferenceActions(
+            owner: ObjectIdentifier(model),
+            openInCurrent: { openInReader($0) },
+            openInNewTab: { openInReader($0) },
+            opensTabs: false
+        ))
+    }
+
+    private func openInReader(_ reference: Int) {
+        model.openReference(reference)
+        openWindow(id: "reader")
     }
 }
 
