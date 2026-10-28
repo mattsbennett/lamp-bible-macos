@@ -1548,6 +1548,8 @@ private struct PlanReadingQuizPanel: View {
 enum ReaderLayoutMode: String, CaseIterable, Identifiable {
     case continuousParagraphs
     case versePerLine
+    /// The translation being read and a companion, verse by verse in rows.
+    case sideBySide
 
     var id: Self { self }
 
@@ -1555,6 +1557,7 @@ enum ReaderLayoutMode: String, CaseIterable, Identifiable {
         switch self {
         case .versePerLine: "Verse per Line"
         case .continuousParagraphs: "Continuous Paragraph Flow"
+        case .sideBySide: "Side by Side"
         }
     }
 
@@ -1562,8 +1565,36 @@ enum ReaderLayoutMode: String, CaseIterable, Identifiable {
         switch self {
         case .versePerLine: "text.line.first.and.arrowtriangle.forward"
         case .continuousParagraphs: "text.justify.leading"
+        case .sideBySide: "rectangle.split.2x1"
         }
     }
+
+    /// Whether each verse is a row of its own, scrolled to by its reference.
+    var drawsVerseRows: Bool { self != .continuousParagraphs }
+}
+
+/// Which column a verse is drawn in, and so what it carries with it.
+private enum ReaderVerseColumn {
+    /// The translation being read, on its own: its marks in the margin beside it.
+    case reading
+    /// The translation being read, beside a companion. The row marks it, since
+    /// either column can hold a verse the other lacks.
+    case main
+    /// The companion: its own highlights, and none of the reading's notes,
+    /// translator's notes or marks.
+    case companion
+}
+
+/// The companion translation's text for the chapters on screen side by side.
+private struct ReaderCompanionText {
+    var translationID: String?
+    /// Keyed by the chapter on screen each one goes beside.
+    var chapters: [String: LampChapter] = [:]
+    /// Every chapter asked for, including those the companion doesn't have.
+    var asked: Set<String> = []
+    var highlights: [Int: [LampVerseHighlight]] = [:]
+
+    static func key(book: Int, chapter: Int) -> String { "\(book):\(chapter)" }
 }
 
 /// A translator's note the reader has opened: which verse, and which of that
@@ -1779,19 +1810,30 @@ private struct ReaderSelectableText: View {
     var marks: ReaderMarginMarks = .none
     /// How far the text is set in from the reader's column.
     var indent: CGFloat = 0
+    /// Whether the text carries the reader's margin. Side by side, the row
+    /// draws the marks, and a margin on the right-hand column would reach
+    /// back over the left.
+    var showsMargin = true
     let openLink: (URL) -> Void
     var openNote: (Int) -> Void = { _ in }
+
+    private var textLeading: CGFloat { (showsMargin ? ReaderMargin.width : 0) + indent }
 
     var body: some View {
         ReaderTextRepresentable(
             attributedText: attributedText,
             marks: marks,
-            textLeading: ReaderMargin.width + indent,
+            textLeading: textLeading,
             openLink: openLink,
             openNote: openNote
         )
-        .padding(.leading, -(ReaderMargin.width + indent))
+        .padding(.leading, -textLeading)
     }
+}
+
+private enum ReaderParallel {
+    /// Between the two columns side by side.
+    static let columnGap: CGFloat = 28
 }
 
 private enum ReaderMargin {
@@ -1941,7 +1983,7 @@ private final class ReaderTextView: NSTextView {
 
     private func sizeTextContainer() {
         if margin.superview !== self { addSubview(margin) }
-        margin.frame = NSRect(x: 0, y: 0, width: ReaderMargin.width, height: bounds.height)
+        margin.frame = NSRect(x: 0, y: 0, width: min(ReaderMargin.width, textLeading), height: bounds.height)
         guard let textContainer else { return }
         let width = max(frame.width - textLeading, 0)
         guard textContainer.size.width != width else { return }
@@ -2986,6 +3028,10 @@ private struct TranslationReaderView: View, Equatable {
     @AppStorage("reader.lineSpacing") private var lineSpacing = LampTextScale.readerLineSpacing.defaultValue
     @AppStorage("reader.typeface") private var typeface = ProseTypeface.readerDefault
     @AppStorage("reader.layoutMode") private var readerLayoutMode = ReaderLayoutMode.continuousParagraphs
+    /// The translation read beside the selected one, side by side. Empty, or
+    /// a translation no longer there, means the first other one installed.
+    @AppStorage("reader.companionTranslationID") private var companionTranslationID = ""
+    @State private var companionText = ReaderCompanionText()
     @AppStorage("reader.readAloud.voice") private var readAloudVoice = ""
     @AppStorage("reader.readAloud.rate") private var readAloudRate = 0.5
     @AppStorage("reader.readAloud.followAlong") private var followReadAloud = true
@@ -3483,7 +3529,9 @@ private struct TranslationReaderView: View, Equatable {
                             }
                             .accessibilityHidden(true)
                     }
-                    .frame(maxWidth: 780, alignment: .leading)
+                    // Side by side, each column gets about the measure one
+                    // column has on its own.
+                    .frame(maxWidth: readerLayoutMode == .sideBySide ? 1_240 : 780, alignment: .leading)
                     .padding(.horizontal, 48)
                     .padding(.vertical, 42)
                     // The live viewport width, so the passage uses whatever room it
@@ -3503,7 +3551,7 @@ private struct TranslationReaderView: View, Equatable {
                 .id(passageIdentity)
                 .onScrollTargetVisibilityChange(idType: Int.self) { visible in
                     guard !isPanelTransitioning,
-                          readerLayoutMode == .versePerLine else { return }
+                          readerLayoutMode.drawsVerseRows else { return }
                     scrollLink.readerDidScroll(to: visible.min())
                 }
                 // Read once per scroll rather than once per paragraph that happens to
@@ -3576,6 +3624,12 @@ private struct TranslationReaderView: View, Equatable {
                     scrollLink.reset()
                     scrollToReaderLocation(proxy, chapters: chapters)
                 }
+                // Side by side, the rows arrive with the companion's text,
+                // after the scroll that looked for the verse being read.
+                .onChange(of: companionText.asked.sorted()) { _, _ in
+                    guard readerLayoutMode == .sideBySide else { return }
+                    scrollToReaderLocation(proxy, chapters: chapters)
+                }
                 // Settle back onto the verse the reader was showing before a side
                 // panel changed its width. The passage re-wraps at the new width,
                 // so without this the reading position drifts by however much the
@@ -3589,6 +3643,196 @@ private struct TranslationReaderView: View, Equatable {
                 }
         }
         }
+        .task(id: companionLoadKey(for: chapters)) {
+            await loadCompanion(for: chapters)
+        }
+    }
+
+    // MARK: Side by side
+
+    private func translationName(_ id: String?) -> String {
+        guard let module = model.translations.first(where: { $0.id == id }) else { return "" }
+        return module.abbreviation ?? module.name
+    }
+
+    /// The translation to read beside `mainID`: the one chosen, or the first
+    /// other one installed.
+    private func companionTranslation(beside mainID: String?) -> LampInstalledModule? {
+        let others = model.translations.filter { $0.id != mainID }
+        return others.first { $0.id == companionTranslationID } ?? others.first
+    }
+
+    private func companionLoadKey(for chapters: [LampChapter]) -> String {
+        guard readerLayoutMode == .sideBySide,
+              let companion = companionTranslation(beside: chapters.first?.translationID) else { return "" }
+        return companion.id + "|" + chapters
+            .map { "\($0.translationID):\($0.book.id):\($0.number)" }
+            .joined(separator: ",")
+    }
+
+    /// Loads the companion's text for the chapters on screen, or lets it go
+    /// when the reader isn't side by side. Replaced whole once every chapter
+    /// is in, so a column never shows one chapter's text beside another's.
+    private func loadCompanion(for chapters: [LampChapter]) async {
+        guard readerLayoutMode == .sideBySide,
+              let companion = companionTranslation(beside: chapters.first?.translationID) else {
+            if companionText.translationID != nil { companionText = ReaderCompanionText() }
+            return
+        }
+        var loaded = ReaderCompanionText(translationID: companion.id)
+        var highlights: [LampVerseHighlight] = []
+        for chapter in chapters {
+            let key = ReaderCompanionText.key(book: chapter.book.id, chapter: chapter.number)
+            loaded.asked.insert(key)
+            // A translation without this book leaves its column empty.
+            guard let text = try? await model.companionChapter(
+                translationID: companion.id,
+                book: chapter.book.id,
+                chapter: chapter.number
+            ) else { continue }
+            guard !Task.isCancelled else { return }
+            loaded.chapters[key] = text.chapter
+            highlights += text.highlights
+        }
+        guard !Task.isCancelled else { return }
+        loaded.highlights = ReaderParallelRows.highlights(highlights, of: companion.id)
+        companionText = loaded
+    }
+
+    private var companionSelection: Binding<String> {
+        Binding(
+            get: { companionTranslation(beside: model.selectedTranslationID)?.id ?? "" },
+            set: { companionTranslationID = $0 }
+        )
+    }
+
+    /// The two translations' names over their columns.
+    private func parallelColumnTitles(for chapter: LampChapter) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: ReaderParallel.columnGap) {
+            Text(translationName(chapter.translationID))
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(translationName(companionText.translationID))
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 8)
+        .padding(.bottom, 4)
+    }
+
+    private func parallelRow(
+        _ row: ReaderParallelRow,
+        companionChapterLoaded: Bool,
+        showsInstantDetails: Bool
+    ) -> some View {
+        HStack(alignment: .top, spacing: ReaderParallel.columnGap) {
+            Group {
+                if let verse = row.main {
+                    renderedVerseText(for: verse, column: .main)
+                        .padding(.leading, partialPoetryRange(for: verse) == nil ? poetryIndent(for: verse) : 0)
+                        .overlay {
+                            ReaderNativeContextMenuAugmenter(
+                                entries: verseContextMenuEntries(verse),
+                                openLink: { _ = handleReaderLink($0) },
+                                participatesInLexicalHover: showsInstantDetails
+                            )
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+                } else {
+                    missingVerse(row.number, in: model.selectedTranslationID)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Group {
+                if let verse = row.companion {
+                    verseLines(for: verse, column: .companion)
+                        .padding(.leading, partialPoetryRange(for: verse) == nil ? poetryIndent(for: verse) : 0)
+                        .overlay {
+                            ReaderNativeContextMenuAugmenter(
+                                entries: [],
+                                openLink: { _ = handleReaderLink($0) },
+                                participatesInLexicalHover: showsInstantDetails
+                            )
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+                } else if companionChapterLoaded {
+                    missingVerse(row.number, in: companionText.translationID)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .overlay(alignment: .topLeading) { parallelRowMarks(for: row.reference) }
+        .padding(.top, row.main.map { topPadding(for: $0) } ?? 5)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// A verse one of the two translations leaves out: an empty place, so the
+    /// rows after it stay level, that says what's missing.
+    private func missingVerse(_ number: Int, in translationID: String?) -> some View {
+        Text("—")
+            .font(.system(size: fontSize * 0.8))
+            .foregroundStyle(.tertiary)
+            .help("Verse \(number) isn’t in the \(translationName(translationID))")
+    }
+
+    /// The margin beside a side-by-side row, where the reader alone draws it
+    /// from the text: a bar when the row's verse is selected, and an icon for
+    /// each kind of note it has. Drawn for the row, which spans the taller of
+    /// the two columns and stands even where the translation being read
+    /// leaves the verse out.
+    @ViewBuilder
+    private func parallelRowMarks(for reference: Int) -> some View {
+        let font = readerFont(size: fontSize)
+        let iconSize = (fontSize * 0.72).rounded()
+        // Level with the first line's small letters, as the margin beside a
+        // single column places them.
+        let iconTop = font.ascender - font.xHeight / 2 - iconSize / 2
+        ZStack(alignment: .topLeading) {
+            if model.selectedVerseReference == reference {
+                RoundedRectangle(cornerRadius: 1.25)
+                    .fill(Color(nsColor: .secondaryLabelColor))
+                    .frame(width: 2.5)
+                    .padding(.vertical, 1)
+                    .offset(x: -10)
+            }
+            HStack(spacing: 4) {
+                if model.hasInstalledNote(for: reference) {
+                    noteButton("book.closed", color: .systemPurple, size: iconSize, reference: reference,
+                               help: "Study notes on verse \(LampBibleReferenceFormatter.components(of: reference).verse)")
+                }
+                if model.hasPersonalNote(for: reference) {
+                    noteButton("note.text", color: .systemOrange, size: iconSize, reference: reference,
+                               help: "Your note on verse \(LampBibleReferenceFormatter.components(of: reference).verse)")
+                }
+            }
+            .frame(width: ReaderMargin.width - 15, alignment: .trailing)
+            .offset(x: -ReaderMargin.width, y: iconTop)
+        }
+        .frame(maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func noteButton(
+        _ symbol: String,
+        color: NSColor,
+        size: CGFloat,
+        reference: Int,
+        help: String
+    ) -> some View {
+        Button {
+            openVerseStudy(reference: reference)
+        } label: {
+            Image(systemName: symbol)
+                .font(.system(size: size * 0.82, weight: .semibold))
+                .foregroundStyle(Color(nsColor: color))
+                .frame(width: size, height: size)
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .accessibilityLabel(help)
     }
 
     @ViewBuilder
@@ -3611,7 +3855,30 @@ private struct TranslationReaderView: View, Equatable {
         .padding(.bottom, 28)
         .id(isFirst ? "chapter-top" : "chapter-\(chapter.book.id)-\(chapter.number)")
 
-        if readerLayoutMode == .versePerLine {
+        if readerLayoutMode == .sideBySide {
+            let key = ReaderCompanionText.key(book: chapter.book.id, chapter: chapter.number)
+            let companion = companionText.chapters[key]
+            // Rows wait the moment the companion takes to load: drawn first
+            // without it, every row would be laid out again when it came.
+            let isWaiting = companionTranslation(beside: chapter.translationID) != nil
+                && !companionText.asked.contains(key)
+            if !isWaiting {
+                parallelColumnTitles(for: chapter)
+            }
+            ForEach(isWaiting ? [] : ReaderParallelRows.rows(main: chapter.verses, companion: companion?.verses ?? [])) { row in
+                VStack(alignment: .leading, spacing: 0) {
+                    if let verse = row.main {
+                        readerHeadings(headingsByVerse[verse.number] ?? [])
+                    }
+                    parallelRow(
+                        row,
+                        companionChapterLoaded: companion != nil,
+                        showsInstantDetails: showsInstantDetails
+                    )
+                }
+                .id(row.reference)
+            }
+        } else if readerLayoutMode == .versePerLine {
             ForEach(chapter.verses) { verse in
                 // Heading and verse share one identity so the scroll link reports
                 // whole verses; loose heading ids would look like verse references.
@@ -3746,7 +4013,8 @@ private struct TranslationReaderView: View, Equatable {
     /// Verses run together as one paragraph, with what the margin beside
     /// them marks.
     private func continuousText(
-        for verses: [LampVerse]
+        for verses: [LampVerse],
+        column: ReaderVerseColumn = .reading
     ) -> (text: NSAttributedString, marks: ReaderMarginMarks) {
         let result = NSMutableAttributedString(string: "")
         var marks = ReaderMarginMarks()
@@ -3756,8 +4024,10 @@ private struct TranslationReaderView: View, Equatable {
             }
             let start = result.length
             result.append(verseMarkerText(for: verse))
-            result.append(verseBodyText(for: verse))
-            mark(verse, from: start, to: result.length, in: &marks)
+            result.append(verseBodyText(for: verse, column: column))
+            if column == .reading {
+                mark(verse, from: start, to: result.length, in: &marks)
+            }
         }
         return (result, marks)
     }
@@ -3767,8 +4037,10 @@ private struct TranslationReaderView: View, Equatable {
     private func marks(
         for verse: LampVerse,
         drawnAs text: NSAttributedString,
-        noting: Bool = true
+        noting: Bool = true,
+        column: ReaderVerseColumn
     ) -> ReaderMarginMarks {
+        guard column == .reading else { return .none }
         var marks = ReaderMarginMarks()
         mark(verse, from: 0, to: text.length, noting: noting, in: &marks)
         return marks
@@ -3822,34 +4094,38 @@ private struct TranslationReaderView: View, Equatable {
     }
 
     @ViewBuilder
-    private func renderedVerseText(for verse: LampVerse) -> some View {
+    private func renderedVerseText(for verse: LampVerse, column: ReaderVerseColumn = .reading) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            verseLines(for: verse)
+            verseLines(for: verse, column: column)
             revealedFootnoteNote(among: [verse])
         }
     }
 
     @ViewBuilder
-    private func verseLines(for verse: LampVerse) -> some View {
+    private func verseLines(for verse: LampVerse, column: ReaderVerseColumn = .reading) -> some View {
+        let showsMargin = column == .reading
         if let poetryRange = partialPoetryRange(for: verse) {
             let opening = verseText(
                 for: verse,
                 range: ReaderTextRange(startOffset: 0, endOffset: poetryRange.startOffset),
-                includesMarker: true
+                includesMarker: true,
+                column: column
             )
-            let poetry = verseBodyText(for: verse, range: poetryRange)
+            let poetry = verseBodyText(for: verse, range: poetryRange, column: column)
             VStack(alignment: .leading, spacing: 4) {
                 ReaderSelectableText(
                     attributedText: opening,
-                    marks: marks(for: verse, drawnAs: opening),
+                    marks: marks(for: verse, drawnAs: opening, column: column),
+                    showsMargin: showsMargin,
                     openLink: { _ = handleReaderLink($0) },
                     openNote: { openVerseStudy(reference: $0) }
                 )
 
                 ReaderSelectableText(
                     attributedText: poetry,
-                    marks: marks(for: verse, drawnAs: poetry, noting: false),
+                    marks: marks(for: verse, drawnAs: poetry, noting: false, column: column),
                     indent: poetryIndent(for: verse),
+                    showsMargin: showsMargin,
                     openLink: { _ = handleReaderLink($0) }
                 )
                     .padding(.leading, poetryIndent(for: verse))
@@ -3860,22 +4136,25 @@ private struct TranslationReaderView: View, Equatable {
                         range: ReaderTextRange(
                             startOffset: poetryRange.endOffset,
                             endOffset: verse.text.count
-                        )
+                        ),
+                        column: column
                     )
                     ReaderSelectableText(
                         attributedText: closing,
-                        marks: marks(for: verse, drawnAs: closing, noting: false),
+                        marks: marks(for: verse, drawnAs: closing, noting: false, column: column),
+                        showsMargin: showsMargin,
                         openLink: { _ = handleReaderLink($0) }
                     )
                 }
             }
         } else {
-            let run = continuousText(for: [verse])
+            let run = continuousText(for: [verse], column: column)
             ReaderSelectableText(
                 attributedText: run.text,
                 marks: run.marks,
-                // Set in by the row or paragraph around it.
+                // Set in by the row, cell or paragraph around it.
                 indent: poetryIndent(for: verse),
+                showsMargin: showsMargin,
                 openLink: { _ = handleReaderLink($0) },
                 openNote: { openVerseStudy(reference: $0) }
             )
@@ -3885,24 +4164,29 @@ private struct TranslationReaderView: View, Equatable {
     private func verseText(
         for verse: LampVerse,
         range: ReaderTextRange? = nil,
-        includesMarker: Bool
+        includesMarker: Bool,
+        column: ReaderVerseColumn = .reading
     ) -> NSAttributedString {
         let result = NSMutableAttributedString(string: "")
         if includesMarker {
             result.append(verseMarkerText(for: verse))
         }
-        result.append(verseBodyText(for: verse, range: range))
+        result.append(verseBodyText(for: verse, range: range, column: column))
         return result
     }
 
     private func verseBodyText(
         for verse: LampVerse,
-        range: ReaderTextRange? = nil
+        range: ReaderTextRange? = nil,
+        column: ReaderVerseColumn = .reading
     ) -> NSAttributedString {
-        let text = styledText(for: verse)
+        let text = styledText(for: verse, column: column)
         let characterIndices = Array(verse.text.indices) + [verse.text.endIndex]
 
         guard let range else {
+            // The translator's notes loaded are the reading's: placed in the
+            // companion's text, they would land at the wrong words.
+            guard column != .companion else { return text }
             return markingFootnotes(
                 in: text, of: verse,
                 from: 0, to: verse.text.count
@@ -3919,8 +4203,10 @@ private struct TranslationReaderView: View, Equatable {
             characterIndices[range.startOffset]..<characterIndices[range.endOffset],
             in: verse.text
         )
+        let piece = text.attributedSubstring(from: nativeRange)
+        guard column != .companion else { return piece }
         return markingFootnotes(
-            in: text.attributedSubstring(from: nativeRange), of: verse,
+            in: piece, of: verse,
             from: range.startOffset, to: range.endOffset
         )
     }
@@ -4172,9 +4458,14 @@ private struct TranslationReaderView: View, Equatable {
         guard let verse = displayedChapters.lazy
             .flatMap(\.verses)
             .first(where: { $0.id == reference }) else {
+            // A verse not on screen in the translation being read, such as
+            // one only the companion beside it has. Its notes are the verse's,
+            // whichever translation holds it.
             prepareChapterForStudy(reference: reference)
             model.focusVerse(reference)
-            selectedStudyTab = "verse"
+            selectedStudyTab = model.hasPersonalNote(for: reference) || model.hasInstalledNote(for: reference)
+                ? "notes"
+                : "verse"
             showingStudyInspector = true
             return
         }
@@ -4258,7 +4549,7 @@ private struct TranslationReaderView: View, Equatable {
         return Int(host)
     }
 
-    private func styledText(for verse: LampVerse) -> NSAttributedString {
+    private func styledText(for verse: LampVerse, column: ReaderVerseColumn = .reading) -> NSAttributedString {
         let result = NSMutableAttributedString(
             string: verse.text,
             attributes: bodyTextAttributes()
@@ -4353,7 +4644,12 @@ private struct TranslationReaderView: View, Equatable {
             }
         }
 
-        for highlight in model.highlights(for: verse.id) {
+        // Each column its own translation's: offsets made in one translation
+        // would colour the wrong words of another.
+        let highlights = column == .companion
+            ? companionText.highlights[verse.id] ?? []
+            : model.highlights(for: verse.id)
+        for highlight in highlights {
             let startOffset = min(max(highlight.startOffset, 0), verse.text.count)
             let endOffset = min(max(highlight.endOffset, startOffset), verse.text.count)
             guard let range = attributedRange(from: startOffset, to: endOffset) else { continue }
@@ -4640,6 +4936,14 @@ private struct TranslationReaderView: View, Equatable {
                     }
                 }
                 .pickerStyle(.inline)
+
+                Picker("Companion", selection: companionSelection) {
+                    ForEach(model.translations.filter { $0.id != model.selectedTranslationID }) { translation in
+                        Text(translation.name).tag(translation.id)
+                    }
+                }
+                .disabled(readerLayoutMode != .sideBySide)
+                .help("The translation read beside this one, side by side")
 
                 Divider()
 

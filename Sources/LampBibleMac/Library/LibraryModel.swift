@@ -700,6 +700,38 @@ final class LibraryModel: ObservableObject {
         dictionaryLookupRequest = nil
     }
 
+    /// A chapter of another translation, with its highlights, for reading
+    /// beside the selected one. Asked for by the reader rather than kept here:
+    /// nothing else in the library follows it.
+    func companionChapter(
+        translationID: String,
+        book: Int,
+        chapter: Int
+    ) async throws -> (chapter: LampChapter, highlights: [LampVerseHighlight]) {
+        async let chapterRequest = library.chapter(
+            moduleID: translationID,
+            bookNumber: book,
+            chapterNumber: chapter
+        )
+        async let highlightsRequest = library.verseHighlights(
+            translationID: translationID,
+            bookNumber: book,
+            chapterNumber: chapter
+        )
+        let (loadedChapter, personalHighlights) = try await (chapterRequest, highlightsRequest)
+        var installedHighlights: [LampVerseHighlight] = []
+        for highlightsModule in highlightModules {
+            installedHighlights += (try? await library.moduleVerseHighlights(
+                moduleID: highlightsModule.id,
+                bookNumber: book,
+                chapterNumber: chapter
+            )) ?? []
+        }
+        // Installed first, as `highlights(for:)` lays them, so the reader's
+        // own are drawn over them.
+        return (loadedChapter, installedHighlights + personalHighlights)
+    }
+
     func highlights(for reference: Int) -> [LampVerseHighlight] {
         (installedHighlightsByReference[reference] ?? [])
             + (highlightsByReference[reference] ?? [])

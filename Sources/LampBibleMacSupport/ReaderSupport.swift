@@ -487,6 +487,56 @@ public struct ReaderMarginMarks: Equatable, Sendable {
     }
 }
 
+/// One row of the side-by-side reader: a verse, in the translation being read
+/// and in the companion beside it, where each has it.
+public struct ReaderParallelRow: Identifiable, Equatable, Sendable {
+    public let number: Int
+    /// The verse both columns speak to: what the row scrolls to, and what
+    /// selecting it or opening its notes acts on.
+    public let reference: Int
+    public let main: LampVerse?
+    public let companion: LampVerse?
+
+    public var id: Int { reference }
+}
+
+public enum ReaderParallelRows {
+    /// Pairs two translations' verses of a chapter by number, in reading
+    /// order. A verse only one of them has gets a row of its own, the other
+    /// side empty: closing the gap would pull every row after it out of line,
+    /// and the gap is itself a difference between the two.
+    public static func rows(main: [LampVerse], companion: [LampVerse]) -> [ReaderParallelRow] {
+        var byNumber: [Int: (main: LampVerse?, companion: LampVerse?)] = [:]
+        for verse in main { byNumber[verse.number, default: (nil, nil)].main = verse }
+        for verse in companion { byNumber[verse.number, default: (nil, nil)].companion = verse }
+        return byNumber.keys.sorted().compactMap { number in
+            guard let pair = byNumber[number],
+                  let reference = (pair.main ?? pair.companion)?.id else { return nil }
+            return ReaderParallelRow(
+                number: number,
+                reference: reference,
+                main: pair.main,
+                companion: pair.companion
+            )
+        }
+    }
+
+    /// One translation's highlights, by verse.
+    ///
+    /// Filtered rather than trusted: a highlight's offsets count the
+    /// characters of the translation it was made in, and drawn on another's
+    /// text they colour the wrong words without any error to show it.
+    public static func highlights(
+        _ highlights: [LampVerseHighlight],
+        of translationID: String
+    ) -> [Int: [LampVerseHighlight]] {
+        Dictionary(
+            grouping: highlights.filter { $0.translationID == translationID },
+            by: \.reference
+        )
+    }
+}
+
 public struct ReaderParagraphSegment: Equatable, Sendable {
     public let reference: Int
     public let characterCount: Int

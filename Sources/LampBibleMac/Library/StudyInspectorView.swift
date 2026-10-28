@@ -2668,7 +2668,7 @@ struct ScriptureReferencePopover: View {
 
     @ViewBuilder
     private func previewSection(_ section: ScripturePreviewSection) -> some View {
-        if readerLayoutMode == .versePerLine {
+        if readerLayoutMode.drawsVerseRows {
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(section.verses) { item in
                     verseRow(item)

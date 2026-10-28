@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import LampCore
 import LampModuleKit
 import Testing
 @testable import LampBibleMacSupport
@@ -549,5 +550,57 @@ struct ReaderSupportTests {
         #expect(ReaderMarginMarks.none.isEmpty)
         #expect(!ReaderMarginMarks(selectedRange: NSRange(location: 0, length: 4)).isEmpty)
         #expect(ReaderMarginMarks.icons(for: []).isEmpty)
+    }
+
+    // MARK: - Side by side
+
+    private func verse(_ number: Int, _ text: String = "text") -> LampVerse {
+        LampVerse(id: 40_018_000 + number, number: number, text: text, beginsParagraph: false)
+    }
+
+    /// Matthew 18 as the BSB and the WEB have it: the BSB leaves verse 11 out,
+    /// so its side of that row is empty and every row after it stays level.
+    @Test func pairsVersesByNumberAndKeepsAGapForALeftOutVerse() {
+        let rows = ReaderParallelRows.rows(
+            main: [verse(10), verse(12), verse(13)],
+            companion: [verse(10), verse(11), verse(12), verse(13)]
+        )
+
+        #expect(rows.map(\.number) == [10, 11, 12, 13])
+        #expect(rows[1].main == nil)
+        #expect(rows[1].companion?.number == 11)
+        #expect(rows[1].reference == 40_018_011)
+        #expect(rows.allSatisfy { $0.number == 11 || $0.main != nil })
+    }
+
+    /// The companion can be the one without a verse, or not loaded yet: the
+    /// main translation's rows stand on their own.
+    @Test func keepsTheMainTranslationsRowsWithoutACompanion() {
+        let rows = ReaderParallelRows.rows(main: [verse(1), verse(2)], companion: [])
+        #expect(rows.map(\.number) == [1, 2])
+        #expect(rows.allSatisfy { $0.companion == nil })
+
+        let extra = ReaderParallelRows.rows(main: [verse(1)], companion: [verse(1), verse(2)])
+        #expect(extra.last?.main == nil)
+        #expect(extra.last?.companion?.number == 2)
+    }
+
+    /// A highlight made in one translation, drawn on another's text, would
+    /// colour whatever words its offsets land on there.
+    @Test func keepsEachColumnToItsOwnTranslationsHighlights() {
+        func highlight(_ id: Int64, _ translation: String, _ reference: Int) -> LampVerseHighlight {
+            LampVerseHighlight(
+                id: id, setID: "personal-highlights:\(translation)", translationID: translation,
+                reference: reference, startOffset: 0, endOffset: 12
+            )
+        }
+        let byVerse = ReaderParallelRows.highlights(
+            [highlight(1, "BSBs", 40_018_012), highlight(2, "WEBs", 40_018_012), highlight(3, "WEBs", 40_018_013)],
+            of: "WEBs"
+        )
+
+        #expect(byVerse[40_018_012]?.map(\.id) == [2])
+        #expect(byVerse[40_018_013]?.map(\.id) == [3])
+        #expect(byVerse.values.joined().allSatisfy { $0.translationID == "WEBs" })
     }
 }
