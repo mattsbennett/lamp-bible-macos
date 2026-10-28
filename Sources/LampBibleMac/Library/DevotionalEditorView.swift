@@ -611,6 +611,7 @@ struct DevotionalEditorView: View {
             guard !Task.isCancelled else { return }
             saveDirtyWorkspaceDocuments()
         }
+        .onDisappear { flushPendingSaves() }
         .focusedSceneValue(\.writingFind, find)
         .onChange(of: activeFindTarget.map(ObjectIdentifier.init), initial: true) {
             find.attach(activeFindTarget)
@@ -2274,6 +2275,24 @@ struct DevotionalEditorView: View {
         saveState = .idle
         savedFields = editedFields
         hasLoaded = true
+    }
+
+    /// Writes what is waiting, on the way out.
+    ///
+    /// Both autosaves wait before writing — 1.5 seconds for the writing, 0.9
+    /// for a workspace document — and both wait inside a `.task`, which is
+    /// cancelled when the view goes away. Closing the window or leaving the
+    /// editor inside that window therefore threw the last edit away, and
+    /// nothing else caught it.
+    ///
+    /// This covers leaving while the app runs. Quitting is still unguarded:
+    /// `save()` finishes on a task of its own, and the process does not wait
+    /// for it. That wants an application-level hook rather than a view's.
+    private func flushPendingSaves() {
+        if isDirty, hasSavableContent { save() }
+        if workspaceDocuments.contains(where: { $0.isDirty && !$0.hasExternalConflict }) {
+            saveDirtyWorkspaceDocuments()
+        }
     }
 
     private func save() {
