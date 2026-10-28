@@ -311,7 +311,10 @@ struct DevotionalsView: View {
             }
             Button("Cancel", role: .cancel) { devotionalPendingDeletion = nil }
         } message: {
-            Text("This removes the personal writing from this Mac. Installed module entries are never modified.")
+            // Not "from this Mac": deleting records a tombstone, which is how
+            // the deletion reaches the other devices rather than the writing
+            // coming back on the next sync.
+            Text("This deletes the writing from your library — from this Mac, and from your other devices the next time they sync. Installed module entries are never modified.")
         }
         .onAppear { selectFirstIfNeeded() }
         .onChange(of: model.devotionals) { _, _ in selectFirstIfNeeded() }
