@@ -106,9 +106,16 @@ struct AddToLibraryView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 980, minHeight: 600)
+        // A confirmation belongs to the pane that was showing when its import
+        // ran. Switching panes, or opening the window again, starts clean.
+        .onAppear { clearConfirmation() }
+        .onChange(of: selection) { _, _ in clearConfirmation() }
         .fileImporter(
             isPresented: $showingModuleImporter,
-            allowedContentTypes: [.lampModuleFile],
+            // Not only `.lamp`: a Bible in another format chosen here is read
+            // by the Bible importer rather than refused, so there is no
+            // reason the picker cannot offer one.
+            allowedContentTypes: [.lampModuleFile, .folder, .data],
             allowsMultipleSelection: true
         ) { result in
             if case .success(let urls) = result {
@@ -192,17 +199,6 @@ struct AddToLibraryView: View {
             Text(request.prompt)
         }
         .alert(
-            "Translation Imported",
-            isPresented: Binding(
-                get: { model.translationImportMessage != nil },
-                set: { if !$0 { model.translationImportMessage = nil } }
-            )
-        ) {
-            Button("OK") { model.translationImportMessage = nil }
-        } message: {
-            Text(model.translationImportMessage ?? "The translation is in your library.")
-        }
-        .alert(
             "Personal Content Imported",
             isPresented: Binding(
                 get: { model.studyImportMessage != nil },
@@ -222,19 +218,22 @@ struct AddToLibraryView: View {
             description: "Open a finished .lamp package to install ready-to-use library content. A module can contain a Bible translation, reading plan, devotional, quiz, dictionary, commentary, or book.",
             distinction: "Input: a finished .lamp content module. This adds reference content to your library; it does not restore or alter personal notes and highlights.",
             steps: [
-                ("Choose one or more finished .lamp modules.", "Lamp validates each package before adding it to your library."),
+                ("Choose one or more finished .lamp modules.", "Lamp validates each package before adding it to your library. A Bible in another format chosen here is read by Import a Bible instead."),
                 ("Use the new content immediately.", "Installed modules appear in their matching library section and can be enabled or disabled in Settings."),
             ]
         ) {
-            Button("Choose .lamp Modules…", systemImage: "folder") {
-                showingModuleImporter = true
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(model.isImporting)
+            VStack(alignment: .leading, spacing: 12) {
+                Button("Choose .lamp Modules…", systemImage: "folder") {
+                    showingModuleImporter = true
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(model.isImporting)
 
-            if model.isImporting {
-                ProgressView("Installing modules…")
+                if model.isImporting {
+                    ProgressView("Installing modules…")
+                }
+                confirmation
             }
         }
     }
@@ -246,21 +245,24 @@ struct AddToLibraryView: View {
             description: "Turn a Bible you already have into a translation in your library: USFM, OSIS, Zefania or another XML Bible, or a SWORD module — as a single file, a folder, or a zip. A locked SWORD module opens with the key you bought for it.",
             distinction: "Input: a Bible in another app’s format. Lamp converts it once and keeps the translation in your library, where it syncs like your other modules. Import only Bibles you have the right to use.",
             steps: [
-                ("Choose the file, folder or zip.", "For a SWORD module, choose its zip, its folder or its .conf file. Lamp reads it — asking for the key if it's locked — and shows what it found, including anything it had to leave out, such as books outside the 66."),
+                ("Choose the file, folder or zip.", "For a SWORD module, choose its zip, its folder or its .conf file. Lamp reads it — asking for the key if it's locked — and shows what it found, including anything it had to leave out, such as books outside the 66. A finished .lamp module chosen here is simply installed."),
                 ("Name it and import.", "Give the translation a name and abbreviation. Importing the same abbreviation again replaces the earlier import."),
             ]
         ) {
-            Button("Choose a Bible…", systemImage: "folder") {
-                showingBibleImporter = true
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(model.isReadingTranslation || model.isImporting)
+            VStack(alignment: .leading, spacing: 12) {
+                Button("Choose a Bible…", systemImage: "folder") {
+                    showingBibleImporter = true
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(model.isReadingTranslation || model.isImporting)
 
-            if model.isReadingTranslation {
-                ProgressView("Reading the Bible…")
-            } else if model.isImporting {
-                ProgressView("Importing…")
+                if model.isReadingTranslation {
+                    ProgressView("Reading the Bible…")
+                } else if model.isImporting {
+                    ProgressView("Importing…")
+                }
+                confirmation
             }
         }
     }
@@ -299,6 +301,31 @@ struct AddToLibraryView: View {
                 ProgressView("Importing study data…")
             }
         }
+    }
+
+    /// What the last import did, said beside the button that started it
+    /// rather than in a sheet to dismiss.
+    ///
+    /// A module install reports here; so does a Bible import, whose own
+    /// report used to arrive as an alert — two kinds of answer to the same
+    /// question, in the same window.
+    @ViewBuilder private var confirmation: some View {
+        if let message = model.moduleInstallMessage ?? model.translationImportMessage {
+            Label {
+                Text(message)
+                    .fixedSize(horizontal: false, vertical: true)
+            } icon: {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.tint)
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private func clearConfirmation() {
+        model.moduleInstallMessage = nil
+        model.translationImportMessage = nil
     }
 
     private func pathRow(_ path: LibraryAdditionPath) -> some View {

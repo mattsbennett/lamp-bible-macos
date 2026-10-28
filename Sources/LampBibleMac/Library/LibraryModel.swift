@@ -109,6 +109,9 @@ final class LibraryModel: ObservableObject {
     @Published var pendingTranslationImport: PendingTranslationImport?
     @Published var translationUnlockRequest: TranslationUnlockRequest?
     @Published var translationImportMessage: String?
+    /// What the last install of finished modules did, for the pane whose
+    /// button started it to show. Installing used to succeed in silence.
+    @Published var moduleInstallMessage: String?
     @Published private(set) var isImportingStudyData = false
     @Published private(set) var isLoadingChapter = false
     @Published private(set) var isSearching = false
@@ -279,36 +282,48 @@ final class LibraryModel: ObservableObject {
         loadCurrentChapter()
     }
 
+    /// Installs finished `.lamp` modules, and says what it installed.
+    ///
+    /// A file that is not a module is not turned away over its extension: a
+    /// Bible in another format, chosen here rather than in the Bible
+    /// importer, is read there instead. Which pane someone was standing in is
+    /// not something the file has to agree with.
     func install(_ urls: [URL]) {
-        let lampURLs = urls.filter { $0.pathExtension.lowercased() == "lamp" }
-        guard !lampURLs.isEmpty, !isImporting else {
-            if lampURLs.isEmpty {
-                errorMessage = LampLibraryError.invalidFileExtension.localizedDescription
-            }
-            return
-        }
-
-        isImporting = true
-        errorMessage = nil
-        Task {
-            var lastInstalledTranslationID: String?
-            do {
-                for url in lampURLs {
-                    let module = try await library.install(from: url)
-                    if module.kind == .translation {
-                        lastInstalledTranslationID = module.id
-                    } else if module.kind == .plan {
-                        try await library.setPlanSelected(moduleID: module.id, selected: true)
+        guard !isImporting else { return }
+        switch LampLibraryAddition.route(urls) {
+        case .readBible(let url):
+            readTranslation(at: url)
+        case .unusable:
+            errorMessage = LampLibraryError.invalidFileExtension.localizedDescription
+        case .installModules(let lampURLs, let others):
+            isImporting = true
+            errorMessage = nil
+            moduleInstallMessage = nil
+            Task {
+                var installed: [LampInstalledModule] = []
+                do {
+                    for url in lampURLs {
+                        let module = try await library.install(from: url)
+                        installed.append(module)
+                        if module.kind == .plan {
+                            try await library.setPlanSelected(moduleID: module.id, selected: true)
+                        }
                     }
+                    if let translation = installed.last(where: { $0.kind == .translation }) {
+                        selectedTranslationID = translation.id
+                    }
+                    await refreshLibrary()
+                } catch {
+                    errorMessage = error.localizedDescription
                 }
-                if let lastInstalledTranslationID {
-                    selectedTranslationID = lastInstalledTranslationID
-                }
-                await refreshLibrary()
-            } catch {
-                errorMessage = error.localizedDescription
+                // Said even when one of several modules failed: what was
+                // installed is installed, and the error names the one that
+                // was not.
+                moduleInstallMessage = LampLibraryAddition.installSummary(
+                    installed, notModules: others
+                )
+                isImporting = false
             }
-            isImporting = false
         }
     }
 
@@ -319,6 +334,13 @@ final class LibraryModel: ObservableObject {
     /// read again with it.
     func readTranslation(at url: URL, unlockKey: String? = nil) {
         guard !isReadingTranslation, !isImporting else { return }
+        // A finished module offered here is installed rather than told it
+        // "isn't a Bible format Lamp can import": it is a Bible, and one Lamp
+        // converted already.
+        guard !LampLibraryAddition.isModule(url) else {
+            install([url])
+            return
+        }
         isReadingTranslation = true
         errorMessage = nil
         Task {
