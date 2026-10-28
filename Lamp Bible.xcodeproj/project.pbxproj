@@ -11,6 +11,7 @@
 		A10000000000000000000210 /* FootnoteFieldSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000211 /* FootnoteFieldSupport.swift */; };
 		A10000000000000000000212 /* PendingWritesSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000212 /* PendingWritesSupport.swift */; };
 		A10000000000000000000214 /* SlideStudioDraftSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000213 /* SlideStudioDraftSupport.swift */; };
+		A10000000000000000000216 /* DeckEditHistorySupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000214 /* DeckEditHistorySupport.swift */; };
 		A10000000000000000000050 /* UnifiedDiffSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000004D /* UnifiedDiffSupport.swift */; };
 		A1000000000000000000004F /* AgentRevisionSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000025 /* AgentRevisionSupport.swift */; };
 		A10000000000000000000001 /* LampBibleCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000001 /* LampBibleCommands.swift */; };
@@ -108,6 +109,7 @@
 		A10000000000000000000211 /* FootnoteFieldSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000211 /* FootnoteFieldSupport.swift */; };
 		A10000000000000000000213 /* PendingWritesSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000212 /* PendingWritesSupport.swift */; };
 		A10000000000000000000215 /* SlideStudioDraftSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000213 /* SlideStudioDraftSupport.swift */; };
+		A10000000000000000000217 /* DeckEditHistorySupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000214 /* DeckEditHistorySupport.swift */; };
 		A1000000000000000000004D /* UnifiedDiffSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000004D /* UnifiedDiffSupport.swift */; };
 		A1000000000000000000004C /* ManuscriptNotesRefreshSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000004C /* ManuscriptNotesRefreshSupport.swift */; };
 		A1000000000000000000003D /* SwiftyChat in Frameworks */ = {isa = PBXBuildFile; productRef = G1000000000000000000000A /* SwiftyChat */; };
@@ -213,6 +215,7 @@
 		B10000000000000000000211 /* FootnoteFieldSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/FootnoteFieldSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000212 /* PendingWritesSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/PendingWritesSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000213 /* SlideStudioDraftSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/SlideStudioDraftSupport.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000214 /* DeckEditHistorySupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/DeckEditHistorySupport.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000004D /* UnifiedDiffSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/UnifiedDiffSupport.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000004C /* ManuscriptNotesRefreshSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/ManuscriptNotesRefreshSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000039 /* WorkspaceTextFileSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/WorkspaceTextFileSupport.swift; sourceTree = SOURCE_ROOT; };
@@ -348,6 +351,7 @@
 				B10000000000000000000211 /* FootnoteFieldSupport.swift */,
 				B10000000000000000000212 /* PendingWritesSupport.swift */,
 				B10000000000000000000213 /* SlideStudioDraftSupport.swift */,
+				B10000000000000000000214 /* DeckEditHistorySupport.swift */,
 				B1000000000000000000004D /* UnifiedDiffSupport.swift */,
 				B1000000000000000000004C /* ManuscriptNotesRefreshSupport.swift */,
 				B1000000000000000000003D /* ReaderChatSidebarView.swift */,
@@ -582,6 +586,7 @@
 				A10000000000000000000211 /* FootnoteFieldSupport.swift in Sources */,
 				A10000000000000000000213 /* PendingWritesSupport.swift in Sources */,
 				A10000000000000000000215 /* SlideStudioDraftSupport.swift in Sources */,
+				A10000000000000000000217 /* DeckEditHistorySupport.swift in Sources */,
 				A1000000000000000000004D /* UnifiedDiffSupport.swift in Sources */,
 				A1000000000000000000004C /* ManuscriptNotesRefreshSupport.swift in Sources */,
 				A10000000000000000000042 /* ReaderChatSidebarView.swift in Sources */,
@@ -626,6 +631,7 @@
 				A10000000000000000000210 /* FootnoteFieldSupport.swift in Sources */,
 				A10000000000000000000212 /* PendingWritesSupport.swift in Sources */,
 				A10000000000000000000214 /* SlideStudioDraftSupport.swift in Sources */,
+				A10000000000000000000216 /* DeckEditHistorySupport.swift in Sources */,
 				A10000000000000000000050 /* UnifiedDiffSupport.swift in Sources */,
 				A1000000000000000000004F /* AgentRevisionSupport.swift in Sources */,
 				A1000000000000000000002A /* main.swift in Sources */,

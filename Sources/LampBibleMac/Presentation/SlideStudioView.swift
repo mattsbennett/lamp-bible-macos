@@ -41,6 +41,17 @@ struct SlideStudioView: View {
     @State private var decks: [LampPresentationDeck] = []
     @State private var selectedDeckID: String?
     @State private var deck: LampPresentationDeck?
+    /// The decks this window has moved on from, so an edit can be taken back.
+    @State private var history = LampDeckEditHistory()
+    /// True while an undo or redo is being applied, so putting the old deck
+    /// back is not itself recorded as an edit to undo.
+    @State private var isRestoring = false
+    /// Mirrored into state rather than read from `history`, which is a class
+    /// SwiftUI does not watch: read directly, these buttons would be right
+    /// only because every change to the history happens to accompany a change
+    /// to the deck, which is not a thing to rely on.
+    @State private var canUndoEdit = false
+    @State private var canRedoEdit = false
     @State private var savedDeck: LampPresentationDeck?
     @State private var selectedSlideID: String?
     /// Whether the slide list has the keyboard. Arrow keys step between slides
@@ -136,7 +147,18 @@ struct SlideStudioView: View {
             }
         }
         .onChange(of: selectedDeckID) { _, deckID in selectDeck(deckID) }
-        .onChange(of: deck) { _, updatedDeck in scheduleAutosave(updatedDeck) }
+        .onChange(of: deck) { previousDeck, updatedDeck in
+            if let previousDeck, !isRestoring, previousDeck.id == updatedDeck?.id {
+                // Only an edit to the deck on screen. Changing deck is a move,
+                // not something to undo, and `applySelection` clears the
+                // history for that.
+                history.record(previousDeck)
+            }
+            isRestoring = false
+            canUndoEdit = history.canUndo
+            canRedoEdit = history.canRedo
+            scheduleAutosave(updatedDeck)
+        }
         // Off the main thread: a long writing over many slides takes a while
         // to split, and opening a deck waited for it.
         .task(id: manuscriptNotesInputs) {
@@ -189,6 +211,19 @@ struct SlideStudioView: View {
     @ToolbarContentBuilder
     private var studioToolbar: some ToolbarContent {
         ToolbarItemGroup {
+            // Deliberately without a key equivalent. In AppKit a menu or
+            // toolbar shortcut is consulted before the responder chain, so
+            // taking Command-Z here would take it from the text field being
+            // typed in, and undoing a word would undo the whole slide
+            // instead. Wiring these to the window's UndoManager is what lets
+            // both live together, and is a piece of work in its own right.
+            Button("Undo Edit", systemImage: "arrow.uturn.backward") { undoEdit() }
+                .help("Take back the last change to this deck")
+                .disabled(!canUndoEdit)
+            Button("Redo Edit", systemImage: "arrow.uturn.forward") { redoEdit() }
+                .help("Put back the change that was taken back")
+                .disabled(!canRedoEdit)
+
             Button("Import Deck…", systemImage: "square.and.arrow.down") { importDeck() }
                 .help("Import a .lampdeck document")
             Button("Export Deck…", systemImage: "square.and.arrow.up") { exportDeck() }
@@ -800,6 +835,13 @@ struct SlideStudioView: View {
     }
 
     private func applySelection(_ selected: LampPresentationDeck) {
+        // A different deck is a different history. Undoing across that
+        // boundary would put one deck's slides into another.
+        if selected.id != deck?.id {
+            history.forget()
+            canUndoEdit = false
+            canRedoEdit = false
+        }
         // An unfinished version of this deck outranks the stored one: it is
         // what the writer last had on screen, and the only reason it is not in
         // the library is that it does not validate yet. `savedDeck` stays the
@@ -819,6 +861,22 @@ struct SlideStudioView: View {
     private var applicationSupportURL: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
+    }
+
+    private func undoEdit() {
+        guard let current = deck, let previous = history.undo(from: current) else { return }
+        isRestoring = true
+        deck = previous
+        selectedSlideID = previous.slides.first { $0.id == selectedSlideID }?.id
+            ?? previous.slides.first?.id
+    }
+
+    private func redoEdit() {
+        guard let current = deck, let next = history.redo(from: current) else { return }
+        isRestoring = true
+        deck = next
+        selectedSlideID = next.slides.first { $0.id == selectedSlideID }?.id
+            ?? next.slides.first?.id
     }
 
     private func selectDeck(_ deckID: String?) {
