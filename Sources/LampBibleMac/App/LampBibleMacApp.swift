@@ -14,6 +14,14 @@ struct LampBibleMacApp: App {
     @StateObject private var presentationRemoteHost = LampPresentationRemoteHost()
     @StateObject private var softwareUpdater = SoftwareUpdater()
 
+    init() {
+        // `@AppStorage`'s default is that property wrapper's own fallback and is
+        // never written to UserDefaults, so code reading the raw value gets
+        // `false` until the switch is touched. Sync at launch reads it that way,
+        // so on a new install it never ran while Settings showed it on.
+        UserDefaults.standard.register(defaults: ["sync.automatic": true])
+    }
+
     var body: some Scene {
         WindowGroup("Lamp Bible", id: "reader") {
             LibraryRootView()
