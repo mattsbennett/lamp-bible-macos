@@ -22,6 +22,7 @@
 		A10000000000000000000005 /* ReadingPlansView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000005 /* ReadingPlansView.swift */; };
 		A10000000000000000000006 /* StudyHighlightPalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000006 /* StudyHighlightPalette.swift */; };
 		A10000000000000000000007 /* StudyInspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000007 /* StudyInspectorView.swift */; };
+		A10000000000000000000220 /* ReaderWorkspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000216 /* ReaderWorkspace.swift */; };
 		A10000000000000000000008 /* ModuleStudioModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000008 /* ModuleStudioModel.swift */; };
 		A10000000000000000000009 /* ModuleStudioView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000009 /* ModuleStudioView.swift */; };
 		A1000000000000000000000A /* StudioDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000A /* StudioDocument.swift */; };
@@ -134,6 +135,7 @@
 		B10000000000000000000005 /* ReadingPlansView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/ReadingPlansView.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000006 /* StudyHighlightPalette.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/StudyHighlightPalette.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000007 /* StudyInspectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/StudyInspectorView.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000216 /* ReaderWorkspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/ReaderWorkspace.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000008 /* ModuleStudioModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/ModuleStudio/ModuleStudioModel.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000009 /* ModuleStudioView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/ModuleStudio/ModuleStudioView.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000000A /* StudioDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/StudioDocument.swift; sourceTree = SOURCE_ROOT; };
@@ -325,6 +327,7 @@
 				B10000000000000000000005 /* ReadingPlansView.swift */,
 				B10000000000000000000006 /* StudyHighlightPalette.swift */,
 				B10000000000000000000007 /* StudyInspectorView.swift */,
+				B10000000000000000000216 /* ReaderWorkspace.swift */,
 				B10000000000000000000008 /* ModuleStudioModel.swift */,
 				B10000000000000000000009 /* ModuleStudioView.swift */,
 				B1000000000000000000000A /* StudioDocument.swift */,
@@ -559,6 +562,7 @@
 				A10000000000000000000005 /* ReadingPlansView.swift in Sources */,
 				A10000000000000000000006 /* StudyHighlightPalette.swift in Sources */,
 				A10000000000000000000007 /* StudyInspectorView.swift in Sources */,
+				A10000000000000000000220 /* ReaderWorkspace.swift in Sources */,
 				A10000000000000000000008 /* ModuleStudioModel.swift in Sources */,
 				A10000000000000000000009 /* ModuleStudioView.swift in Sources */,
 				A1000000000000000000000A /* StudioDocument.swift in Sources */,
