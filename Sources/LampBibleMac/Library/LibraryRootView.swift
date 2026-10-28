@@ -60,6 +60,9 @@ struct LibraryRootView: View {
     @EnvironmentObject private var syncController: LibrarySyncController
     @EnvironmentObject private var scrollLink: ReaderScrollLink
     @State private var selection: LibrarySelection? = .section(.reader)
+    /// A passage waiting for the reader to say which Bible app to open it in,
+    /// because they chose "Ask Each Time".
+    @State private var externalBibleRequest: ExternalBibleRequest?
     @State private var showingImporter = false
     @State private var showingStudyDataImporter = false
     @State private var readerTabs = ReaderTabCollection()
@@ -206,6 +209,34 @@ struct LibraryRootView: View {
             openInNewTab: { openReferenceInNewTab($0) }
         ))
         .onOpenURL { handleOpenURL($0) }
+        .confirmationDialog(
+            "Open this passage in which Bible?",
+            isPresented: Binding(
+                get: { externalBibleRequest != nil },
+                set: { if !$0 { externalBibleRequest = nil } }
+            ),
+            presenting: externalBibleRequest
+        ) { request in
+            ForEach(ExternalBibleApplication.allCases) { application in
+                Button(application.rawValue) {
+                    if let destination = application.url(
+                        startReference: request.startReference,
+                        endReference: request.endReference
+                    ) {
+                        NSWorkspace.shared.open(destination)
+                    }
+                    externalBibleRequest = nil
+                }
+            }
+            Button("Open in Lamp Bible") {
+                model.openReference(request.startReference, translationID: nil)
+                selection = .section(.reader)
+                externalBibleRequest = nil
+            }
+            Button("Cancel", role: .cancel) { externalBibleRequest = nil }
+        } message: { _ in
+            Text("Choose a default in Settings to stop being asked.")
+        }
         .onChange(of: selection) { _, newValue in
             if case .translation(let moduleID) = newValue {
                 model.selectTranslation(moduleID)
@@ -325,9 +356,17 @@ struct LibraryRootView: View {
             model.openReference(reference, translationID: translationID)
             selection = .section(.reader)
         case .reading(let reference, let endReference, let openExternal):
-            if openExternal,
-               let appName = UserDefaults.standard.string(forKey: "plans.externalBibleApp"),
-               let application = ExternalBibleApplication(rawValue: appName),
+            let chosenApp = UserDefaults.standard.string(forKey: "plans.externalBibleApp")
+                .flatMap(ExternalBibleApplication.init(rawValue:))
+            if openExternal, chosenApp == nil {
+                // "Ask Each Time" is the empty default, so there is no app to
+                // resolve. This used to fall through and open Lamp's own
+                // reader, which is the one thing the link was asking not to do.
+                externalBibleRequest = ExternalBibleRequest(
+                    startReference: reference, endReference: endReference
+                )
+            } else if openExternal,
+               let application = chosenApp,
                let destination = application.url(
                    startReference: reference, endReference: endReference
                ) {
@@ -6032,4 +6071,12 @@ private extension LampModuleKind {
         case .quiz: "Quiz"
         }
     }
+}
+
+/// A passage waiting for its reader to choose a Bible app.
+struct ExternalBibleRequest: Identifiable, Equatable {
+    let startReference: Int
+    let endReference: Int?
+
+    var id: String { "\(startReference)-\(endReference ?? startReference)" }
 }
