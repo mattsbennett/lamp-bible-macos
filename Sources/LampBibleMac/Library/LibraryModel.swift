@@ -1155,14 +1155,25 @@ final class LibraryModel: ObservableObject {
         }
     }
 
-    private func loadChapter(moduleID: String, book: Int, chapter: Int) async throws {
+    /// Reads everything a reader shows for one chapter, and changes nothing.
+    ///
+    /// Separate from the model's own place in scripture on purpose: a reader
+    /// window will ask for its own chapter, and the answer must not depend on,
+    /// or disturb, where any other reader happens to be. What it needs from
+    /// the library beyond the chapter itself — which note and highlight
+    /// modules are installed — is library-wide and stays here.
+    func chapterContents(
+        translationID: String,
+        book: Int,
+        chapter: Int
+    ) async throws -> ReaderChapterContents {
         async let chapterRequest = library.chapter(
-            moduleID: moduleID,
+            moduleID: translationID,
             bookNumber: book,
             chapterNumber: chapter
         )
         async let highlightsRequest = library.verseHighlights(
-            translationID: moduleID,
+            translationID: translationID,
             bookNumber: book,
             chapterNumber: chapter
         )
@@ -1191,22 +1202,28 @@ final class LibraryModel: ObservableObject {
                 chapterNumber: chapter
             )) ?? []
         }
-        guard !Task.isCancelled,
-              selectedTranslationID == moduleID,
-              selectedBookNumber == book,
-              selectedChapterNumber == chapter else { return }
-
-        // Gathered as one value: these are read together, replaced together,
-        // and half of one chapter beside half of another is never right. A
-        // reader window will hold one of these of its own.
-        apply(ReaderChapterContents(
+        return ReaderChapterContents(
             chapter: loadedChapter,
-            translationID: moduleID,
+            translationID: translationID,
             highlights: loadedHighlights,
             notes: loadedNotes,
             installedHighlights: installedHighlights,
             installedNotes: installedNotes
-        ))
+        )
+    }
+
+    private func loadChapter(moduleID: String, book: Int, chapter: Int) async throws {
+        let contents = try await chapterContents(
+            translationID: moduleID, book: book, chapter: chapter
+        )
+        // The reader may have moved on while this was being read, in which
+        // case these are the wrong chapter's contents and showing them would
+        // put one chapter's highlights over another's words.
+        guard !Task.isCancelled,
+              selectedTranslationID == moduleID,
+              selectedBookNumber == book,
+              selectedChapterNumber == chapter else { return }
+        apply(contents)
         persistLocation()
     }
 
