@@ -11,10 +11,19 @@ import UniformTypeIdentifiers
 struct SlideStudioRequest: Codable, Hashable {
     var deckID: String?
     var devotionalID: String?
+    /// A deck to make when the window opens, if it is not there already.
+    ///
+    /// New Presentation Deck names the deck it wants rather than asking for
+    /// "something new", because this request is what a restored window comes
+    /// back with: "something new" would make another empty deck on every
+    /// launch, and naming it means the restored window simply reopens the deck
+    /// that was made the first time.
+    var newDeckID: String?
 
-    init(deckID: String? = nil, devotionalID: String? = nil) {
+    init(deckID: String? = nil, devotionalID: String? = nil, newDeckID: String? = nil) {
         self.deckID = deckID
         self.devotionalID = devotionalID
+        self.newDeckID = newDeckID
     }
 }
 
@@ -691,6 +700,14 @@ struct SlideStudioView: View {
         saveTask?.cancel()
         do {
             decks = try store.decks()
+            if let newDeckID = request.newDeckID {
+                // Asked for a new deck. Opening the first existing one instead
+                // meant File → New Presentation Deck handed you a deck you had
+                // already written, and Slide Studio saves as you type.
+                try openOrMakeDeck(id: newDeckID)
+                isLoading = false
+                return
+            }
             let requestedDeck: LampPresentationDeck?
             if let deckID = request.deckID {
                 requestedDeck = decks.first { $0.id == deckID }
@@ -751,6 +768,23 @@ struct SlideStudioView: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// Opens the deck with this ID, making it first if it is not there.
+    ///
+    /// Idempotent, which is what lets a restored window carry the same request
+    /// without making a second deck.
+    private func openOrMakeDeck(id: String) throws {
+        if let existing = decks.first(where: { $0.id == id }) {
+            applySelection(existing)
+            return
+        }
+        var newDeck = starterDeck(devotionalID: request.devotionalID)
+        newDeck.id = id
+        try store.save(newDeck)
+        decks.append(newDeck)
+        decks.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        applySelection(newDeck)
     }
 
     private func starterDeck(devotionalID: String?) -> LampPresentationDeck {

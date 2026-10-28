@@ -91,7 +91,10 @@ struct LampBibleCommands: Commands {
             .keyboardShortcut("n", modifiers: [.command, .shift])
 
             Button("New Presentation Deck") {
-                openWindow(id: "slide-studio", value: SlideStudioRequest())
+                openWindow(
+                    id: "slide-studio",
+                    value: SlideStudioRequest(newDeckID: UUID().uuidString)
+                )
             }
             .keyboardShortcut("n", modifiers: [.command, .option, .shift])
 
