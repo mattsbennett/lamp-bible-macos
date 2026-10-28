@@ -528,8 +528,9 @@ struct ReaderSupportTests {
     // MARK: - Margin marks
 
     /// Verses 9 and 10 begin on one line, both with notes of their own: the
-    /// line shows each kind once, for the first verse, the reader's own nearer
-    /// the text. Verse 12, on a later line, keeps its own icon.
+    /// line shows each kind once, for the first verse with a note of that
+    /// kind, so the reader's own goes to verse 10 and the module's to verse 9.
+    /// Verse 12, on a later line, keeps its own icon.
     @Test func showsEachKindOfNoteOnceALine() {
         let icons = ReaderMarginMarks.icons(for: [
             (line: 3, note: .init(location: 40, reference: 43014009, kinds: [.module])),

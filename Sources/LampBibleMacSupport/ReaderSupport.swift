@@ -469,10 +469,11 @@ public struct ReaderMarginMarks: Equatable, Sendable {
 
     /// The icons for notes, given the line each one's verse begins on.
     ///
-    /// Two verses can begin on one line, and the line shows each kind once,
-    /// for the first of them: a second icon of a kind would repeat the first,
-    /// and the margin has room for two. The reader's own note comes first,
-    /// nearer the text.
+    /// Two verses can begin on one line, and the line shows each kind once:
+    /// a second icon of a kind would repeat the first, and the margin has
+    /// room for two. Each icon stands for the first verse on the line with a
+    /// note of its kind, so the two beside one line can belong to different
+    /// verses. The reader's own note comes first, nearer the text.
     public static func icons(for notes: [(line: Int, note: Note)]) -> [Icon] {
         var shown = Set<[Int]>()
         var icons: [Icon] = []

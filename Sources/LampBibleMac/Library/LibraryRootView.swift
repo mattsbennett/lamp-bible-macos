@@ -2019,7 +2019,10 @@ private final class ReaderTextView: NSTextView {
                 rect: rect,
                 image: image,
                 reference: icon.reference,
-                help: icon.kind == .personal ? "Your note" : "Study notes"
+                // Naming the verse: two icons beside one line can open two.
+                help: icon.kind == .personal
+                    ? "Your note on verse \(icon.reference % 1_000)"
+                    : "Study notes on verse \(icon.reference % 1_000)"
             ))
         }
         return placed
