@@ -710,8 +710,8 @@ struct LibraryRootView: View {
         case .section(.search):
             UnifiedSearchView(
                 showImporter: { showingImporter = true },
-                openReference: { reference in
-                    model.openReference(reference)
+                openReference: { reference, translationID in
+                    model.openReference(reference, translationID: translationID)
                     selection = .section(.reader)
                 },
                 openBook: { result in

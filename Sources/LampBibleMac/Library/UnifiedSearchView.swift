@@ -21,7 +21,10 @@ struct UnifiedSearchView: View {
     @State private var highlightColor = ""
 
     let showImporter: () -> Void
-    let openReference: (Int) -> Void
+    /// Opens a reference, in the translation it was found in when the result
+    /// came from one. A verse found in the WEB for its particular wording is
+    /// not that verse in whatever translation the reader happens to be on.
+    let openReference: (Int, String?) -> Void
     let openBook: (LampModuleSearchResult) -> Void
     let openKind: (LampModuleKind) -> Void
 
@@ -214,7 +217,7 @@ struct UnifiedSearchView: View {
                     .contextMenu {
                         if let reference = result.startReference {
                             Button("Open \(result.referenceDescription ?? "Reference")") {
-                                openReference(reference)
+                                openReference(reference, translationID(of: result))
                             }
                         }
                         Button("Copy Result") { copy(result) }
@@ -260,7 +263,7 @@ struct UnifiedSearchView: View {
                     if let reference = result.startReference {
                         Button("Open in Reader", systemImage: "book") {
                             saveSearch()
-                            openReference(reference)
+                            openReference(reference, translationID(of: result))
                         }
                         .buttonStyle(.borderedProminent)
                     }
@@ -377,6 +380,13 @@ struct UnifiedSearchView: View {
             return module.name
         }
         return entry.kind?.displayName ?? "All Content"
+    }
+
+    /// A translation result's module is the translation. Everything else — a
+    /// commentary, a note — points at scripture without being scripture, so it
+    /// opens in whatever is being read.
+    private func translationID(of result: LampModuleSearchResult) -> String? {
+        result.kind == .translation ? result.moduleID : nil
     }
 
     private func copy(_ result: LampModuleSearchResult) {
