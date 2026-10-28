@@ -12,7 +12,7 @@ This matrix tracks user-facing capability rather than identical UI. Touch-only i
 | Navigation | Book/chapter/verse navigation and history | Menus, chapter shortcuts, precise verse links, persistent back/forward history | Complete |
 | Read aloud | Voice selection, rate, pause/resume, follow along | `AVSpeechSynthesizer` chapter queue with voice/rate settings and spoken-verse scrolling | Complete |
 | Study tools | Commentary, lexicons, Strong’s links, footnotes, cross-references | Resizable macOS inspector with module defaults/visibility and cross-reference sorting | Complete |
-| Notes | Editable verse/range notes with footnotes and import/export | Markdown note editor, verse ranges, editable footnotes, canonical JSON/`.lamp` transfer | Complete |
+| Notes | Verse/range notes whose existing footnotes can be edited, with import/export | Markdown note editor, verse ranges, editable footnotes, canonical JSON/`.lamp` transfer | Complete |
 | Highlights | Exact spans, colors, underline styles, sets, themes, import/export | AppKit text selection, four styles, named sets/themes, canonical JSON/`.lamp` transfer | Complete |
 | Search | Scripture and module search with filters/history | Unified search across all nine module kinds plus personal notes/highlights, filters, previews, and persistent history | Complete |
 | Plans | Selected plans, Today, completion, dates, estimates, reminders, external apps | Today and plan views, year-scoped completion, actual word-count estimates, notifications, five external Bible targets | Complete |
@@ -23,7 +23,7 @@ This matrix tracks user-facing capability rather than identical UI. Touch-only i
 | Sync | Local, iCloud Drive, WebDAV, settings and editable data | Versioned portable backup over a chosen iCloud Drive/folder or authenticated WebDAV; includes companion writing files, agent context, custom skills, and revisions; Keychain password, merge, manual and launch sync | Complete |
 | Links and files | App links and document import | `lampbible://` reader, book/section, and library links plus Finder opening for `.lamp` and JSON | Complete |
 | Widget | Today-reading glance and launch | Menu-bar Today window with plan assignments and reader launch | Complete (native equivalent) |
-| Multiwindow | iPad/window navigation | Reader and Module Studio window groups; additional reader windows from File menu | Complete |
+| Multiwindow | iPad/window navigation | Reader, book, writing and Slide Studio window groups; additional reader windows from File menu | Complete |
 | Module authoring | Not an iOS feature | Drag/drop JSON inspection, validation and `.lamp` builds for every module kind | macOS addition |
 
 ## Platform-specific substitutions

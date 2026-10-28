@@ -8,7 +8,7 @@ This repository intentionally contains Mac-specific application lifecycle and UI
 
 - Native multiwindow SwiftUI shell
 - Sidebar-based library navigation
-- Dedicated Module Studio window and menu command
+- Module Studio in the Import or Create Content window, with a menu command
 - JSON file importer and drag-and-drop target
 - Module type detection, summary statistics, and validation provided by `LampModuleKit`
 - Native `.lamp` compilation for translations, dictionaries, commentaries, reading plans, devotionals, quizzes, notes, and highlights
@@ -40,7 +40,7 @@ This repository intentionally contains Mac-specific application lifecycle and UI
 - Persistent reader navigation history and unified all-module search history
 - Read Aloud with system voices, adjustable rate, pause/resume, and verse follow-along
 - Exact text-range highlights with styles, named sets, and reusable themes
-- Verse-range Markdown notes with editable footnotes
+- Verse-range Markdown notes, whose existing footnotes can be edited
 - Personal devotional authoring with find and replace in both the visual and Markdown editors, images, audio attachment/recording/playback, presentation, import, export, and sharing
 - Native Slide Studio with semantic layouts, speaker notes, linked writing decks, `.lampdeck` import/export, validation, autosave, and indexed full-screen presentation
 - Bonjour presentation discovery with QR-first, challenge-bound encrypted pairing and synchronized iPhone/iPad controls for current/next slide, notes, timing, navigation, and blackout
@@ -48,7 +48,7 @@ This repository intentionally contains Mac-specific application lifecycle and UI
 - Native devotional agent chat (powered by the Apache-2.0 SwiftyChat UI) with resumable Codex, Claude Code, and OpenCode sessions, browser sign-in, Allow, Always Allow, or Deny for Claude Code tool calls that need permission, and a terminal-mode toggle
 - Resizable reader chat sidebar using the same provider accounts and chat UI, with read-only module research, per-message chapter context, and separate saved conversations for each reader window
 - Actual-word-count reading estimates, daily notifications, and external Bible app links
-- Default, visibility, and ordering preferences for translations, dictionaries, and commentaries
+- Default and visibility preferences for translations, dictionaries, and commentaries
 - Finder document opening and `lampbible://` deep links
 - Portable iCloud Drive/folder and WebDAV sync for modules, settings, notes, highlights/themes, devotionals, media, and user-authored devotional workspace files
 - A menu-bar Today surface as the native Mac equivalent of the iOS widget

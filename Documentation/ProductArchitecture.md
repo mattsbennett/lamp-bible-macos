@@ -8,7 +8,7 @@ The primary window uses a native sidebar and detail area. `LampLibrary` installs
 
 ### Module Studio
 
-Module Studio is a separate window so a user can validate and build modules alongside one or more reader windows. Its pipeline is:
+Module Studio is a section of the Import or Create Content window, so a user can validate and build modules alongside one or more reader windows. Its pipeline is:
 
 ```text
 drop JSON → detect → validate → preview → compile SQLite → integrity check → compress → save .lamp
