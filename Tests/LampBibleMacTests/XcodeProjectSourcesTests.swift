@@ -52,6 +52,52 @@ struct XcodeProjectSourcesTests {
         )
     }
 
+    /// Every object in the project file is defined once.
+    ///
+    /// The identifiers here are assigned by hand, in a series per kind, and
+    /// reusing one does not fail to parse: the last definition wins, and
+    /// whatever an earlier one named leaves the build without a word. The
+    /// test above does not see it, because the file is still listed and still
+    /// on disk — it is simply attached to an identifier that now means
+    /// something else. `swift build` globs `Sources` and stays green, so the
+    /// first sign of it is "cannot find X in scope" about a file plainly
+    /// there.
+    @Test func notwoObjectsShareAnIdentifier() throws {
+        let project = try String(
+            contentsOf: repositoryRoot
+                .appendingPathComponent("Lamp Bible.xcodeproj/project.pbxproj"),
+            encoding: .utf8
+        )
+        let pattern = try NSRegularExpression(
+            pattern: #"^\s*([0-9A-F]{24}) (?:/\* (.*?) \*/ )?= \{"#
+        )
+        let lines = project.components(separatedBy: .newlines)
+        var namesByIdentifier: [String: [String]] = [:]
+        for (index, line) in lines.enumerated() {
+            guard let match = pattern.firstMatch(
+                in: line, range: NSRange(line.startIndex..., in: line)
+            ) else { continue }
+            // An object says what it is, on its line or the next. The same
+            // identifier also appears as a plain key under `TargetAttributes`,
+            // which is a mention of the target, not a second one.
+            let declares = line.contains("isa = ")
+                || (lines.indices.contains(index + 1) && lines[index + 1].contains("isa = "))
+            guard declares,
+                  let identifier = Range(match.range(at: 1), in: line)
+                      .map({ String(line[$0]) })
+            else { continue }
+            let name = Range(match.range(at: 2), in: line)
+                .map { String(line[$0]) } ?? "unnamed"
+            namesByIdentifier[identifier, default: []].append(name)
+        }
+
+        let reused = namesByIdentifier
+            .filter { $0.value.count > 1 }
+            .map { "\($0.key) is \($0.value.joined(separator: " and "))" }
+        #expect(reused.isEmpty, "give each object its own identifier: \(reused.sorted())")
+        #expect(namesByIdentifier.count > 100, "the project file is parsed, not merely read")
+    }
+
     /// Xcode compiles the support sources straight into the target that needs
     /// them, so inside the app — and inside the MCP helper — `LampBibleMacSupport`
     /// is not a module and importing it unconditionally fails dependency
