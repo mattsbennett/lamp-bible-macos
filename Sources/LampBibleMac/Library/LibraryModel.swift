@@ -990,7 +990,9 @@ final class LibraryModel: ObservableObject {
         readingIndex: Int,
         year: Int
     ) {
-        let id = "\(planID)_\(day)_r\(readingIndex)_\(year)"
+        let id = LampLibrary.completedReadingID(
+            planID: planID, day: day, readingIndex: readingIndex, year: year
+        )
         setReadingCompleted(
             planID: planID,
             day: day,
@@ -1007,7 +1009,9 @@ final class LibraryModel: ObservableObject {
         year: Int,
         completed: Bool
     ) {
-        let id = "\(planID)_\(day)_r\(readingIndex)_\(year)"
+        let id = LampLibrary.completedReadingID(
+            planID: planID, day: day, readingIndex: readingIndex, year: year
+        )
         guard completedReadingIDs.contains(id) != completed else { return }
         Task {
             do {
