@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		A10000000000000000000051 /* WritingChangesSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000004E /* WritingChangesSupport.swift */; };
 		A10000000000000000000210 /* FootnoteFieldSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000211 /* FootnoteFieldSupport.swift */; };
+		A10000000000000000000212 /* PendingWritesSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000212 /* PendingWritesSupport.swift */; };
 		A10000000000000000000050 /* UnifiedDiffSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000004D /* UnifiedDiffSupport.swift */; };
 		A1000000000000000000004F /* AgentRevisionSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000025 /* AgentRevisionSupport.swift */; };
 		A10000000000000000000001 /* LampBibleCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000001 /* LampBibleCommands.swift */; };
@@ -104,6 +105,7 @@
 		A10000000000000000000111 /* TranslationImportSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000111 /* TranslationImportSheet.swift */; };
 		A1000000000000000000004E /* WritingChangesSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000004E /* WritingChangesSupport.swift */; };
 		A10000000000000000000211 /* FootnoteFieldSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000211 /* FootnoteFieldSupport.swift */; };
+		A10000000000000000000213 /* PendingWritesSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000212 /* PendingWritesSupport.swift */; };
 		A1000000000000000000004D /* UnifiedDiffSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000004D /* UnifiedDiffSupport.swift */; };
 		A1000000000000000000004C /* ManuscriptNotesRefreshSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000004C /* ManuscriptNotesRefreshSupport.swift */; };
 		A1000000000000000000003D /* SwiftyChat in Frameworks */ = {isa = PBXBuildFile; productRef = G1000000000000000000000A /* SwiftyChat */; };
@@ -207,6 +209,7 @@
 		B10000000000000000000111 /* TranslationImportSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/TranslationImportSheet.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000004E /* WritingChangesSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/WritingChangesSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000211 /* FootnoteFieldSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/FootnoteFieldSupport.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000212 /* PendingWritesSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/PendingWritesSupport.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000004D /* UnifiedDiffSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/UnifiedDiffSupport.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000004C /* ManuscriptNotesRefreshSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/ManuscriptNotesRefreshSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000039 /* WorkspaceTextFileSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/WorkspaceTextFileSupport.swift; sourceTree = SOURCE_ROOT; };
@@ -340,6 +343,7 @@
 				B100000000000000000000F2 /* PresentationImportStatusSupport.swift */,
 				B1000000000000000000004E /* WritingChangesSupport.swift */,
 				B10000000000000000000211 /* FootnoteFieldSupport.swift */,
+				B10000000000000000000212 /* PendingWritesSupport.swift */,
 				B1000000000000000000004D /* UnifiedDiffSupport.swift */,
 				B1000000000000000000004C /* ManuscriptNotesRefreshSupport.swift */,
 				B1000000000000000000003D /* ReaderChatSidebarView.swift */,
@@ -572,6 +576,7 @@
 				A100000000000000000000F2 /* PresentationImportStatusSupport.swift in Sources */,
 				A1000000000000000000004E /* WritingChangesSupport.swift in Sources */,
 				A10000000000000000000211 /* FootnoteFieldSupport.swift in Sources */,
+				A10000000000000000000213 /* PendingWritesSupport.swift in Sources */,
 				A1000000000000000000004D /* UnifiedDiffSupport.swift in Sources */,
 				A1000000000000000000004C /* ManuscriptNotesRefreshSupport.swift in Sources */,
 				A10000000000000000000042 /* ReaderChatSidebarView.swift in Sources */,
@@ -614,6 +619,7 @@
 			files = (
 				A10000000000000000000051 /* WritingChangesSupport.swift in Sources */,
 				A10000000000000000000210 /* FootnoteFieldSupport.swift in Sources */,
+				A10000000000000000000212 /* PendingWritesSupport.swift in Sources */,
 				A10000000000000000000050 /* UnifiedDiffSupport.swift in Sources */,
 				A1000000000000000000004F /* AgentRevisionSupport.swift in Sources */,
 				A1000000000000000000002A /* main.swift in Sources */,

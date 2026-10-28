@@ -6,8 +6,46 @@ import LampCore
 import LampModuleKit
 import SwiftUI
 
+/// Lets the editors finish writing before the app goes away.
+///
+/// Lamp writes on a short delay so that typing never waits on a disk, and that
+/// delay is spent in a task the process does not wait for. Without this, Quit
+/// during that window threw the last edit away — the one case a view cannot
+/// cover for itself.
+final class LampAppDelegate: NSObject, NSApplicationDelegate {
+    private var hasReplied = false
+
+    func applicationShouldTerminate(
+        _ sender: NSApplication
+    ) -> NSApplication.TerminateReply {
+        hasReplied = false
+        let quiet = LampPendingWrites.shared.flushAll { [weak self] in
+            self?.reply(to: sender)
+        }
+        guard !quiet else { return .terminateNow }
+
+        // Never trap someone in an app that will not quit. A write still
+        // outstanding after five seconds is not going to land, and a person
+        // holding a laptop lid open is a worse outcome than a lost edit.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+            LampPendingWrites.shared.cancelQuietHandler()
+            self?.reply(to: sender)
+        }
+        return .terminateLater
+    }
+
+    /// Answers once. Both the last write landing and the deadline can arrive,
+    /// and replying twice is a programming error AppKit complains about.
+    private func reply(to sender: NSApplication) {
+        guard !hasReplied else { return }
+        hasReplied = true
+        sender.reply(toApplicationShouldTerminate: true)
+    }
+}
+
 @main
 struct LampBibleMacApp: App {
+    @NSApplicationDelegateAdaptor(LampAppDelegate.self) private var appDelegate
     @StateObject private var libraryModel = LibraryModel()
     @StateObject private var syncController = LibrarySyncController()
     @StateObject private var scrollLink = ReaderScrollLink()

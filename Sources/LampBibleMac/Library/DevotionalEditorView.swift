@@ -408,6 +408,8 @@ struct DevotionalEditorView: View {
     @State private var find = WritingFindController()
     @State private var markdownFinder = MarkdownTextFinder()
     @State private var saveState: DevotionalSaveState = .idle
+    /// Identifies this editor to the quit hook, for as long as it is on screen.
+    @State private var pendingWritesID = UUID()
     @State private var showingAudioRecorder = false
     @State private var hasLoaded = false
     /// The document as last written to the library. Dirtiness is this compared with
@@ -611,7 +613,13 @@ struct DevotionalEditorView: View {
             guard !Task.isCancelled else { return }
             saveDirtyWorkspaceDocuments()
         }
-        .onDisappear { flushPendingSaves() }
+        .onAppear {
+            LampPendingWrites.shared.register(pendingWritesID) { flushPendingSaves() }
+        }
+        .onDisappear {
+            flushPendingSaves()
+            LampPendingWrites.shared.unregister(pendingWritesID)
+        }
         .focusedSceneValue(\.writingFind, find)
         .onChange(of: activeFindTarget.map(ObjectIdentifier.init), initial: true) {
             find.attach(activeFindTarget)
@@ -2299,6 +2307,10 @@ struct DevotionalEditorView: View {
         guard hasSavableContent, saveState != .saving else { return }
         saveState = .saving
         Task {
+            // Quitting waits on this count, so it has to come down on every
+            // way out of this task, including the failures.
+            LampPendingWrites.shared.begin()
+            defer { LampPendingWrites.shared.end() }
             let markdown = content
             let body: StoredDevotionalBody
             do {
