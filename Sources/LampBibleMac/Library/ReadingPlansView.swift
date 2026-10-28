@@ -40,7 +40,7 @@ struct TodayPlansView: View {
     }
 
     private var year: Int {
-        Calendar.current.component(.year, from: date)
+        LampPlanCalendar.year(for: date)
     }
 
     private var selectedPlans: [LampReadingPlan] {
@@ -194,7 +194,7 @@ struct ReadingPlansView: View {
         }
         .navigationTitle("Reading Plans")
         .task {
-            await model.loadPlanProgress(year: Calendar.current.component(.year, from: date))
+            await model.loadPlanProgress(year: LampPlanCalendar.year(for: date))
         }
     }
 }
@@ -208,7 +208,7 @@ private struct ReadingPlanCard: View {
     let openAllReadings: (PlanReadingMode) -> Void
 
     private var dayNumber: Int { LampPlanCalendar.dayNumber(for: date) }
-    private var year: Int { Calendar.current.component(.year, from: date) }
+    private var year: Int { LampPlanCalendar.year(for: date) }
 
     var body: some View {
         GroupBox {

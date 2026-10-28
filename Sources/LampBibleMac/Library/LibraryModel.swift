@@ -126,7 +126,7 @@ final class LibraryModel: ObservableObject {
     @Published private(set) var quizModules: [LampQuizModule] = []
     @Published private(set) var selectedPlanIDs: Set<String> = []
     @Published private(set) var completedReadingIDs: Set<String> = []
-    @Published private(set) var planProgressYear = Calendar.current.component(.year, from: Date())
+    @Published private(set) var planProgressYear = LampPlanCalendar.year(for: Date())
     @Published var errorMessage: String?
     @Published var studyImportMessage: String?
 

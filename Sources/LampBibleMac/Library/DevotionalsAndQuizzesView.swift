@@ -1109,7 +1109,7 @@ struct QuizzesView: View {
     }
 
     private var currentYear: Int {
-        Calendar.current.component(.year, from: Date())
+        LampPlanCalendar.year(for: Date())
     }
 
     private var selectedDateDescription: String {
