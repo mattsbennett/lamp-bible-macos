@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import shutil
 import sqlite3
 import sys
@@ -46,6 +47,9 @@ IOS_NOTICES = REPOS / "lamp-bible-ios" / "Resource Files" / "Third Party License
 IOS_EDITOR = REPOS / "lamp-bible-ios" / "Lamp Bible" / "Resources" / "TipTapEditor" / "index.html"
 MAC_EDITOR = ROOT / "Sources" / "LampBibleMac" / "Resources" / "TipTapEditor" / "index.html"
 BUNDLED_DB = REPOS / "lamp-bible-modules" / "modules_db" / "bundled_modules.db.zlib"
+VERSIFICATION_DATA = (
+    REPOS / "lamp-bible-core" / "Sources" / "LampModuleKit" / "LampVersificationData.swift"
+)
 
 
 @dataclass(frozen=True)
@@ -114,6 +118,7 @@ EDITOR_NOTICE_FILES = [
 ]
 
 CROSSWIRE_NOTICE = "CrossWire-KJV-v3.1-NOTICE.txt"
+VERSIFICATION_NOTICE = "SIL-libpalaso-versification-MIT.txt"
 
 LICENCE_NAMES = ("LICENSE", "LICENSE.txt", "LICENSE.md", "LICENCE", "COPYING")
 NOTICE_NAMES = ("NOTICE", "NOTICE.txt", "NOTICE.md")
@@ -184,6 +189,37 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def versification_notice() -> tuple[str, str, str]:
+    """SIL libpalaso's commit, copyright line and licence text.
+
+    Read out of core's generated source rather than restated here. The data and
+    its licence travel together in that file's header, so a notice written by
+    hand beside them is one that can be dropped by a regeneration — which is
+    what happened to the first one.
+    """
+    if not VERSIFICATION_DATA.exists():
+        raise NoticeError(
+            f"{VERSIFICATION_DATA} is missing. The app embeds SIL's versification data "
+            "through core, and its notice is read from that file."
+        )
+    header: list[str] = []
+    for line in VERSIFICATION_DATA.read_text(encoding="utf-8").splitlines():
+        if not line.startswith("//"):
+            break
+        header.append(line[2:].removeprefix(" "))
+    text = "\n".join(header)
+
+    commit = re.search(r"at commit ([0-9a-f]{7,40})", text)
+    copyright_line = re.search(r"^(Copyright \(c\) .+)$", text, re.MULTILINE)
+    start = text.find("The MIT License")
+    if not commit or not copyright_line or start < 0:
+        raise NoticeError(
+            f"{VERSIFICATION_DATA.name}'s header no longer carries the upstream commit, a "
+            "copyright line and the MIT text. Its notice is generated from those three."
+        )
+    return commit.group(1), copyright_line.group(1), text[start:].strip() + "\n"
+
+
 def bundled_translation_ids() -> set[str]:
     raw = BUNDLED_DB.read_bytes()
     data = zlib.decompressobj(wbits=-15).decompress(raw)
@@ -248,6 +284,23 @@ def main() -> int:
     for name in EDITOR_NOTICE_FILES:
         shutil.copy2(IOS_NOTICES / name, OUTPUT / name)
 
+    commit, copyright_line, licence = versification_notice()
+    # What it is and why it ships, then the licence. The commit comes from core
+    # so it cannot drift from the data; the description is stable enough to live
+    # here.
+    (OUTPUT / VERSIFICATION_NOTICE).write_text(
+        "SIL libpalaso — standard versifications (SIL.Scripture/Resources/*.vrs.txt)\n"
+        f"https://github.com/sillsdev/libpalaso, commit {commit}\n"
+        "Used by lamp-bible-core to pair verses that translations number differently.\n"
+        "\n"
+        + licence,
+        encoding="utf-8",
+    )
+    reference_rows = [
+        f"- SIL libpalaso standard versifications, commit {commit[:7]} — MIT — {copyright_line}",
+        f"  — {VERSIFICATION_NOTICE}",
+    ]
+
     content_lines = []
     if "KJVs" in bundled_translation_ids():
         shutil.copy2(IOS_NOTICES / CROSSWIRE_NOTICE, OUTPUT / CROSSWIRE_NOTICE)
@@ -269,6 +322,9 @@ Writing editor (identical to the iPhone and iPad app's):
 - ProseMirror and related packages — principally MIT; exact package notices are included here
 - tiptap-markdown 0.9.0 — MIT — Copyright (c) 2021, Antoine Guingand
 - markdown-it and related runtime packages — permissive licences; exact notices are included here
+
+Reference data (in lamp-bible-core):
+{chr(10).join(reference_rows)}
 
 These notices apply to the third-party components only. They do not change the licence of Lamp
 Bible itself or the rights in bundled Bible content. Bundled-content notices are published at

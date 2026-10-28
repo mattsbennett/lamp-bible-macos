@@ -14,7 +14,7 @@ Swift packages (in the app and its lamp-mcp helper):
 - Swift System 1.8.0 — Apache-2.0 — Swift-System-Apache-2.0.txt
 - SwiftLog 1.15.0 — Apache-2.0 — SwiftLog-Apache-2.0.txt
 - SwiftNIO 2.101.3 — Apache-2.0 — SwiftNIO-Apache-2.0.txt
-- SwiftTerm 1.11.2 — MIT — SwiftTerm-MIT.txt
+- SwiftTerm 1.20.0 — MIT — SwiftTerm-MIT.txt
 - SwiftUIEKtensions 0.4.0 — No licence published — SwiftUIEKtensions-no-licence.txt
 - SwiftyChat 4.1.1 — Apache-2.0 — SwiftyChat-Apache-2.0.txt
 
