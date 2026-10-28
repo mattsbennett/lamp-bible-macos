@@ -849,6 +849,24 @@ final class LibraryModel: ObservableObject {
         }
     }
 
+    /// Removes a set of the reader's own, and every highlight in it.
+    ///
+    /// The default set is not offered for deletion: it is where an ordinary
+    /// highlight goes, so removing it would mean the next highlight recreated
+    /// it with nothing in it.
+    func deleteHighlightSet(id: String) async throws {
+        guard id != "personal-highlights:\(selectedTranslationID ?? "")" else { return }
+        try await library.deleteHighlightSet(id: id)
+        for (reference, highlights) in highlightsByReference {
+            let kept = highlights.filter { $0.setID != id }
+            if kept.isEmpty {
+                highlightsByReference.removeValue(forKey: reference)
+            } else {
+                highlightsByReference[reference] = kept
+            }
+        }
+    }
+
     func deleteVerseHighlight(id: Int64, reference: Int) async throws {
         try await library.deleteVerseHighlight(id: id)
         highlightsByReference[reference]?.removeAll { $0.id == id }

@@ -18,6 +18,7 @@ struct VerseHighlightEditorView: View {
     @State private var selectedSetID = ""
     @State private var themes: [LampHighlightTheme] = []
     @State private var showingNewSet = false
+    @State private var showingDeleteSet = false
     @State private var showingSaveTheme = false
     @State private var newSetName = ""
     @State private var newSetDescription = ""
@@ -33,6 +34,95 @@ struct VerseHighlightEditorView: View {
 
     private var defaultSetID: String {
         "personal-highlights:\(model.selectedTranslationID ?? "translation")"
+    }
+
+    /// What is already highlighted here, and the way to remove one of them.
+    ///
+    /// Without this the editor could only add. A highlight over the wrong
+    /// words could be covered by another or cleared along with every other
+    /// highlight on the verse, but not taken off by itself.
+    @ViewBuilder
+    private var existingHighlights: some View {
+        let highlights = model.personalHighlights(for: verse.id)
+        if !highlights.isEmpty {
+            Divider()
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Already Highlighted")
+                    .font(.headline)
+                ForEach(highlights) { highlight in
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(Color(nsColor: readerColor(highlight.color) ?? .systemYellow))
+                            .frame(width: 13, height: 13)
+                        Text(words(of: highlight))
+                            .lineLimit(1)
+                        Text(setName(highlight.setID))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Remove", systemImage: "trash", role: .destructive) {
+                            remove(highlight)
+                        }
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.borderless)
+                        .help("Remove this highlight")
+                    }
+                }
+            }
+        }
+    }
+
+    /// The words a highlight covers, for telling two of them apart.
+    private func words(of highlight: LampVerseHighlight) -> String {
+        let indices = Array(verse.text.indices) + [verse.text.endIndex]
+        guard highlight.startOffset >= 0,
+              highlight.endOffset > highlight.startOffset,
+              highlight.endOffset < indices.count
+        else { return verse.text }
+        return String(verse.text[indices[highlight.startOffset]..<indices[highlight.endOffset]])
+    }
+
+    private func setName(_ setID: String) -> String {
+        setID == defaultSetID ? "My Highlights" : (sets.first { $0.id == setID }?.name ?? "")
+    }
+
+    private func readerColor(_ hex: String?) -> NSColor? {
+        guard let hex else { return nil }
+        var value: UInt64 = 0
+        guard Scanner(string: hex.hasPrefix("#") ? String(hex.dropFirst()) : hex)
+            .scanHexInt64(&value), hex.count >= 6 else { return nil }
+        return NSColor(
+            srgbRed: CGFloat((value >> 16) & 0xFF) / 255,
+            green: CGFloat((value >> 8) & 0xFF) / 255,
+            blue: CGFloat(value & 0xFF) / 255,
+            alpha: 1
+        )
+    }
+
+    private func remove(_ highlight: LampVerseHighlight) {
+        isWorking = true
+        Task {
+            defer { isWorking = false }
+            do {
+                try await model.deleteVerseHighlight(id: highlight.id, reference: verse.id)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func deleteSelectedSet() {
+        let id = selectedSetID
+        isWorking = true
+        Task {
+            defer { isWorking = false }
+            do {
+                try await model.deleteHighlightSet(id: id)
+                selectedSetID = defaultSetID
+                await loadSets()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
     }
 
     private var selectedCharacterRange: ReaderTextRange? {
@@ -67,6 +157,13 @@ struct VerseHighlightEditorView: View {
                         }
                         .labelsHidden()
                         Button("New Set…", systemImage: "plus") { showingNewSet = true }
+                        Button("Delete Set…", systemImage: "trash", role: .destructive) {
+                            showingDeleteSet = true
+                        }
+                        // The default set is where an ordinary highlight goes,
+                        // so deleting it would only mean the next highlight
+                        // made it again, empty.
+                        .disabled(selectedSetID == defaultSetID)
                     }
                 }
                 if !themes.isEmpty {
@@ -127,6 +224,8 @@ struct VerseHighlightEditorView: View {
                     .foregroundStyle(.red)
             }
 
+            existingHighlights
+
             Spacer()
             HStack {
                 Spacer()
@@ -140,6 +239,16 @@ struct VerseHighlightEditorView: View {
         .frame(minWidth: 680, minHeight: 500)
         .task { await loadSets() }
         .onChange(of: selectedSetID) { _, _ in Task { await loadThemes() } }
+        .confirmationDialog(
+            "Delete this highlight set?",
+            isPresented: $showingDeleteSet,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Set", role: .destructive) { deleteSelectedSet() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Every highlight in \(setName(selectedSetID)) goes with it, in this translation and any other. Highlights in your other sets are not affected.")
+        }
         .sheet(isPresented: $showingNewSet) {
             VStack(alignment: .leading, spacing: 16) {
                 Text("New Highlight Set").font(.title2.bold())
