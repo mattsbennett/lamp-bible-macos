@@ -1560,3 +1560,29 @@ public enum LampSearchHistoryStore {
 }
 
 public typealias ExternalBibleApplication = LampExternalBibleApplication
+
+public extension LampExternalBibleApplication {
+    /// The Bible apps this Mac can actually open.
+    ///
+    /// Offering one nothing can open gives the reader a link and then an
+    /// error naming a URL at them. YouVersion is the case that prompted this:
+    /// its Mac listing is the iPhone app running under "Designed for iPad",
+    /// and those do not register their URL schemes with macOS, so
+    /// `youversion://` has no handler however the app is installed. The same
+    /// would greet anyone offered Accordance or Olive Tree without owning
+    /// them.
+    ///
+    /// Asked of the system rather than written down here, so an app installed
+    /// later appears, and YouVersion returns of its own accord if it ever
+    /// ships a Mac app that registers the scheme.
+    ///
+    /// Logos stays whatever is installed: its links are ordinary web
+    /// addresses, which a browser answers for.
+    static var openableOnThisMac: [LampExternalBibleApplication] {
+        allCases.filter { application in
+            guard let url = URL(string: application.urlRoot) else { return false }
+            if url.scheme?.hasPrefix("http") == true { return true }
+            return NSWorkspace.shared.urlForApplication(toOpen: url) != nil
+        }
+    }
+}

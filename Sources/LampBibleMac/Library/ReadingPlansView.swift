@@ -395,7 +395,7 @@ private struct PlanDayReadings: View {
                             }
                             Divider()
                         }
-                        ForEach(ExternalBibleApplication.allCases) { application in
+                        ForEach(ExternalBibleApplication.openableOnThisMac) { application in
                             Button(application.rawValue) {
                                 openExternally(reading, using: application)
                             }
@@ -433,7 +433,10 @@ private struct PlanDayReadings: View {
     }
 
     private var preferredApplication: ExternalBibleApplication? {
+        // Checked against what this Mac can open, not just what was chosen:
+        // a default saved while an app was installed outlives the app.
         ExternalBibleApplication(rawValue: externalBibleApp)
+            .flatMap { ExternalBibleApplication.openableOnThisMac.contains($0) ? $0 : nil }
     }
 
     private var wordCountRequest: String {

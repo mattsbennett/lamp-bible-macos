@@ -557,7 +557,7 @@ private struct ReaderSettingsView: View {
                             in: 80...600, step: 5)
                         Picker("Default External Bible", selection: $externalBibleApp) {
                             Text("Ask Each Time").tag("")
-                            ForEach(ExternalBibleApplication.allCases) { application in
+                            ForEach(ExternalBibleApplication.openableOnThisMac) { application in
                                 Text(application.rawValue).tag(application.rawValue)
                             }
                         }

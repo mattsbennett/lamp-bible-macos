@@ -267,7 +267,7 @@ struct LibraryRootView: View {
             ),
             presenting: externalBibleRequest
         ) { request in
-            ForEach(ExternalBibleApplication.allCases) { application in
+            ForEach(ExternalBibleApplication.openableOnThisMac) { application in
                 Button(application.rawValue) {
                     if let destination = application.url(
                         startReference: request.startReference,
@@ -408,6 +408,7 @@ struct LibraryRootView: View {
         case .reading(let reference, let endReference, let openExternal):
             let chosenApp = UserDefaults.standard.string(forKey: "plans.externalBibleApp")
                 .flatMap(ExternalBibleApplication.init(rawValue:))
+                .flatMap { ExternalBibleApplication.openableOnThisMac.contains($0) ? $0 : nil }
             if openExternal, chosenApp == nil {
                 // "Ask Each Time" is the empty default, so there is no app to
                 // resolve. This used to fall through and open Lamp's own
