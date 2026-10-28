@@ -156,15 +156,18 @@ private struct ReaderSettingsView: View {
     @AppStorage("reader.readAloud.voice") private var readAloudVoice = ""
     @AppStorage("reader.readAloud.rate") private var readAloudRate = 0.5
     @AppStorage("reader.readAloud.followAlong") private var followReadAloud = true
-    @AppStorage("plans.wordsPerMinute") private var wordsPerMinute = 225
+    @AppStorage("plans.wordsPerMinute")
+    private var wordsPerMinute = LampPreferenceDefaults.plansWordsPerMinute
     @AppStorage(LampReadingMode.silent.wordsPerMinuteKey)
     private var silentWordsPerMinute = LampReadingMode.silent.defaultWordsPerMinute
     @AppStorage(LampReadingMode.aloud.wordsPerMinuteKey)
     private var aloudWordsPerMinute = LampReadingMode.aloud.defaultWordsPerMinute
     @AppStorage("plans.externalBibleApp") private var externalBibleApp = ""
     @AppStorage("plans.reminder.enabled") private var reminderEnabled = false
-    @AppStorage("plans.reminder.hour") private var reminderHour = 8
-    @AppStorage("plans.reminder.minute") private var reminderMinute = 0
+    @AppStorage("plans.reminder.hour")
+    private var reminderHour = LampPreferenceDefaults.plansReminderHour
+    @AppStorage("plans.reminder.minute")
+    private var reminderMinute = LampPreferenceDefaults.plansReminderMinute
     @State private var reminderError: String?
     @AppStorage("reader.showStrongsHints") private var showStrongsHints = true
     @AppStorage("reader.crossReferences.canonicalOrder") private var canonicalCrossReferenceOrder = false
@@ -696,8 +699,8 @@ private struct ReaderSettingsView: View {
 
     private func updateReminderTime(_ date: Date) {
         let components = Calendar.current.dateComponents([.hour, .minute], from: date)
-        reminderHour = components.hour ?? 8
-        reminderMinute = components.minute ?? 0
+        reminderHour = components.hour ?? LampPreferenceDefaults.plansReminderHour
+        reminderMinute = components.minute ?? LampPreferenceDefaults.plansReminderMinute
     }
 
     private func applyReminder() {
