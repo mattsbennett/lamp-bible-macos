@@ -398,12 +398,32 @@ final class LibraryModel: ObservableObject {
         }
     }
 
+    /// Opens a reference in the reader being used.
+    ///
+    /// Called from windows that are not readers — a search result, a deep
+    /// link, a cross-reference in a writing — so it goes to the active reader
+    /// rather than to a place of the library's own. With no reader open it is
+    /// kept for the next one, which is what used to happen by the library
+    /// simply holding the place itself.
     func openReference(_ encodedReference: Int, translationID: String?) {
-        if let translationID,
-           translations.contains(where: { $0.id == translationID }) {
-            selectedTranslationID = translationID
+        guard let activeReader else {
+            let parts = LampBibleReferenceFormatter.components(of: encodedReference)
+            let translation = translationID
+                ?? selectedTranslationID
+                ?? translations.first?.id
+            guard let translation else { return }
+            pendingReaderLocation = ReaderLocation(
+                translationID: translation,
+                bookNumber: parts.book,
+                chapterNumber: parts.chapter,
+                verseReference: encodedReference
+            )
+            return
         }
-        openReference(encodedReference)
+        let translation = translationID.flatMap { id in
+            translations.contains { $0.id == id } ? id : nil
+        }
+        activeReader.openReference(encodedReference, translationID: translation)
     }
 
     func importPersonalStudyData(_ urls: [URL]) {
@@ -1225,6 +1245,77 @@ final class LibraryModel: ObservableObject {
               selectedChapterNumber == chapter else { return }
         apply(contents)
         persistLocation()
+    }
+
+    /// The reader window being used, which is the one other windows mean.
+    ///
+    /// The writing editor inserting a verse reference, Slide Studio, the
+    /// highlight editor: each asks the library for the current verse, and once
+    /// two readers disagree there is no answer in the data. The rule is the
+    /// reader last used, and this is where it is kept.
+    ///
+    /// It also means a reader view that still reads from the library rather
+    /// than from its own workspace shows the active window's place, which is
+    /// what this app did for every window until now.
+    /// The reader window being used, when one is open.
+    ///
+    /// Held weakly: a window owns its workspace, and the library outlives
+    /// every window.
+    weak var activeReader: ReaderWorkspace?
+
+    /// A place asked for while no reader was open, for the next one to take.
+    private(set) var pendingReaderLocation: ReaderLocation?
+
+    func takePendingReaderLocation() -> ReaderLocation? {
+        defer { pendingReaderLocation = nil }
+        return pendingReaderLocation
+    }
+
+    func adoptActiveReader(
+        translationID: String?,
+        book: Int?,
+        chapter: Int,
+        verse: Int?,
+        books: [LampTranslationBook],
+        contents: ReaderChapterContents
+    ) {
+        selectedTranslationID = translationID
+        selectedBookNumber = book
+        selectedChapterNumber = chapter
+        selectedVerseReference = verse
+        self.books = books
+        apply(contents)
+        persistLocation()
+    }
+
+    /// Takes in what a reader window read for a chapter.
+    ///
+    /// Highlights and notes stay here rather than going to the window,
+    /// because a verse reference is unique across the whole Bible: two windows
+    /// on different chapters never collide, and one made in either is seen by
+    /// both. A window owning its own copy would mean a highlight made in one
+    /// not appearing in the other, and not appearing in the window that made
+    /// it until its chapter was read again.
+    ///
+    /// The chapter's own references are replaced rather than merged, so a
+    /// highlight deleted on another device and synced away actually goes.
+    func absorbChapterContents(_ contents: ReaderChapterContents) {
+        guard let loaded = contents.chapter else { return }
+        let first = loaded.book.id * 1_000_000 + loaded.number * 1_000
+        let references = first..<(first + 1_000)
+
+        highlightsByReference = highlightsByReference
+            .filter { !references.contains($0.key) }
+            .merging(contents.highlightsByReference) { _, read in read }
+        installedHighlightsByReference = installedHighlightsByReference
+            .filter { !references.contains($0.key) }
+            .merging(contents.installedHighlightsByReference) { _, read in read }
+        installedNotesByReference = installedNotesByReference
+            .filter { !references.contains($0.key) }
+            .merging(contents.installedNotesByReference) { _, read in read }
+        noteReferences = noteReferences
+            .filter { !references.contains($0) }
+            .union(contents.noteReferences)
     }
 
     /// Shows what was read for a chapter.

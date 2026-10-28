@@ -56,7 +56,13 @@ private enum LibrarySelection: Hashable {
 
 struct LibraryRootView: View {
     @Environment(\.openWindow) private var openWindow
+    /// Whether this window is the one being used, which is how the library
+    /// knows whose place to hand to the writing editor and Slide Studio.
+    @Environment(\.controlActiveState) private var controlActiveState
     @EnvironmentObject private var model: LibraryModel
+    /// This window's own place in scripture. Each reader window has one, which
+    /// is what lets two of them sit on different chapters.
+    @StateObject private var workspace = ReaderWorkspace()
     @EnvironmentObject private var syncController: LibrarySyncController
     @EnvironmentObject private var scrollLink: ReaderScrollLink
     @State private var selection: LibrarySelection? = .section(.reader)
@@ -141,9 +147,30 @@ struct LibraryRootView: View {
             guard hasRestoredReaderTabs else { return }
             savedReaderTabs = ReaderTabSessionStore.save(tabs)
         }
+        .environmentObject(workspace)
         .task {
+            workspace.start(
+                model: model,
+                at: model.takePendingReaderLocation() ?? model.readerLocation
+            )
+            model.activeReader = workspace
             await syncController.syncAutomaticallyIfNeeded(library: model.library)
             model.refresh()
+        }
+        // The library chooses a translation when it has read itself and this
+        // window has nowhere of its own — a first launch, or the first
+        // translation installed. A window already reading something ignores
+        // it.
+        .onChange(of: model.selectedTranslationID, initial: true) { _, _ in
+            workspace.adoptIfUnplaced(model.readerLocation)
+        }
+        .onChange(of: controlActiveState) { _, state in
+            // The reader last used is the one other windows mean by "the
+            // current verse". Set as this window comes forward rather than as
+            // another goes back, so closing one does not leave the library
+            // pointing at a window that has gone.
+            guard state == .key else { return }
+            model.activeReader = workspace
         }
         // Publishing what is done here, without being asked for it. Checking
         // costs a couple of aggregates and a small blob, and only a change
@@ -252,7 +279,7 @@ struct LibraryRootView: View {
                 }
             }
             Button("Open in Lamp Bible") {
-                model.openReference(request.startReference, translationID: nil)
+                workspace.openReference(request.startReference, translationID: nil)
                 selection = .section(.reader)
                 externalBibleRequest = nil
             }
@@ -262,7 +289,7 @@ struct LibraryRootView: View {
         }
         .onChange(of: selection) { _, newValue in
             if case .translation(let moduleID) = newValue {
-                model.selectTranslation(moduleID)
+                workspace.selectTranslation(moduleID)
             }
             if !isReaderSelection(newValue) {
                 if readerSidebar != nil || isReaderSidebarMounted {
@@ -376,7 +403,7 @@ struct LibraryRootView: View {
         guard let deepLink = LampDeepLink(url: url) else { return }
         switch deepLink {
         case .reader(let reference, let translationID):
-            model.openReference(reference, translationID: translationID)
+            workspace.openReference(reference, translationID: translationID)
             selection = .section(.reader)
         case .reading(let reference, let endReference, let openExternal):
             let chosenApp = UserDefaults.standard.string(forKey: "plans.externalBibleApp")
@@ -395,7 +422,7 @@ struct LibraryRootView: View {
                ) {
                 NSWorkspace.shared.open(destination)
             } else {
-                model.openReference(reference, translationID: nil)
+                workspace.openReference(reference, translationID: nil)
                 selection = .section(.reader)
             }
         case .strongs(let key):
@@ -469,7 +496,7 @@ struct LibraryRootView: View {
     }
 
     private func openReferenceInCurrentTab(_ reference: Int) {
-        model.openReference(reference)
+        workspace.openReference(reference)
         selection = .section(.reader)
     }
 
@@ -514,7 +541,7 @@ struct LibraryRootView: View {
     }
 
     private func readerLocation(for reference: Int) -> ReaderLocation? {
-        guard let translationID = model.selectedTranslationID ?? model.translations.first?.id else {
+        guard let translationID = workspace.selectedTranslationID ?? model.translations.first?.id else {
             return nil
         }
         let components = LampBibleReferenceFormatter.components(of: reference)
@@ -600,6 +627,7 @@ struct LibraryRootView: View {
                 HStack(spacing: 0) {
                     TranslationReaderView(
                         model: model,
+                        workspace: workspace,
                         isShown: isShown,
                         planReadingMode: $planReadingMode,
                         readerSidebar: $readerSidebar,
@@ -749,7 +777,7 @@ struct LibraryRootView: View {
                 initialSectionID: requestedBookSectionID,
                 showImporter: { showingImporter = true },
                 openReference: { reference in
-                    model.openReference(reference)
+                    workspace.openReference(reference)
                     selection = .section(.reader)
                 }
             )
@@ -757,7 +785,7 @@ struct LibraryRootView: View {
             DevotionalsView(
                 showImporter: { showingImporter = true },
                 openReference: { reference in
-                    model.openReference(reference)
+                    workspace.openReference(reference)
                     selection = .section(.reader)
                 }
             )
@@ -765,7 +793,7 @@ struct LibraryRootView: View {
             QuizzesView(
                 showImporter: { showingImporter = true },
                 openReference: { reference in
-                    model.openReference(reference)
+                    workspace.openReference(reference)
                     selection = .section(.reader)
                 }
             )
@@ -773,7 +801,7 @@ struct LibraryRootView: View {
             UnifiedSearchView(
                 showImporter: { showingImporter = true },
                 openReference: { reference, translationID in
-                    model.openReference(reference, translationID: translationID)
+                    workspace.openReference(reference, translationID: translationID)
                     selection = .section(.reader)
                 },
                 openBook: { result in
@@ -1084,6 +1112,7 @@ private struct ReaderTabBar: View {
 private struct NewReaderTabView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var model: LibraryModel
+    @EnvironmentObject private var workspace: ReaderWorkspace
     let currentLocation: ReaderLocation?
     let duplicate: () -> Void
     let openLocation: (ReaderLocation) -> Void
@@ -1203,7 +1232,7 @@ private struct NewReaderTabView: View {
         .frame(width: 390)
         .onAppear {
             if translationID.isEmpty {
-                translationID = model.selectedTranslationID ?? model.translations.first?.id ?? ""
+                translationID = workspace.selectedTranslationID ?? model.translations.first?.id ?? ""
             }
         }
         .onChange(of: translationID) { oldValue, newValue in
@@ -2961,6 +2990,7 @@ struct ReaderLexicalHoverObserver: NSViewRepresentable {
 
 private struct ReaderLocationPickerPopover: View {
     @EnvironmentObject private var model: LibraryModel
+    @EnvironmentObject private var workspace: ReaderWorkspace
     @Binding var isPresented: Bool
     @State private var translationID = ""
     @State private var books: [LampTranslationBook] = []
@@ -3039,7 +3069,7 @@ private struct ReaderLocationPickerPopover: View {
                 }
                 Spacer()
                 Button("Done") {
-                    model.selectPassage(
+                    workspace.selectPassage(
                         translationID: translationID,
                         bookNumber: bookNumber,
                         chapterNumber: chapterNumber
@@ -3063,9 +3093,9 @@ private struct ReaderLocationPickerPopover: View {
         }
         .onChange(of: bookNumber) { oldValue, newValue in
             guard oldValue != newValue else { return }
-            chapterNumber = translationID == model.selectedTranslationID
-                    && newValue == model.selectedBookNumber
-                ? model.selectedChapterNumber
+            chapterNumber = translationID == workspace.selectedTranslationID
+                    && newValue == workspace.selectedBookNumber
+                ? workspace.selectedChapterNumber
                 : 1
             clampChapterNumber()
         }
@@ -3077,10 +3107,10 @@ private struct ReaderLocationPickerPopover: View {
     }
 
     private func resetSelection() {
-        translationID = model.selectedTranslationID ?? model.translations.first?.id ?? ""
-        books = translationID == model.selectedTranslationID ? model.books : []
-        bookNumber = model.selectedBookNumber ?? books.first?.id ?? 0
-        chapterNumber = model.selectedChapterNumber
+        translationID = workspace.selectedTranslationID ?? model.translations.first?.id ?? ""
+        books = translationID == workspace.selectedTranslationID ? workspace.books : []
+        bookNumber = workspace.selectedBookNumber ?? books.first?.id ?? 0
+        chapterNumber = workspace.selectedChapterNumber
         clampChapterNumber()
         errorMessage = nil
     }
@@ -3093,8 +3123,8 @@ private struct ReaderLocationPickerPopover: View {
         }
 
         let requestedTranslationID = translationID
-        if requestedTranslationID == model.selectedTranslationID, !model.books.isEmpty {
-            books = model.books
+        if requestedTranslationID == workspace.selectedTranslationID, !workspace.books.isEmpty {
+            books = workspace.books
             if !books.contains(where: { $0.id == bookNumber }) {
                 bookNumber = books.first?.id ?? 0
             }
@@ -3136,6 +3166,10 @@ private struct TranslationReaderView: View, Equatable {
     /// from the view above it, which lets a hidden reader decline them (see
     /// `==`). Shown, it updates whenever the library does, as before.
     let model: LibraryModel
+    /// This window's place in scripture. Handed in for the same reason as the
+    /// model above: observed here, a hidden reader could not decline its
+    /// changes.
+    let workspace: ReaderWorkspace
     @EnvironmentObject private var scrollLink: ReaderScrollLink
     @AppStorage("reader.fontSize") private var fontSize = LampTextScale.readerText.defaultValue
     @AppStorage("reader.lineSpacing") private var lineSpacing = LampTextScale.readerLineSpacing.defaultValue
@@ -3247,7 +3281,7 @@ private struct TranslationReaderView: View, Equatable {
                             PlanReadingQuizPanel(
                                 mode: planReadingMode,
                                 close: { showingPlanQuiz = false },
-                                openReference: { model.openReference($0) }
+                                openReference: { workspace.openReference($0) }
                             )
                         }
                         .frame(width: Self.quizPanelWidth, height: geometry.size.height)
@@ -3302,17 +3336,17 @@ private struct TranslationReaderView: View, Equatable {
         }
         .onChange(of: readAloud.currentReference) { _, reference in
             guard followReadAloud, let reference else { return }
-            model.focusVerse(reference)
+            workspace.focusVerse(reference)
         }
-        .onChange(of: model.selectedTranslationID) { _, _ in
+        .onChange(of: workspace.selectedTranslationID) { _, _ in
             readAloud.stop()
             // Do not leave details from the previous translation visible while
             // the replacement passage is loading. The new passage opts back in
             // after confirming it contains Strong's annotations.
             lexicalHoverStore.configure(isDetailsEnabled: false)
         }
-        .onChange(of: model.selectedBookNumber) { _, _ in readAloud.stop() }
-        .onChange(of: model.selectedChapterNumber) { _, _ in readAloud.stop() }
+        .onChange(of: workspace.selectedBookNumber) { _, _ in readAloud.stop() }
+        .onChange(of: workspace.selectedChapterNumber) { _, _ in readAloud.stop() }
         .onChange(of: planReadingMode) { _, mode in
             if mode == nil { showingPlanQuiz = false }
         }
@@ -3398,13 +3432,13 @@ private struct TranslationReaderView: View, Equatable {
             } else {
                 ProgressView("Loading Reading…")
             }
-        } else if let chapter = model.chapter {
+        } else if let chapter = workspace.chapter {
             passageView([chapter])
                 .id("\(chapter.book.id):\(chapter.number)")
                 .task(id: footnoteLoadKey(for: [chapter])) {
                     await loadFootnotes(for: [chapter])
                 }
-        } else if model.isLoadingChapter {
+        } else if workspace.isLoadingChapter {
             ProgressView("Loading Chapter…")
         } else {
             ContentUnavailableView(
@@ -3416,7 +3450,7 @@ private struct TranslationReaderView: View, Equatable {
     }
 
     private var planReadingChapterRequest: PlanReadingChapterRequest? {
-        guard let translationID = model.selectedTranslationID,
+        guard let translationID = workspace.selectedTranslationID,
               let reading = planReadingMode?.activeReading else { return nil }
         return PlanReadingChapterRequest(
             translationID: translationID,
@@ -3432,7 +3466,7 @@ private struct TranslationReaderView: View, Equatable {
            !planReadingChapters.isEmpty {
             return planReadingChapters
         }
-        return model.chapter.map { [$0] } ?? []
+        return workspace.chapter.map { [$0] } ?? []
     }
 
     /// `rereading` reads again a reading already on screen, which stays there
@@ -3523,7 +3557,7 @@ private struct TranslationReaderView: View, Equatable {
         guard var mode = planReadingMode else { return }
         mode.activeReadingID = reading.id
         planReadingMode = mode
-        model.openReference(reading.startReference)
+        workspace.openReference(reading.startReference)
     }
 
     private var activePlanReadingIndex: Int? {
@@ -3535,28 +3569,28 @@ private struct TranslationReaderView: View, Equatable {
         if planReadingMode != nil {
             return activePlanReadingIndex.map { $0 > 0 } ?? false
         }
-        return model.canNavigateBackward
+        return workspace.canNavigateBackward
     }
 
     private var canNavigateReaderForward: Bool {
         if let mode = planReadingMode {
             return activePlanReadingIndex.map { $0 < mode.readings.index(before: mode.readings.endIndex) } ?? false
         }
-        return model.canNavigateForward
+        return workspace.canNavigateForward
     }
 
     private var canNavigateBookBackward: Bool {
         guard planReadingMode == nil,
-              let bookNumber = model.selectedBookNumber,
-              let index = model.books.firstIndex(where: { $0.id == bookNumber }) else { return false }
-        return index > model.books.startIndex
+              let bookNumber = workspace.selectedBookNumber,
+              let index = workspace.books.firstIndex(where: { $0.id == bookNumber }) else { return false }
+        return index > workspace.books.startIndex
     }
 
     private var canNavigateBookForward: Bool {
         guard planReadingMode == nil,
-              let bookNumber = model.selectedBookNumber,
-              let index = model.books.firstIndex(where: { $0.id == bookNumber }) else { return false }
-        return index < model.books.index(before: model.books.endIndex)
+              let bookNumber = workspace.selectedBookNumber,
+              let index = workspace.books.firstIndex(where: { $0.id == bookNumber }) else { return false }
+        return index < workspace.books.index(before: workspace.books.endIndex)
     }
 
     private var backwardNavigationTitle: String {
@@ -3569,7 +3603,7 @@ private struct TranslationReaderView: View, Equatable {
 
     private func navigateReaderBackward() {
         guard let mode = planReadingMode else {
-            model.navigateBackward()
+            workspace.navigateBackward()
             return
         }
         guard let index = activePlanReadingIndex, index > mode.readings.startIndex else { return }
@@ -3578,7 +3612,7 @@ private struct TranslationReaderView: View, Equatable {
 
     private func navigateReaderForward() {
         guard let mode = planReadingMode else {
-            model.navigateForward()
+            workspace.navigateForward()
             return
         }
         guard let index = activePlanReadingIndex,
@@ -3588,16 +3622,16 @@ private struct TranslationReaderView: View, Equatable {
 
     private func navigateBookBackward() {
         guard canNavigateBookBackward,
-              let bookNumber = model.selectedBookNumber,
-              let index = model.books.firstIndex(where: { $0.id == bookNumber }) else { return }
-        model.selectBook(model.books[model.books.index(before: index)].id)
+              let bookNumber = workspace.selectedBookNumber,
+              let index = workspace.books.firstIndex(where: { $0.id == bookNumber }) else { return }
+        workspace.selectBook(workspace.books[workspace.books.index(before: index)].id)
     }
 
     private func navigateBookForward() {
         guard canNavigateBookForward,
-              let bookNumber = model.selectedBookNumber,
-              let index = model.books.firstIndex(where: { $0.id == bookNumber }) else { return }
-        model.selectBook(model.books[model.books.index(after: index)].id)
+              let bookNumber = workspace.selectedBookNumber,
+              let index = workspace.books.firstIndex(where: { $0.id == bookNumber }) else { return }
+        workspace.selectBook(workspace.books[workspace.books.index(after: index)].id)
     }
 
     private func passageView(_ chapters: [LampChapter]) -> some View {
@@ -3715,7 +3749,7 @@ private struct TranslationReaderView: View, Equatable {
                     proxy.scrollTo(scrollTarget(for: reference, in: chapters), anchor: .top)
                 }
                 .onAppear { scrollToReaderLocation(proxy, chapters: chapters) }
-                .onChange(of: model.selectedVerseReference) { _, _ in
+                .onChange(of: workspace.selectedVerseReference) { _, _ in
                     // Selecting a verse by clicking it in the reader must not move
                     // the reader: the verse is already under the pointer. This
                     // scroll is for selections made elsewhere — search, history, a
@@ -4105,7 +4139,7 @@ private struct TranslationReaderView: View, Equatable {
             ids[slot] = chapter.translationID
             chooseCompanions(ids)
         }
-        model.openReference(readingPlace(in: chapter), translationID: id)
+        workspace.openReference(readingPlace(in: chapter), translationID: id)
     }
 
     /// Adds a column for the first installed translation not yet read here.
@@ -4121,7 +4155,7 @@ private struct TranslationReaderView: View, Equatable {
     /// Where a chapter reopens when its translation changes: the verse being
     /// studied, else the chapter's first verse.
     private func readingPlace(in chapter: LampChapter) -> Int {
-        model.selectedVerseReference
+        workspace.selectedVerseReference
             ?? chapter.verses.first?.id
             ?? chapter.book.id * 1_000_000 + chapter.number * 1_000 + 1
     }
@@ -4183,7 +4217,7 @@ private struct TranslationReaderView: View, Equatable {
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
             } else {
-                missingVerse(row.number, in: model.selectedTranslationID)
+                missingVerse(row.number, in: workspace.selectedTranslationID)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -4249,7 +4283,7 @@ private struct TranslationReaderView: View, Equatable {
         // single column places them.
         let iconTop = font.ascender - font.xHeight / 2 - iconSize / 2
         ZStack(alignment: .topLeading) {
-            if model.selectedVerseReference == reference {
+            if workspace.selectedVerseReference == reference {
                 RoundedRectangle(cornerRadius: 1.25)
                     .fill(Color(nsColor: .secondaryLabelColor))
                     .frame(width: 2.5)
@@ -4518,7 +4552,7 @@ private struct TranslationReaderView: View, Equatable {
         noting: Bool = true,
         in marks: inout ReaderMarginMarks
     ) {
-        if model.selectedVerseReference == verse.id {
+        if workspace.selectedVerseReference == verse.id {
             marks.selectedRange = NSRange(location: start, length: end - start)
         }
         guard noting else { return }
@@ -4533,7 +4567,7 @@ private struct TranslationReaderView: View, Equatable {
     private func verseMarkerText(for verse: LampVerse) -> NSAttributedString {
         let result = NSMutableAttributedString(string: "")
         let verseURL = readerVerseURL(reference: verse.id)
-        let isSelected = model.selectedVerseReference == verse.id
+        let isSelected = workspace.selectedVerseReference == verse.id
 
         // The selected verse is marked by a bar in the margin; its number only
         // darkens, to show where in a shared line the verse begins. Nothing
@@ -4902,7 +4936,7 @@ private struct TranslationReaderView: View, Equatable {
         guard let firstReference = fallbackVerses.first?.id,
               let chapter = displayedChapters.first(where: { chapter in
                   chapter.verses.contains(where: { $0.id == firstReference })
-              }) ?? model.chapter else { return }
+              }) ?? workspace.chapter else { return }
         let pasteboard = NSPasteboard.general
         let originalChangeCount = pasteboard.changeCount
         let copiedSelection = NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil)
@@ -4966,7 +5000,7 @@ private struct TranslationReaderView: View, Equatable {
             // one only the companion beside it has. Its notes are the verse's,
             // whichever translation holds it.
             prepareChapterForStudy(reference: reference)
-            model.focusVerse(reference)
+            workspace.focusVerse(reference)
             selectedStudyTab = model.hasPersonalNote(for: reference) || model.hasInstalledNote(for: reference)
                 ? "notes"
                 : "verse"
@@ -4982,7 +5016,7 @@ private struct TranslationReaderView: View, Equatable {
         let passage = chapters
             .map { "\($0.book.id).\($0.number)" }
             .joined(separator: ",")
-        return "\(model.selectedTranslationID ?? "-"):\(passage)"
+        return "\(workspace.selectedTranslationID ?? "-"):\(passage)"
     }
 
     /// Reads the translator's notes for the verses that advertise having any.
@@ -4991,7 +5025,7 @@ private struct TranslationReaderView: View, Equatable {
     /// the reader came for, and a chapter of Genesis asks the library once per
     /// footnoted verse. The markers appear as the answers arrive.
     private func loadFootnotes(for chapters: [LampChapter]) async {
-        guard let translationID = model.selectedTranslationID else {
+        guard let translationID = workspace.selectedTranslationID else {
             chapterFootnotes = [:]
             return
         }
@@ -5057,8 +5091,8 @@ private struct TranslationReaderView: View, Equatable {
     }
 
     private func prepareChapterForStudy(reference: Int) {
-        guard model.chapter?.verses.contains(where: { $0.id == reference }) != true else { return }
-        model.openReference(reference)
+        guard workspace.chapter?.verses.contains(where: { $0.id == reference }) != true else { return }
+        workspace.openReference(reference)
     }
 
     private func readerVerseURL(reference: Int) -> URL? {
@@ -5264,7 +5298,7 @@ private struct TranslationReaderView: View, Equatable {
 
     /// Selects a verse the user clicked in the reader.
     ///
-    /// Distinct from `model.focusVerse` on purpose: a selection made *here* must
+    /// Distinct from `workspace.focusVerse` on purpose: a selection made *here* must
     /// not scroll the reader to the verse, because the verse is already on screen
     /// under the pointer. Selections from elsewhere — search, history, read-aloud,
     /// a cross-reference — still scroll, because there the verse may be anywhere.
@@ -5272,8 +5306,8 @@ private struct TranslationReaderView: View, Equatable {
         // Armed only for a change, which is what clears it: choosing the verse
         // already chosen changes nothing, and a flag left armed would swallow
         // the scroll of the next verse chosen from elsewhere in the chapter.
-        isSelectingVerseFromReader = reference != model.selectedVerseReference
-        model.focusVerse(reference)
+        isSelectingVerseFromReader = reference != workspace.selectedVerseReference
+        workspace.focusVerse(reference)
     }
 
     private func openLexicon(_ lookup: LexiconLookupLink) {
@@ -5340,7 +5374,7 @@ private struct TranslationReaderView: View, Equatable {
     }
 
     private func scrollToReaderLocation(_ proxy: ScrollViewProxy, chapters: [LampChapter]) {
-        guard let reference = model.selectedVerseReference else { return }
+        guard let reference = workspace.selectedVerseReference else { return }
         // Plan readings deliberately start with the passage header visible. The
         // fresh scroll container already has the correct natural top position.
         guard planReadingMode?.activeReading?.startReference != reference else { return }
@@ -5361,7 +5395,7 @@ private struct TranslationReaderView: View, Equatable {
                 } label: {
                     Image(systemName: "chevron.left.2")
                 }
-                .disabled(!canNavigateBookBackward || model.isLoadingChapter || isLoadingPlanReading)
+                .disabled(!canNavigateBookBackward || workspace.isLoadingChapter || isLoadingPlanReading)
                 .keyboardShortcut("[", modifiers: [.command, .shift])
                 .help("Previous Book")
                 .accessibilityLabel("Previous Book")
@@ -5371,7 +5405,7 @@ private struct TranslationReaderView: View, Equatable {
                 } label: {
                     Image(systemName: "chevron.left")
                 }
-                .disabled(!canNavigateReaderBackward || model.isLoadingChapter || isLoadingPlanReading)
+                .disabled(!canNavigateReaderBackward || workspace.isLoadingChapter || isLoadingPlanReading)
                 .keyboardShortcut("[", modifiers: .command)
                 .help(backwardNavigationTitle)
                 .accessibilityLabel(backwardNavigationTitle)
@@ -5400,7 +5434,7 @@ private struct TranslationReaderView: View, Equatable {
                 } label: {
                     Image(systemName: "chevron.right")
                 }
-                .disabled(!canNavigateReaderForward || model.isLoadingChapter || isLoadingPlanReading)
+                .disabled(!canNavigateReaderForward || workspace.isLoadingChapter || isLoadingPlanReading)
                 .keyboardShortcut("]", modifiers: .command)
                 .help(forwardNavigationTitle)
                 .accessibilityLabel(forwardNavigationTitle)
@@ -5410,7 +5444,7 @@ private struct TranslationReaderView: View, Equatable {
                 } label: {
                     Image(systemName: "chevron.right.2")
                 }
-                .disabled(!canNavigateBookForward || model.isLoadingChapter || isLoadingPlanReading)
+                .disabled(!canNavigateBookForward || workspace.isLoadingChapter || isLoadingPlanReading)
                 .keyboardShortcut("]", modifiers: [.command, .shift])
                 .help("Next Book")
                 .accessibilityLabel("Next Book")
@@ -5420,29 +5454,29 @@ private struct TranslationReaderView: View, Equatable {
 
         ToolbarItemGroup(placement: .navigation) {
             Button("Back in Reading History", systemImage: "arrow.uturn.backward") {
-                model.goBackInHistory()
+                workspace.goBackInHistory()
             }
-            .disabled(!model.canGoBackInHistory)
+            .disabled(!workspace.canGoBackInHistory)
             .keyboardShortcut("[", modifiers: [.command, .option])
 
             Button("Forward in Reading History", systemImage: "arrow.uturn.forward") {
-                model.goForwardInHistory()
+                workspace.goForwardInHistory()
             }
-            .disabled(!model.canGoForwardInHistory)
+            .disabled(!workspace.canGoForwardInHistory)
             .keyboardShortcut("]", modifiers: [.command, .option])
 
             Menu("Reading History", systemImage: "clock.arrow.circlepath") {
-                if model.recentReaderLocations.isEmpty {
+                if workspace.recentLocations.isEmpty {
                     Text("No Reading History")
                 } else {
-                    ForEach(model.recentReaderLocations, id: \.self) { location in
+                    ForEach(workspace.recentLocations, id: \.self) { location in
                         Button(historyLabel(location)) {
-                            model.openHistoryLocation(location)
+                            workspace.openHistoryLocation(location)
                         }
                     }
                     Divider()
                     Button("Clear History", role: .destructive) {
-                        model.clearNavigationHistory()
+                        workspace.clearHistory()
                     }
                 }
             }
@@ -5499,9 +5533,9 @@ private struct TranslationReaderView: View, Equatable {
                 ) {
                     startReadAloud(at: nil)
                 }
-                if model.selectedVerseReference != nil {
+                if workspace.selectedVerseReference != nil {
                     Button("Read from Selected Verse", systemImage: "text.line.first.and.arrowtriangle.forward") {
-                        startReadAloud(at: model.selectedVerseReference)
+                        startReadAloud(at: workspace.selectedVerseReference)
                     }
                 }
                 if readAloud.state == .playing {
@@ -5540,8 +5574,8 @@ private struct TranslationReaderView: View, Equatable {
         if let reading = planReadingMode?.activeReading {
             return "\(translation) \u{00B7} \(reading.displayDescription)"
         }
-        let book = model.selectedBook?.name ?? "Book"
-        return "\(translation) \u{00B7} \(book) \(model.selectedChapterNumber)"
+        let book = workspace.selectedBook?.name ?? "Book"
+        return "\(translation) \u{00B7} \(book) \(workspace.selectedChapterNumber)"
     }
 
     private func historyLabel(_ location: ReaderLocation) -> String {
@@ -5574,7 +5608,7 @@ private struct TranslationReaderView: View, Equatable {
             items: verses.map {
                 ReadAloudItem(reference: $0.id, verseNumber: $0.number, text: $0.text)
             },
-            startingAt: model.selectedVerseReference,
+            startingAt: workspace.selectedVerseReference,
             voiceIdentifier: readAloudVoice,
             rate: readAloudRate
         )
