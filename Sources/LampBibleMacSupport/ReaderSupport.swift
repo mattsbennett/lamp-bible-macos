@@ -1579,10 +1579,32 @@ public extension LampExternalBibleApplication {
     /// Logos stays whatever is installed: its links are ordinary web
     /// addresses, which a browser answers for.
     static var openableOnThisMac: [LampExternalBibleApplication] {
-        allCases.filter { application in
-            guard let url = URL(string: application.urlRoot) else { return false }
-            if url.scheme?.hasPrefix("http") == true { return true }
-            return NSWorkspace.shared.urlForApplication(toOpen: url) != nil
-        }
+        allCases.filter(\.canOpenOnThisMac)
+    }
+
+    /// Whether this Mac can open this app right now.
+    var canOpenOnThisMac: Bool {
+        guard let url = URL(string: urlRoot) else { return false }
+        if url.scheme?.hasPrefix("http") == true { return true }
+        return NSWorkspace.shared.urlForApplication(toOpen: url) != nil
+    }
+
+    /// Whether installing it would help.
+    ///
+    /// For every app here but one, "no handler" means "not installed", and
+    /// saying so is worth doing: it tells the reader which apps Lamp works
+    /// with. YouVersion is the exception — its Mac listing is the iPhone app
+    /// under "Designed for iPad", which registers no URL scheme — so there is
+    /// nothing to install that would make it work, and offering it greyed
+    /// would be holding out a hope that cannot be met.
+    ///
+    /// Read through `canOpenOnThisMac` first, so a YouVersion that one day
+    /// ships a real Mac app comes back without anyone editing this.
+    var couldBeInstalledOnThisMac: Bool { self != .youVersion }
+
+    /// The apps worth naming in settings: those that work, and those that
+    /// would if they were installed.
+    static var offeredOnThisMac: [LampExternalBibleApplication] {
+        allCases.filter { $0.canOpenOnThisMac || $0.couldBeInstalledOnThisMac }
     }
 }

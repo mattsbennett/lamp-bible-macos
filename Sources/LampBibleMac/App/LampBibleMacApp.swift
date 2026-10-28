@@ -557,8 +557,14 @@ private struct ReaderSettingsView: View {
                             in: 80...600, step: 5)
                         Picker("Default External Bible", selection: $externalBibleApp) {
                             Text("Ask Each Time").tag("")
-                            ForEach(ExternalBibleApplication.openableOnThisMac) { application in
-                                Text(application.rawValue).tag(application.rawValue)
+                            // An app that isn't installed is shown greyed
+                            // rather than left out, so this says which Bible
+                            // apps Lamp can hand a reading to. One that could
+                            // never work here is not listed at all.
+                            ForEach(ExternalBibleApplication.offeredOnThisMac) { application in
+                                Text(application.rawValue)
+                                    .tag(application.rawValue)
+                                    .disabled(!application.canOpenOnThisMac)
                             }
                         }
                         Toggle("Daily reading reminder", isOn: $reminderEnabled)
