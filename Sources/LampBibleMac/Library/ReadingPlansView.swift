@@ -388,22 +388,27 @@ private struct PlanDayReadings: View {
                         .help("Estimated at \(wordsPerMinute) words per minute")
                     }
 
-                    Menu("Open in External Bible", systemImage: "arrow.up.right.square") {
-                        if let preferredApplication {
-                            Button("Open in \(preferredApplication.rawValue)") {
-                                openExternally(reading, using: preferredApplication)
+                    // Nothing to offer is the ordinary case: most readers
+                    // have no other Bible app at all, and a button that opens
+                    // an empty menu is worse than no button.
+                    if !ExternalBibleApplication.openableOnThisMac.isEmpty {
+                        Menu("Open in External Bible", systemImage: "arrow.up.right.square") {
+                            if let preferredApplication {
+                                Button("Open in \(preferredApplication.rawValue)") {
+                                    openExternally(reading, using: preferredApplication)
+                                }
+                                Divider()
                             }
-                            Divider()
-                        }
-                        ForEach(ExternalBibleApplication.openableOnThisMac) { application in
-                            Button(application.rawValue) {
-                                openExternally(reading, using: application)
+                            ForEach(ExternalBibleApplication.openableOnThisMac) { application in
+                                Button(application.rawValue) {
+                                    openExternally(reading, using: application)
+                                }
                             }
                         }
+                        .labelStyle(.iconOnly)
+                        .menuStyle(.borderlessButton)
+                        .help("Open in another Bible app")
                     }
-                    .labelStyle(.iconOnly)
-                    .menuStyle(.borderlessButton)
-                    .help("Open in another Bible app")
                 }
                 .padding(.vertical, 3)
             }
