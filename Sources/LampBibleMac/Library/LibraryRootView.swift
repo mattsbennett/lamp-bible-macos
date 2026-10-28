@@ -2015,14 +2015,15 @@ private final class ReaderTextView: NSTextView {
                 width: image.size.width,
                 height: image.size.height
             )
+            // Naming the verse: two icons beside one line can open two.
+            let verse = LampBibleReferenceFormatter.components(of: icon.reference).verse
             placed.append(PlacedIcon(
                 rect: rect,
                 image: image,
                 reference: icon.reference,
-                // Naming the verse: two icons beside one line can open two.
                 help: icon.kind == .personal
-                    ? "Your note on verse \(icon.reference % 1_000)"
-                    : "Study notes on verse \(icon.reference % 1_000)"
+                    ? "Your note on verse \(verse)"
+                    : "Study notes on verse \(verse)"
             ))
         }
         return placed
