@@ -156,6 +156,18 @@ struct LibraryRootView: View {
                 await syncController.syncLocalWorkIfAppeared(library: model.library)
             }
         }
+        // And taking in what another device has done. Less often than the
+        // local check, because this one asks the server rather than this
+        // Mac's own database.
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(30))
+                guard !Task.isCancelled else { return }
+                if await syncController.syncRemoteChangesIfAny(library: model.library) {
+                    model.refresh()
+                }
+            }
+        }
     }
 
     private var libraryInterface: some View {

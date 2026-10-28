@@ -171,7 +171,12 @@ final class LibrarySyncController: ObservableObject {
     @discardableResult
     func sync(library: LampLibrary) async -> Bool {
         lastSyncedChangeStamp = try? await library.personalChangeStamp()
-        return await runSyncPass(library: library)
+        let finished = await runSyncPass(library: library)
+        // Both forgotten on purpose: the next probe takes a fresh mark to
+        // measure from, once the server has had time to settle.
+        lastSeenBundleRevision = nil
+        lastPassFinishedAt = Date()
+        return finished
     }
 
     /// The library's change stamp as of the last pass, so a later one can be
@@ -206,6 +211,69 @@ final class LibrarySyncController: ObservableObject {
         }
     }
 
+
+    /// The bundle's revision when this Mac last looked, or nil when it has
+    /// not looked since its own write.
+    private var lastSeenBundleRevision: String??
+    /// When the last pass finished, so a probe is not made while the server
+    /// may still be answering with what it held before the write.
+    private var lastPassFinishedAt = Date.distantPast
+
+    /// Opens the configured remote, for something smaller than a pass.
+    private func withRemoteStore<T>(
+        _ body: (any LampSyncRemoteStore) async throws -> T
+    ) async throws -> T {
+        switch provider {
+        case .off:
+            throw LibrarySyncError.providerNotConfigured
+        case .folder:
+            let folder = try resolveFolderURL()
+            let hasScope = folder.startAccessingSecurityScopedResource()
+            defer { if hasScope { folder.stopAccessingSecurityScopedResource() } }
+            return try await body(LampSyncDirectoryStore(root: folder))
+        case .webDAV:
+            guard let url = URL(string: endpoint), url.scheme?.hasPrefix("http") == true else {
+                throw LibrarySyncError.invalidWebDAVURL
+            }
+            let storedPassword = SyncSecretStore.password ?? ""
+            let credentials = username.isEmpty && storedPassword.isEmpty
+                ? nil : LampWebDAVCredentials(username: username, password: storedPassword)
+            return try await body(LampWebDAVClient(baseURL: url, credentials: credentials))
+        }
+    }
+
+    /// Takes in another device's work while this one is open.
+    ///
+    /// The companion to `syncLocalWorkIfAppeared`: that publishes what is made
+    /// here, this collects what was made elsewhere. It costs one request with
+    /// no body, and a pass follows only when the bundle has moved.
+    ///
+    /// Nothing is compared for a while after this Mac's own pass. A server can
+    /// answer with the revision it held before the write for a short time,
+    /// which reads as somebody else's change and would start a pass answering
+    /// our own.
+    /// Returns whether a pass ran, so a caller only reloads when there is
+    /// something new to show.
+    @discardableResult
+    func syncRemoteChangesIfAny(library: LampLibrary) async -> Bool {
+        guard !isSyncing,
+              defaults.bool(forKey: "sync.automatic"),
+              provider != .off,
+              Date().timeIntervalSince(lastPassFinishedAt) > 15
+        else { return false }
+        let revision = try? await withRemoteStore { store in
+            try await store.revision(path: LampSyncFolderLayout.bundlePath)
+        }
+        guard let revision else { return false }
+        guard let seen = lastSeenBundleRevision else {
+            // First look since a pass. Take it as the mark to measure from
+            // rather than syncing: a pass has just reconciled with this.
+            lastSeenBundleRevision = revision
+            return false
+        }
+        guard !LampSyncConditionalWrite.namesSameRevision(revision, seen ?? "") else { return false }
+        return await sync(library: library)
+    }
 
     private func runSyncPass(library: LampLibrary) async -> Bool {
         guard !isSyncing else { return false }
