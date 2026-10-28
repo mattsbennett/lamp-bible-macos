@@ -985,6 +985,8 @@ private enum LibrarySyncError: LocalizedError {
     case folderNotConfigured
     case invalidWebDAVURL
     case incompleteRemoteImport([String])
+    /// The keychain refused to hold the WebDAV password.
+    case passwordNotStored(OSStatus)
     case missingRemoteRevision(String)
     case archiveUnreadable
     case libraryMovedOn
@@ -994,6 +996,15 @@ private enum LibrarySyncError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .providerNotConfigured: "Choose a sync provider first."
+        case .passwordNotStored(let status):
+            // Named rather than numbered where macOS has a name for it: the
+            // common causes are a locked login keychain or a denied prompt,
+            // and both have messages a person can act on.
+            """
+            Your password could not be saved to the keychain\
+            \(SecCopyErrorMessageString(status, nil).map { " (\($0))" } ?? " (error \(status))").
+            Sync is otherwise set up; unlock your login keychain and enter it again.
+            """
         case .folderNotConfigured: "Choose an iCloud Drive or local folder for sync."
         case .invalidWebDAVURL: "Enter a valid HTTP or HTTPS WebDAV folder URL."
         case .archiveUnreadable:
@@ -1041,6 +1052,10 @@ private enum SyncSecretStore {
         var item = query
         item[kSecValueData as String] = Data(password.utf8)
         let status = SecItemAdd(item as CFDictionary, nil)
-        guard status == errSecSuccess else { throw LibrarySyncError.providerNotConfigured }
+        // Not `providerNotConfigured`, which told someone who had just chosen a
+        // provider and typed their password to go and choose a provider.
+        guard status == errSecSuccess else {
+            throw LibrarySyncError.passwordNotStored(status)
+        }
     }
 }
