@@ -145,6 +145,17 @@ struct LibraryRootView: View {
             await syncController.syncAutomaticallyIfNeeded(library: model.library)
             model.refresh()
         }
+        // Publishing what is done here, without being asked for it. Checking
+        // costs a couple of aggregates and a small blob, and only a change
+        // since the last pass starts one — so this is quiet while nothing is
+        // happening, and a few seconds behind a tick when something is.
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(6))
+                guard !Task.isCancelled else { return }
+                await syncController.syncLocalWorkIfAppeared(library: model.library)
+            }
+        }
     }
 
     private var libraryInterface: some View {

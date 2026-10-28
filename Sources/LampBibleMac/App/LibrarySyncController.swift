@@ -170,7 +170,40 @@ final class LibrarySyncController: ObservableObject {
     /// over.
     @discardableResult
     func sync(library: LampLibrary) async -> Bool {
-        await runSyncPass(library: library)
+        lastSyncedChangeStamp = try? await library.personalChangeStamp()
+        return await runSyncPass(library: library)
+    }
+
+    /// The library's change stamp as of the last pass, so a later one can be
+    /// told from the state that pass already published.
+    private var lastSyncedChangeStamp: Int64?
+
+    /// Publishes this Mac's work when it has any, without being asked.
+    ///
+    /// Sync ran at launch and when the Sync button was pressed, and nothing
+    /// else — so a reading ticked here sat on this Mac until someone went
+    /// looking for that button, while the phone had published the same kind of
+    /// change within seconds.
+    ///
+    /// Asked often and does nothing nearly every time: the question is two
+    /// aggregates and a small blob, and a pass follows only when the answer
+    /// has moved. That keeps the status line still, and keeps a pass from
+    /// running while a burst of edits is still arriving.
+    func syncLocalWorkIfAppeared(library: LampLibrary) async {
+        guard !isSyncing,
+              defaults.bool(forKey: "sync.automatic"),
+              provider != .off,
+              let stamp = try? await library.personalChangeStamp()
+        else { return }
+        guard let last = lastSyncedChangeStamp else {
+            // Nothing published yet in this run. Take the stamp as the
+            // baseline rather than syncing: the launch pass covers what was
+            // already here, and syncing again would say the same thing twice.
+            lastSyncedChangeStamp = stamp
+            return
+        }
+        guard stamp > last else { return }
+        _ = await sync(library: library)
     }
 
 
