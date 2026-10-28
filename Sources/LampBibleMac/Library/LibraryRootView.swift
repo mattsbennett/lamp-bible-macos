@@ -810,9 +810,8 @@ private struct LampSplashView: View {
 enum StudyInspectorMetrics {
     static let defaultWidth = 410.0
     /// Narrow enough to leave the reader its page, wide enough for the study
-    /// column's own tab bar: four segments and the scroll-link button will not
-    /// compress below 364pt, and a column narrower than that is one its chrome
-    /// spills out of.
+    /// panes' own controls. The tab bar shows its five tabs from about 390pt,
+    /// and below that the same choice as a pop-up menu.
     static let minimumWidth = 364.0
     static let maximumWidth = 580.0
 

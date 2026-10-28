@@ -43,6 +43,7 @@ struct StudyInspectorView: View {
     @EnvironmentObject private var scrollLink: ReaderScrollLink
     @Binding var isPresented: Bool
     @AppStorage("studyInspector.tab") private var selectedTab = "commentary"
+    @AppStorage(LinkedTranslationInspectorView.preferenceKey) private var linkedTranslationID = ""
     @State private var dictionaryQuery = ""
     @State private var dictionaryLookup: DictionaryLookup?
 
@@ -57,7 +58,7 @@ struct StudyInspectorView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                StudyToolPicker(selection: $selectedTab)
+                StudyToolPicker(selection: $selectedTab, translationTitle: linkedTranslationTitle)
 
                 Spacer(minLength: 8)
 
@@ -94,6 +95,8 @@ struct StudyInspectorView: View {
                 }
             case "notes":
                 NotesInspectorView()
+            case "translation":
+                LinkedTranslationInspectorView()
             default:
                 CommentaryInspectorView()
             }
@@ -121,6 +124,16 @@ struct StudyInspectorView: View {
             guard presented else { return }
             adoptDictionaryLookup(model.dictionaryLookupRequest)
         }
+    }
+
+    /// The linked translation's tab is named for the translation it shows.
+    private var linkedTranslationTitle: String {
+        guard let translation = LinkedTranslationInspectorView.translation(
+            preferring: linkedTranslationID,
+            beside: model.chapter?.translationID ?? model.selectedTranslationID,
+            in: model.translations
+        ) else { return "Translation" }
+        return translation.abbreviation ?? translation.name
     }
 
     private var scrollLinkHelp: String {
@@ -2049,6 +2062,254 @@ private struct DictionaryResultView: View {
     }
 }
 
+private struct LinkedTranslationRequest: Hashable {
+    let readingID: String
+    let bookNumber: Int
+    let chapterNumber: Int
+    let moduleID: String
+}
+
+/// A paragraph of the linked translation.
+private struct LinkedTranslationParagraph: Identifiable {
+    /// A string, so the scroll link never takes it for a verse.
+    let id: String
+    /// Its chapter's name, over the chapter's first paragraph.
+    let title: String?
+    /// Where it sits in the reading's numbering, for the scroll link.
+    let anchor: VerseAnchor?
+    let verses: [ScripturePreviewVerse]
+}
+
+/// Another translation of the chapter being read, flowing in paragraphs and
+/// following the reader by the scroll link.
+///
+/// Its paragraphs carry the reading's verse numbers, converted through the two
+/// translations' numbering, so the link scrolls it as it does the commentary.
+/// Where the other translation places some of the chapter's verses in another
+/// chapter, those verses follow its own, and where its chapter holds verses
+/// the reading places elsewhere, they are quieter and have no place to scroll to.
+private struct LinkedTranslationInspectorView: View {
+    static let preferenceKey = "studyInspector.translationID"
+
+    @EnvironmentObject private var model: LibraryModel
+    @AppStorage(Self.preferenceKey) private var preferredModuleID = ""
+    // The study column's text, as the commentary sets it.
+    @AppStorage("commentary.fontSize") private var fontSize = LampTextScale.commentaryText.defaultValue
+    @AppStorage("commentary.lineSpacing") private var lineSpacing = LampTextScale.commentaryLineSpacing.defaultValue
+    @AppStorage("commentary.typeface") private var typeface = ProseTypeface.commentaryDefault
+    @State private var paragraphs: [LinkedTranslationParagraph] = []
+    @State private var isLoading = false
+
+    /// The translation to show beside `readingID`: the one chosen, or the
+    /// first other one installed. Never the reading's own.
+    static func translation(
+        preferring id: String,
+        beside readingID: String?,
+        in translations: [LampInstalledModule]
+    ) -> LampInstalledModule? {
+        let others = translations.filter { $0.id != readingID }
+        return others.first { $0.id == id } ?? others.first
+    }
+
+    private var others: [LampInstalledModule] {
+        model.translations.filter { $0.id != model.chapter?.translationID }
+    }
+
+    private var translation: LampInstalledModule? {
+        Self.translation(preferring: preferredModuleID, beside: model.chapter?.translationID, in: model.translations)
+    }
+
+    private var request: LinkedTranslationRequest? {
+        guard let chapter = model.chapter, let translation else { return nil }
+        return LinkedTranslationRequest(
+            readingID: chapter.translationID,
+            bookNumber: chapter.book.id,
+            chapterNumber: chapter.number,
+            moduleID: translation.id
+        )
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                if !others.isEmpty {
+                    Picker("Translation", selection: Binding(
+                        get: { translation?.id ?? "" },
+                        set: { preferredModuleID = $0 }
+                    )) {
+                        ForEach(others) { translation in
+                            Text(translation.name).tag(translation.id)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                }
+
+                Spacer(minLength: 0)
+
+                TextSizeMenu(
+                    fontSize: $fontSize,
+                    lineSpacing: $lineSpacing,
+                    typeface: $typeface,
+                    defaultTypeface: .commentaryDefault,
+                    fontScale: .commentaryText,
+                    lineSpacingScale: .commentaryLineSpacing,
+                    help: "Choose the study column’s text appearance"
+                )
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .labelStyle(.iconOnly)
+                .frame(width: 24)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+
+            Divider()
+
+            panelContent
+        }
+        .task(id: request) {
+            await load(request)
+        }
+    }
+
+    @ViewBuilder
+    private var panelContent: some View {
+        if translation == nil {
+            ContentUnavailableView(
+                "No Other Translation",
+                systemImage: "books.vertical",
+                description: Text("Install another translation to read it beside this one.")
+            )
+            .studyPaneState()
+        } else if model.chapter == nil {
+            ContentUnavailableView(
+                "No Chapter Selected",
+                systemImage: "book",
+                description: Text("Open a Bible chapter to read it in another translation.")
+            )
+            .studyPaneState()
+        } else if isLoading && paragraphs.isEmpty {
+            ProgressView("Loading Translation…")
+                .studyPaneState()
+        } else if paragraphs.isEmpty {
+            ContentUnavailableView(
+                "Not in This Translation",
+                systemImage: "book.closed",
+                description: Text(missingDescription)
+            )
+            .studyPaneState()
+        } else {
+            let size = LampTextScale.commentaryText.clamped(fontSize)
+            VerseAnchoredScrollView(
+                anchors: paragraphs.compactMap(\.anchor),
+                focusedReference: model.selectedVerseReference
+            ) {
+                ForEach(paragraphs) { paragraph in
+                    anchored(
+                        VStack(alignment: .leading, spacing: 8) {
+                            if let title = paragraph.title {
+                                Text(title)
+                                    .font(.headline)
+                            }
+                            Text(scriptureParagraphText(
+                                paragraph.verses,
+                                typeface: typeface,
+                                numberSize: max(size * 0.7, 9)
+                            ))
+                            .font(.system(size: size, design: typeface.design))
+                            .lineSpacing(LampTextScale.commentaryLineSpacing.clamped(lineSpacing))
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading),
+                        paragraph
+                    )
+                }
+            }
+        }
+    }
+
+    /// A paragraph by the reading's verse it begins at, which the scroll link
+    /// reports and scrolls to, or by its own key where it has none.
+    @ViewBuilder
+    private func anchored(_ view: some View, _ paragraph: LinkedTranslationParagraph) -> some View {
+        if let anchor = paragraph.anchor {
+            view.id(anchor.reference)
+        } else {
+            view.id(paragraph.id)
+        }
+    }
+
+    private var missingDescription: String {
+        guard let chapter = model.chapter, let translation else { return "" }
+        return "\(translation.name) doesn’t have \(chapter.book.name) \(chapter.number)."
+    }
+
+    @MainActor
+    private func load(_ request: LinkedTranslationRequest?) async {
+        guard let request,
+              let chapter = model.chapter,
+              chapter.translationID == request.readingID,
+              chapter.book.id == request.bookNumber,
+              chapter.number == request.chapterNumber else {
+            paragraphs = []
+            isLoading = false
+            return
+        }
+        isLoading = true
+        let reading = (try? await model.library.versification(moduleID: request.readingID))
+            ?? .standard(.english)
+        let other = (try? await model.library.versification(moduleID: request.moduleID))
+            ?? .standard(.english)
+        let toReading: (Int) -> Int? = { other.convert($0, to: reading) }
+        let readingChapter = request.bookNumber * 1_000 + request.chapterNumber
+        let chapters = ReaderLinkedTranslation.chapters(
+            holding: chapter.verses.map(\.id),
+            convert: { reading.convert($0, to: other) }
+        )
+
+        var loaded: [(key: String, title: String?, verses: [ScripturePreviewVerse])] = []
+        for place in chapters.all {
+            // A translation without this book or chapter has nothing to show.
+            guard let text = try? await model.library.chapter(
+                moduleID: request.moduleID,
+                bookNumber: place / 1_000,
+                chapterNumber: place % 1_000
+            ) else { continue }
+            guard !Task.isCancelled else { return }
+            let isWhole = place == chapters.main
+            var title: String? = "\(text.book.name) \(text.number)"
+            for paragraph in ReaderParagraphPlanner.paragraphs(in: text) {
+                let verses = paragraph.verses.compactMap { verse -> ScripturePreviewVerse? in
+                    let isReadings = toReading(verse.id).map { $0 / 1_000 == readingChapter } ?? false
+                    guard isWhole || isReadings else { return nil }
+                    return ScripturePreviewVerse(verse: verse, isContext: !isReadings)
+                }
+                guard !verses.isEmpty else { continue }
+                loaded.append(("\(place):\(paragraph.id)", title, verses))
+                title = nil
+            }
+        }
+        guard !Task.isCancelled else { return }
+        // Only the reading's own verses give a paragraph its place: a verse
+        // the reading has in another chapter isn't on the reader's screen.
+        let anchors = ReaderLinkedTranslation.anchors(
+            forParagraphs: loaded.map { $0.verses.filter { !$0.isContext }.map(\.verse.id) },
+            toReading: toReading
+        )
+        paragraphs = zip(loaded, anchors).map { paragraph, anchor in
+            LinkedTranslationParagraph(
+                id: paragraph.key,
+                title: paragraph.title,
+                anchor: anchor,
+                verses: paragraph.verses
+            )
+        }
+        isLoading = false
+    }
+}
+
 private struct CommentaryRequest: Hashable {
     let bookNumber: Int?
     let chapterNumber: Int?
@@ -2795,35 +3056,12 @@ struct ScriptureReferencePopover: View {
     }
 
     private func continuousText(_ verses: [ScripturePreviewVerse]) -> some View {
-        Text(continuousAttributedText(verses))
+        Text(scriptureParagraphText(verses, typeface: typeface, numberSize: 11))
             .font(.system(.body, design: typeface.design))
             .lineSpacing(lineSpacing)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func continuousAttributedText(
-        _ verses: [ScripturePreviewVerse]
-    ) -> AttributedString {
-        var result = AttributedString()
-        for (index, item) in verses.enumerated() {
-            if index > 0 { result.append(AttributedString(" ")) }
-
-            var number = AttributedString("\(item.verse.number) ")
-            number.font = .system(size: 11, weight: .semibold, design: typeface.design)
-            number.foregroundColor = item.isContext
-                ? Color.secondary.opacity(0.55)
-                : Color.secondary
-            result.append(number)
-
-            var text = AttributedString(item.verse.text)
-            text.foregroundColor = item.isContext
-                ? Color.secondary.opacity(0.8)
-                : Color.primary
-            result.append(text)
-        }
-        return result
     }
 
     private var isSingleChapterReference: Bool {
@@ -2935,6 +3173,34 @@ struct ScriptureReferencePopover: View {
         }
         isLoading = false
     }
+}
+
+/// Verses run together as a paragraph, each after its number: the study
+/// column's scripture, in a preview or in a linked translation. Verses there
+/// only for context are quieter.
+private func scriptureParagraphText(
+    _ verses: [ScripturePreviewVerse],
+    typeface: ProseTypeface,
+    numberSize: CGFloat
+) -> AttributedString {
+    var result = AttributedString()
+    for (index, item) in verses.enumerated() {
+        if index > 0 { result.append(AttributedString(" ")) }
+
+        var number = AttributedString("\(item.verse.number) ")
+        number.font = .system(size: numberSize, weight: .semibold, design: typeface.design)
+        number.foregroundColor = item.isContext
+            ? Color.secondary.opacity(0.55)
+            : Color.secondary
+        result.append(number)
+
+        var text = AttributedString(item.verse.text)
+        text.foregroundColor = item.isContext
+            ? Color.secondary.opacity(0.8)
+            : Color.primary
+        result.append(text)
+    }
+    return result
 }
 
 private struct ScripturePreviewSection: Identifiable {
@@ -3130,18 +3396,42 @@ private struct DictionaryPopoverEntryView: View {
 /// weight that would make the word wider.
 private struct StudyToolPicker: View {
     @Binding var selection: String
+    let translationTitle: String
     @State private var hovered: String?
 
-    private static let tools: [(id: String, title: String)] = [
-        ("commentary", "Commentary"),
-        ("verse", "Verse"),
-        ("notes", "Notes"),
-        ("dictionary", "Dictionary"),
-    ]
+    private var tools: [(id: String, title: String)] {
+        [
+            ("commentary", "Commentary"),
+            ("verse", "Verse"),
+            ("notes", "Notes"),
+            ("translation", translationTitle),
+            ("dictionary", "Dictionary"),
+        ]
+    }
 
     var body: some View {
+        // Tabs while the column has room for them all, else the same choice
+        // as a pop-up menu.
+        ViewThatFits(in: .horizontal) {
+            tabs
+
+            Picker("Study Tool", selection: $selection) {
+                ForEach(tools, id: \.id) { tool in
+                    Text(tool.title).tag(tool.id)
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .fixedSize()
+        }
+        .font(.body)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Study Tool")
+    }
+
+    private var tabs: some View {
         HStack(spacing: 18) {
-            ForEach(Self.tools, id: \.id) { tool in
+            ForEach(tools, id: \.id) { tool in
                 let isSelected = selection == tool.id
                 Button {
                     selection = tool.id
@@ -3170,8 +3460,5 @@ private struct StudyToolPicker: View {
                 .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
             }
         }
-        .font(.body)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Study Tool")
     }
 }

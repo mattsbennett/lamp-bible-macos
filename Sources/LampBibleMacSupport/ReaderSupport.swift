@@ -600,6 +600,53 @@ public enum ReaderParallelRows {
     }
 }
 
+/// Another translation in the study column, flowing in paragraphs beside the
+/// chapter being read and following it verse for verse, however each
+/// translation numbers its verses.
+public enum ReaderLinkedTranslation {
+    /// The other translation's chapters that hold the chapter being read, as
+    /// book × 1,000 + chapter.
+    public struct Chapters: Equatable, Sendable {
+        /// In the order the reading reaches them.
+        public let all: [Int]
+        /// The one most of the chapter's verses are in, shown whole; the others
+        /// show only the verses that are the reading's.
+        public let main: Int?
+    }
+
+    /// Usually the chapter of the same number alone. A translation that numbers
+    /// a psalm's verses from its title, or places a doxology in another
+    /// chapter, adds the chapter the verses are in.
+    public static func chapters(holding verses: [Int], convert: (Int) -> Int?) -> Chapters {
+        var all: [Int] = []
+        var counts: [Int: Int] = [:]
+        for verse in verses {
+            guard let partner = convert(verse) else { continue }
+            let chapter = partner / 1_000
+            if counts[chapter] == nil { all.append(chapter) }
+            counts[chapter, default: 0] += 1
+        }
+        // The first reached wins a tie.
+        let main = all.max { counts[$0, default: 0] < counts[$1, default: 0] }
+        return Chapters(all: all, main: main)
+    }
+
+    /// Where each paragraph of the other translation sits in the reading's
+    /// numbering, for the scroll link: from the first of its verses the
+    /// reading has, to its last in that same chapter. Nil for a paragraph the
+    /// reading has none of, and for one that would start where an earlier one
+    /// does: the link scrolls to a verse, and one verse can be one place.
+    public static func anchors(forParagraphs paragraphs: [[Int]], toReading: (Int) -> Int?) -> [VerseAnchor?] {
+        var used = Set<Int>()
+        return paragraphs.map { verses in
+            let converted = verses.compactMap(toReading)
+            guard let first = converted.first, used.insert(first).inserted else { return nil }
+            let last = converted.filter { $0 / 1_000 == first / 1_000 }.max()
+            return VerseAnchor(reference: first, endReference: last)
+        }
+    }
+}
+
 public struct ReaderParagraphSegment: Equatable, Sendable {
     public let reference: Int
     public let characterCount: Int

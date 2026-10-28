@@ -682,4 +682,49 @@ struct ReaderSupportTests {
         #expect(rows[2].companions.map { $0?.number } == [12, 12, 12])
         #expect(rows.allSatisfy { $0.companions.count == 3 })
     }
+
+    // MARK: - Linked translation
+
+    /// Reading the KJV's Romans 16 beside the WEB, which ends Romans 14 with
+    /// the doxology the KJV numbers 16:25–27: the WEB's Romans 16 is shown
+    /// whole, and its Romans 14 for those three verses.
+    @Test func findsTheOtherTranslationsChaptersForAChapter() {
+        let romans16 = (1...27).map { 45_016_000 + $0 }
+        let toWEB: (Int) -> Int? = { $0 >= 45_016_025 ? $0 - 45_016_025 + 45_014_024 : $0 }
+
+        let chapters = ReaderLinkedTranslation.chapters(holding: romans16, convert: toWEB)
+
+        #expect(chapters.all == [45_016, 45_014])
+        #expect(chapters.main == 45_016)
+    }
+
+    /// A paragraph anchors from its first verse the reading has to its last in
+    /// that chapter, so one that runs on into verses the reading places
+    /// elsewhere doesn't claim every chapter between.
+    @Test func anchorsEachParagraphInTheReadingsNumbering() {
+        let toKJV: (Int) -> Int? = { $0 >= 45_014_024 && $0 < 45_015_000 ? $0 - 45_014_024 + 45_016_025 : $0 }
+        let anchors = ReaderLinkedTranslation.anchors(
+            forParagraphs: [
+                [45_014_019, 45_014_020, 45_014_021],
+                [45_014_022, 45_014_023, 45_014_024, 45_014_025, 45_014_026],
+            ],
+            toReading: toKJV
+        )
+
+        #expect(anchors == [
+            VerseAnchor(reference: 45_014_019, endReference: 45_014_021),
+            VerseAnchor(reference: 45_014_022, endReference: 45_014_023),
+        ])
+    }
+
+    /// A paragraph the reading has none of has no place to scroll to, and nor
+    /// has one starting where an earlier one already does.
+    @Test func leavesAParagraphWithoutAPlaceUnanchored() {
+        let anchors = ReaderLinkedTranslation.anchors(
+            forParagraphs: [[1_003_001, 1_003_002], [1_003_003], [1_003_004]],
+            toReading: { $0 == 1_003_003 ? nil : ($0 == 1_003_004 ? 1_003_001 : $0) }
+        )
+
+        #expect(anchors == [VerseAnchor(reference: 1_003_001, endReference: 1_003_002), nil, nil])
+    }
 }
