@@ -603,4 +603,58 @@ struct ReaderSupportTests {
         #expect(byVerse[40_018_013]?.map(\.id) == [3])
         #expect(byVerse.values.joined().allSatisfy { $0.translationID == "WEBs" })
     }
+
+    /// The WEB ends Romans 14 with the doxology the KJV numbers 16:25-27.
+    /// Reading the WEB's Romans 14 beside the KJV, its last three verses sit
+    /// beside the KJV's 16:25-27; reading the KJV's Romans 16 beside the WEB,
+    /// those verses sit beside the WEB's 14:24-26.
+    @Test func pairsAVerseOneTranslationPlacesInAnotherChapter() {
+        func romans(_ chapter: Int, _ verse: Int) -> LampVerse {
+            LampVerse(id: 45_000_000 + chapter * 1_000 + verse, number: verse, text: "", beginsParagraph: false)
+        }
+        let webToKJV: (Int) -> Int? = { ref in
+            (45_014_024...45_014_026).contains(ref) ? ref - 45_014_024 + 45_016_025 : ref
+        }
+        let kjvToWEB: (Int) -> Int? = { ref in
+            (45_016_025...45_016_027).contains(ref) ? ref - 45_016_025 + 45_014_024 : ref
+        }
+
+        let webRomans14 = ReaderParallelRows.rows(
+            main: (1...26).map { romans(14, $0) },
+            companion: (1...23).map { romans(14, $0) } + (25...27).map { romans(16, $0) },
+            mainToCompanion: webToKJV,
+            companionToMain: kjvToWEB
+        )
+        #expect(webRomans14.count == 26)
+        #expect(webRomans14.last?.companion?.id == 45_016_027)
+
+        let kjvRomans16 = ReaderParallelRows.rows(
+            main: (1...27).map { romans(16, $0) },
+            companion: (1...24).map { romans(16, $0) } + (24...26).map { romans(14, $0) },
+            mainToCompanion: kjvToWEB,
+            companionToMain: webToKJV
+        )
+        #expect(kjvRomans16.count == 27)
+        #expect(kjvRomans16[24].companion?.id == 45_014_024)
+        #expect(kjvRomans16.allSatisfy { $0.main != nil })
+    }
+
+    /// A psalm whose title the Hebrew numbers as verse 1: read in the Hebrew
+    /// numbering beside an English one, the title has no English verse beside
+    /// it, and every verse after it pairs with the English verse one lower.
+    @Test func pairsAPsalmAcrossTheTitleOneTranslationNumbers() {
+        func psalm3(_ verse: Int) -> LampVerse {
+            LampVerse(id: 19_003_000 + verse, number: verse, text: "", beginsParagraph: false)
+        }
+        let rows = ReaderParallelRows.rows(
+            main: (1...9).map(psalm3),
+            companion: (1...8).map(psalm3),
+            mainToCompanion: { $0 == 19_003_001 ? nil : $0 - 1 },
+            companionToMain: { $0 + 1 }
+        )
+        #expect(rows.count == 9)
+        #expect(rows[0].companion == nil)
+        #expect(rows[1].companion?.number == 1)
+        #expect(rows[8].companion?.number == 8)
+    }
 }

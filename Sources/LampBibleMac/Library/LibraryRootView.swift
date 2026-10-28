@@ -1593,8 +1593,14 @@ private enum ReaderVerseColumn {
 /// The companion translation's text for the chapters on screen side by side.
 private struct ReaderCompanionText {
     var translationID: String?
-    /// Keyed by the chapter on screen each one goes beside.
-    var chapters: [String: LampChapter] = [:]
+    /// The companion verses each chapter on screen pairs with, keyed by that
+    /// chapter: its own chapter of the companion, and any other a verse of it
+    /// converts to.
+    var chapters: [String: [LampVerse]] = [:]
+    /// How the translation being read and the companion number their verses,
+    /// for pairing them verse for verse.
+    var mainVersification: LampVersification?
+    var versification: LampVersification?
     /// Every chapter asked for, including those the companion doesn't have.
     var asked: Set<String> = []
     var highlights: [Int: [LampVerseHighlight]] = [:]
@@ -3712,19 +3718,42 @@ private struct TranslationReaderView: View, Equatable {
             return
         }
         var loaded = ReaderCompanionText(translationID: companion.id)
+        let mainVersification = (try? await model.library.versification(
+            moduleID: chapters.first?.translationID ?? ""
+        )) ?? .standard(.english)
+        let versification = (try? await model.library.versification(moduleID: companion.id))
+            ?? .standard(.english)
+        loaded.mainVersification = mainVersification
+        loaded.versification = versification
         var highlights: [LampVerseHighlight] = []
+        // Each companion chapter once, though several on screen may need it.
+        var fetched: [[Int]: LampChapter] = [:]
         for chapter in chapters {
             let key = ReaderCompanionText.key(book: chapter.book.id, chapter: chapter.number)
             loaded.asked.insert(key)
-            // A translation without this book leaves its column empty.
-            guard let text = try? await model.companionChapter(
-                translationID: companion.id,
-                book: chapter.book.id,
-                chapter: chapter.number
-            ) else { continue }
-            guard !Task.isCancelled else { return }
-            loaded.chapters[key] = text.chapter
-            highlights += text.highlights
+            // The companion's own chapter of this number, and any other a
+            // verse converts to, as the WEB's Romans 14:24 is the KJV's 16:25.
+            var places: Set<[Int]> = [[chapter.book.id, chapter.number]]
+            for verse in chapter.verses {
+                guard let partner = mainVersification.convert(verse.id, to: versification) else { continue }
+                places.insert([partner / 1_000_000, partner / 1_000 % 1_000])
+            }
+            var verses: [LampVerse] = []
+            for place in places.sorted(by: { ($0[0], $0[1]) < ($1[0], $1[1]) }) {
+                if fetched[place] == nil,
+                   // A translation without this book or chapter leaves its side empty.
+                   let text = try? await model.companionChapter(
+                       translationID: companion.id,
+                       book: place[0],
+                       chapter: place[1]
+                   ) {
+                    guard !Task.isCancelled else { return }
+                    fetched[place] = text.chapter
+                    highlights += text.highlights
+                }
+                verses += fetched[place]?.verses ?? []
+            }
+            if !verses.isEmpty { loaded.chapters[key] = verses }
         }
         guard !Task.isCancelled else { return }
         loaded.highlights = ReaderParallelRows.highlights(highlights, of: companion.id)
@@ -3733,7 +3762,7 @@ private struct TranslationReaderView: View, Equatable {
         // Its translator's notes after its text, as the reading's come after
         // the reading's: the rows needn't wait for them.
         var footnotes: [Int: LampVerseStudyData] = [:]
-        for verse in loaded.chapters.values.flatMap(\.verses) where verse.hasFootnotes {
+        for verse in fetched.values.flatMap(\.verses) where verse.hasFootnotes {
             guard let data = try? await model.library.verseStudyData(
                 moduleID: companion.id,
                 reference: verse.id
@@ -3745,6 +3774,21 @@ private struct TranslationReaderView: View, Equatable {
         guard !Task.isCancelled, !footnotes.isEmpty,
               companionText.translationID == companion.id else { return }
         companionText.footnotes = footnotes
+    }
+
+    /// A chapter's rows beside the companion verses it pairs with, through
+    /// the two translations' numbering.
+    private func parallelRows(for chapter: LampChapter, beside companion: [LampVerse]) -> [ReaderParallelRow] {
+        guard let main = companionText.mainVersification,
+              let other = companionText.versification else {
+            return ReaderParallelRows.rows(main: chapter.verses, companion: companion)
+        }
+        return ReaderParallelRows.rows(
+            main: chapter.verses,
+            companion: companion,
+            mainToCompanion: { main.convert($0, to: other) },
+            companionToMain: { other.convert($0, to: main) }
+        )
     }
 
     private var companionSelection: Binding<String> {
@@ -4044,7 +4088,7 @@ private struct TranslationReaderView: View, Equatable {
             if !isWaiting {
                 parallelColumnTitles(for: chapter, stacked: stacksCompanion)
             }
-            ForEach(isWaiting ? [] : ReaderParallelRows.rows(main: chapter.verses, companion: companion?.verses ?? [])) { row in
+            ForEach(isWaiting ? [] : parallelRows(for: chapter, beside: companion ?? [])) { row in
                 VStack(alignment: .leading, spacing: 0) {
                     if let verse = row.main {
                         readerHeadings(headingsByVerse[verse.number] ?? [])
