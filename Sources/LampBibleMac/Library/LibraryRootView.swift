@@ -3754,19 +3754,31 @@ private struct TranslationReaderView: View, Equatable {
         )
     }
 
-    /// The two translations' names over their columns, or, with the
-    /// companion beneath each verse, which is which.
+    /// The two translations over their columns, each a menu that changes its
+    /// own column, or, with the companion beneath each verse, the same two
+    /// read as a sentence.
+    ///
+    /// The choice lives here rather than in a toolbar menu because this is
+    /// where the translations are named: a column's title changes that column,
+    /// and the pair being compared is changed in one place instead of two.
     private func parallelColumnTitles(for chapter: LampChapter, stacked: Bool) -> some View {
         let main = translationName(chapter.translationID)
         let companion = translationName(companionText.translationID)
+        let companions = companions(beside: chapter)
+        let chosen = translationName(companionTranslation(beside: chapter.translationID)?.id)
         return HStack(alignment: .firstTextBaseline, spacing: ReaderParallel.columnGap) {
             if stacked {
-                Text("\(main), with \(companion) beneath each verse")
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    translationMenu(main, selection: mainSelection(reading: chapter), among: model.translations)
+                    Text("with")
+                    translationMenu(chosen, selection: companionSelection, among: companions)
+                    Text("beneath each verse")
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                Text(main)
+                translationMenu(main, selection: mainSelection(reading: chapter), among: model.translations)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                Text(companion)
+                translationMenu(chosen, selection: companionSelection, among: companions)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             Button("Swap Translations", systemImage: "arrow.left.arrow.right") {
@@ -3783,15 +3795,70 @@ private struct TranslationReaderView: View, Equatable {
         .padding(.bottom, 4)
     }
 
+    /// A column's title, which is also how that column's translation is chosen.
+    private func translationMenu(
+        _ title: String,
+        selection: Binding<String>,
+        among translations: [LampInstalledModule]
+    ) -> some View {
+        Menu {
+            Picker(title, selection: selection) {
+                ForEach(translations) { translation in
+                    Text(translation.name).tag(translation.id)
+                }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        } label: {
+            // Styled here rather than left to the row: a bordered or borderless
+            // menu draws its label in the control's own colour.
+            Text(translations.isEmpty ? "No Other Translation" : title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .disabled(translations.isEmpty)
+        .help("Choose the translation read in this column")
+    }
+
+    private func companions(beside chapter: LampChapter) -> [LampInstalledModule] {
+        model.translations.filter { $0.id != chapter.translationID }
+    }
+
+    /// The translation being read, as the main column's title.
+    ///
+    /// Choosing the companion here swaps the two. Left to itself the companion
+    /// would fall back to whichever other translation is installed first, so
+    /// asking to read the translation you were comparing against would quietly
+    /// put a third one beside it.
+    private func mainSelection(reading chapter: LampChapter) -> Binding<String> {
+        Binding(
+            get: { chapter.translationID },
+            set: { id in
+                guard id != chapter.translationID else { return }
+                if id == companionTranslation(beside: chapter.translationID)?.id {
+                    companionTranslationID = chapter.translationID
+                }
+                model.openReference(readingPlace(in: chapter), translationID: id)
+            }
+        )
+    }
+
+    /// Where a chapter reopens when its translation changes: the verse being
+    /// studied, else the chapter's first verse.
+    private func readingPlace(in chapter: LampChapter) -> Int {
+        model.selectedVerseReference
+            ?? chapter.verses.first?.id
+            ?? chapter.book.id * 1_000_000 + chapter.number * 1_000 + 1
+    }
+
     /// Makes the companion the translation being read, and the one being read
     /// its companion, at the same place.
     private func swapTranslations(reading chapter: LampChapter) {
         guard let companionID = companionText.translationID else { return }
         companionTranslationID = chapter.translationID
-        let place = model.selectedVerseReference
-            ?? chapter.verses.first?.id
-            ?? chapter.book.id * 1_000_000 + chapter.number * 1_000 + 1
-        model.openReference(place, translationID: companionID)
+        model.openReference(readingPlace(in: chapter), translationID: companionID)
     }
 
     private func parallelRow(
@@ -5073,14 +5140,6 @@ private struct TranslationReaderView: View, Equatable {
                     }
                 }
                 .pickerStyle(.inline)
-
-                Picker("Companion", selection: companionSelection) {
-                    ForEach(model.translations.filter { $0.id != model.selectedTranslationID }) { translation in
-                        Text(translation.name).tag(translation.id)
-                    }
-                }
-                .disabled(readerLayoutMode != .sideBySide)
-                .help("The translation read beside this one, side by side")
 
                 Divider()
 
