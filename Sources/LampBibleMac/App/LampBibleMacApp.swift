@@ -15,6 +15,18 @@ import SwiftUI
 final class LampAppDelegate: NSObject, NSApplicationDelegate {
     private var hasReplied = false
 
+    /// Puts the daily reminder back if the switch is on and the system is not
+    /// holding one.
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        let defaults = UserDefaults.standard
+        let configuration = ReadingReminderConfiguration(
+            isEnabled: defaults.bool(forKey: "plans.reminder.enabled"),
+            hour: defaults.integer(forKey: "plans.reminder.hour"),
+            minute: defaults.integer(forKey: "plans.reminder.minute")
+        )
+        Task { await ReadingReminderScheduler.reapplyIfMissing(configuration) }
+    }
+
     func applicationShouldTerminate(
         _ sender: NSApplication
     ) -> NSApplication.TerminateReply {
@@ -57,7 +69,14 @@ struct LampBibleMacApp: App {
         // never written to UserDefaults, so code reading the raw value gets
         // `false` until the switch is touched. Sync at launch reads it that way,
         // so on a new install it never ran while Settings showed it on.
-        UserDefaults.standard.register(defaults: ["sync.automatic": true])
+        UserDefaults.standard.register(defaults: [
+            "sync.automatic": true,
+            // Registered for the same reason: the launch reminder check reads
+            // these raw, and an unregistered integer is 0, which would move
+            // the reminder to midnight.
+            "plans.reminder.hour": LampPreferenceDefaults.plansReminderHour,
+            "plans.reminder.minute": LampPreferenceDefaults.plansReminderMinute,
+        ])
     }
 
     var body: some Scene {
