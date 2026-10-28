@@ -4997,7 +4997,10 @@ private struct TranslationReaderView: View, Equatable {
     /// under the pointer. Selections from elsewhere — search, history, read-aloud,
     /// a cross-reference — still scroll, because there the verse may be anywhere.
     private func selectVerseFromReader(_ reference: Int) {
-        isSelectingVerseFromReader = true
+        // Armed only for a change, which is what clears it: choosing the verse
+        // already chosen changes nothing, and a flag left armed would swallow
+        // the scroll of the next verse chosen from elsewhere in the chapter.
+        isSelectingVerseFromReader = reference != model.selectedVerseReference
         model.focusVerse(reference)
     }
 
