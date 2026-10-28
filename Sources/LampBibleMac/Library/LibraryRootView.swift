@@ -1769,16 +1769,51 @@ private enum ReaderTextHeights {
 /// lazy scroll view materialises attributed text containing many metadata runs.
 /// An ordinary non-editable `NSTextView` provides the same native selection and
 /// contextual menu without involving that overlay.
-private struct ReaderSelectableText: NSViewRepresentable {
+/// Verse text, with the reader's margin beside it.
+///
+/// The text view reaches back past any indent and into the margin, so that
+/// every mark sits in one column at the left of the reader, however the
+/// poetry beside it is indented.
+private struct ReaderSelectableText: View {
     let attributedText: NSAttributedString
+    var marks: ReaderMarginMarks = .none
+    /// How far the text is set in from the reader's column.
+    var indent: CGFloat = 0
     let openLink: (URL) -> Void
+    var openNote: (Int) -> Void = { _ in }
+
+    var body: some View {
+        ReaderTextRepresentable(
+            attributedText: attributedText,
+            marks: marks,
+            textLeading: ReaderMargin.width + indent,
+            openLink: openLink,
+            openNote: openNote
+        )
+        .padding(.leading, -(ReaderMargin.width + indent))
+    }
+}
+
+private enum ReaderMargin {
+    /// Room for two note icons and the selection bar, left of the column.
+    static let width: CGFloat = 52
+}
+
+private struct ReaderTextRepresentable: NSViewRepresentable {
+    let attributedText: NSAttributedString
+    let marks: ReaderMarginMarks
+    let textLeading: CGFloat
+    let openLink: (URL) -> Void
+    let openNote: (Int) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(openLink: openLink)
     }
 
-    func makeNSView(context: Context) -> NSTextView {
-        let textView = NSTextView(frame: .zero)
+    func makeNSView(context: Context) -> ReaderTextView {
+        // TextKit 1: the margin reads its lines from the layout manager, and
+        // asking a TextKit 2 view for one switches it over there and then.
+        let textView = ReaderTextView(usingTextLayoutManager: false)
         textView.delegate = context.coordinator
         textView.isEditable = false
         textView.isSelectable = true
@@ -1786,7 +1821,8 @@ private struct ReaderSelectableText: NSViewRepresentable {
         textView.drawsBackground = false
         textView.textContainerInset = .zero
         textView.textContainer?.lineFragmentPadding = 0
-        textView.textContainer?.widthTracksTextView = true
+        // Sized by the view, less the margin, rather than tracking its width.
+        textView.textContainer?.widthTracksTextView = false
         textView.textContainer?.heightTracksTextView = false
         textView.isHorizontallyResizable = false
         textView.isVerticallyResizable = true
@@ -1795,31 +1831,39 @@ private struct ReaderSelectableText: NSViewRepresentable {
             height: CGFloat.greatestFiniteMagnitude
         )
         textView.linkTextAttributes = [:]
+        textView.textLeading = textLeading
         textView.textStorage?.setAttributedString(attributedText)
+        textView.marks = marks
+        textView.openNote = openNote
         return textView
     }
 
-    func updateNSView(_ textView: NSTextView, context: Context) {
+    func updateNSView(_ textView: ReaderTextView, context: Context) {
         context.coordinator.openLink = openLink
-        guard textView.attributedString() != attributedText else { return }
-        let selection = textView.selectedRange()
-        textView.textStorage?.setAttributedString(attributedText)
-        if selection.location != NSNotFound,
-           NSMaxRange(selection) <= attributedText.length {
-            textView.setSelectedRange(selection)
+        textView.openNote = openNote
+        textView.textLeading = textLeading
+        if textView.attributedString() != attributedText {
+            let selection = textView.selectedRange()
+            textView.textStorage?.setAttributedString(attributedText)
+            if selection.location != NSNotFound,
+               NSMaxRange(selection) <= attributedText.length {
+                textView.setSelectedRange(selection)
+            }
         }
+        // After the text, which the marks' locations count in.
+        textView.marks = marks
     }
 
     func sizeThatFits(
         _ proposal: ProposedViewSize,
-        nsView textView: NSTextView,
+        nsView textView: ReaderTextView,
         context: Context
     ) -> CGSize? {
-        guard let width = proposal.width, width > 0 else { return nil }
+        guard let width = proposal.width, width > textLeading else { return nil }
 
         return CGSize(
             width: width,
-            height: ReaderTextHeights.height(of: attributedText, width: width)
+            height: ReaderTextHeights.height(of: attributedText, width: width - textLeading)
         )
     }
 
@@ -1846,6 +1890,207 @@ private struct ReaderSelectableText: NSViewRepresentable {
             guard let url else { return false }
             openLink(url)
             return true
+        }
+    }
+}
+
+/// The reader's text view, with a margin left of the text where the reader
+/// marks verses: a bar beside the selected verse's lines, and an icon beside
+/// the line where a verse with notes begins.
+///
+/// Placed from the view's own layout, so a mark always sits on the line it
+/// belongs to, at whatever width the text has wrapped to, and a change of
+/// marks costs a redraw of the margin rather than a layout of the text.
+private final class ReaderTextView: NSTextView {
+    var marks = ReaderMarginMarks.none {
+        didSet {
+            guard marks != oldValue else { return }
+            margin.needsDisplay = true
+            window?.invalidateCursorRects(for: margin)
+        }
+    }
+    /// Where the text starts: past the margin and any indent.
+    var textLeading: CGFloat = ReaderMargin.width {
+        didSet {
+            guard textLeading != oldValue else { return }
+            sizeTextContainer()
+        }
+    }
+    var openNote: ((Int) -> Void)?
+
+    /// The strip the marks are drawn in. Drawn in the text view's own pass,
+    /// after its text, they never reached the screen.
+    private let margin = ReaderMarginView()
+
+    override var textContainerOrigin: NSPoint { NSPoint(x: textLeading, y: 0) }
+
+    override func mouseDown(with event: NSEvent) {
+        // Here rather than in the margin view: SwiftUI hands a click anywhere
+        // in the text view to the text view, never asking its subviews.
+        if let icon = icon(at: convert(event.locationInWindow, from: nil)) {
+            openNote?(icon.reference)
+            return
+        }
+        super.mouseDown(with: event)
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        sizeTextContainer()
+    }
+
+    private func sizeTextContainer() {
+        if margin.superview !== self { addSubview(margin) }
+        margin.frame = NSRect(x: 0, y: 0, width: ReaderMargin.width, height: bounds.height)
+        guard let textContainer else { return }
+        let width = max(frame.width - textLeading, 0)
+        guard textContainer.size.width != width else { return }
+        textContainer.size = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+    }
+
+    fileprivate func drawMarks() {
+        guard !marks.isEmpty else { return }
+        if let bar = selectionBar() {
+            NSColor.secondaryLabelColor.setFill()
+            NSBezierPath(roundedRect: bar, xRadius: 1.5, yRadius: 1.5).fill()
+        }
+        for icon in placedIcons() {
+            icon.image.draw(in: icon.rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        }
+    }
+
+    /// The note icon at a point in the margin, if one is there.
+    fileprivate func icon(at point: NSPoint) -> PlacedIcon? {
+        placedIcons().first { $0.hitRect.contains(point) }
+    }
+
+    // MARK: Placing the marks
+
+    fileprivate struct PlacedIcon {
+        let rect: NSRect
+        let image: NSImage
+        let reference: Int
+        let help: String
+
+        var hitRect: NSRect { rect.insetBy(dx: -4, dy: -4) }
+    }
+
+    /// The bar beside the selected verse's lines, a little in from the text.
+    private func selectionBar() -> NSRect? {
+        guard let range = marks.selectedRange,
+              let first = lineBand(at: range.location),
+              let last = lineBand(at: max(NSMaxRange(range) - 1, range.location))
+        else { return nil }
+        return NSRect(
+            x: ReaderMargin.width - 10,
+            y: first.minY + 1,
+            width: 2.5,
+            height: max(last.maxY - first.minY - 2, 3)
+        )
+    }
+
+    fileprivate func placedIcons() -> [PlacedIcon] {
+        guard !marks.notes.isEmpty else { return [] }
+        var bands: [Int: LineBand] = [:]
+        let lines = marks.notes.compactMap { note -> (line: Int, note: ReaderMarginMarks.Note)? in
+            guard let band = lineBand(at: note.location) else { return nil }
+            let line = Int(band.minY.rounded())
+            bands[line] = band
+            return (line, note)
+        }
+        var placed: [PlacedIcon] = []
+        var slotsUsed: [Int: Int] = [:]
+        for icon in ReaderMarginMarks.icons(for: lines) {
+            guard let band = bands[icon.line] else { continue }
+            let slot = slotsUsed[icon.line, default: 0]
+            slotsUsed[icon.line] = slot + 1
+            let size = (band.fontSize * 0.72).rounded()
+            let image = Self.icon(for: icon.kind, size: size)
+            // The reader's own note nearest the text, a little clear of the
+            // strip the selection bar is drawn in.
+            let centerX = ReaderMargin.width - 15 - size / 2 - CGFloat(slot) * (size + 4)
+            let rect = NSRect(
+                x: centerX - image.size.width / 2,
+                y: band.midText - image.size.height / 2,
+                width: image.size.width,
+                height: image.size.height
+            )
+            placed.append(PlacedIcon(
+                rect: rect,
+                image: image,
+                reference: icon.reference,
+                help: icon.kind == .personal ? "Your note" : "Study notes"
+            ))
+        }
+        return placed
+    }
+
+    private struct LineBand {
+        let minY: CGFloat
+        let maxY: CGFloat
+        /// Halfway up the text's small letters, where an icon looks level with it.
+        let midText: CGFloat
+        let fontSize: CGFloat
+    }
+
+    /// The line a character is set on: from the top of its glyphs to the foot
+    /// of their descenders, leaving out the space set below the line.
+    private func lineBand(at characterIndex: Int) -> LineBand? {
+        guard let layoutManager, let textStorage, textStorage.length > 0 else { return nil }
+        let index = min(max(characterIndex, 0), textStorage.length - 1)
+        let glyph = layoutManager.glyphIndexForCharacter(at: index)
+        var lineGlyphs = NSRange()
+        let fragment = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: &lineGlyphs)
+        // The body text of the line, not the raised verse number at its start.
+        let bodyCharacter = layoutManager.characterIndexForGlyph(at: max(NSMaxRange(lineGlyphs) - 1, lineGlyphs.location))
+        let font = textStorage.attribute(.font, at: min(bodyCharacter, textStorage.length - 1), effectiveRange: nil) as? NSFont
+            ?? NSFont.systemFont(ofSize: 17)
+        let baseline = layoutManager.location(forGlyphAt: layoutManager.glyphIndexForCharacter(at: min(bodyCharacter, textStorage.length - 1))).y
+        let originY = fragment.minY + textContainerOrigin.y
+        return LineBand(
+            minY: originY + baseline - font.ascender,
+            maxY: originY + baseline - font.descender,
+            midText: originY + baseline - font.xHeight / 2,
+            fontSize: font.pointSize
+        )
+    }
+
+    private static var icons: [String: NSImage] = [:]
+
+    /// A note icon, coloured for its kind: each kind its own symbol as well as
+    /// its own colour, so neither depends on telling the colours apart.
+    private static func icon(for kind: ReaderMarginMarks.NoteKinds, size: CGFloat) -> NSImage {
+        let name = kind == .personal ? "note.text" : "book.closed"
+        let key = "\(name)-\(size)"
+        if let image = icons[key] { return image }
+        let color: NSColor = kind == .personal ? .systemOrange : .systemPurple
+        let configuration = NSImage.SymbolConfiguration(pointSize: size * 0.82, weight: .semibold)
+            .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
+        let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(configuration) ?? NSImage()
+        icons[key] = image
+        return image
+    }
+}
+
+/// The reader's margin beside its text, drawing what the text view places.
+/// Clicks pass through it to the text view, which opens a note.
+private final class ReaderMarginView: NSView {
+    private var textView: ReaderTextView? { superview as? ReaderTextView }
+
+    override var isFlipped: Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        textView?.drawMarks()
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func resetCursorRects() {
+        removeAllToolTips()
+        for icon in textView?.placedIcons() ?? [] {
+            addCursorRect(icon.hitRect, cursor: .pointingHand)
+            addToolTip(icon.hitRect, owner: icon.help as NSString, userData: nil)
         }
     }
 }
@@ -3430,10 +3675,14 @@ private struct TranslationReaderView: View, Equatable {
         if paragraph.verses.count == 1, let verse = paragraph.verses.first {
             renderedVerseText(for: verse)
         } else {
+            let run = continuousText(for: paragraph.verses)
             VStack(alignment: .leading, spacing: 0) {
                 ReaderSelectableText(
-                    attributedText: continuousText(for: paragraph.verses),
-                    openLink: { _ = handleReaderLink($0) }
+                    attributedText: run.text,
+                    marks: run.marks,
+                    indent: paragraphIndent(for: paragraph),
+                    openLink: { _ = handleReaderLink($0) },
+                    openNote: { openVerseStudy(reference: $0) }
                 )
                 revealedFootnoteNote(among: paragraph.verses)
             }
@@ -3490,16 +3739,56 @@ private struct TranslationReaderView: View, Equatable {
         paragraphAnchors.paragraphs(in: chapter)
     }
 
-    private func continuousText(for verses: [LampVerse]) -> NSAttributedString {
+    /// Verses run together as one paragraph, with what the margin beside
+    /// them marks.
+    private func continuousText(
+        for verses: [LampVerse]
+    ) -> (text: NSAttributedString, marks: ReaderMarginMarks) {
         let result = NSMutableAttributedString(string: "")
+        var marks = ReaderMarginMarks()
         for (index, verse) in verses.enumerated() {
             if index > 0 {
                 result.append(NSAttributedString(string: " ", attributes: bodyTextAttributes()))
             }
+            let start = result.length
             result.append(verseMarkerText(for: verse))
             result.append(verseBodyText(for: verse))
+            mark(verse, from: start, to: result.length, in: &marks)
         }
-        return result
+        return (result, marks)
+    }
+
+    /// The marks beside one piece of a verse drawn on its own. Its notes are
+    /// marked only beside the piece that holds its number.
+    private func marks(
+        for verse: LampVerse,
+        drawnAs text: NSAttributedString,
+        noting: Bool = true
+    ) -> ReaderMarginMarks {
+        var marks = ReaderMarginMarks()
+        mark(verse, from: 0, to: text.length, noting: noting, in: &marks)
+        return marks
+    }
+
+    /// Adds a verse's marks for the characters it was drawn as, from its
+    /// number to its last character.
+    private func mark(
+        _ verse: LampVerse,
+        from start: Int,
+        to end: Int,
+        noting: Bool = true,
+        in marks: inout ReaderMarginMarks
+    ) {
+        if model.selectedVerseReference == verse.id {
+            marks.selectedRange = NSRange(location: start, length: end - start)
+        }
+        guard noting else { return }
+        var kinds: ReaderMarginMarks.NoteKinds = []
+        if model.hasPersonalNote(for: verse.id) { kinds.insert(.personal) }
+        if model.hasInstalledNote(for: verse.id) { kinds.insert(.module) }
+        if !kinds.isEmpty {
+            marks.notes.append(.init(location: start, reference: verse.id, kinds: kinds))
+        }
     }
 
     private func verseMarkerText(for verse: LampVerse) -> NSAttributedString {
@@ -3507,48 +3796,22 @@ private struct TranslationReaderView: View, Equatable {
         let verseURL = readerVerseURL(reference: verse.id)
         let isSelected = model.selectedVerseReference == verse.id
 
-        // The number stays quiet whether or not the verse is selected: nothing
+        // The selected verse is marked by a bar in the margin; its number only
+        // darkens, to show where in a shared line the verse begins. Nothing
         // inside scripture takes the accent, where a red numeral next to
-        // red-letter text reads as part of the words of Christ. Selection is
-        // a tinted ground behind the number instead.
+        // red-letter text reads as part of the words of Christ. A verse's notes
+        // are marked in the margin too.
         var numberAttributes = markerTextAttributes(
             size: max(fontSize * 0.58, 10),
             weight: .semibold,
-            color: .secondaryLabelColor,
+            color: isSelected ? .labelColor : .secondaryLabelColor,
             baselineOffset: max(fontSize * 0.28, 4)
         )
         numberAttributes[.link] = verseURL
-        if isSelected {
-            numberAttributes[.backgroundColor] = NSColor.controlAccentColor
-                .withAlphaComponent(0.22)
-        }
         result.append(NSAttributedString(
             string: verse.number.formatted(),
             attributes: numberAttributes
         ))
-
-
-        if model.hasPersonalNote(for: verse.id) {
-            var attributes = markerTextAttributes(
-                size: max(fontSize * 0.48, 9),
-                weight: .semibold,
-                color: .systemOrange,
-                baselineOffset: max(fontSize * 0.28, 4)
-            )
-            attributes[.link] = verseURL
-            result.append(NSAttributedString(string: "✎", attributes: attributes))
-        }
-
-        if model.hasInstalledNote(for: verse.id) {
-            var attributes = markerTextAttributes(
-                size: max(fontSize * 0.43, 8),
-                weight: .semibold,
-                color: .systemPurple,
-                baselineOffset: max(fontSize * 0.28, 4)
-            )
-            attributes[.link] = verseURL
-            result.append(NSAttributedString(string: "▣", attributes: attributes))
-        }
 
         result.append(NSAttributedString(string: " ", attributes: bodyTextAttributes()))
         return result
@@ -3565,39 +3828,52 @@ private struct TranslationReaderView: View, Equatable {
     @ViewBuilder
     private func verseLines(for verse: LampVerse) -> some View {
         if let poetryRange = partialPoetryRange(for: verse) {
+            let opening = verseText(
+                for: verse,
+                range: ReaderTextRange(startOffset: 0, endOffset: poetryRange.startOffset),
+                includesMarker: true
+            )
+            let poetry = verseBodyText(for: verse, range: poetryRange)
             VStack(alignment: .leading, spacing: 4) {
                 ReaderSelectableText(
-                    attributedText: verseText(
-                        for: verse,
-                        range: ReaderTextRange(startOffset: 0, endOffset: poetryRange.startOffset),
-                        includesMarker: true
-                    ),
-                    openLink: { _ = handleReaderLink($0) }
+                    attributedText: opening,
+                    marks: marks(for: verse, drawnAs: opening),
+                    openLink: { _ = handleReaderLink($0) },
+                    openNote: { openVerseStudy(reference: $0) }
                 )
 
                 ReaderSelectableText(
-                    attributedText: verseBodyText(for: verse, range: poetryRange),
+                    attributedText: poetry,
+                    marks: marks(for: verse, drawnAs: poetry, noting: false),
+                    indent: poetryIndent(for: verse),
                     openLink: { _ = handleReaderLink($0) }
                 )
                     .padding(.leading, poetryIndent(for: verse))
 
                 if poetryRange.endOffset < verse.text.count {
+                    let closing = verseBodyText(
+                        for: verse,
+                        range: ReaderTextRange(
+                            startOffset: poetryRange.endOffset,
+                            endOffset: verse.text.count
+                        )
+                    )
                     ReaderSelectableText(
-                        attributedText: verseBodyText(
-                            for: verse,
-                            range: ReaderTextRange(
-                                startOffset: poetryRange.endOffset,
-                                endOffset: verse.text.count
-                            )
-                        ),
+                        attributedText: closing,
+                        marks: marks(for: verse, drawnAs: closing, noting: false),
                         openLink: { _ = handleReaderLink($0) }
                     )
                 }
             }
         } else {
+            let run = continuousText(for: [verse])
             ReaderSelectableText(
-                attributedText: continuousText(for: [verse]),
-                openLink: { _ = handleReaderLink($0) }
+                attributedText: run.text,
+                marks: run.marks,
+                // Set in by the row or paragraph around it.
+                indent: poetryIndent(for: verse),
+                openLink: { _ = handleReaderLink($0) },
+                openNote: { openVerseStudy(reference: $0) }
             )
         }
     }
@@ -4374,15 +4650,16 @@ private struct TranslationReaderView: View, Equatable {
                 )
 
                 Divider()
-                Section("Verse markers") {
-                    Text("Blue * — translation note")
-                    Text("Orange ✎ — personal note")
-                    Text("Purple ▣ — study note")
+                Section("Verse marks") {
+                    Text("Bar in the margin — selected verse")
+                    Text("Orange note in the margin — your note")
+                    Text("Purple book in the margin — study notes")
+                    Text("Blue letter in the text — translator’s note")
                 }
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
-            .help("Choose the reader layout, typeface, text size, and verse markers")
+            .help("Choose the reader layout, typeface, and text size, and see what the verse marks mean")
 
             Button {
                 toggleReadAloud()

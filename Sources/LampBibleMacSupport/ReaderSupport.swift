@@ -410,6 +410,82 @@ public struct ReaderTextRange: Codable, Equatable, Sendable {
     }
 }
 
+/// What the reader marks in the margin beside a run of verse text: the verse
+/// being studied, and the verses that carry notes.
+///
+/// In the margin rather than in the text, because the text's own marks are
+/// taken: three of the four highlight styles are underlines, a translation's
+/// variants are underlined too, and a fill would read as another highlight.
+public struct ReaderMarginMarks: Equatable, Sendable {
+    public struct NoteKinds: OptionSet, Hashable, Sendable {
+        public let rawValue: Int
+        public init(rawValue: Int) { self.rawValue = rawValue }
+
+        /// The reader's own note.
+        public static let personal = NoteKinds(rawValue: 1 << 0)
+        /// A note from an installed study module.
+        public static let module = NoteKinds(rawValue: 1 << 1)
+    }
+
+    public struct Note: Equatable, Sendable {
+        /// Where the verse's number is in the text, in UTF-16 units.
+        public let location: Int
+        public let reference: Int
+        public let kinds: NoteKinds
+
+        public init(location: Int, reference: Int, kinds: NoteKinds) {
+            self.location = location
+            self.reference = reference
+            self.kinds = kinds
+        }
+    }
+
+    /// One icon in the margin, beside the line where a verse with a note of
+    /// its kind begins.
+    public struct Icon: Equatable, Sendable {
+        public let line: Int
+        public let kind: NoteKinds
+        public let reference: Int
+
+        public init(line: Int, kind: NoteKinds, reference: Int) {
+            self.line = line
+            self.kind = kind
+            self.reference = reference
+        }
+    }
+
+    /// The selected verse's characters in the text, when any of them are here.
+    public var selectedRange: NSRange?
+    public var notes: [Note]
+
+    public init(selectedRange: NSRange? = nil, notes: [Note] = []) {
+        self.selectedRange = selectedRange
+        self.notes = notes
+    }
+
+    public static let none = ReaderMarginMarks()
+
+    public var isEmpty: Bool { selectedRange == nil && notes.isEmpty }
+
+    /// The icons for notes, given the line each one's verse begins on.
+    ///
+    /// Two verses can begin on one line, and the line shows each kind once,
+    /// for the first of them: a second icon of a kind would repeat the first,
+    /// and the margin has room for two. The reader's own note comes first,
+    /// nearer the text.
+    public static func icons(for notes: [(line: Int, note: Note)]) -> [Icon] {
+        var shown = Set<[Int]>()
+        var icons: [Icon] = []
+        for (line, note) in notes {
+            for kind in [NoteKinds.personal, .module] where note.kinds.contains(kind) {
+                guard shown.insert([line, kind.rawValue]).inserted else { continue }
+                icons.append(Icon(line: line, kind: kind, reference: note.reference))
+            }
+        }
+        return icons.sorted { ($0.line, $0.kind.rawValue) < ($1.line, $1.kind.rawValue) }
+    }
+}
+
 public struct ReaderParagraphSegment: Equatable, Sendable {
     public let reference: Int
     public let characterCount: Int

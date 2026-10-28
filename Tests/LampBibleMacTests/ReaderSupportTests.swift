@@ -524,4 +524,29 @@ struct ReaderSupportTests {
             endReference: end
         )?.absoluteString == "accord://read/John_3:16-John_3:18")
     }
+
+    // MARK: - Margin marks
+
+    /// Verses 9 and 10 begin on one line, both with notes of their own: the
+    /// line shows each kind once, for the first verse, the reader's own nearer
+    /// the text. Verse 12, on a later line, keeps its own icon.
+    @Test func showsEachKindOfNoteOnceALine() {
+        let icons = ReaderMarginMarks.icons(for: [
+            (line: 3, note: .init(location: 40, reference: 43014009, kinds: [.module])),
+            (line: 3, note: .init(location: 92, reference: 43014010, kinds: [.personal, .module])),
+            (line: 5, note: .init(location: 160, reference: 43014012, kinds: [.personal])),
+        ])
+
+        #expect(icons == [
+            .init(line: 3, kind: .personal, reference: 43014010),
+            .init(line: 3, kind: .module, reference: 43014009),
+            .init(line: 5, kind: .personal, reference: 43014012),
+        ])
+    }
+
+    @Test func marksNothingWhenNoVerseIsSelectedOrNoted() {
+        #expect(ReaderMarginMarks.none.isEmpty)
+        #expect(!ReaderMarginMarks(selectedRange: NSRange(location: 0, length: 4)).isEmpty)
+        #expect(ReaderMarginMarks.icons(for: []).isEmpty)
+    }
 }
