@@ -63,6 +63,34 @@ struct PresentationPDFExportTests {
         return deck
     }
 
+    /// A slide hidden from the presentation stays out of the handout too. The
+    /// exported file is often the copy other people keep, and a slide cut for
+    /// time or left unfinished should not be the version they read.
+    @Test func ahiddenSlideIsNotExported() async throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var deck = LampPresentationDeck.starter(title: "Psalm 23")
+        let visible = deck.slides.count
+        deck.slides[0].isHidden = true
+
+        let pdf = try await export(deck, in: root)
+
+        #expect(pdf.pageCount == visible - 1)
+    }
+
+    /// Hiding every slide is not the same as having none, and saying "no
+    /// slides" would send someone looking for slides that are all there.
+    @Test func adeckWhoseSlidesAreAllHiddenSaysSo() async throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var deck = LampPresentationDeck.starter(title: "Psalm 23")
+        for index in deck.slides.indices { deck.slides[index].isHidden = true }
+
+        await #expect(throws: LampPresentationPDFExport.ExportError.allSlidesHidden) {
+            _ = try await export(deck, in: root)
+        }
+    }
+
     @Test func eachSlideBecomesOnePage() async throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }

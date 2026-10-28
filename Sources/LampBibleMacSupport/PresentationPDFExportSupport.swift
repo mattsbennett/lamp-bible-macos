@@ -26,6 +26,8 @@ public enum LampPresentationPDFExport {
         /// A deck with no slides would produce a PDF with no pages, which no
         /// reader will open.
         case noSlides
+        /// Every slide is hidden, so there is nothing to put on a page.
+        case allSlidesHidden
         /// Core Graphics would not open the destination for writing.
         case destinationUnwritable(URL)
 
@@ -36,6 +38,8 @@ public enum LampPresentationPDFExport {
             switch self {
             case .noSlides:
                 "This deck has no slides to export."
+            case .allSlidesHidden:
+                "Every slide in this deck is hidden, so there is nothing to export."
             case let .destinationUnwritable(url):
                 "Could not write to \(url.lastPathComponent)."
             }
@@ -92,6 +96,11 @@ public enum LampPresentationPDFExport {
         progress: ((Int, Int) -> Void)? = nil
     ) async throws {
         guard !deck.slides.isEmpty else { throw ExportError.noSlides }
+        // Hidden slides stay out, as they do when the deck is presented. A
+        // slide hidden because it is unfinished, or cut for time, should not
+        // reappear in the handout — which is often the copy other people keep.
+        let slides = deck.slides.filter { !$0.isHidden }
+        guard !slides.isEmpty else { throw ExportError.allSlidesHidden }
 
         let slideSize = pageSize(for: deck.aspectRatio)
         var mediaBox = CGRect(
@@ -106,7 +115,7 @@ public enum LampPresentationPDFExport {
               )
         else { throw ExportError.destinationUnwritable(destination) }
 
-        for (offset, slide) in deck.slides.enumerated() {
+        for (offset, slide) in slides.enumerated() {
             let canvas = LampPresentationSlideCanvas(slide: slide, deck: deck, store: store)
                 .frame(width: slideSize.width, height: slideSize.height)
             let renderer = ImageRenderer(content: canvas)
@@ -133,7 +142,9 @@ public enum LampPresentationPDFExport {
                 context.endPDFPage()
             }
 
-            progress?(offset + 1, deck.slides.count)
+            // Numbered as they are presented, so slide 3 in the PDF is slide 3
+            // on the screen rather than counting a slide nobody will see.
+            progress?(offset + 1, slides.count)
             await Task.yield()
         }
 
