@@ -169,9 +169,14 @@ public enum LampReaderFootnoteMarks {
               let runStart = location(of: startOffset)
         else { return [] }
 
+        // A note can follow the verse's last character, at the offset one past
+        // it, as the BSB marks many: that belongs to the run the verse ends in,
+        // when the run holds any of it.
+        let endsVerse = endOffset == indices.count - 1 && endOffset > startOffset
         return offsets.enumerated()
             .compactMap { index, offset -> Insertion? in
-                guard offset >= startOffset, offset < endOffset,
+                guard offset >= startOffset,
+                      offset < endOffset || (endsVerse && offset == endOffset),
                       let at = location(of: offset)
                 else { return nil }
                 return Insertion(location: at - runStart, index: index)

@@ -173,6 +173,38 @@ struct ReaderFootnoteMarkTests {
         #expect(found.map(\.location) == [verse.count - 1, 0])
     }
 
+    /// The BSB marks many notes after a verse's last character, one past it.
+    /// Those were dropped as falling outside the run, so the note never showed.
+    @Test func marksANoteAfterTheVersesLastCharacter() {
+        let whole = LampReaderFootnoteMarks.insertions(
+            in: verse, from: 0, to: verse.count, markedAt: [verse.count]
+        )
+        #expect(whole.map(\.location) == [verse.count])
+
+        // In poetry, only the run the verse ends in takes it.
+        let opening = LampReaderFootnoteMarks.insertions(
+            in: verse, from: 0, to: 18, markedAt: [verse.count]
+        )
+        let closing = LampReaderFootnoteMarks.insertions(
+            in: verse, from: 18, to: verse.count, markedAt: [verse.count]
+        )
+        #expect(opening.isEmpty)
+        #expect(closing.map(\.location) == [verse.count - 18])
+    }
+
+    /// A note at the boundary between two runs still belongs to the second,
+    /// as one placed before the character there: only the verse's end is new.
+    @Test func keepsANoteAtARunBoundaryInTheRunAfterIt() {
+        let opening = LampReaderFootnoteMarks.insertions(
+            in: verse, from: 0, to: 18, markedAt: [18]
+        )
+        let closing = LampReaderFootnoteMarks.insertions(
+            in: verse, from: 18, to: verse.count, markedAt: [18]
+        )
+        #expect(opening.isEmpty)
+        #expect(closing.map(\.location) == [0])
+    }
+
     @Test func leavesOutWhatTheRunDoesNotHold() {
         #expect(LampReaderFootnoteMarks.insertions(
             in: verse, from: 0, to: 5, markedAt: [40]

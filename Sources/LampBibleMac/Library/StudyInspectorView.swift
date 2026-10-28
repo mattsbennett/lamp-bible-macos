@@ -190,7 +190,9 @@ private extension View {
 private struct NoteGroup: Identifiable {
     let id: Int
     let endReference: Int?
-    let verse: LampVerse
+    /// Nil for a verse the translation being read leaves out, whose notes
+    /// are the verse's all the same.
+    let verse: LampVerse?
     let hasPersonalNote: Bool
     let installedNotes: [LampVerseNote]
 }
@@ -216,15 +218,23 @@ private struct NotesInspectorView: View {
     /// start writing.
     private var groups: [NoteGroup] {
         guard let chapter = model.chapter else { return [] }
-        return chapter.verses.compactMap { verse in
-            let installed = model.installedNotes(for: verse.id)
-            let hasPersonal = model.hasPersonalNote(for: verse.id)
-            let isSelected = model.selectedVerseReference == verse.id
+        let verses = Dictionary(uniqueKeysWithValues: chapter.verses.map { ($0.id, $0) })
+        // The chapter's verses, and any verse it leaves out that has notes or
+        // is selected: a note written while reading another translation, or a
+        // verse chosen from the companion side by side.
+        var references = Set(verses.keys).union(model.notedReferences)
+        if let selected = model.selectedVerseReference { references.insert(selected) }
+        return references.sorted().compactMap { reference in
+            let place = LampBibleReferenceFormatter.components(of: reference)
+            guard place.book == chapter.book.id, place.chapter == chapter.number else { return nil }
+            let installed = model.installedNotes(for: reference)
+            let hasPersonal = model.hasPersonalNote(for: reference)
+            let isSelected = model.selectedVerseReference == reference
             guard hasPersonal || !installed.isEmpty || isSelected else { return nil }
             return NoteGroup(
-                id: verse.id,
+                id: reference,
                 endReference: installed.flatMap(\.verseReferences).max(),
-                verse: verse,
+                verse: verses[reference],
                 hasPersonalNote: hasPersonal,
                 installedNotes: installed
             )
@@ -282,6 +292,7 @@ private struct NotesInspectorView: View {
     private func noteCard(_ group: NoteGroup) -> some View {
         if group.id == model.selectedVerseReference {
             PersonalNoteEditor(
+                reference: group.id,
                 verse: group.verse,
                 installedNotes: group.installedNotes,
                 reloadToken: reloadToken,
@@ -483,7 +494,10 @@ private struct NotesInspectorView: View {
 private struct PersonalNoteEditor: View {
     @EnvironmentObject private var model: LibraryModel
     @EnvironmentObject private var scrollLink: ReaderScrollLink
-    let verse: LampVerse
+    let reference: Int
+    /// Nil for a verse the translation being read leaves out: it can carry a
+    /// note, and nothing to highlight.
+    let verse: LampVerse?
     let installedNotes: [LampVerseNote]
     let reloadToken: UUID
     @Binding var isDirty: Bool
@@ -507,7 +521,7 @@ private struct PersonalNoteEditor: View {
     @State private var editorHeight = NoteEditorMetrics.minimumHeight
     @FocusState private var focusedField: NoteEditorField?
 
-    private var reference: Int { verse.id }
+    private var verseNumber: Int { LampBibleReferenceFormatter.components(of: reference).verse }
     private var hasUnsavedEdits: Bool {
         title != savedTitle
             || content != savedContent
@@ -528,6 +542,7 @@ private struct PersonalNoteEditor: View {
                 if isLoading { ProgressView().controlSize(.small) }
             }
 
+            if verse != nil {
             VStack(alignment: .leading, spacing: 10) {
                 Label("Highlight", systemImage: "highlighter")
                     .font(.subheadline.weight(.semibold))
@@ -566,6 +581,7 @@ private struct PersonalNoteEditor: View {
             }
 
             Divider()
+            }
 
             VStack(alignment: .leading, spacing: 10) {
                 Label("Personal Note", systemImage: "note.text")
@@ -581,11 +597,13 @@ private struct PersonalNoteEditor: View {
                     Label("Verse Range", systemImage: "arrow.left.and.right.text.vertical")
                         .font(.subheadline.weight(.semibold))
                     Picker("Applies through", selection: $rangeEndVerse) {
-                        ForEach(chapter.verses.filter { $0.number >= verse.number }) { candidate in
-                            Text(candidate.number == verse.number
-                                ? "Verse \(candidate.number) only"
-                                : "Verses \(verse.number)–\(candidate.number)")
-                                .tag(candidate.number)
+                        // The verse itself first, whether or not this
+                        // translation has it.
+                        ForEach([verseNumber] + chapter.verses.map(\.number).filter { $0 > verseNumber }, id: \.self) { number in
+                            Text(number == verseNumber
+                                ? "Verse \(number) only"
+                                : "Verses \(verseNumber)–\(number)")
+                                .tag(number)
                         }
                     }
                 }
@@ -699,7 +717,7 @@ private struct PersonalNoteEditor: View {
             content = note?.content ?? ""
             rangeEndVerse = note?.verseReferences
                 .map { LampBibleReferenceFormatter.components(of: $0).verse }
-                .max() ?? verse.number
+                .max() ?? verseNumber
             personalFootnotes = note?.footnotes.map(NoteFootnoteDraft.init) ?? []
             savedTitle = title
             savedContent = content
@@ -730,9 +748,11 @@ private struct PersonalNoteEditor: View {
         let submittedTitle = title
         let submittedRangeEndVerse = rangeEndVerse
         let submittedFootnotes = personalFootnotes.compactMap(\.lampFootnote)
-        let submittedReferences = model.chapter?.verses
-            .filter { $0.id >= reference && $0.number <= submittedRangeEndVerse }
-            .map(\.id) ?? [reference]
+        // The verse itself always, though the translation being read may leave
+        // it out, then the verses the range runs on through.
+        let submittedReferences = [reference] + (model.chapter?.verses
+            .filter { $0.id > reference && $0.number <= submittedRangeEndVerse }
+            .map(\.id) ?? [])
         isSaving = true
         errorMessage = nil
         Task {
@@ -761,6 +781,7 @@ private struct PersonalNoteEditor: View {
     private func setHighlight(_ color: String?) {
         Task {
             do {
+                guard let verse else { return }
                 try await model.setWholeVerseHighlight(
                     reference: reference,
                     textLength: verse.text.count,
@@ -1540,6 +1561,13 @@ private struct VerseInspectorView: View {
                     description: Text("Click a verse in the reader to see its translation notes, original-language words and cross-references.")
                 )
                 .studyPaneState()
+            } else if let missing = missingVerse {
+                ContentUnavailableView(
+                    missing.title,
+                    systemImage: "text.book.closed",
+                    description: Text(missing.detail)
+                )
+                .studyPaneState()
             } else if groups.isEmpty {
                 ContentUnavailableView(
                     "No Verse Notes",
@@ -1702,11 +1730,34 @@ private struct VerseInspectorView: View {
     }
 
     private var contextDescription: String {
-        guard let chapter = model.chapter else { return "the verse being read" }
-        guard let reference = model.selectedVerseReference,
-              let verse = chapter.verses.first(where: { $0.id == reference })
-        else { return "\(chapter.book.name) \(chapter.number)" }
-        return "\(chapter.book.name) \(chapter.number):\(verse.number)"
+        guard let reference = model.selectedVerseReference else { return "the verse being read" }
+        return LampBibleReferenceFormatter.describeRange(from: reference, to: reference)
+    }
+
+    /// What to say when the chosen verse isn't in the chapter this pane reads:
+    /// one the translation leaves out, which side by side can show from the
+    /// companion, or one in another chapter of a reading that spans several.
+    /// Saying the translation has no notes for the chapter would be false.
+    private var missingVerse: (title: String, detail: String)? {
+        guard let chapter = model.chapter,
+              let reference = model.selectedVerseReference,
+              !chapter.verses.contains(where: { $0.id == reference })
+        else { return nil }
+        let place = LampBibleReferenceFormatter.components(of: reference)
+        let verse = LampBibleReferenceFormatter.describeRange(from: reference, to: reference)
+        if place.book == chapter.book.id, place.chapter == chapter.number {
+            let translation = model.translations.first { $0.id == chapter.translationID }
+            return (
+                "Not in This Translation",
+                // The full name: a short one like "ASVs", with its s for
+                // Strong's, reads as a plural in a sentence.
+                "The \(translation?.name ?? "translation being read") has no \(verse)."
+            )
+        }
+        return (
+            "Verse Not Open",
+            "\(verse) is in a chapter that isn't open for study. Click its verse number to open it."
+        )
     }
 
     private func sortedScriptureAnnotations(

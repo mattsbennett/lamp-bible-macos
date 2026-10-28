@@ -741,6 +741,12 @@ final class LibraryModel: ObservableObject {
         highlightsByReference[reference] ?? []
     }
 
+    /// Every verse in the chapter with a note of either kind, including any
+    /// the translation being read leaves out.
+    var notedReferences: Set<Int> {
+        noteReferences.union(installedNotesByReference.keys)
+    }
+
     func hasPersonalNote(for reference: Int) -> Bool {
         noteReferences.contains(reference)
     }
