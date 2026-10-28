@@ -513,10 +513,11 @@ struct ReaderSupportTests {
         let start = 43_003_016
         let end = 43_003_018
 
+        // USFM, which is how YouVersion names a book. The others take OSIS.
         #expect(ExternalBibleApplication.youVersion.url(
             startReference: start,
             endReference: end
-        )?.absoluteString == "youversion://bible?reference=John.3.16-18")
+        )?.absoluteString == "youversion://bible?reference=JHN.3.16-18")
         #expect(ExternalBibleApplication.logos.url(
             startReference: start
         )?.absoluteString == "https://ref.ly/john3:16")

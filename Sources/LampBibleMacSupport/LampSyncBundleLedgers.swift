@@ -31,6 +31,8 @@ extension LampSyncBundleLedgers {
         public var personalDeletionsApplied = false
         /// The decks that went, by ID.
         public var decksRemoved: [String] = []
+        /// Whether a plan's selection or a reading's tick moved.
+        public var planProgressApplied = false
     }
 
     /// Takes the bundle's records, folds them into this library's, and carries
@@ -59,6 +61,14 @@ extension LampSyncBundleLedgers {
             }
         }
 
+        if let data = bundle.planProgress,
+           let incoming = try? LampSyncPlanProgress.decode(data) {
+            // Joined first, then applied, so what this library does matches
+            // what it is about to publish.
+            try await library.mergePlanProgressLedger(incoming)
+            applied.planProgressApplied = try await library.applyPlanProgress()
+        }
+
         if let data = bundle.deckDeletions {
             applied.decksRemoved = try LampPresentationDeckSync.applyDeletions(
                 LampPresentationDeckDeletionLedger.decoded(from: data),
@@ -82,7 +92,8 @@ extension LampSyncBundleLedgers {
             personal: try await library.personalDeletionLedger(),
             decks: try LampPresentationDeckSync.deletions(
                 in: library.rootURL, fileManager: fileManager
-            )
+            ),
+            planProgress: try await library.planProgressLedger()
         )
     }
 
