@@ -766,11 +766,25 @@ struct SlideStudioView: View {
     }
 
     private func applySelection(_ selected: LampPresentationDeck) {
-        deck = selected
+        // An unfinished version of this deck outranks the stored one: it is
+        // what the writer last had on screen, and the only reason it is not in
+        // the library is that it does not validate yet. `savedDeck` stays the
+        // stored deck, so the draft still counts as unsaved work.
+        let draft = LampSlideStudioDrafts.read(
+            forDeck: selected.id, inApplicationSupport: applicationSupportURL
+        )
+        deck = draft ?? selected
         savedDeck = selected
         selectedDeckID = selected.id
-        selectedSlideID = selected.slides.first?.id
-        statusMessage = "Saved"
+        selectedSlideID = (draft ?? selected).slides.first?.id
+        statusMessage = draft == nil ? "Saved" : "Unfinished — fix the errors to save"
+    }
+
+    /// Where this machine's own unfinished work is kept. Not the library: the
+    /// library syncs, and a broken deck is not something to send to a phone.
+    private var applicationSupportURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
     }
 
     private func selectDeck(_ deckID: String?) {
@@ -791,14 +805,24 @@ struct SlideStudioView: View {
         }
     }
 
+    /// Writes the deck as it stands, whether or not it validates.
+    ///
+    /// Validity used to gate this, and that lost people's work. Every error the
+    /// validator raises is a state you pass through while editing — a title
+    /// cleared to retype it, a half-typed hex colour, every slide deleted to
+    /// start again — so a deck sitting invalid for a few seconds is ordinary.
+    /// Closing the window or changing deck in those seconds threw away
+    /// everything since the deck last validated, and said so only in a status
+    /// message.
+    ///
+    /// Validity governs publishing instead, which is where it was always
+    /// enforced anyway: `presentDeck` refuses an invalid deck, and the agent's
+    /// preview and the workspace import each validate what they read. An editor
+    /// that will not remember what you typed is a worse failure than a deck
+    /// that is briefly unpresentable.
     private func saveNow() {
         saveTask?.cancel()
         guard let deck, deck != savedDeck else { return }
-        let validationErrors = LampPresentationDeckValidator.errors(in: deck)
-        guard validationErrors.isEmpty else {
-            statusMessage = "Fix validation errors to save"
-            return
-        }
         do {
             try store.save(deck)
             savedDeck = deck
@@ -809,6 +833,23 @@ struct SlideStudioView: View {
             }
             decks.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
             statusMessage = "Saved"
+            LampSlideStudioDrafts.discard(
+                forDeck: deck.id, inApplicationSupport: applicationSupportURL
+            )
+        } catch let error as LampPresentationDeckStoreError {
+            // The library takes valid decks only. Keep the work beside the app
+            // so closing the window does not throw it away, and say that it is
+            // held rather than stored.
+            guard case .invalidDeck = error else {
+                errorMessage = error.localizedDescription
+                return
+            }
+            do {
+                try LampSlideStudioDrafts.write(deck, inApplicationSupport: applicationSupportURL)
+                statusMessage = "Unfinished — fix the errors to save"
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         } catch {
             errorMessage = error.localizedDescription
         }

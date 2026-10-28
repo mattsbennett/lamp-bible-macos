@@ -242,6 +242,79 @@ struct PresentationStudioEditsTests {
         #expect(stored.lastImport != nil, "the import summary is still carried as before")
     }
 
+    // MARK: - What the store will hold
+
+    /// Slide Studio writes the deck as it stands, valid or not, because every
+    /// error the validator raises is a state someone passes through while
+    /// editing: a title cleared to retype it, every slide deleted to start
+    /// again. Refusing to store those lost everything typed since the deck last
+    /// validated, as soon as the window closed.
+    ///
+    /// This is the contract that makes writing them safe. Validity gates
+    /// publishing — presenting, the agent's preview, import — not remembering.
+    @Test func adeckTheValidatorRejectsIsStillRememberedByTheStore() throws {
+        let workspace = try makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let store = LampPresentationDeckStore(
+            rootURL: workspace.appendingPathComponent("library", isDirectory: true)
+        )
+        var halfEdited = deck()
+        halfEdited.title = ""
+        halfEdited.theme.backgroundColor = "#12"
+
+        #expect(
+            LampPresentationDeckValidator.errors(in: halfEdited).isEmpty == false,
+            "a cleared title and a half-typed colour are errors, which is the point"
+        )
+
+        #expect(throws: LampPresentationDeckStoreError.self) {
+            try store.save(halfEdited)
+        }
+
+        let support = workspace.appendingPathComponent("support", isDirectory: true)
+        try LampSlideStudioDrafts.write(halfEdited, inApplicationSupport: support)
+
+        #expect(
+            LampSlideStudioDrafts.read(forDeck: halfEdited.id, inApplicationSupport: support)
+                == halfEdited,
+            "what was typed comes back, errors and all"
+        )
+    }
+
+    /// Once the deck is storable again the draft goes, or reopening would hand
+    /// back the broken version of a deck that has since been fixed.
+    @Test func thedraftIsForgottenOnceTheDeckIsStorable() throws {
+        let workspace = try makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let support = workspace.appendingPathComponent("support", isDirectory: true)
+        var halfEdited = deck()
+        halfEdited.title = ""
+        try LampSlideStudioDrafts.write(halfEdited, inApplicationSupport: support)
+
+        LampSlideStudioDrafts.discard(forDeck: halfEdited.id, inApplicationSupport: support)
+
+        #expect(
+            LampSlideStudioDrafts.read(forDeck: halfEdited.id, inApplicationSupport: support) == nil
+        )
+    }
+
+    /// A draft is a recovery copy. One that will not decode must not stop the
+    /// stored deck opening — that would turn a lost edit into a lost deck.
+    @Test func anunreadableDraftIsTreatedAsNoDraft() throws {
+        let workspace = try makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let support = workspace.appendingPathComponent("support", isDirectory: true)
+        let url = LampSlideStudioDrafts.url(forDeck: "deck-1", inApplicationSupport: support)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        try Data("not a deck".utf8).write(to: url)
+
+        #expect(
+            LampSlideStudioDrafts.read(forDeck: "deck-1", inApplicationSupport: support) == nil
+        )
+    }
+
     /// The gate that keeps the poll cheap has to actually notice a save.
     @Test func thestampMovesWhenTheLibrarysCopyIsSavedAgain() throws {
         let workspace = try makeWorkspace()
