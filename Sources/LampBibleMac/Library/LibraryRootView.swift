@@ -5695,7 +5695,11 @@ private struct InstalledModulesView: View {
                 moduleToRemove = nil
             }
         } message: { module in
-            Text("This removes the installed copy of \(module.name). Your original .lamp file is not affected.")
+            // Not "the installed copy": `LibraryModel.remove(_:)` records the
+            // removal through LampSyncRemovedModules first, which is what stops
+            // the next sync fetching the module back — and so is what carries
+            // the removal to the other devices.
+            Text("This removes \(module.name) from your library — from this Mac, and from your other devices the next time they sync. Your original .lamp file is not affected.")
         }
     }
 
