@@ -195,15 +195,15 @@ final class LibrarySyncController: ObservableObject {
               provider != .off,
               let stamp = try? await library.personalChangeStamp()
         else { return }
-        guard let last = lastSyncedChangeStamp else {
-            // Nothing published yet in this run. Take the stamp as the
-            // baseline rather than syncing: the launch pass covers what was
-            // already here, and syncing again would say the same thing twice.
-            lastSyncedChangeStamp = stamp
+        // No stamp means no pass has run in this session, which is the case
+        // when sync was switched on after launch. Publishing then is right:
+        // the launch pass, which would otherwise have covered what is already
+        // here, never happened. A pass that did run records the stamp before
+        // it starts, so this is not the ordinary path.
+        guard let last = lastSyncedChangeStamp, stamp <= last else {
+            _ = await sync(library: library)
             return
         }
-        guard stamp > last else { return }
-        _ = await sync(library: library)
     }
 
 
