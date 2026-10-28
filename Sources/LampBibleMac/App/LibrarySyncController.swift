@@ -81,6 +81,32 @@ final class LibrarySyncController: ObservableObject {
         set { defaults.set(newValue, forKey: "sync.webdav.username") }
     }
 
+    /// Whether anything is remembered about how to reach a sync server.
+    var hasRememberedDetails: Bool {
+        !endpoint.isEmpty
+            || !username.isEmpty
+            || defaults.data(forKey: "sync.folderBookmark") != nil
+            || SyncSecretStore.password != nil
+    }
+
+    /// Forgets how to reach the server: the folder, the WebDAV address and
+    /// username, and the password in the keychain.
+    ///
+    /// Turning sync off stops syncing and keeps all of that, on purpose, so it
+    /// can be turned back on without typing it again. But someone who means to
+    /// disconnect — a shared Mac, a server they have stopped using — wants it
+    /// gone, and Off was the only control there was. The library itself is left
+    /// alone: this forgets the way to the server, not anything that was synced.
+    func forgetSyncDetails() {
+        provider = .off
+        defaults.removeObject(forKey: "sync.webdav.endpoint")
+        defaults.removeObject(forKey: "sync.webdav.username")
+        defaults.removeObject(forKey: "sync.folderBookmark")
+        try? SyncSecretStore.setPassword("")
+        errorMessage = nil
+        objectWillChange.send()
+    }
+
     func updateWebDAVPassword(_ password: String) -> Bool {
         do {
             try SyncSecretStore.setPassword(password)

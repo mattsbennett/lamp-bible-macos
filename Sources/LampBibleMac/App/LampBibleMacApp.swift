@@ -232,6 +232,7 @@ private struct ReaderSettingsView: View {
     @State private var webDAVEndpoint = ""
     @State private var webDAVUsername = ""
     @State private var webDAVPassword = ""
+    @State private var isForgettingSyncDetails = false
 
     private var voices: [AVSpeechSynthesisVoice] {
         AVSpeechSynthesisVoice.speechVoices()
@@ -621,6 +622,33 @@ private struct ReaderSettingsView: View {
                         Text("Includes companion writing files, agent context, custom workspace skills, and revision history. Provider credentials and generated agent configuration stay on this Mac.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        if syncController.provider == .off, syncController.hasRememberedDetails {
+                            // Off keeps the server details so sync can be
+                            // turned back on without typing them again. Said
+                            // out loud, because "Off" reads as disconnected.
+                            Text("Sync is off. Your server details are still saved on this Mac, so you can turn it back on without entering them again.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Button("Forget Sync Details…", systemImage: "trash", role: .destructive) {
+                            isForgettingSyncDetails = true
+                        }
+                        .disabled(!syncController.hasRememberedDetails)
+                        .confirmationDialog(
+                            "Forget sync details?",
+                            isPresented: $isForgettingSyncDetails,
+                            titleVisibility: .visible
+                        ) {
+                            Button("Forget Details", role: .destructive) {
+                                syncController.forgetSyncDetails()
+                                webDAVEndpoint = ""
+                                webDAVUsername = ""
+                                webDAVPassword = ""
+                            }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("This removes the folder, WebDAV address and username, and the password in your keychain, and turns sync off. Nothing already synced is deleted, here or on the server.")
+                        }
                         HStack {
                             Button("Sync Now", systemImage: "arrow.triangle.2.circlepath") {
                                 Task {
