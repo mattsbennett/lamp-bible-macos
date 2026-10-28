@@ -792,30 +792,36 @@ final class LibraryModel: ObservableObject {
     ) async throws {
         guard let translationID = selectedTranslationID else { return }
         let setID = "personal-highlights:\(translationID)"
+
+        // Removing clears every set of this reader's own, not just the
+        // default one. The menu offers "Remove Highlight" whenever the verse
+        // carries any highlight of theirs, so clearing one set left the others
+        // on the page and the command looked as though it had done nothing.
+        // A module's highlights are not this reader's and are left alone.
+        guard let color else {
+            for id in Set((highlightsByReference[reference] ?? []).map(\.setID)) {
+                try await library.deleteVerseHighlights(setID: id, reference: reference)
+            }
+            guard selectedTranslationID == translationID else { return }
+            highlightsByReference.removeValue(forKey: reference)
+            return
+        }
+
         try await library.deleteVerseHighlights(
             setID: setID,
             reference: reference
         )
         let retainedHighlights = (highlightsByReference[reference] ?? [])
             .filter { $0.setID != setID }
-        if let color {
-            let highlight = try await library.saveVerseHighlight(
-                translationID: translationID,
-                reference: reference,
-                startOffset: 0,
-                endOffset: textLength,
-                color: color
-            )
-            guard selectedTranslationID == translationID else { return }
-            highlightsByReference[reference] = retainedHighlights + [highlight]
-        } else {
-            guard selectedTranslationID == translationID else { return }
-            if retainedHighlights.isEmpty {
-                highlightsByReference.removeValue(forKey: reference)
-            } else {
-                highlightsByReference[reference] = retainedHighlights
-            }
-        }
+        let highlight = try await library.saveVerseHighlight(
+            translationID: translationID,
+            reference: reference,
+            startOffset: 0,
+            endOffset: textLength,
+            color: color
+        )
+        guard selectedTranslationID == translationID else { return }
+        highlightsByReference[reference] = retainedHighlights + [highlight]
     }
 
     func saveVerseHighlight(
