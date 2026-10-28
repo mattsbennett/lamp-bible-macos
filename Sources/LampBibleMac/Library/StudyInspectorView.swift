@@ -1568,10 +1568,12 @@ private struct VerseInspectorView: View {
     @ViewBuilder
     private func verseGroupView(_ group: VerseStudyGroup) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            Button(group.title) { model.focusVerse(group.id) }
-                .buttonStyle(.plain)
+            // Plain, and not a button. The pane holds the verse being read and
+            // no other, so the accent marked it out from nothing and the tap
+            // selected what was already selected. The Commentary pane draws the
+            // same reference the same way.
+            Text(group.title)
                 .font(.headline)
-                .foregroundStyle(model.selectedVerseReference == group.id ? Color.accentColor : .primary)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             if !group.footnotes.isEmpty {
