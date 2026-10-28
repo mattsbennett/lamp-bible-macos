@@ -657,4 +657,29 @@ struct ReaderSupportTests {
         #expect(rows[1].companion?.number == 1)
         #expect(rows[8].companion?.number == 8)
     }
+
+    /// Three translations beside the one being read: each column pairs on its
+    /// own, and a verse the reading leaves out that two of them have shares
+    /// one row.
+    @Test func pairsEachOfSeveralCompanionsOnItsOwn() {
+        let identity = ReaderParallelCompanion(
+            verses: [verse(10), verse(11), verse(12)], fromMain: { $0 }, toMain: { $0 }
+        )
+        let alsoHasEleven = ReaderParallelCompanion(
+            verses: [verse(10), verse(11), verse(12)], fromMain: { $0 }, toMain: { $0 }
+        )
+        let leavesItOut = ReaderParallelCompanion(
+            verses: [verse(10), verse(12)], fromMain: { $0 }, toMain: { $0 }
+        )
+        let rows = ReaderParallelRows.rows(
+            main: [verse(10), verse(12)],
+            companions: [identity, alsoHasEleven, leavesItOut]
+        )
+
+        #expect(rows.map(\.number) == [10, 11, 12])
+        #expect(rows[1].main == nil)
+        #expect(rows[1].companions.map { $0?.number } == [11, 11, nil])
+        #expect(rows[2].companions.map { $0?.number } == [12, 12, 12])
+        #expect(rows.allSatisfy { $0.companions.count == 3 })
+    }
 }

@@ -488,16 +488,33 @@ public struct ReaderMarginMarks: Equatable, Sendable {
 }
 
 /// One row of the side-by-side reader: a verse, in the translation being read
-/// and in the companion beside it, where each has it.
+/// and in each companion beside it, where each has it.
 public struct ReaderParallelRow: Identifiable, Equatable, Sendable {
     public let number: Int
-    /// The verse both columns speak to: what the row scrolls to, and what
+    /// The verse every column speaks to: what the row scrolls to, and what
     /// selecting it or opening its notes acts on.
     public let reference: Int
     public let main: LampVerse?
-    public let companion: LampVerse?
+    /// One for each companion, in the order of their columns.
+    public let companions: [LampVerse?]
 
     public var id: Int { reference }
+    /// The first companion's verse.
+    public var companion: LampVerse? { companions.first ?? nil }
+}
+
+/// One companion's verses for a chapter, and how its numbering and the
+/// reading's convert into each other: nil where the other has no such verse.
+public struct ReaderParallelCompanion {
+    public let verses: [LampVerse]
+    public let fromMain: (Int) -> Int?
+    public let toMain: (Int) -> Int?
+
+    public init(verses: [LampVerse], fromMain: @escaping (Int) -> Int?, toMain: @escaping (Int) -> Int?) {
+        self.verses = verses
+        self.fromMain = fromMain
+        self.toMain = toMain
+    }
 }
 
 public enum ReaderParallelRows {
@@ -507,52 +524,64 @@ public enum ReaderParallelRows {
         rows(main: main, companion: companion, mainToCompanion: { $0 }, companionToMain: { $0 })
     }
 
-    /// Pairs a chapter of the translation being read with the companion verses
-    /// that are the same verses, however each translation numbers them: a
-    /// psalm whose title one of them counts as verse 1, a doxology one of them
-    /// places in another chapter. The two functions convert a reference from
-    /// one translation's numbering to the other's, nil where it has no such
-    /// verse.
-    ///
-    /// Each verse of the chapter is a row, in its order, beside the companion
-    /// verse it converts to. A companion verse that converts into this chapter
-    /// to a verse it leaves out gets a row of its own, the other side empty:
-    /// closing the gap would pull every row after it out of line, and the gap
-    /// is itself a difference between the two. Companion verses that convert
-    /// to another chapter of the translation being read belong to that
-    /// chapter's rows.
+    /// Pairs a chapter of the translation being read with one companion.
     public static func rows(
         main: [LampVerse],
         companion: [LampVerse],
-        mainToCompanion: (Int) -> Int?,
-        companionToMain: (Int) -> Int?
+        mainToCompanion: @escaping (Int) -> Int?,
+        companionToMain: @escaping (Int) -> Int?
     ) -> [ReaderParallelRow] {
-        let companionByID = Dictionary(companion.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let mainIDs = Set(main.map(\.id))
-        var paired = Set<Int>()
-        var rows: [ReaderParallelRow] = main.map { verse in
-            let partner = mainToCompanion(verse.id).flatMap { companionByID[$0] }
-            if let partner { paired.insert(partner.id) }
-            return ReaderParallelRow(number: verse.number, reference: verse.id, main: verse, companion: partner)
+        rows(main: main, companions: [
+            ReaderParallelCompanion(verses: companion, fromMain: mainToCompanion, toMain: companionToMain),
+        ])
+    }
+
+    /// Pairs a chapter of the translation being read with each companion's
+    /// verses that are the same verses, however each translation numbers them:
+    /// a psalm whose title one of them counts as verse 1, a doxology one of
+    /// them places in another chapter.
+    ///
+    /// Each verse of the chapter is a row, in its order, beside the verse each
+    /// companion's numbering converts it to. A companion verse that converts
+    /// into this chapter to a verse it leaves out gets a row of its own, the
+    /// reading's side empty, shared with any other companion that has that
+    /// verse: closing the gap would pull every row after it out of line, and
+    /// the gap is itself a difference between them. Companion verses that
+    /// convert to another chapter of the reading belong to that chapter's rows.
+    public static func rows(main: [LampVerse], companions: [ReaderParallelCompanion]) -> [ReaderParallelRow] {
+        guard let chapter = main.first.map({ $0.id / 1_000 })
+            ?? companions.lazy.compactMap({ $0.verses.first }).first.map({ $0.id / 1_000 })
+        else { return [] }
+        let mainByID = Dictionary(main.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var columns: [Int: [LampVerse?]] = [:]
+        for verse in main {
+            columns[verse.id] = Array(repeating: nil, count: companions.count)
         }
-        // The chapter the rows stand in, by its first verse.
-        guard let chapter = main.first.map({ $0.id / 1_000 }) ?? companion.first.map({ $0.id / 1_000 }) else {
-            return []
-        }
-        for verse in companion where !paired.contains(verse.id) {
-            guard let reference = companionToMain(verse.id),
-                  reference / 1_000 == chapter,
-                  !mainIDs.contains(reference) else { continue }
-            rows.append(ReaderParallelRow(
-                number: reference % 1_000,
-                reference: reference,
-                main: nil,
-                companion: verse
-            ))
+        for (index, companion) in companions.enumerated() {
+            let byID = Dictionary(companion.verses.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            var paired = Set<Int>()
+            for verse in main {
+                guard let partner = companion.fromMain(verse.id).flatMap({ byID[$0] }) else { continue }
+                columns[verse.id]?[index] = partner
+                paired.insert(partner.id)
+            }
+            for verse in companion.verses where !paired.contains(verse.id) {
+                guard let reference = companion.toMain(verse.id),
+                      reference / 1_000 == chapter,
+                      mainByID[reference] == nil else { continue }
+                columns[reference, default: Array(repeating: nil, count: companions.count)][index] = verse
+            }
         }
         // Verses in reading order; a row standing for a verse the reading
         // leaves out takes the place its number gives it.
-        return rows.sorted { $0.reference < $1.reference }
+        return columns.keys.sorted().map { reference in
+            ReaderParallelRow(
+                number: reference % 1_000,
+                reference: reference,
+                main: mainByID[reference],
+                companions: columns[reference] ?? []
+            )
+        }
     }
 
     /// One translation's highlights, by verse.
