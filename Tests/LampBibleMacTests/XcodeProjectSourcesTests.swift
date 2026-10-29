@@ -163,4 +163,80 @@ struct XcodeProjectSourcesTests {
             )
         }
     }
+
+    /// The app's version never changes, so the only way to tell one installed
+    /// copy from another is the commits its build wrote into its Info.plist.
+    /// The phase has to belong to the app target, after the helper is embedded,
+    /// or a shipped app is back to needing a note beside it.
+    @Test func theAppNamesTheSourcesItWasBuiltFrom() throws {
+        let project = try String(
+            contentsOf: repositoryRoot
+                .appendingPathComponent("Lamp Bible.xcodeproj/project.pbxproj"),
+            encoding: .utf8
+        )
+        let target = try #require(project.range(of: "D10000000000000000000001 /* Lamp Bible */ = {"))
+        let phases = project[target.upperBound...].prefix(while: { $0 != ")" })
+        let lastPhase = phases.split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .last { !$0.isEmpty }
+        #expect(lastPhase == "C10000000000000000000007 /* Name the Build's Sources */,")
+
+        let declaration = try #require(
+            project.range(of: "C10000000000000000000007 /* Name the Build's Sources */ = {")
+        )
+        // To the object's end, `};`: its script holds braces of its own.
+        let rest = project[declaration.upperBound...]
+        let end = try #require(rest.range(of: "};"))
+        #expect(rest[..<end.lowerBound].contains("scripts/stamp-build-sources.sh"))
+    }
+
+    /// Run as Xcode runs it, against a plist of its own, twice: the second run
+    /// replaces what the first wrote, as every incremental build does.
+    @Test func theStampNamesThisCheckout() throws {
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("stamp-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let plist = scratch.appendingPathComponent("Info.plist")
+        try PropertyListSerialization.data(
+            fromPropertyList: ["CFBundleIdentifier": "test"], format: .xml, options: 0
+        ).write(to: plist)
+
+        for _ in 0..<2 {
+            let stamp = Process()
+            stamp.executableURL = repositoryRoot
+                .appendingPathComponent("scripts/stamp-build-sources.sh")
+            stamp.environment = [
+                "PATH": "/usr/bin:/bin",
+                "PROJECT_DIR": repositoryRoot.path,
+                "TARGET_BUILD_DIR": scratch.path,
+                "INFOPLIST_PATH": "Info.plist",
+            ]
+            try stamp.run()
+            stamp.waitUntilExit()
+            #expect(stamp.terminationStatus == 0)
+        }
+
+        let written = try #require(
+            PropertyListSerialization.propertyList(from: Data(contentsOf: plist), format: nil)
+                as? [String: Any]
+        )
+        let head = Process()
+        let output = Pipe()
+        head.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        head.arguments = ["-C", repositoryRoot.path, "rev-parse", "HEAD"]
+        head.standardOutput = output
+        try head.run()
+        head.waitUntilExit()
+        let commit = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let mac = try #require(written["LampMacCommit"] as? String)
+        #expect(mac == commit || mac == commit + "-modified")
+        let core = try #require(written["LampCoreCommit"] as? String)
+        #expect(core == "unknown" || core.wholeMatch(of: #/[0-9a-f]{40}(-modified)?/#) != nil)
+        let archive = try #require(written["LampBundledModulesSHA256"] as? String)
+        #expect(archive == "missing" || archive.wholeMatch(of: #/[0-9a-f]{64}/#) != nil)
+        #expect(written["CFBundleIdentifier"] as? String == "test", "the rest of the plist is kept")
+    }
 }

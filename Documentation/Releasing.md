@@ -125,11 +125,19 @@ codesign --verify --deep --strict --verbose=2 "$APP"
 codesign -dvv "$APP" 2>&1 | grep -E "Authority=Developer ID Application|flags=.*runtime"
 lipo -archs "$APP/Contents/MacOS/Lamp Bible"          # expect: x86_64 arm64
 /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" -c "Print :CFBundleVersion" "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Print :LampMacCommit" -c "Print :LampCoreCommit" -c "Print :LampBundledModulesSHA256" "$APP/Contents/Info.plist"
 ```
 
 The first two lines must show the Developer ID authority and the hardened runtime. If `lipo`
 shows only `arm64`, the site's "Apple silicon and Intel" claim is wrong for this build — fix the
 build or `macRelease.architectures` before publishing.
+
+The last line is what the build was made from, written by `scripts/stamp-build-sources.sh` in the
+app target's last build phase: this repository's commit, the `lamp-bible-core` commit it built
+against, and the SHA-256 of the bundled modules archive. A commit ending in `-modified` means its
+checkout had uncommitted changes, so the build cannot be made again from the commit alone; a
+release should show neither. The same three keys identify any local build, including an install
+to `~/Applications`, since the version itself is the same in every build.
 
 ### 4. Notarize and staple the app
 

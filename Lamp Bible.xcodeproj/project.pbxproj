@@ -461,6 +461,7 @@
 				C10000000000000000000001 /* Frameworks */,
 				C10000000000000000000002 /* Resources */,
 				C10000000000000000000006 /* Embed Helper Tools */,
+				C10000000000000000000007 /* Name the Build's Sources */,
 			);
 			buildRules = (
 			);
@@ -559,6 +560,29 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		C10000000000000000000007 /* Name the Build's Sources */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)",
+			);
+			name = "Name the Build's Sources";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${PROJECT_DIR}/scripts/stamp-build-sources.sh\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		C10000000000000000000003 /* Sources */ = {
