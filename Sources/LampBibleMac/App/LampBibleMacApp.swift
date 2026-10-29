@@ -206,7 +206,7 @@ private struct StandaloneBookReaderView: View {
     }
 
     private func openInReader(_ reference: Int) {
-        model.openReference(reference)
+        model.openReference(reference, translationID: nil)
         openWindow(id: "reader")
     }
 }

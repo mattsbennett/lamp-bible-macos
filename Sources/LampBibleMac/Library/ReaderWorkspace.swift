@@ -43,12 +43,13 @@ final class ReaderWorkspace: ObservableObject {
         books.first { $0.id == selectedBookNumber }
     }
 
-    /// Hands the workspace the library, and the place to open if it has none
-    /// of its own yet.
+    /// Hands the workspace the library, and opens the window's place: the one
+    /// given, or else the library's choice.
     ///
-    /// Called when the window appears rather than at init: a `@StateObject` is
-    /// made before the view has an environment, so there is nothing to read
-    /// through at that point.
+    /// Called once the library has been read rather than at init: a
+    /// `@StateObject` is made before the view has an environment, and a
+    /// chapter read before the library knows its note and highlight modules
+    /// would come without them.
     func start(model: LibraryModel, at location: ReaderLocation?) {
         guard self.model == nil else { return }
         self.model = model
@@ -59,6 +60,8 @@ final class ReaderWorkspace: ObservableObject {
                 chapter: location.chapterNumber,
                 verse: nil
             )
+        } else {
+            adoptIfUnplaced()
         }
     }
 
@@ -70,13 +73,16 @@ final class ReaderWorkspace: ObservableObject {
     /// that has not been anywhere follows it. A window already reading
     /// something ignores this, which is the whole point of the window owning
     /// its place.
-    func adoptIfUnplaced(_ location: ReaderLocation?) {
-        guard selectedTranslationID == nil, let location else { return }
+    func adoptIfUnplaced() {
+        guard let model, selectedTranslationID == nil,
+              let translationID = model.selectedTranslationID else { return }
+        // The book may be unknown, on a first launch: the translation's first
+        // is opened then.
         open(
-            translationID: location.translationID,
-            book: location.bookNumber,
-            chapter: location.chapterNumber,
-            verse: location.verseReference
+            translationID: translationID,
+            book: model.selectedBookNumber,
+            chapter: model.selectedChapterNumber,
+            verse: model.selectedVerseReference
         )
     }
 
@@ -239,6 +245,12 @@ final class ReaderWorkspace: ObservableObject {
         apply(location)
     }
 
+    /// Goes to a tab's place. Changing tabs is not a move to record: back
+    /// retraces where this window was taken, not which tabs were chosen.
+    func openTab(at location: ReaderLocation) {
+        apply(location)
+    }
+
     func clearHistory() {
         history.clear(keeping: currentLocation)
     }
@@ -294,7 +306,12 @@ final class ReaderWorkspace: ObservableObject {
         // should reach the rest of the app at once, not a chapter later.
         mirror()
         chapterTask = Task {
-            defer { if !Task.isCancelled { isLoadingChapter = false } }
+            defer {
+                if !Task.isCancelled {
+                    isLoadingChapter = false
+                    model.markInitialContentLoaded()
+                }
+            }
             do {
                 let loadedBooks = try await model.library.translationBooks(moduleID: translationID)
                 guard !Task.isCancelled, selectedTranslationID == translationID else { return }

@@ -155,12 +155,19 @@ final class LibrarySyncController: ObservableObject {
         }
     }
 
-    func syncAutomaticallyIfNeeded(library: LampLibrary) async {
+    /// Syncs once per launch, if sync is on, and says whether this call ran a
+    /// pass — finished or not, since a pass that failed partway may still
+    /// have brought something in. A window that waited on another's pass,
+    /// or found it done, ran none.
+    @discardableResult
+    func syncAutomaticallyIfNeeded(library: LampLibrary) async -> Bool {
         guard !isSyncing,
               defaults.bool(forKey: "sync.automatic"),
-              provider != .off else { return }
+              provider != .off else { return false }
+        var ranPass = false
         do {
             try await automaticSync.run {
+                ranPass = true
                 guard await self.sync(library: library) else {
                     throw AutomaticSyncError.failed
                 }
@@ -168,6 +175,7 @@ final class LibrarySyncController: ObservableObject {
         } catch {
             // Keep the gate open; sync(library:) reports operational errors.
         }
+        return ranPass
     }
 
     /// Sync this library.

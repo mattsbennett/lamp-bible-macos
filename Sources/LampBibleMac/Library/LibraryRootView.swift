@@ -138,9 +138,11 @@ struct LibraryRootView: View {
             }
             model.start()
         }
+        .onChange(of: model.hasReadLibrary, initial: true) { _, read in
+            if read { restoreReaderTabs() }
+        }
         .onChange(of: model.hasLoadedInitialContent, initial: true) { _, loaded in
             guard loaded else { return }
-            restoreReaderTabs()
             // A writing editor waiting from the start, so the first writing
             // opened shows at once rather than after its web view loads.
             TipTapEditorPool.shared.prewarm(libraryRootURL: model.library.rootURL, compact: false)
@@ -154,27 +156,25 @@ struct LibraryRootView: View {
         }
         .environmentObject(workspace)
         .task {
-            workspace.start(
-                model: model,
-                at: model.takePendingReaderLocation() ?? model.readerLocation
-            )
-            model.activeReader = workspace
-            await syncController.syncAutomaticallyIfNeeded(library: model.library)
-            model.refresh()
+            // Read again only when a pass ran, since only then can anything
+            // have changed underneath.
+            if await syncController.syncAutomaticallyIfNeeded(library: model.library) {
+                model.refresh()
+            }
         }
         // The library chooses a translation when it has read itself and this
-        // window has nowhere of its own — a first launch, or the first
-        // translation installed. A window already reading something ignores
+        // window has nowhere of its own — the first translation installed
+        // into an empty library. A window already reading something ignores
         // it.
-        .onChange(of: model.selectedTranslationID, initial: true) { _, _ in
-            workspace.adoptIfUnplaced(model.readerLocation)
+        .onChange(of: model.selectedTranslationID) { _, _ in
+            workspace.adoptIfUnplaced()
         }
         .onChange(of: controlActiveState) { _, state in
             // The reader last used is the one other windows mean by "the
             // current verse". Set as this window comes forward rather than as
             // another goes back, so closing one does not leave the library
             // pointing at a window that has gone.
-            guard state == .key else { return }
+            guard state == .key, hasRestoredReaderTabs else { return }
             model.activeReader = workspace
         }
         // Publishing what is done here, without being asked for it. Checking
@@ -314,7 +314,7 @@ struct LibraryRootView: View {
                 readerSidebarClosedOutOfSight = false
             }
         }
-        .onChange(of: model.readerLocation) { _, location in
+        .onChange(of: workspace.currentLocation) { _, location in
             if hasRestoredReaderTabs, let location {
                 readerTabs.updateSelected(location: location)
             }
@@ -450,8 +450,11 @@ struct LibraryRootView: View {
         }
     }
 
+    /// Opens this window's tabs, and its reader at the tab chosen in them,
+    /// once the library has been read: which translations remain, for the
+    /// tabs, and which note and highlight modules the chapter is read with.
     private func restoreReaderTabs() {
-        guard !hasRestoredReaderTabs, model.hasLoadedInitialContent, !model.isRefreshing else { return }
+        guard !hasRestoredReaderTabs, model.hasReadLibrary, !model.isRefreshing else { return }
         // A failed library load must not replace saved tabs with an empty session.
         guard model.errorMessage == nil || !model.modules.isEmpty else { return }
         readerTabs = ReaderTabSessionStore.load(
@@ -460,9 +463,12 @@ struct LibraryRootView: View {
             fallbackLocation: model.readerLocation
         )
         hasRestoredReaderTabs = true
-        if let location = readerTabs.selectedTab?.location, location != model.readerLocation {
-            model.openReaderTabLocation(location)
-        }
+        // A place asked for while no reader was open goes in the chosen tab.
+        workspace.start(
+            model: model,
+            at: model.takePendingReaderLocation() ?? readerTabs.selectedTab?.location
+        )
+        model.activeReader = workspace
     }
 
     private func presentNewReaderTabChooser() {
@@ -471,22 +477,22 @@ struct LibraryRootView: View {
     }
 
     private func duplicateCurrentReaderTab() {
-        guard let location = model.readerLocation else { return }
+        guard let location = workspace.currentLocation else { return }
         openReaderTab(at: location)
     }
 
     private func openReaderTab(at location: ReaderLocation) {
-        readerTabs.updateSelected(location: model.readerLocation)
+        readerTabs.updateSelected(location: workspace.currentLocation)
         readerTabs.add(location: location)
-        model.openReaderTabLocation(location)
+        workspace.openTab(at: location)
         selection = .section(.reader)
     }
 
     private func selectReaderTab(_ id: UUID) {
         guard id != readerTabs.selectedID else { return }
-        readerTabs.updateSelected(location: model.readerLocation)
+        readerTabs.updateSelected(location: workspace.currentLocation)
         if let location = readerTabs.select(id) {
-            model.openReaderTabLocation(location)
+            workspace.openTab(at: location)
         }
         selection = .section(.reader)
     }
@@ -494,10 +500,10 @@ struct LibraryRootView: View {
     private func closeReaderTab(_ id: UUID) {
         guard readerTabs.tabs.count > 1 else { return }
         let wasSelected = readerTabs.selectedID == id
-        if wasSelected { readerTabs.updateSelected(location: model.readerLocation) }
+        if wasSelected { readerTabs.updateSelected(location: workspace.currentLocation) }
         let destination = readerTabs.close(id)
         if wasSelected, let destination {
-            model.openReaderTabLocation(destination)
+            workspace.openTab(at: destination)
         }
     }
 
@@ -518,7 +524,7 @@ struct LibraryRootView: View {
     }
 
     private func openAllPlanReadings(_ mode: PlanReadingMode) {
-        readerTabs.updateSelected(location: model.readerLocation)
+        readerTabs.updateSelected(location: workspace.currentLocation)
         var lastLocation: ReaderLocation?
         var lastReadingID = mode.activeReadingID
         for reading in mode.readings {
@@ -531,7 +537,7 @@ struct LibraryRootView: View {
         var activatedMode = mode
         activatedMode.activeReadingID = lastReadingID
         planReadingMode = activatedMode
-        model.openReaderTabLocation(lastLocation)
+        workspace.openTab(at: lastLocation)
         selection = .section(.reader)
     }
 
@@ -589,7 +595,7 @@ struct LibraryRootView: View {
                 ReaderTabBar(
                     tabs: readerTabs.tabs,
                     selectedID: readerTabs.selectedID,
-                    currentLocation: model.readerLocation,
+                    currentLocation: workspace.currentLocation,
                     showingNewTab: $showingNewReaderTab,
                     select: selectReaderTab,
                     close: closeReaderTab,

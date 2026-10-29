@@ -99,6 +99,11 @@ final class LibraryModel: ObservableObject {
     @Published private(set) var books: [LampTranslationBook] = []
     @Published private(set) var chapter: LampChapter?
     @Published private(set) var isRefreshing = false
+    /// False until the library has been read once: which translations there
+    /// are, and which note and highlight modules a chapter is read with. A
+    /// window opens its first chapter after this, so that chapter is read
+    /// once and whole.
+    @Published private(set) var hasReadLibrary = false
     /// False until the library has been read and the opening chapter is on screen,
     /// so the window can hold a splash rather than assemble itself around empty
     /// states. One-way: later refreshes never send the interface away again.
@@ -113,7 +118,6 @@ final class LibraryModel: ObservableObject {
     /// button started it to show. Installing used to succeed in silence.
     @Published var moduleInstallMessage: String?
     @Published private(set) var isImportingStudyData = false
-    @Published private(set) var isLoadingChapter = false
     @Published private(set) var isSearching = false
     @Published private(set) var searchResults: [LampTranslationSearchResult] = []
     @Published private(set) var moduleSearchResults: [LampModuleSearchResult] = []
@@ -138,13 +142,11 @@ final class LibraryModel: ObservableObject {
     @Published private(set) var selectedChapterNumber = 1
 
     let library: LampLibrary
-    private var chapterTask: Task<Void, Never>?
     private var searchTask: Task<Void, Never>?
     private var moduleSearchTask: Task<Void, Never>?
     private var searchToken: UUID?
     private let lexiconMappingStore: LexiconMappingStore
     private let defaults: UserDefaults
-    private var navigationHistory: ReaderNavigationHistory
     @Published private(set) var hiddenModuleIDs: Set<String>
 
     var translations: [LampInstalledModule] {
@@ -187,27 +189,6 @@ final class LibraryModel: ObservableObject {
         books.first { $0.id == selectedBookNumber }
     }
 
-    var canNavigateBackward: Bool {
-        guard let selectedBookNumber,
-              let bookIndex = books.firstIndex(where: { $0.id == selectedBookNumber }) else {
-            return false
-        }
-        return selectedChapterNumber > 1 || bookIndex > books.startIndex
-    }
-
-    var canNavigateForward: Bool {
-        guard let selectedBook,
-              let bookIndex = books.firstIndex(where: { $0.id == selectedBook.id }) else {
-            return false
-        }
-        return selectedChapterNumber < selectedBook.chapterCount || bookIndex < books.index(before: books.endIndex)
-    }
-
-    var canGoBackInHistory: Bool { navigationHistory.canGoBack }
-    var canGoForwardInHistory: Bool { navigationHistory.canGoForward }
-    var recentReaderLocations: [ReaderLocation] {
-        Array(navigationHistory.backStack.reversed().prefix(20))
-    }
     var readerLocation: ReaderLocation? { currentReaderLocation }
 
     init(
@@ -232,12 +213,6 @@ final class LibraryModel: ObservableObject {
         self.library = resolvedLibrary
         self.lexiconMappingStore = LexiconMappingStore(library: resolvedLibrary)
         self.defaults = defaults
-        if let historyData = defaults.data(forKey: "reader.navigationHistory"),
-           let history = try? JSONDecoder().decode(ReaderNavigationHistory.self, from: historyData) {
-            navigationHistory = history
-        } else {
-            navigationHistory = ReaderNavigationHistory()
-        }
         hiddenModuleIDs = Set(defaults.stringArray(forKey: "modules.hiddenIDs") ?? [])
         selectedTranslationID = defaults.string(forKey: "reader.translationID")
         let storedBook = defaults.integer(forKey: "reader.bookNumber")
@@ -247,14 +222,15 @@ final class LibraryModel: ObservableObject {
     }
 
     deinit {
-        chapterTask?.cancel()
         searchTask?.cancel()
         moduleSearchTask?.cancel()
     }
 
+    /// Reads the library for the first time. No reader is open yet to read
+    /// a chapter again: each window reads its own once this is done.
     func start() {
         guard modules.isEmpty, !isRefreshing else { return }
-        Task { await refreshLibrary() }
+        Task { await refreshLibrary(reloadingReader: false) }
     }
 
     func refresh() {
@@ -268,18 +244,20 @@ final class LibraryModel: ObservableObject {
             hiddenModuleIDs.remove(moduleID)
         }
         defaults.set(Array(hiddenModuleIDs).sorted(), forKey: "modules.hiddenIDs")
-        if hidden, selectedTranslationID == moduleID, let replacement = translations.first {
-            selectTranslation(replacement.id)
+        if hidden, activeReader?.selectedTranslationID == moduleID, let replacement = translations.first {
+            activeReader?.selectTranslation(replacement.id)
         }
     }
 
     func setDefaultTranslation(_ moduleID: String?) {
         defaults.set(moduleID, forKey: "reader.defaultTranslationID")
-        if let moduleID { selectTranslation(moduleID) }
+        if let moduleID { activeReader?.selectTranslation(moduleID) }
     }
 
+    /// Reads the active reader's chapter again, for notes and highlights
+    /// just imported or edited.
     func reloadCurrentChapterStudyData() {
-        loadCurrentChapter()
+        activeReader?.reload()
     }
 
     /// Installs finished `.lamp` modules, and says what it installed.
@@ -521,93 +499,6 @@ final class LibraryModel: ObservableObject {
         }
     }
 
-    func selectTranslation(_ moduleID: String) {
-        guard selectedTranslationID != moduleID || books.isEmpty else { return }
-        selectedTranslationID = moduleID
-        selectedBookNumber = nil
-        selectedChapterNumber = 1
-        selectedVerseReference = nil
-        persistLocation()
-        loadTranslation(moduleID)
-    }
-
-    func selectBook(_ bookNumber: Int) {
-        guard selectedBookNumber != bookNumber || chapter == nil else { return }
-        selectedBookNumber = bookNumber
-        selectedChapterNumber = 1
-        selectedVerseReference = nil
-        recordCurrentLocation()
-        persistLocation()
-        loadCurrentChapter()
-    }
-
-    func selectChapter(_ chapterNumber: Int) {
-        guard chapterNumber > 0 else { return }
-        selectedChapterNumber = chapterNumber
-        selectedVerseReference = nil
-        recordCurrentLocation()
-        persistLocation()
-        loadCurrentChapter()
-    }
-
-    func selectPassage(
-        translationID: String,
-        bookNumber: Int,
-        chapterNumber: Int
-    ) {
-        guard !translationID.isEmpty, bookNumber > 0, chapterNumber > 0 else { return }
-        guard selectedTranslationID != translationID
-                || selectedBookNumber != bookNumber
-                || selectedChapterNumber != chapterNumber else { return }
-
-        let translationChanged = selectedTranslationID != translationID
-        selectedTranslationID = translationID
-        selectedBookNumber = bookNumber
-        selectedChapterNumber = chapterNumber
-        selectedVerseReference = nil
-        recordCurrentLocation()
-        persistLocation()
-
-        if translationChanged || !books.contains(where: { $0.id == bookNumber }) {
-            loadTranslation(translationID)
-        } else {
-            loadCurrentChapter()
-        }
-    }
-
-    func navigateBackward() {
-        guard let selectedBookNumber,
-              let bookIndex = books.firstIndex(where: { $0.id == selectedBookNumber }) else { return }
-        if selectedChapterNumber > 1 {
-            selectedChapterNumber -= 1
-        } else if bookIndex > books.startIndex {
-            let previousBook = books[books.index(before: bookIndex)]
-            self.selectedBookNumber = previousBook.id
-            selectedChapterNumber = previousBook.chapterCount
-        }
-        selectedVerseReference = nil
-        recordCurrentLocation()
-        persistLocation()
-        loadCurrentChapter()
-    }
-
-    func navigateForward() {
-        guard let selectedBookNumber,
-              let bookIndex = books.firstIndex(where: { $0.id == selectedBookNumber }) else { return }
-        let book = books[bookIndex]
-        if selectedChapterNumber < book.chapterCount {
-            selectedChapterNumber += 1
-        } else if bookIndex < books.index(before: books.endIndex) {
-            let nextBook = books[books.index(after: bookIndex)]
-            self.selectedBookNumber = nextBook.id
-            selectedChapterNumber = 1
-        }
-        selectedVerseReference = nil
-        recordCurrentLocation()
-        persistLocation()
-        loadCurrentChapter()
-    }
-
     func search(_ query: String, translationID: String? = nil) {
         searchTask?.cancel()
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -701,16 +592,6 @@ final class LibraryModel: ObservableObject {
             }
             if !Task.isCancelled { isModuleSearching = false }
         }
-    }
-
-    func openSearchResult(_ result: LampTranslationSearchResult) {
-        selectedTranslationID = result.translationID
-        selectedBookNumber = result.bookNumber
-        selectedChapterNumber = result.chapterNumber
-        selectedVerseReference = result.reference
-        recordCurrentLocation()
-        persistLocation()
-        loadTranslation(result.translationID)
     }
 
     func focusVerse(_ reference: Int?) {
@@ -918,48 +799,7 @@ final class LibraryModel: ObservableObject {
     }
 
     func openReading(_ reading: LampPlanReading) {
-        openReference(reading.startReference)
-    }
-
-    func openReference(_ encodedReference: Int) {
-        guard let translationID = selectedTranslationID ?? translations.first?.id else {
-            errorMessage = "Install a translation before opening this scripture reference."
-            return
-        }
-        let reference = LampBibleReferenceFormatter.components(of: encodedReference)
-        selectedTranslationID = translationID
-        selectedBookNumber = reference.book
-        selectedChapterNumber = reference.chapter
-        selectedVerseReference = encodedReference
-        recordCurrentLocation()
-        persistLocation()
-        loadTranslation(translationID)
-    }
-
-    func goBackInHistory() {
-        guard let location = navigationHistory.goBack() else { return }
-        applyHistoryLocation(location)
-    }
-
-    func goForwardInHistory() {
-        guard let location = navigationHistory.goForward() else { return }
-        applyHistoryLocation(location)
-    }
-
-    func openHistoryLocation(_ location: ReaderLocation) {
-        navigationHistory.visit(location)
-        applyHistoryLocation(location)
-    }
-
-    /// Restores a tab without treating the tab switch as a new reading-history
-    /// visit. Navigation performed inside the tab continues to use normal history.
-    func openReaderTabLocation(_ location: ReaderLocation) {
-        applyHistoryLocation(location)
-    }
-
-    func clearNavigationHistory() {
-        navigationHistory.clear(keeping: currentReaderLocation)
-        persistNavigationHistory()
+        openReference(reading.startReference, translationID: nil)
     }
 
     func setPlanSelected(_ planID: String, selected: Bool) {
@@ -1100,7 +940,11 @@ final class LibraryModel: ObservableObject {
         }
     }
 
-    private func refreshLibrary() async {
+    /// Reads what is installed, and chooses the translation a window with
+    /// nowhere of its own opens. After the first read the active reader
+    /// reads its chapter again, since what changed may be its notes and
+    /// highlights.
+    private func refreshLibrary(reloadingReader: Bool = true) async {
         isRefreshing = true
         do {
             try LampSyncSettingsCommit.recover(from: library.rootURL, to: defaults)
@@ -1117,16 +961,13 @@ final class LibraryModel: ObservableObject {
             let completed = try await library.completedReadings(year: planProgressYear)
             completedReadingIDs = Set(completed.map(\.id))
             let availableTranslations = translations
-            if let selectedTranslationID,
-               availableTranslations.contains(where: { $0.id == selectedTranslationID }) {
-                loadTranslation(selectedTranslationID)
+            if availableTranslations.contains(where: { $0.id == selectedTranslationID }) {
+                // Still installed: kept.
             } else if let preferred = defaults.string(forKey: "reader.defaultTranslationID"),
                       availableTranslations.contains(where: { $0.id == preferred }) {
                 selectedTranslationID = preferred
-                loadTranslation(preferred)
             } else if let first = availableTranslations.first {
                 selectedTranslationID = first.id
-                loadTranslation(first.id)
             } else {
                 selectedTranslationID = nil
                 selectedBookNumber = nil
@@ -1139,62 +980,21 @@ final class LibraryModel: ObservableObject {
                 // Nothing to open — an empty library is a loaded library.
                 markInitialContentLoaded()
             }
+            if reloadingReader { activeReader?.reload() }
         } catch {
             errorMessage = error.localizedDescription
             markInitialContentLoaded()
         }
+        hasReadLibrary = true
         isRefreshing = false
     }
 
-    /// Marked even when a chapter load is cancelled or fails: a splash that never
-    /// leaves is worse than an interface that opens onto an error.
-    private func markInitialContentLoaded() {
+    /// Marked by the reader when its first chapter is in, even when that read
+    /// fails: a splash that never leaves is worse than an interface that
+    /// opens onto an error.
+    func markInitialContentLoaded() {
         guard !hasLoadedInitialContent else { return }
         hasLoadedInitialContent = true
-    }
-
-    private func loadTranslation(_ moduleID: String) {
-        chapterTask?.cancel()
-        isLoadingChapter = true
-        chapterTask = Task {
-            do {
-                let loadedBooks = try await library.translationBooks(moduleID: moduleID)
-                guard !Task.isCancelled, selectedTranslationID == moduleID else { return }
-                books = loadedBooks
-                let selected = loadedBooks.first { $0.id == selectedBookNumber } ?? loadedBooks.first
-                selectedBookNumber = selected?.id
-                if let selected {
-                    selectedChapterNumber = min(max(selectedChapterNumber, 1), selected.chapterCount)
-                    recordCurrentLocation()
-                    try await loadChapter(moduleID: moduleID, book: selected.id, chapter: selectedChapterNumber)
-                } else {
-                    chapter = nil
-                }
-            } catch {
-                guard !Task.isCancelled else { return }
-                errorMessage = error.localizedDescription
-                chapter = nil
-            }
-            if !Task.isCancelled { isLoadingChapter = false }
-            markInitialContentLoaded()
-        }
-    }
-
-    private func loadCurrentChapter() {
-        guard let moduleID = selectedTranslationID, let book = selectedBookNumber else { return }
-        chapterTask?.cancel()
-        isLoadingChapter = true
-        chapterTask = Task {
-            do {
-                try await loadChapter(moduleID: moduleID, book: book, chapter: selectedChapterNumber)
-            } catch {
-                guard !Task.isCancelled else { return }
-                errorMessage = error.localizedDescription
-                chapter = nil
-            }
-            if !Task.isCancelled { isLoadingChapter = false }
-            markInitialContentLoaded()
-        }
     }
 
     /// Reads everything a reader shows for one chapter, and changes nothing.
@@ -1252,21 +1052,6 @@ final class LibraryModel: ObservableObject {
             installedHighlights: installedHighlights,
             installedNotes: installedNotes
         )
-    }
-
-    private func loadChapter(moduleID: String, book: Int, chapter: Int) async throws {
-        let contents = try await chapterContents(
-            translationID: moduleID, book: book, chapter: chapter
-        )
-        // The reader may have moved on while this was being read, in which
-        // case these are the wrong chapter's contents and showing them would
-        // put one chapter's highlights over another's words.
-        guard !Task.isCancelled,
-              selectedTranslationID == moduleID,
-              selectedBookNumber == book,
-              selectedChapterNumber == chapter else { return }
-        apply(contents)
-        persistLocation()
     }
 
     /// The reader window being used, which is the one other windows mean.
@@ -1364,28 +1149,6 @@ final class LibraryModel: ObservableObject {
             chapterNumber: selectedChapterNumber,
             verseReference: selectedVerseReference
         )
-    }
-
-    private func recordCurrentLocation() {
-        guard let location = currentReaderLocation else { return }
-        navigationHistory.visit(location)
-        persistNavigationHistory()
-    }
-
-    private func applyHistoryLocation(_ location: ReaderLocation) {
-        selectedTranslationID = location.translationID
-        selectedBookNumber = location.bookNumber
-        selectedChapterNumber = location.chapterNumber
-        selectedVerseReference = location.verseReference
-        persistNavigationHistory()
-        persistLocation()
-        loadTranslation(location.translationID)
-    }
-
-    private func persistNavigationHistory() {
-        if let data = try? JSONEncoder().encode(navigationHistory) {
-            defaults.set(data, forKey: "reader.navigationHistory")
-        }
     }
 
     private func visibleModules(kind: LampModuleKind) -> [LampInstalledModule] {
