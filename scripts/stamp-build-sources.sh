@@ -50,6 +50,10 @@ set_string() {
         || /usr/libexec/PlistBuddy -c "Add :$1 string $2" "$plist"
 }
 
+# Bare assignments on purpose: `exit 1` in source_of leaves only its
+# subshell, and set -e acts on that only where the substitution's status is
+# the command's. Passed straight to set_string, the failure would be lost and
+# an empty stamp written.
 mac=$(source_of "$PROJECT_DIR")
 core=$(source_of "${sibling}/lamp-bible-core")
 
