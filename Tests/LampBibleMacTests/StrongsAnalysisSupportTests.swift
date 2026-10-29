@@ -615,3 +615,28 @@ struct StrongsChartStyleTests {
         #expect(LampStrongsChartStyle.grid.needsBooks)
     }
 }
+
+/// Which books the shape spans.
+struct StrongsShapeRangeTests {
+    /// A Greek key cannot occur in the Old Testament, so padding to all
+    /// sixty-six spends two thirds of the chart on guaranteed emptiness.
+    @Test func agreekKeyIsShapedOverTheNewTestament() {
+        #expect(LampStrongsSpread.shapeRange(forKey: "G26", chosen: nil) == 40...66)
+        #expect(LampStrongsSpread.shapeRange(forKey: "g26", chosen: nil) == 40...66)
+    }
+
+    @Test func ahebrewKeyIsShapedOverTheOldTestament() {
+        #expect(LampStrongsSpread.shapeRange(forKey: "H7225", chosen: nil) == 1...39)
+    }
+
+    /// A range the reader chose always wins; they asked for it.
+    @Test func achosenRangeIsNotSecondGuessed() {
+        #expect(LampStrongsSpread.shapeRange(forKey: "G26", chosen: 40...43) == 40...43)
+        #expect(LampStrongsSpread.shapeRange(forKey: "H7225", chosen: 40...66) == 40...66)
+    }
+
+    @Test func akeyOfNoKnownLanguageSpansEverything() {
+        #expect(LampStrongsSpread.shapeRange(forKey: "", chosen: nil) == nil)
+        #expect(LampStrongsSpread.shapeRange(forKey: "TH1234", chosen: nil) == nil)
+    }
+}

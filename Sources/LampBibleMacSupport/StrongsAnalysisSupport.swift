@@ -499,3 +499,27 @@ extension LampStrongsSpread {
             }
     }
 }
+
+extension LampStrongsSpread {
+    /// Books 1–39 and 40–66 in the numbering Lamp uses.
+    public static let oldTestament = 1...39
+    public static let newTestament = 40...66
+
+    /// The books worth drawing a shape over for this key.
+    ///
+    /// A Greek key cannot occur in the Old Testament and a Hebrew one cannot
+    /// occur in the New, so padding to all sixty-six spends two thirds of the
+    /// width on guaranteed emptiness and squeezes the actual shape into a
+    /// corner. A range the reader chose always wins: they asked for it.
+    public static func shapeRange(
+        forKey key: String,
+        chosen: ClosedRange<Int>?
+    ) -> ClosedRange<Int>? {
+        if let chosen { return chosen }
+        switch LampStrongsKey.normalized(key).first {
+        case "G": return newTestament
+        case "H": return oldTestament
+        default: return nil
+        }
+    }
+}

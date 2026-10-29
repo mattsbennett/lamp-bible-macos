@@ -373,6 +373,10 @@ struct StrongsAnalysisPane: View {
 
     // MARK: - Spread
 
+    /// One row of the chapter grid: the cell height plus room for the
+    /// book's name beside it.
+    private static let gridRowHeight: Double = 13
+
     /// Books unless sections were asked for — and always books for the grid,
     /// which is drawn from chapters that only a book has.
     private var showsBooks: Bool { !bySection || style.needsBooks }
@@ -450,7 +454,10 @@ struct StrongsAnalysisPane: View {
     @ViewBuilder
     private func columnsChart(_ analysis: LampStrongsAnalysis) -> some View {
         let divisions = showsBooks
-            ? LampStrongsSpread.everyBook(from: analysis.books, in: bookRange)
+            ? LampStrongsSpread.everyBook(
+                from: analysis.books,
+                in: LampStrongsSpread.shapeRange(forKey: key, chosen: bookRange)
+            )
             : analysis.sections
         let bars = LampStrongsSpread.bars(divisions, measure: measure)
         if bars.isEmpty {
@@ -481,6 +488,20 @@ struct StrongsAnalysisPane: View {
                             }
                             .buttonStyle(.plain)
                             .help(helpText(bar))
+                            // The one label worth drawing, over the column it
+                            // belongs to. Centred in the row instead, it
+                            // pointed at whatever happened to be in the
+                            // middle.
+                            .overlay(alignment: .top) {
+                                if bar.id == tallest?.id, bar.occurrenceCount > 0 {
+                                    Text("\(LampBibleReferenceFormatter.bookAbbreviation(bar.id)) "
+                                        + "\(bar.occurrenceCount)")
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(.tint)
+                                        .fixedSize()
+                                        .offset(y: -13)
+                                }
+                            }
                         }
                     }
                     .frame(height: 96, alignment: .bottom)
@@ -490,14 +511,10 @@ struct StrongsAnalysisPane: View {
                 // Selective labels: the ends anchor the order, and the tallest
                 // is the one anyone will ask about. A name on all sixty-six
                 // would be a grey smear.
+                // The ends anchor the order; the peak labels itself above its
+                // own column.
                 HStack(spacing: 4) {
                     Text(bars.first?.name ?? "").font(.caption2)
-                    Spacer()
-                    if let tallest, tallest.occurrenceCount > 0 {
-                        Text("\(tallest.name) \(tallest.occurrenceCount)")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.tint)
-                    }
                     Spacer()
                     Text(bars.last?.name ?? "").font(.caption2)
                 }
@@ -517,25 +534,26 @@ struct StrongsAnalysisPane: View {
             nothingToChart
         } else {
             let busiest = rows.flatMap(\.cells).map(\.occurrenceCount).max() ?? 0
+            let longest = max(1, rows.map(\.cells.count).max() ?? 1)
+            // One cell size for the whole grid, taken from the longest book.
+            // Sizing each row to the full width instead made Philemon's single
+            // chapter as wide as Matthew's twenty-eight, so a row's length
+            // said nothing about the book — and cell width read as extent.
             VStack(alignment: .leading, spacing: 3) {
-                ForEach(rows) { row in
-                    HStack(spacing: 5) {
-                        Text(row.name)
-                            .font(.caption2)
-                            .lineLimit(1)
-                            .frame(width: 74, alignment: .trailing)
-                            .foregroundStyle(.secondary)
-                        GeometryReader { proxy in
-                            let gap: Double = 1
-                            let width = max(
-                                2,
-                                (proxy.size.width - gap * Double(row.cells.count - 1))
-                                    / Double(row.cells.count)
-                            )
-                            HStack(spacing: gap) {
-                                ForEach(row.cells) { cell in
+                GeometryReader { proxy in
+                let cell = max(2, min(12, (proxy.size.width - 80) / Double(longest)))
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(rows) { row in
+                        HStack(spacing: 5) {
+                            Text(row.name)
+                                .font(.caption2)
+                                .lineLimit(1)
+                                .frame(width: 74, alignment: .trailing)
+                                .foregroundStyle(.secondary)
+                            HStack(spacing: 1) {
+                                ForEach(row.cells) { chapter in
                                     Button {
-                                        choose(.chapter(book: row.id, number: cell.number))
+                                        choose(.chapter(book: row.id, number: chapter.number))
                                     } label: {
                                         RoundedRectangle(cornerRadius: 1)
                                             .fill(.tint)
@@ -543,21 +561,28 @@ struct StrongsAnalysisPane: View {
                                             // still visible against the
                                             // background rather than a guess.
                                             .opacity(
-                                                cell.occurrenceCount == 0
+                                                chapter.occurrenceCount == 0
                                                     ? 0.07
-                                                    : 0.25 + 0.75 * cell.intensity
+                                                    : 0.25 + 0.75 * chapter.intensity
                                             )
-                                            .frame(width: width, height: 11)
+                                            .frame(width: cell - 1, height: 11)
                                     }
                                     .buttonStyle(.plain)
-                                    .help("\(row.name) \(cell.number): "
-                                        + "\(cell.occurrenceCount)")
+                                    .help("\(row.name) \(chapter.number): "
+                                        + "\(chapter.occurrenceCount)")
                                 }
                             }
+                            Spacer(minLength: 0)
                         }
-                        .frame(height: 11)
+                        // Pinned, so the height reserved below is the height
+                        // actually used. Left to the label's own line height
+                        // the rows grew past it and the key underneath was
+                        // drawn over the last few books.
+                        .frame(height: Self.gridRowHeight)
                     }
                 }
+            }
+            .frame(height: Double(rows.count) * (Self.gridRowHeight + 3))
                 // The grid cannot label every cell, so it says what the shade
                 // means and at what value it tops out.
                 HStack(spacing: 5) {
