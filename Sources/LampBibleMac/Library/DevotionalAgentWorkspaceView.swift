@@ -343,10 +343,9 @@ private enum DevotionalAgentWorkspaceStore {
     private static let builtInSkillNames: Set<String> = ["build-lamp-deck"]
 
     static func workspaceURL(libraryRootURL: URL, devotionalID: String) -> URL {
-        libraryRootURL
-            .appendingPathComponent("AgentWorkspaces", isDirectory: true)
-            .appendingPathComponent("Devotionals", isDirectory: true)
-            .appendingPathComponent(safeDirectoryName(for: devotionalID), isDirectory: true)
+        // One derivation, shared with the helper, which resolves a workspace
+        // from a writing's identifier for the writing tools.
+        LampWritingWorkspace.url(libraryRootURL: libraryRootURL, writingID: devotionalID)
     }
 
     @discardableResult
@@ -731,19 +730,6 @@ private enum DevotionalAgentWorkspaceStore {
         )
     }
 
-    private static func safeDirectoryName(for identifier: String) -> String {
-        let readable = identifier.unicodeScalars.map { scalar -> Character in
-            CharacterSet.alphanumerics.contains(scalar) || scalar == "-" || scalar == "_"
-                ? Character(String(scalar)) : "_"
-        }
-        var hash: UInt64 = 14_695_981_039_346_656_037
-        for byte in identifier.utf8 {
-            hash ^= UInt64(byte)
-            hash &*= 1_099_511_628_211
-        }
-        let prefix = String(readable.prefix(48)).trimmingCharacters(in: CharacterSet(charactersIn: "_"))
-        return "\(prefix.isEmpty ? "devotional" : prefix)-\(String(hash, radix: 16))"
-    }
 
     private static func contextDirectory(in workspace: URL) -> URL {
         workspace.appendingPathComponent("context", isDirectory: true)

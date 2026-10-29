@@ -10,7 +10,8 @@ struct LampMCPServerTests {
         let all = LampMCPToolCatalog.tools(workspace: true)
         #expect(LampMCPToolCatalog.tools.count == 15)
         #expect(LampMCPToolCatalog.deckTools.count == 3)
-        #expect(all.count == 19)
+        #expect(LampMCPToolCatalog.writingTools.count == 2)
+        #expect(all.count == 21)
         #expect(Set(all.map(\.name)).count == all.count)
         #expect(all.allSatisfy { $0.annotations.readOnlyHint == true })
         #expect(all.allSatisfy {

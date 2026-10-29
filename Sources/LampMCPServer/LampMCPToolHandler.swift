@@ -18,6 +18,14 @@ public actor LampMCPToolHandler {
     /// writing's own history is reachable, and only to read.
     private let workspaceURL: URL?
     private let encoder: JSONEncoder
+    /// The policy as last read, kept because some tools have to ask about it
+    /// rather than let the library enforce it.
+    ///
+    /// Starts at the default, where personal content is *not* included, so a
+    /// session with no policy file to read denies it. Failing closed is the
+    /// only safe direction for a permission: a missing answer must not read as
+    /// yes.
+    private var policy = LampAgentAccessPolicy()
 
     public init(
         library: LampAgentLibrary,
@@ -162,6 +170,16 @@ public actor LampMCPToolHandler {
         case "render_deck":
             return try await renderDeck(arguments)
 
+        case "list_writings":
+            try requirePersonalContent()
+            return try result(LampWritingWorkspace.listed(
+                libraryRootURL: try writingLibraryRoot()
+            ))
+
+        case "read_writing":
+            try requirePersonalContent()
+            return try result(try readWriting(arguments))
+
         default:
             throw LampMCPToolError.unknownTool(name)
         }
@@ -224,6 +242,41 @@ public actor LampMCPToolHandler {
         )
     }
 
+    /// Reading or changing a writing is reading or changing personal content,
+    /// so it answers to the same setting as the rest of it.
+    private func requirePersonalContent() throws {
+        guard policy.isEnabled else { throw LampMCPToolError.accessDisabled }
+        guard policy.includesPersonalContent else {
+            throw LampMCPToolError.personalContentNotAllowed
+        }
+    }
+
+    /// Where the workspaces are. A writing tool needs the library's path, and
+    /// a session started without one cannot serve them.
+    private func writingLibraryRoot() throws -> URL {
+        guard let libraryRootURL else { throw LampMCPToolError.noLibraryRoot }
+        return libraryRootURL
+    }
+
+    private func readWriting(_ arguments: [String: Value]) throws -> WritingDraft {
+        let root = try writingLibraryRoot()
+        let writingID = try requiredString("writing_id", in: arguments)
+        guard LampWritingWorkspace.exists(libraryRootURL: root, writingID: writingID) else {
+            throw LampMCPToolError.noWritingWorkspace(writingID)
+        }
+        let draft = try LampWritingWorkspace.readDraft(
+            libraryRootURL: root, writingID: writingID
+        )
+        return WritingDraft(
+            writingID: writingID,
+            title: LampWritingWorkspace.title(ofDraft: draft),
+            draft: draft,
+            context: arguments["include_context"]?.boolValue ?? true
+                ? LampWritingWorkspace.readContext(libraryRootURL: root, writingID: writingID)
+                : nil
+        )
+    }
+
     /// What has changed in the writing, as diffs.
     ///
     /// An agent is told `draft.md` changed but not what changed, and used to
@@ -247,6 +300,7 @@ public actor LampMCPToolHandler {
         guard let policyURL else { return }
         let data = try Data(contentsOf: policyURL)
         let policy = try JSONDecoder().decode(LampAgentAccessPolicy.self, from: data)
+        self.policy = policy
         await library.updatePolicy(policy)
     }
 
@@ -326,6 +380,14 @@ public actor LampMCPToolHandler {
     }
 }
 
+/// A writing's draft and the context Lamp wrote beside it.
+struct WritingDraft: Codable, Sendable {
+    var writingID: String
+    var title: String?
+    var draft: String
+    var context: String?
+}
+
 /// One change to the writing, as it is sent to an agent.
 ///
 /// Named here rather than returned from the support layer directly, so what
@@ -362,6 +424,10 @@ public enum LampMCPToolError: Error, LocalizedError, Equatable, Sendable {
     case missingArgument(String)
     case invalidArgument(String, String)
     case noWorkspace
+    case accessDisabled
+    case personalContentNotAllowed
+    case noLibraryRoot
+    case noWritingWorkspace(String)
 
     public var errorDescription: String? {
         switch self {
@@ -373,6 +439,26 @@ public enum LampMCPToolError: Error, LocalizedError, Equatable, Sendable {
             "The ‘\(name)’ argument is invalid. \(message)"
         case .noWorkspace:
             "This session serves no agent workspace, so it has no writing history to read."
+        case .accessDisabled:
+            """
+            Lamp is not letting agents use the library. Turn on "Allow agents \
+            to query Lamp modules" in Lamp's Settings, under AI & Agents.
+            """
+        case .personalContentNotAllowed:
+            """
+            Lamp is not sharing personal writing. Turn on "Include personal \
+            writing, notes, and highlights" in Lamp's Settings, under AI & \
+            Agents, to read it here.
+            """
+        case .noLibraryRoot:
+            "This session was started without a library, so it has no writings."
+        case .noWritingWorkspace(let id):
+            """
+            The writing \(id) has no agent workspace. Open it in Lamp and \
+            show its agent pane once; Lamp writes the workspace, because it \
+            holds the context document and instructions that belong in it. \
+            Use list_writings for the writings that have one.
+            """
         }
     }
 }

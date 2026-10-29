@@ -230,9 +230,42 @@ public enum LampMCPToolCatalog {
         ),
     ]
 
+    /// Reading the writings that have an agent workspace.
+    ///
+    /// A writing is named by its identifier and never by a path, so there is
+    /// no file for a caller to choose; `list_writings` is how an identifier is
+    /// found in the first place. These are reads of personal content, so they
+    /// are governed by the same "include personal writing, notes and
+    /// highlights" setting as the rest of it.
+    public static let writingTools: [Tool] = [
+        tool(
+            "list_writings",
+            """
+            List the writings that have an agent workspace, newest change \
+            first, with the identifier each of the other writing tools takes. \
+            A writing that has never been opened in its agent pane is not here.
+            """,
+            properties: [:]
+        ),
+        tool(
+            "read_writing",
+            """
+            Read a writing's draft and the context document Lamp wrote beside \
+            it. The draft is the Markdown the writer and any agent both edit.
+            """,
+            properties: [
+                "writing_id": string("The writing's identifier, from list_writings."),
+                "include_context": boolean(
+                    "Include DEVOTIONAL_CONTEXT.md. Defaults to true."
+                ),
+            ],
+            required: ["writing_id"]
+        ),
+    ]
+
     /// Everything a session with a workspace is offered.
     public static func tools(workspace: Bool) -> [Tool] {
-        let base = tools + deckTools
+        let base = tools + deckTools + writingTools
         return workspace ? base + workspaceTools : base
     }
 
