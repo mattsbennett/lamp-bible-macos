@@ -43,86 +43,10 @@ public enum BookReaderJSON {
     }
 }
 
-public enum BookReaderFootnoteReferences {
-    /// Returns only the footnotes linked from a section's rendered content,
-    /// including media captions and nested list items.
-    public static func ids(in blocks: [BookReaderContentBlock]) -> Set<String> {
-        var result = Set<String>()
-        for block in blocks {
-            if let content = block.content { collect(content, into: &result) }
-            if let caption = block.caption?.annotatedText { collect(caption, into: &result) }
-            for item in block.items { collect(item, into: &result) }
-            for row in block.rows {
-                for cell in row.cells {
-                    collect(cell.content, into: &result)
-                }
-            }
-        }
-        return result
-    }
-
-    private static func collect(
-        _ item: BookReaderListItem,
-        into result: inout Set<String>
-    ) {
-        collect(item.content, into: &result)
-        for child in item.children { collect(child, into: &result) }
-    }
-
-    private static func collect(
-        _ content: BookReaderAnnotatedText,
-        into result: inout Set<String>
-    ) {
-        result.formUnion(content.footnoteReferences.map(\.id))
-        result.formUnion(content.annotations.compactMap(\.data?.footnoteID))
-    }
-}
-
-/// Where an annotation or a footnote marker falls in a block of a book's text.
-///
-/// The converters count offsets in Unicode scalars, so that is what they mean
-/// here. Indexing by `Character` instead drifts the moment a scalar joins the
-/// one before it into a grapheme — which pointed Hebrew and decomposed accents
-/// both do — and every link after such a word in the block lands early.
-public enum BookReaderTextOffsets {
-    /// Where to insert something of the reader's own, such as a footnote
-    /// marker.
-    ///
-    /// An offset past the end of the text clamps to the end rather than
-    /// failing. Some books carry footnote offsets that overrun the block they
-    /// belong to, and a marker at the end of the paragraph is both what was
-    /// meant and the only reading of it a reader can act on; dropping it loses
-    /// a footnote the text is pointing at, with nothing on screen to say so.
-    public static func insertionIndex(
-        at offset: Int,
-        in value: AttributedString
-    ) -> AttributedString.Index? {
-        guard offset >= 0 else { return nil }
-        let scalars = value.unicodeScalars
-        return scalars.index(
-            scalars.startIndex,
-            offsetBy: offset,
-            limitedBy: scalars.endIndex
-        ) ?? scalars.endIndex
-    }
-
-    /// The span of text an annotation styles.
-    ///
-    /// Unlike an insertion point, a span that begins past the end has no text
-    /// to style, so it is dropped rather than clamped onto an empty range. One
-    /// that merely *ends* past the end is clamped and styles what is there.
-    public static func range(
-        from start: Int,
-        to end: Int,
-        in value: AttributedString
-    ) -> Range<AttributedString.Index>? {
-        guard start >= 0, end > start,
-              let lower = insertionIndex(at: start, in: value),
-              let upper = insertionIndex(at: end, in: value),
-              lower < upper else { return nil }
-        return lower..<upper
-    }
-}
+// Which footnotes a section cites, and where an offset falls in a block, are
+// both core's now: `LampBookSectionIndex.footnoteIDs` gives them in the order
+// cited rather than as an unordered set, and `LampBookTextResolver` holds the
+// scalar-offset contract that the phone's reader needs too.
 
 public enum BookReaderMediaResolver {
     public static func url(

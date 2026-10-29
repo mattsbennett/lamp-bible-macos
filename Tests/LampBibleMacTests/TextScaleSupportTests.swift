@@ -1,4 +1,5 @@
 import Foundation
+import LampModuleKit
 import Testing
 @testable import LampBibleMacSupport
 

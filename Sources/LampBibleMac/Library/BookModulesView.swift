@@ -4,6 +4,7 @@ import AVFoundation
 import LampBibleMacSupport
 #endif
 import LampCore
+import LampModuleKit
 import SwiftUI
 
 struct BookReaderRequest: Codable, Hashable {
@@ -641,8 +642,11 @@ private struct BookSectionReaderDocument: Sendable {
     let decoded: BookReaderDecodedBlocks
     let footnotes: [BookReaderFootnote]
     let referencedFootnotes: [BookReaderFootnote]
+    /// The section's headings, citations and cited footnotes, in reading order.
+    let index: LampBookSectionIndex
     let mediaByID: [String: BookReaderMedia]
     private let attributedTextByContent: [BookReaderAnnotatedText: AttributedString]
+    private let footnoteNumbers: [String: Int]
 
     init(
         sectionID: String,
@@ -652,7 +656,11 @@ private struct BookSectionReaderDocument: Sendable {
     ) {
         self.sectionID = sectionID
         decoded = BookReaderJSON.decodeBlocks(contentJSON)
-        footnotes = BookReaderJSON.decodeFootnotes(footnotesJSON)
+        let footnotes = BookReaderJSON.decodeFootnotes(footnotesJSON)
+        self.footnotes = footnotes
+        // By their place in the book, which is what a marker shows. Numbered
+        // by the order this section cites them, every section would start at 1.
+        footnoteNumbers = LampBookFootnoteNumbering.numbers(for: footnotes)
 
         var mediaByID: [String: BookReaderMedia] = [:]
         for item in BookReaderJSON.decodeMedia(mediaJSON) {
@@ -660,19 +668,19 @@ private struct BookSectionReaderDocument: Sendable {
         }
         self.mediaByID = mediaByID
 
-        var contents = Set<BookReaderAnnotatedText>()
-        for block in decoded.blocks {
-            Self.collectAnnotatedText(from: block, into: &contents)
-        }
-        let referencedFootnoteIDs = BookReaderFootnoteReferences.ids(in: decoded.blocks)
-        referencedFootnotes = footnotes.filter { referencedFootnoteIDs.contains($0.id) }
-        contents.formUnion(referencedFootnotes.map(\.content.annotatedText))
+        let index = LampBookSectionIndex(blocks: decoded.blocks)
+        self.index = index
+        let cited = Set(index.footnoteIDs)
+        referencedFootnotes = footnotes.filter { cited.contains($0.id) }
 
+        // Once per distinct text: a word repeated down a table's cells is
+        // resolved and styled a single time.
+        var contents = Set(index.annotatedTexts)
+        contents.formUnion(referencedFootnotes.map(\.content.annotatedText))
         var attributedTextByContent: [BookReaderAnnotatedText: AttributedString] = [:]
         for content in contents {
-            attributedTextByContent[content] = BookAttributedTextRenderer.render(
-                content,
-                footnotes: footnotes
+            attributedTextByContent[content] = BookReaderTextStyling.styled(
+                LampBookTextResolver.resolve(content, footnoteNumbers: footnoteNumbers)
             )
         }
         self.attributedTextByContent = attributedTextByContent
@@ -680,31 +688,15 @@ private struct BookSectionReaderDocument: Sendable {
 
     func attributedText(for content: BookReaderAnnotatedText) -> AttributedString {
         attributedTextByContent[content]
-            ?? BookAttributedTextRenderer.render(content, footnotes: footnotes)
+            ?? BookReaderTextStyling.styled(
+                LampBookTextResolver.resolve(content, footnoteNumbers: footnoteNumbers)
+            )
     }
 
-    private static func collectAnnotatedText(
-        from block: BookReaderContentBlock,
-        into contents: inout Set<BookReaderAnnotatedText>
-    ) {
-        if let content = block.content { contents.insert(content) }
-        if let caption = block.caption?.annotatedText { contents.insert(caption) }
-        for item in block.items {
-            collectAnnotatedText(from: item, into: &contents)
-        }
-        for row in block.rows {
-            contents.formUnion(row.cells.map(\.content))
-        }
-    }
-
-    private static func collectAnnotatedText(
-        from item: BookReaderListItem,
-        into contents: inout Set<BookReaderAnnotatedText>
-    ) {
-        contents.insert(item.content)
-        for child in item.children {
-            collectAnnotatedText(from: child, into: &contents)
-        }
+    /// A footnote's number in the book, so the sheet and the marker that opened
+    /// it never disagree.
+    func number(for footnoteID: String) -> Int? {
+        footnoteNumbers[footnoteID]
     }
 }
 
@@ -838,7 +830,7 @@ private struct BookSectionReaderView: View {
             if let document {
                 BookFootnoteSheet(
                     footnote: footnote,
-                    number: document.footnotes.firstIndex(where: { $0.id == footnote.id }).map { $0 + 1 },
+                    number: document.number(for: footnote.id),
                     document: document,
                     fontSize: fontSize,
                     typeface: typeface,
@@ -953,9 +945,7 @@ private struct BookSectionReaderView: View {
                             if showsFootnotes {
                                 VStack(alignment: .leading, spacing: 12) {
                                     ForEach(document.referencedFootnotes) { footnote in
-                                        let number = document.footnotes
-                                            .firstIndex(where: { $0.id == footnote.id })
-                                            .map { $0 + 1 }
+                                        let number = document.number(for: footnote.id)
                                         HStack(alignment: .top, spacing: 8) {
                                             Text(number.map { "\($0)." } ?? "•")
                                                 .foregroundStyle(.secondary)
@@ -1329,17 +1319,20 @@ private struct BookTableBlockView: View {
     }
 
     private var tableGrid: some View {
-        Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
+        let columnCount = resolvedColumnCount
+        let widths = columnWidths
+        return Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
             ForEach(Array(rows.enumerated()), id: \.offset) { rowIndex, row in
                 GridRow(alignment: .top) {
-                    ForEach(placements(in: row)) { placement in
+                    let placements = LampBookTableLayout.placements(
+                        of: row, columnCount: columnCount
+                    )
+                    ForEach(placements, id: \.column) { placement in
                         if let cell = placement.cell {
                             BookTableCellView(
                                 cell: cell,
                                 document: document,
-                                width: usesHorizontalScrolling
-                                    ? cellWidth * CGFloat(placement.span)
-                                    : nil,
+                                width: width(for: placement, in: widths),
                                 rowIndex: rowIndex,
                                 fontSize: fontSize,
                                 lineSpacing: lineSpacing,
@@ -1349,9 +1342,7 @@ private struct BookTableBlockView: View {
                             .gridCellColumns(placement.span)
                         } else {
                             BookTableEmptyCell(
-                                width: usesHorizontalScrolling
-                                    ? cellWidth * CGFloat(placement.span)
-                                    : nil
+                                width: width(for: placement, in: widths)
                             )
                             .gridCellColumns(placement.span)
                         }
@@ -1363,60 +1354,32 @@ private struct BookTableBlockView: View {
     }
 
     private var resolvedColumnCount: Int {
-        let inferred = rows
-            .flatMap(\.cells)
-            .map { $0.column + max($0.columnSpan, 1) }
-            .max() ?? 0
-        return max(columnCount ?? 0, inferred, 1)
+        LampBookTableLayout.resolvedColumnCount(declared: columnCount, rows: rows)
     }
 
-    private var cellWidth: CGFloat {
-        switch resolvedColumnCount {
-        case 1: 640
-        case 2: 310
-        case 3: 215
-        case 4: 165
-        default: 150
-        }
+    /// Only the scrolling table sets its own widths. The Grid sizes its columns
+    /// to what they hold, which is already what the weights are for; a table
+    /// too wide to fit gave every column the same width whatever was in it.
+    private var columnWidths: [CGFloat] {
+        let total = CGFloat(resolvedColumnCount) * 165
+        return LampBookTableLayout
+            .columnWeights(rows: rows, columnCount: resolvedColumnCount)
+            .map { max(total * CGFloat($0), 96) }
     }
 
     private var usesHorizontalScrolling: Bool {
         resolvedColumnCount > 4
     }
 
-    private func placements(in row: BookReaderTableRow) -> [BookTableCellPlacement] {
-        let cells = Dictionary(
-            row.cells
-                .filter { $0.column >= 0 && $0.column < resolvedColumnCount }
-                .map { ($0.column, $0) },
-            uniquingKeysWith: { first, _ in first }
-        )
-        var result: [BookTableCellPlacement] = []
-        var column = 0
-        while column < resolvedColumnCount {
-            if let cell = cells[column] {
-                let span = min(max(cell.columnSpan, 1), resolvedColumnCount - column)
-                result.append(BookTableCellPlacement(
-                    column: column,
-                    span: span,
-                    cell: cell
-                ))
-                column += span
-            } else {
-                result.append(BookTableCellPlacement(column: column, span: 1, cell: nil))
-                column += 1
-            }
-        }
-        return result
+    private func width(
+        for placement: LampBookTableLayout.Placement,
+        in widths: [CGFloat]
+    ) -> CGFloat? {
+        guard usesHorizontalScrolling else { return nil }
+        let columns = placement.column..<min(placement.column + placement.span, widths.count)
+        guard !columns.isEmpty else { return nil }
+        return columns.reduce(0) { $0 + widths[$1] }
     }
-}
-
-private struct BookTableCellPlacement: Identifiable {
-    let column: Int
-    let span: Int
-    let cell: BookReaderTableCell?
-
-    var id: Int { column }
 }
 
 private struct BookTableCellView: View {
@@ -1555,90 +1518,57 @@ private struct BookListItemView: View {
     }
 }
 
-private enum BookAttributedTextRenderer {
-    static func render(
-        _ content: BookReaderAnnotatedText,
-        footnotes: [BookReaderFootnote]
-    ) -> AttributedString {
-        var value = AttributedString(content.text)
-        for annotation in content.annotations {
-            guard let range = range(
-                from: annotation.start,
-                to: annotation.end,
-                in: value
-            ) else { continue }
-            switch annotation.type {
-            case "scripture":
-                let reference = annotation.data?.startReference
-                    ?? annotation.data?.references.first?.startReference
-                let endReference = annotation.data?.endReference
-                    ?? annotation.data?.references.first?.endReference
-                if let reference,
-                   let link = ScriptureAnnotationLink(
-                    startReference: reference,
-                    endReference: endReference
-                   )?.url {
-                    value[range].link = link
-                }
-            case "link":
-                if let rawURL = annotation.data?.url, let url = URL(string: rawURL) {
-                    value[range].link = url
-                }
-            case "footnote":
-                if let id = annotation.data?.footnoteID {
-                    value[range].link = makeFootnoteURL(id)
-                }
-            case "emphasis":
-                switch annotation.data?.style {
-                case "bold":
-                    value[range].inlinePresentationIntent = .stronglyEmphasized
-                case "underline":
-                    value[range].underlineStyle = .single
-                default:
-                    value[range].inlinePresentationIntent = .emphasized
-                }
-            case "quote":
-                value[range].inlinePresentationIntent = .emphasized
-            case "strongs", "greek", "hebrew":
-                value[range].underlineStyle = .single
-                value[range].foregroundColor = .lampOriginalLanguage
-            default:
-                break
-            }
+/// Turns what core says a stretch of a book's text *is* into how this app draws
+/// it, and into what clicking it does.
+///
+/// `LampBookTextResolver` sets Foundation's own attributes for what they can
+/// say — emphasis, a link to the web — and the roles in
+/// `AttributeScopes.LampBookAttributes` for what they cannot: a citation, a
+/// footnote, an original-language word, underlining. It deliberately attaches
+/// no link to the first three, because the URL that reaches a reader's own
+/// handler is the app's business, not the book's.
+private enum BookReaderTextStyling {
+    static func styled(_ resolved: AttributedString) -> AttributedString {
+        var value = resolved
+        // The roles are read off first: the ranges then belong to the string
+        // being changed, and attributes are all that changes, so they stay
+        // good for the whole pass.
+        let roles = value.runs.map {
+            (
+                range: $0.range,
+                passage: $0.bookScripture,
+                footnote: $0.bookFootnote,
+                originalLanguage: $0.bookOriginalLanguage,
+                isUnderlined: $0.bookUnderline == true
+            )
         }
 
-        // Page markers are deliberately absent. `pageNum` carries the page
-        // index of the PDF a book was converted from, not the page number
-        // printed on it — rome-2's PDF page 41 is its printed page 6 — so
-        // "[p. 41]" told a reader to look somewhere the book does not have.
-        // They come back when the data carries printed pages.
-        var insertions: [(offset: Int, marker: AttributedString)] = []
-        for reference in content.footnoteReferences {
-            let number = footnotes.firstIndex { $0.id == reference.id }.map { $0 + 1 }
-            var marker = AttributedString("[\(number.map(String.init) ?? "•")]")
-            marker.link = makeFootnoteURL(reference.id)
-            marker.baselineOffset = 4
-            marker.font = .caption
-            insertions.append((reference.offset, marker))
-        }
-        for insertion in insertions.sorted(by: { $0.offset > $1.offset }) {
-            guard let index = BookReaderTextOffsets.insertionIndex(
-                at: insertion.offset, in: value
-            ) else { continue }
-            value.insert(insertion.marker, at: index)
+        for role in roles {
+            if let passage = role.passage {
+                value[role.range].link = ScriptureAnnotationLink(
+                    startReference: passage.start,
+                    endReference: passage.end
+                )?.url
+            }
+            if let footnote = role.footnote {
+                value[role.range].link = makeFootnoteURL(footnote.id)
+                if footnote.isMarker {
+                    value[role.range].font = .caption
+                    value[role.range].baselineOffset = 4
+                }
+            }
+            if role.originalLanguage != nil {
+                value[role.range].underlineStyle = .single
+                value[role.range].foregroundColor = .lampOriginalLanguage
+            }
+            if role.isUnderlined {
+                value[role.range].underlineStyle = .single
+            }
         }
         return value
     }
 
-    private static func range(
-        from start: Int,
-        to end: Int,
-        in value: AttributedString
-    ) -> Range<AttributedString.Index>? {
-        BookReaderTextOffsets.range(from: start, to: end, in: value)
-    }
-
-    private static func makeFootnoteURL(_ id: String) -> URL? {
+    static func makeFootnoteURL(_ id: String) -> URL? {
         var components = URLComponents()
         components.scheme = "lamp-book"
         components.host = "footnote"

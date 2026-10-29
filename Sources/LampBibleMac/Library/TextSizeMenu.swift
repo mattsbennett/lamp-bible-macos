@@ -1,16 +1,20 @@
 #if canImport(LampBibleMacSupport)
 import LampBibleMacSupport
 #endif
+import LampModuleKit
 import SwiftUI
 
-enum ProseTypeface: String, CaseIterable, Identifiable {
-    case serif
-    case sansSerif
+/// The typeface a prose surface is read in. Its cases are core's, because both
+/// apps store the choice under the same `books.typeface` and have to agree on
+/// what the stored word means; how it is drawn and what it is called are this
+/// app's.
+typealias ProseTypeface = LampProseTypeface
 
+extension LampProseTypeface: @retroactive Identifiable {
     static let readerDefault = ProseTypeface.serif
     static let commentaryDefault = ProseTypeface.sansSerif
 
-    var id: String { rawValue }
+    public var id: String { rawValue }
 
     var title: String {
         switch self {

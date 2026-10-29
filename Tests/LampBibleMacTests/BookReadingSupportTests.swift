@@ -1,4 +1,5 @@
 import Foundation
+import LampModuleKit
 import Testing
 @testable import LampBibleMacSupport
 
@@ -86,7 +87,7 @@ struct BookReadingSupportTests {
         #expect(table.rows.count == 2)
         #expect(table.rows[0].cells.map(\.isHeader) == [true, true])
         #expect(table.rows[1].cells[0].rowSpan == 4)
-        #expect(BookReaderFootnoteReferences.ids(in: result.blocks) == ["table-note"])
+        #expect(LampBookSectionIndex(blocks: result.blocks).footnoteIDs == ["table-note"])
     }
 
     @Test func footnotesMediaAndFlexiblePageNumbersDecodeLossily() {
@@ -139,7 +140,7 @@ struct BookReadingSupportTests {
         ]
         """#)
 
-        #expect(BookReaderFootnoteReferences.ids(in: decoded.blocks) == [
+        #expect(LampBookSectionIndex(blocks: decoded.blocks).footnoteIDs == [
             "paragraph-note",
             "caption-note",
             "nested-note",
