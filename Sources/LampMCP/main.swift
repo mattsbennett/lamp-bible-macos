@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(LampBibleMacSupport)
+import LampBibleMacSupport
+#endif
 import LampCore
 #if canImport(LampMCPServer)
 import LampMCPServer
@@ -21,15 +24,22 @@ struct LampMCPCommand {
                 try await renderDeck(deckURL, options: options)
                 return
             }
+            // An outside app's config names this helper and nothing more, so
+            // what it was not told it reads from the descriptor Lamp keeps.
+            // Anything given explicitly still wins: a workspace config that
+            // names its own library is not second-guessed.
+            let resolved = try options.usesDescriptor ? descriptor() : nil
             // Every mode but `--render-deck` serves a library, and `Options`
             // has already refused the combination that lacks one.
-            guard let libraryRootURL = options.libraryRootURL else {
+            guard let libraryRootURL = options.libraryRootURL ?? resolved?.libraryRootURL else {
                 throw OptionError.missingLibraryRoot
             }
-            let policy = try options.policyURL.map(loadPolicy) ?? LampAgentAccessPolicy()
+            let policyURL = options.policyURL ?? resolved?.policyURL
+            let policy = try policyURL.map(loadPolicy) ?? LampAgentAccessPolicy()
             let library = LampAgentLibrary(
                 libraryRootURL: libraryRootURL,
-                bundledModulesArchiveURL: options.bundledModulesArchiveURL,
+                bundledModulesArchiveURL: options.bundledModulesArchiveURL
+                    ?? resolved?.bundledModulesArchiveURL,
                 policy: policy
             )
             if options.healthCheck {
@@ -47,13 +57,29 @@ struct LampMCPCommand {
             }
             try await LampMCPServerFactory.runStdio(
                 library: library,
-                policyURL: options.policyURL,
+                policyURL: policyURL,
                 workspaceURL: options.workspaceURL
             )
         } catch {
             FileHandle.standardError.write(Data("lamp-mcp: \(error.localizedDescription)\n".utf8))
             exit(64)
         }
+    }
+
+    /// What Lamp wrote down about its library, for a helper started without
+    /// being told where anything is.
+    ///
+    /// The external switch is checked here rather than by the caller, because
+    /// a helper reached this way is being used from outside Lamp whichever
+    /// app did the reaching.
+    private static func descriptor() throws -> LampAgentDescriptor {
+        guard let applicationSupport =
+            LampAgentDescriptorStore.defaultApplicationSupportURL() else {
+            throw OptionError.missingLibraryRoot
+        }
+        return try LampAgentDescriptorStore.readForExternalUse(
+            inApplicationSupport: applicationSupport
+        )
     }
 
     /// Derives what a deck can derive — its speaker notes and any missing
@@ -92,8 +118,22 @@ struct LampMCPCommand {
         FileHandle.standardOutput.write(Data("\n".utf8))
     }
 
+    /// The access policy, or a refusal that names the file.
+    ///
+    /// `JSONDecoder`'s own description of a missing key is "The data couldn't
+    /// be read because it is missing", which says neither what data nor where
+    /// it was. That was tolerable while every caller passed `--policy` itself
+    /// and knew the path; a helper started from the descriptor does not, and
+    /// nor does the person reading its stderr in another app's log.
     private static func loadPolicy(from url: URL) throws -> LampAgentAccessPolicy {
-        try JSONDecoder().decode(LampAgentAccessPolicy.self, from: Data(contentsOf: url))
+        guard let data = try? Data(contentsOf: url) else {
+            throw OptionError.unreadablePolicy(url, "it could not be opened")
+        }
+        do {
+            return try JSONDecoder().decode(LampAgentAccessPolicy.self, from: data)
+        } catch {
+            throw OptionError.unreadablePolicy(url, error.localizedDescription)
+        }
     }
 }
 
@@ -116,6 +156,11 @@ private struct Options {
     let slideNumbers: [Int]?
     let renderWidth: Double
     let workspaceURL: URL?
+    /// Whether to fill in what wasn't given from the descriptor Lamp writes.
+    /// Set by `--external`, and by being started with no arguments at all:
+    /// that is what an outside app's config looks like, since a config cannot
+    /// hold paths that stay true.
+    let usesDescriptor: Bool
 
     init(arguments: [String]) throws {
         var libraryRootURL: URL?
@@ -130,6 +175,7 @@ private struct Options {
         var slideNumbers: [Int]?
         var renderWidth = 1_600.0
         var workspaceURL: URL?
+        var usesDescriptor = arguments.isEmpty
         var index = 0
         while index < arguments.count {
             let argument = arguments[index]
@@ -148,6 +194,8 @@ private struct Options {
                 policyURL = URL(fileURLWithPath: arguments[index])
             case "--health-check":
                 healthCheck = true
+            case "--external":
+                usesDescriptor = true
             case "--render-deck":
                 index += 1
                 guard arguments.indices.contains(index) else { throw OptionError.missingValue(argument) }
@@ -197,8 +245,9 @@ private struct Options {
             index += 1
         }
         // Rendering a deck reads the deck and the images beside it, so it needs
-        // no library; every other mode serves one.
-        if renderDeckURL == nil && buildDeckURL == nil && libraryRootURL == nil {
+        // no library; every other mode serves one, named here or in the
+        // descriptor.
+        if renderDeckURL == nil && buildDeckURL == nil && libraryRootURL == nil && !usesDescriptor {
             throw OptionError.missingLibraryRoot
         }
         self.libraryRootURL = libraryRootURL
@@ -213,6 +262,7 @@ private struct Options {
         self.slideNumbers = slideNumbers
         self.renderWidth = renderWidth
         self.workspaceURL = workspaceURL
+        self.usesDescriptor = usesDescriptor
     }
 }
 
@@ -222,10 +272,12 @@ private enum OptionError: Error, LocalizedError {
     case missingValue(String)
     case invalidValue(String, String)
     case unknown(String)
+    case unreadablePolicy(URL, String)
 
     var errorDescription: String? {
         let usage = """
-        Usage: lamp-mcp --library-root PATH [--bundled-modules-archive PATH] [--policy PATH] [--workspace DIR] [--health-check]
+        Usage: lamp-mcp [--external]
+               lamp-mcp --library-root PATH [--bundled-modules-archive PATH] [--policy PATH] [--workspace DIR] [--health-check]
                lamp-mcp --render-deck PATH [--output DIR] [--overview FILE] [--slides 1,3,5] [--width 1600] [--library-root PATH] [--manuscript PATH]
                lamp-mcp --build-deck PATH --manuscript PATH
         """
@@ -235,6 +287,11 @@ private enum OptionError: Error, LocalizedError {
         case .missingValue(let option): return "Missing value for \(option). \(usage)"
         case .invalidValue(let option, let detail): return "Invalid value for \(option). \(detail)"
         case .unknown(let option): return "Unknown option \(option). \(usage)"
+        case .unreadablePolicy(let url, let detail):
+            return """
+            The access policy at \(url.path) could not be read: \(detail) \
+            Re-apply the agent access settings in Lamp to write it again.
+            """
         }
     }
 }

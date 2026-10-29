@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(LampBibleMacSupport)
+import LampBibleMacSupport
+#endif
 import LampCore
 
 enum AgentModuleAccessScope: String, CaseIterable, Identifiable {
@@ -71,6 +74,46 @@ enum AgentModuleAccessPreferences {
         data.append(0x0A)
         try data.write(to: destination, options: .atomic)
         return destination
+    }
+
+    /// The key behind the switch that lets apps other than Lamp use the
+    /// library. Off until the user turns it on, and carried in the descriptor
+    /// so the helper sees the same answer.
+    static let allowsExternalAppsKey = "agent.externalApps.enabled"
+
+    /// Writes the policy, and the descriptor that tells a helper started by
+    /// another app where to find it.
+    ///
+    /// Both together, because a descriptor naming a policy that was never
+    /// written is worse than having neither: the helper would start, read a
+    /// stale policy, and serve against it. Called whenever any of the
+    /// agent-access settings are applied.
+    @discardableResult
+    static func publish(
+        _ policy: LampAgentAccessPolicy,
+        libraryRootURL: URL,
+        bundledModulesArchiveURL: URL?,
+        allowsExternalApps: Bool,
+        applicationSupportURL: URL? = LampAgentDescriptorStore.defaultApplicationSupportURL()
+    ) throws -> URL {
+        let policyURL = try writePolicy(policy, libraryRootURL: libraryRootURL)
+        guard let applicationSupportURL else {
+            // Nowhere agreed to put it, so an outside app cannot be served.
+            // The workspace flow passes its paths explicitly and is unharmed.
+            throw LampAgentDescriptorStore.StoreError.unreadable(
+                URL(fileURLWithPath: "/Library/Application Support")
+            )
+        }
+        try LampAgentDescriptorStore.write(
+            LampAgentDescriptor(
+                libraryRootPath: libraryRootURL.path,
+                policyPath: policyURL.path,
+                bundledModulesArchivePath: bundledModulesArchiveURL?.path,
+                allowsExternalApps: allowsExternalApps
+            ),
+            inApplicationSupport: applicationSupportURL
+        )
+        return policyURL
     }
 
     static func healthCheck(

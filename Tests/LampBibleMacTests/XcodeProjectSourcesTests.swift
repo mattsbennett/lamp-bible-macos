@@ -147,6 +147,7 @@ struct XcodeProjectSourcesTests {
         let phase = project[start.upperBound...]
             .prefix(while: { $0 != ")" })
         for name in [
+            "AgentDescriptorSupport.swift",
             "AgentRevisionSupport.swift",
             "UnifiedDiffSupport.swift",
             "WritingChangesSupport.swift",

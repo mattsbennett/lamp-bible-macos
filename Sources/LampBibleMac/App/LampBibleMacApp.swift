@@ -259,6 +259,8 @@ private struct ReaderSettingsView: View {
     @AppStorage("quiz.defaultAgeGroup") private var defaultQuizAgeGroup = ""
     @AppStorage("agent.moduleAccess.enabled") private var agentModuleAccessEnabled = true
     @AppStorage("agent.moduleAccess.scope") private var agentModuleAccessScope = AgentModuleAccessScope.enabledModules.rawValue
+    @AppStorage(AgentModuleAccessPreferences.allowsExternalAppsKey)
+    private var agentAllowsExternalApps = false
     @AppStorage("agent.moduleAccess.personal") private var agentPersonalContentEnabled = false
     @State private var agentModuleAccessStatus: String?
     @AppStorage("sync.automatic") private var automaticSync = true
@@ -549,6 +551,14 @@ private struct ReaderSettingsView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                    // The helper reads the policy and the descriptor from
+                    // disk, so a setting changed here has to reach them
+                    // without waiting for someone to press Test.
+                    .onChange(of: agentModuleAccessEnabled) { _, _ in publishAgentAccess() }
+                    .onChange(of: agentModuleAccessScope) { _, _ in publishAgentAccess() }
+                    .onChange(of: agentPersonalContentEnabled) { _, _ in publishAgentAccess() }
+                    .onChange(of: agentAllowsExternalApps) { _, _ in publishAgentAccess() }
+                    .task { publishAgentAccess() }
 
                 case .readingPlans:
                     Section("Reading Plans") {
@@ -895,16 +905,34 @@ private struct ReaderSettingsView: View {
         )
     }
 
+    /// The archive the bundled modules live in, which both the descriptor and
+    /// the health check have to name identically — they are the same library.
+    private var bundledModulesArchiveURL: URL? {
+        Bundle.main.url(forResource: "bundled_modules.db", withExtension: "zlib")
+    }
+
+    /// Puts the current settings where the helper reads them.
+    ///
+    /// Silent on failure by design: this runs on every toggle, and a library
+    /// that is momentarily unwritable is not something to interrupt someone
+    /// changing a setting about. "Test Module Tools" is the button that
+    /// reports, and it writes the same two files first.
+    private func publishAgentAccess() {
+        try? AgentModuleAccessPreferences.publish(
+            currentAgentAccessPolicy,
+            libraryRootURL: model.library.rootURL,
+            bundledModulesArchiveURL: bundledModulesArchiveURL,
+            allowsExternalApps: agentAllowsExternalApps
+        )
+    }
+
     private func testAgentModuleAccess() {
         agentModuleAccessStatus = "Checking…"
         Task {
             agentModuleAccessStatus = await AgentModuleAccessPreferences.healthCheck(
                 policy: currentAgentAccessPolicy,
                 libraryRootURL: model.library.rootURL,
-                bundledModulesArchiveURL: Bundle.main.url(
-                    forResource: "bundled_modules.db",
-                    withExtension: "zlib"
-                )
+                bundledModulesArchiveURL: bundledModulesArchiveURL
             )
         }
     }
