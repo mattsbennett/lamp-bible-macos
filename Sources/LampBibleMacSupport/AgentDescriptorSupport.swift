@@ -26,19 +26,26 @@ public struct LampAgentDescriptor: Codable, Equatable, Sendable {
     /// Whether apps other than Lamp may use the library through the helper.
     /// Off until the user turns it on.
     public var allowsExternalApps: Bool
+    /// Whether those apps may *change* a writing, as against reading one.
+    /// Its own switch, and its own default of off: reading a library and
+    /// rewriting someone's prose are not the same risk, and turning on the
+    /// first must not quietly grant the second.
+    public var allowsExternalWriting: Bool
 
     public init(
         version: Int = currentVersion,
         libraryRootPath: String,
         policyPath: String,
         bundledModulesArchivePath: String? = nil,
-        allowsExternalApps: Bool = false
+        allowsExternalApps: Bool = false,
+        allowsExternalWriting: Bool = false
     ) {
         self.version = version
         self.libraryRootPath = libraryRootPath
         self.policyPath = policyPath
         self.bundledModulesArchivePath = bundledModulesArchivePath
         self.allowsExternalApps = allowsExternalApps
+        self.allowsExternalWriting = allowsExternalWriting
     }
 
     public init(from decoder: Decoder) throws {
@@ -53,6 +60,9 @@ public struct LampAgentDescriptor: Codable, Equatable, Sendable {
         // must not read as permission nobody gave.
         allowsExternalApps = try container.decodeIfPresent(
             Bool.self, forKey: .allowsExternalApps
+        ) ?? false
+        allowsExternalWriting = try container.decodeIfPresent(
+            Bool.self, forKey: .allowsExternalWriting
         ) ?? false
     }
 

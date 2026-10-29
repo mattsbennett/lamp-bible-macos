@@ -1369,13 +1369,7 @@ struct DevotionalAgentWorkspaceView: View {
             } else {
                 // Preserve an existing, unimported workspace draft. This also
                 // migrates drafts left behind by the former manual Pull workflow.
-                try recordAgentRevision(
-                    before: draftMarkdown,
-                    after: diskDraft,
-                    in: workspace
-                )
-                try finishSynchronizing(diskDraft, in: workspace)
-                importDraft(diskDraft)
+                try takeOrKeep(diskDraft: diskDraft, in: workspace)
             }
             refreshWorkspaceMetadata(in: workspace)
             importPresentationArtifactIfNeeded(in: workspace)
@@ -1389,13 +1383,9 @@ struct DevotionalAgentWorkspaceView: View {
         do {
             let diskDraft = try DevotionalAgentWorkspaceStore.readDraft(from: workspaceURL)
             if let lastSyncedDraft, diskDraft != lastSyncedDraft {
-                try recordAgentRevision(
-                    before: lastSyncedDraft,
-                    after: diskDraft,
-                    in: workspaceURL
+                try takeOrKeep(
+                    diskDraft: diskDraft, in: workspaceURL, previous: lastSyncedDraft
                 )
-                try finishSynchronizing(diskDraft, in: workspaceURL)
-                importDraft(diskDraft)
             } else {
                 workspaceDraft = diskDraft
             }
@@ -1405,6 +1395,72 @@ struct DevotionalAgentWorkspaceView: View {
             refreshErrorMessage = nil
         } catch {
             refreshErrorMessage = error.localizedDescription
+        }
+    }
+
+    /// Takes a draft written in the workspace, or keeps the writer's text and
+    /// files the draft in history instead.
+    ///
+    /// Until now the arriving draft always won, which was right while only an
+    /// agent working in this workspace could have written it: the writer's own
+    /// editing came through this view and was reconciled before it got here.
+    /// An outside app can write while Lamp is closed, so the question "has the
+    /// writing moved since that draft was based on it?" now has to be asked,
+    /// and `LampWritingWrite.Note` is what answers it. No times are compared;
+    /// a clock says which write was later, which is not the question.
+    ///
+    /// Without a note the old rule applies, so a draft from this workspace's
+    /// own agent, or from a Lamp that predates the note, behaves as before.
+    private func takeOrKeep(
+        diskDraft: String,
+        in workspace: URL,
+        previous: String? = nil
+    ) throws {
+        let applicationSupport = LampAgentDescriptorStore.defaultApplicationSupportURL()
+        let note = applicationSupport.flatMap {
+            LampWritingWrite.note(applicationSupportURL: $0, writingID: devotionalID)
+        }
+        let resolution = LampWritingWrite.resolve(
+            note: note,
+            draftOnDisk: diskDraft,
+            libraryText: draftMarkdown
+        )
+        // Spent either way: it describes this draft, and this is the decision
+        // it was left for.
+        if let applicationSupport, note != nil {
+            LampWritingWrite.forgetNote(
+                applicationSupportURL: applicationSupport, writingID: devotionalID
+            )
+        }
+
+        switch resolution {
+        case .takeDraft, .takeDraftUnrecorded:
+            try recordAgentRevision(
+                before: previous ?? draftMarkdown,
+                after: diskDraft,
+                in: workspace
+            )
+            try finishSynchronizing(diskDraft, in: workspace)
+            importDraft(diskDraft)
+
+        case .keepWritingAndRecordDraft:
+            // The writer changed this writing after the draft was written, so
+            // their words stay. The outside version is recorded as an agent
+            // change, which is where they can read it and take what they want
+            // from it, and the workspace is put back to what Lamp holds so the
+            // same draft is not resolved again on the next pass.
+            try recordAgentRevision(
+                before: draftMarkdown,
+                after: diskDraft,
+                in: workspace
+            )
+            try DevotionalAgentWorkspaceStore.writeDraftContent(draftMarkdown, to: workspace)
+            try finishSynchronizing(draftMarkdown, in: workspace)
+            contextNote = """
+            A draft written in another app was not applied: you had edited this \
+            writing since. Your text is unchanged, and theirs is in the history \
+            below.
+            """
         }
     }
 
@@ -1422,6 +1478,17 @@ struct DevotionalAgentWorkspaceView: View {
             if let lastSyncedDraft, diskDraft != lastSyncedDraft, diskDraft != draft {
                 try recordAgentRevision(
                     before: lastSyncedDraft,
+                    after: diskDraft,
+                    in: workspaceURL
+                )
+            } else if lastSyncedDraft == nil, diskDraft != draft {
+                // Nothing has synced yet — the moment just after this pane
+                // opens. The branch above cannot run, so the disk draft used
+                // to be overwritten with no record of it. Rare while only this
+                // workspace's own agent could have written it; an outside app
+                // can write at any moment, including this one.
+                try recordAgentRevision(
+                    before: diskDraft,
                     after: diskDraft,
                     in: workspaceURL
                 )

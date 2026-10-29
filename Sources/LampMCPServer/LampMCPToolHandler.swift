@@ -27,6 +27,16 @@ public actor LampMCPToolHandler {
     /// yes.
     private var policy = LampAgentAccessPolicy()
 
+    /// Whether outside apps may change a writing, read from the descriptor at
+    /// each call rather than held from startup: the setting can be turned off
+    /// while an app is connected, and the next write should see that.
+    private var allowsExternalWriting: Bool {
+        guard let applicationSupport =
+            LampAgentDescriptorStore.defaultApplicationSupportURL() else { return false }
+        return (try? LampAgentDescriptorStore.read(inApplicationSupport: applicationSupport))?
+            .allowsExternalWriting ?? false
+    }
+
     public init(
         library: LampAgentLibrary,
         libraryRootURL: URL? = nil,
@@ -180,6 +190,9 @@ public actor LampMCPToolHandler {
             try requirePersonalContent()
             return try result(try readWriting(arguments))
 
+        case "write_writing_draft":
+            return try await writeWritingDraft(arguments)
+
         default:
             throw LampMCPToolError.unknownTool(name)
         }
@@ -240,6 +253,47 @@ public actor LampMCPToolHandler {
             ),
             isError: false
         )
+    }
+
+    /// Replaces a writing's draft, if the writer has not moved it underneath.
+    ///
+    /// The switch is checked here rather than by hiding the tool, so an app
+    /// that was told about the tool can tell its user which setting to change.
+    private func writeWritingDraft(_ arguments: [String: Value]) async throws -> CallTool.Result {
+        try requirePersonalContent()
+        guard allowsExternalWriting else { throw LampMCPToolError.writingNotAllowed }
+        let root = try writingLibraryRoot()
+        let writingID = try requiredString("writing_id", in: arguments)
+        let draft = try requiredString("draft", in: arguments)
+        let basedOn = try requiredString("based_on", in: arguments)
+
+        // What Lamp holds, which an editor can have moved without touching
+        // draft.md. Absent when the writing is not in the library at all, in
+        // which case the draft on disk is the only thing to check against.
+        let libraryText = try? await library.readDevotional(
+            moduleID: "personal-devotionals", devotionalID: writingID
+        ).content
+
+        let note = try LampWritingWrite.writeDraft(
+            libraryRootURL: root,
+            applicationSupportURL: LampAgentDescriptorStore.defaultApplicationSupportURL(),
+            writingID: writingID,
+            draft: draft,
+            basedOn: basedOn,
+            libraryText: libraryText
+        )
+        return try result(WritingWriteOutcome(
+            writingID: writingID,
+            saved: true,
+            draftFingerprint: note.draftFingerprint,
+            // Said plainly, because it has not been imported yet and a reply
+            // that implied otherwise would be the one thing worth getting
+            // right here.
+            message: """
+            Saved to the writing's draft. Lamp will bring it in when you next \
+            open this writing's agent workspace.
+            """
+        ))
     }
 
     /// Reading or changing a writing is reading or changing personal content,
@@ -380,6 +434,14 @@ public actor LampMCPToolHandler {
     }
 }
 
+/// What a write did, as the calling app is told it.
+struct WritingWriteOutcome: Codable, Sendable {
+    var writingID: String
+    var saved: Bool
+    var draftFingerprint: String
+    var message: String
+}
+
 /// A writing's draft and the context Lamp wrote beside it.
 struct WritingDraft: Codable, Sendable {
     var writingID: String
@@ -428,6 +490,7 @@ public enum LampMCPToolError: Error, LocalizedError, Equatable, Sendable {
     case personalContentNotAllowed
     case noLibraryRoot
     case noWritingWorkspace(String)
+    case writingNotAllowed
 
     public var errorDescription: String? {
         switch self {
@@ -452,6 +515,13 @@ public enum LampMCPToolError: Error, LocalizedError, Equatable, Sendable {
             """
         case .noLibraryRoot:
             "This session was started without a library, so it has no writings."
+        case .writingNotAllowed:
+            """
+            Lamp is not letting other apps change writings. Turn on "Allow \
+            other apps to change my writings" in Lamp's Settings, under AI & \
+            Agents. It is separate from reading, and off until the writer \
+            turns it on.
+            """
         case .noWritingWorkspace(let id):
             """
             The writing \(id) has no agent workspace. Open it in Lamp and \

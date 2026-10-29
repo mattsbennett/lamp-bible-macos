@@ -262,6 +262,8 @@ private struct ReaderSettingsView: View {
     @State private var externalAppsStatus: String?
     @AppStorage(AgentModuleAccessPreferences.allowsExternalAppsKey)
     private var agentAllowsExternalApps = false
+    @AppStorage(AgentModuleAccessPreferences.allowsExternalWritingKey)
+    private var agentAllowsExternalWriting = false
     @AppStorage("agent.moduleAccess.personal") private var agentPersonalContentEnabled = false
     @State private var agentModuleAccessStatus: String?
     @AppStorage("sync.automatic") private var automaticSync = true
@@ -569,6 +571,23 @@ private struct ReaderSettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
+                        Toggle(
+                            "Allow other apps to change my writings",
+                            isOn: $agentAllowsExternalWriting
+                        )
+                        .disabled(!agentModuleAccessEnabled || !agentAllowsExternalApps)
+                        Text(
+                            """
+                            An agent in another app can rewrite a writing's \
+                            draft, which Lamp takes in when you next open that \
+                            writing's agent workspace. It cannot write over an \
+                            edit of yours it had not seen. Your draft is sent \
+                            to that app's AI provider.
+                            """
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
                         if agentModuleAccessEnabled, agentAllowsExternalApps {
                             externalAppsSetup
                         }
@@ -580,6 +599,7 @@ private struct ReaderSettingsView: View {
                     .onChange(of: agentModuleAccessScope) { _, _ in publishAgentAccess() }
                     .onChange(of: agentPersonalContentEnabled) { _, _ in publishAgentAccess() }
                     .onChange(of: agentAllowsExternalApps) { _, _ in publishAgentAccess() }
+                    .onChange(of: agentAllowsExternalWriting) { _, _ in publishAgentAccess() }
                     .task { publishAgentAccess() }
 
                 case .readingPlans:
@@ -1091,7 +1111,8 @@ private struct ReaderSettingsView: View {
             currentAgentAccessPolicy,
             libraryRootURL: model.library.rootURL,
             bundledModulesArchiveURL: bundledModulesArchiveURL,
-            allowsExternalApps: agentAllowsExternalApps
+            allowsExternalApps: agentAllowsExternalApps,
+            allowsExternalWriting: agentAllowsExternalWriting
         )
     }
 

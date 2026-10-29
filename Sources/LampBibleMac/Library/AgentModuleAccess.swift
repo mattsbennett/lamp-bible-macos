@@ -81,6 +81,10 @@ enum AgentModuleAccessPreferences {
     /// so the helper sees the same answer.
     static let allowsExternalAppsKey = "agent.externalApps.enabled"
 
+    /// The key behind the switch that lets those apps change a writing. Its
+    /// own, so reading cannot grant writing.
+    static let allowsExternalWritingKey = "agent.externalApps.writing"
+
     /// Writes the policy, and the descriptor that tells a helper started by
     /// another app where to find it.
     ///
@@ -94,6 +98,7 @@ enum AgentModuleAccessPreferences {
         libraryRootURL: URL,
         bundledModulesArchiveURL: URL?,
         allowsExternalApps: Bool,
+        allowsExternalWriting: Bool,
         applicationSupportURL: URL? = LampAgentDescriptorStore.defaultApplicationSupportURL()
     ) throws -> URL {
         let policyURL = try writePolicy(policy, libraryRootURL: libraryRootURL)
@@ -109,7 +114,8 @@ enum AgentModuleAccessPreferences {
                 libraryRootPath: libraryRootURL.path,
                 policyPath: policyURL.path,
                 bundledModulesArchivePath: bundledModulesArchiveURL?.path,
-                allowsExternalApps: allowsExternalApps
+                allowsExternalApps: allowsExternalApps,
+                allowsExternalWriting: allowsExternalWriting
             ),
             inApplicationSupport: applicationSupportURL
         )

@@ -6,17 +6,54 @@ import MCP
 import Testing
 
 struct LampMCPServerTests {
-    @Test func advertisesOnlyReadOnlyToolsWithValidObjectSchemas() {
+    /// Every tool is read-only except the one that writes, and that one says
+    /// so.
+    ///
+    /// `readOnlyHint` is what makes an app ask before running something, so a
+    /// write tool that claimed to be read-only would be rewriting someone's
+    /// prose without the prompt they are entitled to. This test used to assert
+    /// that *all* tools were read-only, which stopped being true the moment
+    /// `write_writing_draft` existed.
+    @Test func onlyTheWriteToolsSayTheyWrite() {
         let all = LampMCPToolCatalog.tools(workspace: true)
         #expect(LampMCPToolCatalog.tools.count == 15)
         #expect(LampMCPToolCatalog.deckTools.count == 3)
         #expect(LampMCPToolCatalog.writingTools.count == 2)
-        #expect(all.count == 21)
+        #expect(LampMCPToolCatalog.writeTools.count == 1)
+        #expect(all.count == 22)
         #expect(Set(all.map(\.name)).count == all.count)
-        #expect(all.allSatisfy { $0.annotations.readOnlyHint == true })
+
+        let writing = Set(LampMCPToolCatalog.writeTools.map(\.name))
+        #expect(writing == ["write_writing_draft"])
+        for tool in all {
+            if writing.contains(tool.name) {
+                #expect(
+                    tool.annotations.readOnlyHint == false,
+                    "\(tool.name) must declare that it writes, or no app will ask first"
+                )
+            } else {
+                #expect(
+                    tool.annotations.readOnlyHint == true,
+                    "\(tool.name) is not a write tool and should say it only reads"
+                )
+            }
+        }
         #expect(all.allSatisfy {
             $0.inputSchema.objectValue?["type"]?.stringValue == "object"
         })
+    }
+
+    /// The write tool is offered whether or not the setting is on, because the
+    /// server caches its tool list and an app cannot recommend a setting it
+    /// was never told about. Being refused at call time is the design.
+    @Test func thewriteToolIsAlwaysOfferedAndNamesItsSetting() throws {
+        let tool = try #require(
+            LampMCPToolCatalog.tools(workspace: false)
+                .first { $0.name == "write_writing_draft" }
+        )
+        let description = try #require(tool.description)
+        #expect(description.contains("Allow other apps to change my writings"))
+        #expect(description.contains("Settings"))
     }
 
     /// A session with no workspace has no writing history, and a tool that can

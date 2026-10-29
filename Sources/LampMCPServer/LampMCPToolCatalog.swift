@@ -265,9 +265,53 @@ public enum LampMCPToolCatalog {
 
     /// Everything a session with a workspace is offered.
     public static func tools(workspace: Bool) -> [Tool] {
-        let base = tools + deckTools + writingTools
+        let base = tools + deckTools + writingTools + writeTools
         return workspace ? base + workspaceTools : base
     }
+
+    /// The one tool that changes something of the user's.
+    ///
+    /// Listed whether or not the switch is on, and refusing with the setting's
+    /// name when it is off. Hiding it would be tidier but would not work: the
+    /// server declares `listChanged: false`, so a client caches what it was
+    /// given, and a tool missing at connection time would stay missing for the
+    /// whole session however the setting moved. An app also cannot tell a user
+    /// to turn on something it was never told exists.
+    public static let writeTools: [Tool] = [
+        Tool(
+            name: "write_writing_draft",
+            description: """
+            Replace a writing's draft. Needs "Allow other apps to change my \
+            writings" in Lamp's Settings, under AI & Agents, which is off \
+            until the writer turns it on. Pass as `based_on` the draft you \
+            read: the write is refused, not merged, if the writer or another \
+            agent has changed it since, so read the writing again and \
+            reconcile. Lamp takes the draft in when that writing's agent \
+            workspace is next opened.
+            """,
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "writing_id": string("The writing's identifier, from list_writings."),
+                    "draft": string("The complete new draft, as Markdown."),
+                    "based_on": string(
+                        "The draft exactly as read_writing returned it, so Lamp can "
+                            + "tell whether anything has changed underneath."
+                    ),
+                ]),
+                "additionalProperties": .bool(false),
+                "required": .array([
+                    .string("writing_id"), .string("draft"), .string("based_on"),
+                ]),
+            ]),
+            annotations: .init(
+                readOnlyHint: false,
+                destructiveHint: true,
+                idempotentHint: false,
+                openWorldHint: false
+            )
+        ),
+    ]
 
     private static func tool(
         _ name: String,
