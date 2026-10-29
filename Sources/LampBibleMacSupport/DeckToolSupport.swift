@@ -47,6 +47,16 @@ public enum LampDeckTools {
     /// A deck too malformed to decode is a report, not a thrown error: "this
     /// is not a deck" is the most useful validation result there is, and an
     /// agent can act on it.
+    ///
+    /// Two things to know about that case, since it is the one place this and
+    /// the script differ. A decoding failure stops at the *first* missing or
+    /// wrong field, so a deck short of three required keys is told about one
+    /// of them and has to come back; the script walks the whole deck and lists
+    /// all three. And these messages are outside `DeckValidatorAgreementTests`,
+    /// which compares the two validators on decks that decode — so nothing
+    /// holds their wording to the script's, and it could not: `keyNotFound`
+    /// knows the key is absent but not what belonged there, which is why the
+    /// script can say "expected a string" and this cannot.
     public static func validate(deckJSON: Data) -> ValidationReport {
         let deck: LampPresentationDeck
         do {

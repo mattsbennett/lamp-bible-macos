@@ -116,6 +116,30 @@ struct DeckToolTests {
         #expect(issue.message.contains("missing"))
     }
 
+    /// Decoding stops at the first fault, so a deck short of two required
+    /// fields is told about one of them and has to come back — where
+    /// `validate_deck.py` walks the whole deck and lists both.
+    ///
+    /// Pinned rather than merely written down: if core's decoder ever fills
+    /// defaults and lets the validator report these properly, this fails, and
+    /// that is the moment to stop saying "one at a time".
+    @Test func adeckShortOfTwoFieldsIsToldAboutOne() throws {
+        var deck = try #require(
+            try JSONSerialization.jsonObject(with: deckJSON()) as? [String: Any]
+        )
+        var slides = try #require(deck["slides"] as? [[String: Any]])
+        slides[1].removeValue(forKey: "speakerNotes")
+        slides[1].removeValue(forKey: "isHidden")
+        deck["slides"] = slides
+
+        let report = LampDeckTools.validate(
+            deckJSON: try JSONSerialization.data(withJSONObject: deck)
+        )
+
+        #expect(report.valid == false)
+        #expect(report.issues.count == 1, "decoding reports the first fault, not every one")
+    }
+
     @Test func thereportCarriesTheSameIssuesCoresValidatorFinds() throws {
         // A title far past the ceiling, so the validator has something to say
         // and both sides can be compared.
