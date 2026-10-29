@@ -931,13 +931,21 @@ extension LibrarySyncController {
         candidates += decks.candidates
         result.gaps += decks.unplaceable
 
-        candidates += try LampSyncLocalFiles.workspaceFiles(
-            inLibraryAt: library.rootURL,
-            stagingIn: exports,
-            fileManager: fileManager
-        )
-
-        let described = LampSyncLocalFiles.describe(candidates, fileManager: fileManager)
+        // Off the main thread, which this controller otherwise holds. Hashing
+        // every file is most of a pass's own work, a second and a half on a
+        // full library, and a launch sync doing it here froze the splash half
+        // faded over the reader until it was done.
+        let gatheredSoFar = candidates
+        let libraryRoot = library.rootURL
+        let fileManager = self.fileManager
+        let described = try await Task.detached {
+            let workspaces = try LampSyncLocalFiles.workspaceFiles(
+                inLibraryAt: libraryRoot,
+                stagingIn: exports,
+                fileManager: fileManager
+            )
+            return LampSyncLocalFiles.describe(gatheredSoFar + workspaces, fileManager: fileManager)
+        }.value
         result.gathered.local = described.files
         result.gaps += described.unreadable
         result.gaps += LampSyncLocalFiles.unresolved(
