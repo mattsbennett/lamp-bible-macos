@@ -106,13 +106,16 @@ struct DeckToolTests {
         strongs: String = "G26",
         translationID: String = "ESVs",
         by: String = "section",
-        measure: String = "occurrences"
+        measure: String = "occurrences",
+        style: String? = nil
     ) -> [String: Any] {
-        [
+        var chart: [String: Any] = [
             "source": ["strongs": strongs, "translationID": translationID],
             "by": by,
             "measure": measure,
         ]
+        if let style { chart["style"] = style }
+        return chart
     }
 
     /// Stands in for a library, so the chart reporting can be tested without
@@ -469,6 +472,32 @@ struct DeckToolTests {
                 == "A title-and-body slide does not draw chart content — a slide draws "
                     + "one picture or chart. Move it to another slide or change the layout."
         )
+    }
+
+    /// The chart styles, held to the same agreement as the rest. These are
+    /// the two rules where a style changes what the other fields may be, and
+    /// `validate_deck.py` carries the same two in the same words.
+    @Test func thetwoValidatorsAgreeAboutChartStyles() throws {
+        let grid = LampDeckTools.validate(
+            deckJSON: deckJSON(chart: chartSource(by: "section", style: "grid"))
+        )
+        let refusal = try #require(grid.issues.first { $0.severity == .error })
+        #expect(refusal.path.hasSuffix("chart.by"))
+        #expect(
+            refusal.message.contains("charts by book"),
+            "a grid shades a book's chapters, so it cannot be grouped otherwise"
+        )
+
+        let share = LampDeckTools.validate(
+            deckJSON: deckJSON(
+                chart: chartSource(by: "section", measure: "perThousandWords", style: "share")
+            )
+        )
+        #expect(
+            share.issues.allSatisfy { $0.severity == .warning },
+            "a rate on a share is a warning: the ring still counts occurrences"
+        )
+        #expect(share.issues.contains { $0.message.contains("do not add up to a whole") })
     }
 
     @Test(arguments: [

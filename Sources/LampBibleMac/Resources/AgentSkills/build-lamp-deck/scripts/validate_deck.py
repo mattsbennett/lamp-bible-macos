@@ -34,6 +34,13 @@ BLOCK_KINDS = {
 HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
 CHART_GROUPINGS = {"book", "section", "rendering", "form"}
 CHART_MEASURES = {"occurrences", "perThousandWords"}
+# How a chart is drawn. Absent means bars, and an unknown style is read as
+# bars too, so a deck from a newer Lamp still opens on an older one.
+CHART_STYLES = {"bars", "columns", "grid", "share"}
+# Past this many books a grid cannot be read across a room.
+CHART_READABLE_GRID_ROWS = 40
+# Past this many slices a share cannot be told apart.
+CHART_READABLE_SLICES = 8
 # Past this many bars a chart is hard to read from the back of a room. Mirrors
 # `LampPresentationChart.readableBars`.
 CHART_READABLE_BARS = 24
@@ -510,13 +517,33 @@ def chart_issues(block: dict) -> tuple[list[str], list[str]]:
                     "Romans or Matthew-John"
                 )
 
-    if chart.get("by") not in CHART_GROUPINGS:
+    grouping = chart.get("by")
+    if grouping not in CHART_GROUPINGS:
         errors.append(
             "chart.by: expected " + ", ".join(sorted(CHART_GROUPINGS))
         )
     measure = chart.get("measure")
     if measure is not None and measure not in CHART_MEASURES:
         errors.append("chart.measure: expected " + " or ".join(sorted(CHART_MEASURES)))
+
+    # An unknown style is a warning, not an error: Lamp decodes it tolerantly
+    # as bars so that a deck written by a newer Lamp still opens on an older
+    # one. Saying nothing would leave a typo silently drawn as the wrong chart.
+    style = chart.get("style")
+    if style is not None and style not in CHART_STYLES:
+        warnings.append(
+            f"chart.style: {style!r} is not a chart Lamp knows, so it draws as bars. "
+            "Expected " + ", ".join(sorted(CHART_STYLES))
+        )
+    drawn = style if style in CHART_STYLES else "bars"
+
+    if drawn == "grid" and grouping in CHART_GROUPINGS and grouping != "book":
+        errors.append("chart.by: A grid shades each book's chapters, so it charts by book.")
+    if drawn == "share" and measure == "perThousandWords":
+        warnings.append(
+            "chart.measure: A share is of occurrences: rates per thousand words do "
+            "not add up to a whole, so the ring counts occurrences."
+        )
 
     values = chart.get("values")
     if values is None:
@@ -526,11 +553,46 @@ def chart_issues(block: dict) -> tuple[list[str], list[str]]:
         )
     elif not isinstance(values, list):
         errors.append("chart.values: expected an array")
-    elif len(values) > CHART_READABLE_BARS:
-        warnings.append(
-            f"chart.values: {len(values)} bars is hard to read from the back of a room; "
-            "chart by section, or narrow the range"
-        )
+    else:
+        for index, value in enumerate(values):
+            if not isinstance(value, dict):
+                continue
+            chapters = value.get("chapters")
+            if chapters is None:
+                continue
+            path = f"chart.values[{index}].chapters"
+            if drawn != "grid" or grouping != "book":
+                errors.append(f"{path}: chapters belong to a grid charted by book")
+            elif not isinstance(chapters, list) or not all(
+                isinstance(c, (int, float)) and not isinstance(c, bool) for c in chapters
+            ):
+                errors.append(f"{path}: expected an array of numbers, one per chapter")
+
+        if drawn == "bars" and len(values) > CHART_READABLE_BARS:
+            # Bars only. Twenty-seven or sixty-six columns are the point of
+            # columns, and a grid and a share have limits of their own.
+            warnings.append(
+                f"chart.values: {len(values)} bars is hard to read from the back of a "
+                "room; chart by section, or narrow the range"
+            )
+        if drawn == "grid":
+            if len(values) > CHART_READABLE_GRID_ROWS:
+                warnings.append(
+                    f"chart.values: A grid of {len(values)} books is too dense to read. "
+                    "Narrow the range."
+                )
+            if grouping == "book" and any(
+                isinstance(v, dict) and v.get("chapters") is None for v in values
+            ):
+                warnings.append(
+                    "chart.values: This grid has no chapters yet. Lamp works them out "
+                    "when the deck is built."
+                )
+        if drawn == "share" and len(values) > CHART_READABLE_SLICES:
+            warnings.append(
+                f"chart.values: A share of {len(values)} slices cannot be told apart. "
+                "Build the deck again to gather the smallest."
+            )
     return errors, warnings
 
 

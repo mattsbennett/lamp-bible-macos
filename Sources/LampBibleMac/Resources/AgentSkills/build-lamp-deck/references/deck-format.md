@@ -343,7 +343,8 @@ the deck is built or imported, and overwrites anything it finds there.
   "text": "Where ἀγάπη is found",
   "chart": {
     "source": { "strongs": "G26", "translationID": "ESVs", "range": "NT" },
-    "by": "section",
+    "style": "columns",
+    "by": "book",
     "measure": "occurrences"
   }
 }
@@ -355,12 +356,26 @@ the deck is built or imported, and overwrites anything it finds there.
   Bible — name the translation in the caption.
 - `source.range` takes whole books: `NT`, `Romans`, `Matthew-John`. Omit it for
   the whole translation.
+- `style` is how it is drawn, and decides what the other fields can be:
+  - `bars` (the default if absent) ranks the divisions. Keep it under about 24.
+  - `columns` stand in Bible order, every book among them including the empty
+    ones, so where a word gathers shows as a shape. Twenty-seven or sixty-six
+    columns are the point here, not a problem.
+  - `grid` shades each book's chapters. It charts `by` book and nothing else,
+    and reads badly past about 40 books.
+  - `share` is a ring of the whole, largest first. It always counts
+    occurrences, whatever `measure` says, because rates per thousand words do
+    not add up to a whole. Past eight slices Lamp gathers the smallest into
+    "Others".
+  - A style Lamp does not know is drawn as bars rather than refused, so a deck
+    from a newer Lamp still opens.
 - `by` is `book`, `section`, `rendering`, or `form`. Renderings and forms show
   the commonest eight.
 - `measure` is `occurrences` or `perThousandWords`. Use the rate when comparing
   books of unequal length, where a raw count mostly measures how long a book is.
 - `text` is an optional heading drawn over the bars, and may be empty.
-- `values` is Lamp's to write. Leave it out. The validator warns that a chart
+- `values` is Lamp's to write, including each row's `chapters` for a grid.
+  Leave it out. The validator warns that a chart
   has none yet, which is the expected state for a deck you have just written.
 
 Use `analyze_strongs` first to find out what is worth charting — which books
@@ -379,9 +394,10 @@ never both. It is drawn on `title-and-body`, `scripture`, `quotation`, `blank`,
 and `image` slides, and not at all on `two-column`. A `caption` block goes with
 it exactly as it would with a picture, and is where the translation belongs.
 
-Keep a chart under about 24 bars; past that it cannot be read from the back of
-a room. Charting the 27 books of the New Testament is over that line, and
-`"by": "section"` is usually the better picture anyway.
+Keep a *bar* chart under about 24 bars; past that it cannot be read from the
+back of a room, and `"by": "section"` is usually the better picture. That limit
+is about bars: a `columns` chart of all 27 New Testament books is exactly what
+columns are for.
 
 ## Speaker notes from the manuscript
 

@@ -1398,6 +1398,10 @@ private struct LampSlideChartEditor: View {
         var range = ""
         var by = LampPresentationChart.Grouping.book
         var measure = LampPresentationChart.Measure.occurrences
+        /// Part of the key, because the values themselves depend on it: a
+        /// grid carries each book's chapters, a share drops the empty
+        /// divisions, and columns keep them.
+        var style = LampPresentationChart.Style.bars
     }
 
     private var source: Source {
@@ -1407,7 +1411,8 @@ private struct LampSlideChartEditor: View {
             translationID: chart.source.translationID,
             range: chart.source.range ?? "",
             by: chart.by,
-            measure: chart.measure
+            measure: chart.measure,
+            style: chart.drawnStyle
         )
     }
 
@@ -1435,15 +1440,38 @@ private struct LampSlideChartEditor: View {
                 }
                 // One per row. Side by side, the inspector is too narrow for
                 // two labelled pickers and the measure drew as "Occurr…".
+                Picker("Draw as", selection: Binding(
+                    get: { chart.wrappedValue.drawnStyle },
+                    set: { style in
+                        chart.wrappedValue.style = style
+                        // A grid is of a book's chapters, so choosing one
+                        // moves the grouping with it. Disabling the control
+                        // alone would leave a deck that fails to validate
+                        // behind a picker nobody can reach.
+                        if style == .grid { chart.wrappedValue.by = .book }
+                    }
+                )) {
+                    ForEach(LampPresentationChart.Style.allCases) { style in
+                        Text(studioStyleName(style)).tag(style)
+                    }
+                }
                 Picker("Group by", selection: chart.by) {
                     ForEach(LampPresentationChart.Grouping.allCases) { grouping in
                         Text(grouping.rawValue.capitalized).tag(grouping)
                     }
                 }
+                .disabled(chart.wrappedValue.drawnStyle == .grid)
+                .help(chart.wrappedValue.drawnStyle == .grid
+                    ? "A grid shades each book's chapters, so it charts by book"
+                    : "")
                 Picker("Measure", selection: chart.measure) {
                     Text("Occurrences").tag(LampPresentationChart.Measure.occurrences)
                     Text("Per 1,000 words").tag(LampPresentationChart.Measure.perThousandWords)
                 }
+                .disabled(chart.wrappedValue.drawnStyle == .share)
+                .help(chart.wrappedValue.drawnStyle == .share
+                    ? "A share is of occurrences: rates do not add up to a whole"
+                    : "")
                 HStack(spacing: 6) {
                     if isWorking { ProgressView().controlSize(.small) }
                     if let status {
@@ -1463,6 +1491,17 @@ private struct LampSlideChartEditor: View {
                     by: .book
                 )
             }
+        }
+    }
+
+    /// Named for what the chart shows rather than by its raw value, which
+    /// is the deck format's word and not a reader's.
+    private func studioStyleName(_ style: LampPresentationChart.Style) -> String {
+        switch style {
+        case .bars: "Bars"
+        case .columns: "Columns in Bible order"
+        case .grid: "Chapter grid"
+        case .share: "Share of the whole"
         }
     }
 
