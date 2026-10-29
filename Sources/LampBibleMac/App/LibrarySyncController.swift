@@ -6,6 +6,13 @@ import LampCore
 import LampModuleKit
 import Security
 
+extension Notification.Name {
+    /// A sync pass brought back a reading position or a bookmark this Mac did
+    /// not have. Sent only when the join actually changed something, so a
+    /// reader is not reloaded by every pass.
+    static let lampBookReadingStateChanged = Notification.Name("lampBookReadingStateChanged")
+}
+
 @MainActor
 final class LibrarySyncController: ObservableObject {
     enum Provider: String, CaseIterable, Identifiable {
@@ -34,6 +41,11 @@ final class LibrarySyncController: ObservableObject {
     /// be joined. Offered rather than done, because a Mac that joins
     /// republishes its whole library into whatever it joined.
     @Published private(set) var moveOffer: LampSyncMoveOffer?
+
+    /// Where each book was left and what is bookmarked in it: this Mac's own
+    /// record rather than the library's, and the one part of a pass that a
+    /// reader writes to while the pass is running.
+    private let readingState = LampBookReadingStateStore()
 
     /// The revision of the archive the last pass imported.
     ///
@@ -773,6 +785,18 @@ extension LibrarySyncController {
         if let plannedSettings {
             try settings.remember(plannedSettings)
             reportDisputedPreferences(plannedSettings.merge)
+        }
+        // What the other device knew about where its books were left. Taken
+        // from the bundle as written rather than by reading it back, and
+        // joined rather than replacing, so a book read on both since the last
+        // pass keeps the later of the two positions and the union of the
+        // bookmarks.
+        if let written = outcome.written?.bundle,
+           let incoming = LampSyncBundleLedgers.bookReading(in: written),
+           readingState.merge(incoming) {
+            // A bookmark set or cleared elsewhere has to appear in a book
+            // that is open now; a position is read when a book next opens.
+            NotificationCenter.default.post(name: .lampBookReadingStateChanged, object: nil)
         }
         defaults.set(Date(), forKey: "sync.lastCompleted")
         report(outcome, gaps: gaps, skippedHighlightSets: skippedHighlightSets, manifest: manifest)

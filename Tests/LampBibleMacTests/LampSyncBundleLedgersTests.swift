@@ -35,6 +35,42 @@ struct LampSyncBundleLedgersTests {
         )
     }
 
+    /// A pass has to actually put this Mac's reading state into the bundle.
+    ///
+    /// Core checks that a contribution joins correctly once it has one; what
+    /// it cannot check is this Mac building one. Leave `bookReading` out of
+    /// `prepareContribution` and nothing fails: sync keeps working, the part
+    /// stays as whatever another device last wrote, and where you were up to
+    /// simply never leaves this Mac. Nobody would notice for a month.
+    @Test func apassCarriesWhereThisMacLeftItsBooks() async throws {
+        let (library, root) = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let suiteName = "LampSyncBundleLedgersTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let readingState = LampBookReadingStateStore(defaults: defaults)
+        readingState.save(
+            position: LampBookReadingPosition(
+                sectionID: "rome-2:chapter-6",
+                blockIndex: 31,
+                updatedAt: Date(timeIntervalSince1970: 1_000)
+            ),
+            for: "rome-2"
+        )
+        readingState.toggleBookmark(sectionID: "chapter-6", for: "rome-2")
+
+        var bundle = LampSyncSettingsBundle()
+        try await LampSyncBundleLedgers.prepareContribution(
+            from: library, readingState: readingState
+        ).apply(to: &bundle)
+
+        let carried = try #require(LampSyncBundleLedgers.bookReading(in: bundle))
+        #expect(carried.positions["rome-2"]?.sectionID == "rome-2:chapter-6")
+        #expect(carried.positions["rome-2"]?.blockIndex == 31)
+        #expect(carried.bookmarkedSections(in: "rome-2") == ["chapter-6"])
+    }
+
     @Test func aDeckDeletedElsewhereGoesWhenItsRecordArrives() throws {
         let (library, root) = try makeLibrary()
         defer { try? FileManager.default.removeItem(at: root) }

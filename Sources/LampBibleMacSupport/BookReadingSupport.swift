@@ -76,102 +76,11 @@ public enum BookReaderMediaResolver {
     }
 }
 
-public struct BookReadingPosition: Codable, Equatable, Sendable {
-    public let sectionID: String
-    public let blockIndex: Int
-    public let updatedAt: Date
-
-    public init(sectionID: String, blockIndex: Int = -1, updatedAt: Date = Date()) {
-        self.sectionID = sectionID
-        self.blockIndex = max(blockIndex, -1)
-        self.updatedAt = updatedAt
-    }
-}
-
-/// Keeps high-frequency scroll visibility changes in memory until the reader
-/// reaches an idle phase. This prevents every scroll tick from becoming a
-/// UserDefaults read, JSON encode, and disk-backed write.
-public struct BookReadingPositionBuffer: Equatable, Sendable {
-    public private(set) var blockIndex: Int
-    private var persistedBlockIndex: Int
-
-    public init(blockIndex: Int = -1) {
-        let normalizedIndex = max(blockIndex, -1)
-        self.blockIndex = normalizedIndex
-        persistedBlockIndex = normalizedIndex
-    }
-
-    public mutating func observe(visibleBlockIndices: [Int]) {
-        guard let firstVisibleIndex = visibleBlockIndices.min() else { return }
-        blockIndex = max(firstVisibleIndex, -1)
-    }
-
-    /// Returns a value only when the in-memory position has changed since the
-    /// previous flush.
-    public mutating func takeChangedBlockIndex() -> Int? {
-        guard blockIndex != persistedBlockIndex else { return nil }
-        persistedBlockIndex = blockIndex
-        return blockIndex
-    }
-}
-
-private struct StoredBookReaderState: Codable {
-    var positions: [String: BookReadingPosition] = [:]
-    var bookmarks: [String: Set<String>] = [:]
-}
-
-public struct BookReadingStateStore {
-    public static let defaultsKey = "books.readerState"
-    private let defaults: UserDefaults
-    private let key: String
-
-    public init(defaults: UserDefaults = .standard, key: String = defaultsKey) {
-        self.defaults = defaults
-        self.key = key
-    }
-
-    public func position(for moduleID: String) -> BookReadingPosition? {
-        load().positions[moduleID]
-    }
-
-    public func save(position: BookReadingPosition, for moduleID: String) {
-        var state = load()
-        state.positions[moduleID] = position
-        save(state)
-    }
-
-    public func bookmarkIDs(for moduleID: String) -> Set<String> {
-        load().bookmarks[moduleID] ?? []
-    }
-
-    @discardableResult
-    public func toggleBookmark(sectionID: String, for moduleID: String) -> Bool {
-        var state = load()
-        var bookmarks = state.bookmarks[moduleID] ?? []
-        let isBookmarked: Bool
-        if bookmarks.remove(sectionID) != nil {
-            isBookmarked = false
-        } else {
-            bookmarks.insert(sectionID)
-            isBookmarked = true
-        }
-        state.bookmarks[moduleID] = bookmarks
-        save(state)
-        return isBookmarked
-    }
-
-    private func load() -> StoredBookReaderState {
-        guard let data = defaults.data(forKey: key),
-              let state = try? JSONDecoder().decode(StoredBookReaderState.self, from: data)
-        else { return StoredBookReaderState() }
-        return state
-    }
-
-    private func save(_ state: StoredBookReaderState) {
-        guard let data = try? JSONEncoder().encode(state) else { return }
-        defaults.set(data, forKey: key)
-    }
-}
+// Where each book was left and what is bookmarked in it are core's now, as
+// `LampBookReadingPosition`, `LampBookReadingPositionBuffer` and
+// `LampBookReadingStateStore`. They moved so that the phone keeps the same
+// record under the same `books.readerState` key, and so that a sync pass can
+// carry it: the store's ledger is what a pass contributes.
 
 public enum BookReaderNavigation {
     public static func previousID(in orderedIDs: [String], currentID: String) -> String? {

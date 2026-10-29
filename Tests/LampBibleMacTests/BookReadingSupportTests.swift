@@ -177,41 +177,6 @@ struct BookReadingSupportTests {
         ) == URL(string: "https://example.com/image.jpg"))
     }
 
-    @Test func readingStatePersistsPositionsAndBookmarksPerBook() throws {
-        let suiteName = "BookReadingSupportTests.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        let store = BookReadingStateStore(defaults: defaults)
-        let position = BookReadingPosition(
-            sectionID: "book-a:chapter-2",
-            blockIndex: 9,
-            updatedAt: Date(timeIntervalSince1970: 100)
-        )
-
-        store.save(position: position, for: "book-a")
-        #expect(store.position(for: "book-a") == position)
-        #expect(store.position(for: "book-b") == nil)
-        #expect(store.toggleBookmark(sectionID: "chapter-2", for: "book-a"))
-        #expect(store.bookmarkIDs(for: "book-a") == ["chapter-2"])
-        #expect(!store.toggleBookmark(sectionID: "chapter-2", for: "book-a"))
-        #expect(store.bookmarkIDs(for: "book-a").isEmpty)
-    }
-
-    @Test func scrollPositionBufferDefersAndCoalescesPersistence() {
-        var buffer = BookReadingPositionBuffer(blockIndex: 2)
-
-        buffer.observe(visibleBlockIndices: [4, 3, 5])
-        buffer.observe(visibleBlockIndices: [7, 6])
-
-        #expect(buffer.blockIndex == 6)
-        #expect(buffer.takeChangedBlockIndex() == 6)
-        #expect(buffer.takeChangedBlockIndex() == nil)
-
-        buffer.observe(visibleBlockIndices: [])
-        #expect(buffer.blockIndex == 6)
-        #expect(buffer.takeChangedBlockIndex() == nil)
-    }
-
     @Test func navigationStopsAtDocumentEdges() {
         let ids = ["one", "two", "three"]
         #expect(BookReaderNavigation.previousID(in: ids, currentID: "one") == nil)

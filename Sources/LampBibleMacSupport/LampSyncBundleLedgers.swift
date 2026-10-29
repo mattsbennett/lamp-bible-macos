@@ -86,14 +86,20 @@ extension LampSyncBundleLedgers {
     /// update's change must be synchronous and may run more than once.
     public static func prepareContribution(
         from library: LampLibrary,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        readingState: LampBookReadingStateStore = LampBookReadingStateStore()
     ) async throws -> Contribution {
         Contribution(
             personal: try await library.personalDeletionLedger(),
             decks: try LampPresentationDeckSync.deletions(
                 in: library.rootURL, fileManager: fileManager
             ),
-            planProgress: try await library.planProgressLedger()
+            planProgress: try await library.planProgressLedger(),
+            // Not the library's, unlike the rest: where a book was left is
+            // this Mac's own record, in the defaults. The whole ledger every
+            // pass, so that an app from before this part restores it by
+            // writing the bundle back without it.
+            bookReading: readingState.ledger()
         )
     }
 

@@ -38,7 +38,7 @@ struct BookModulesView: View {
     let showImporter: () -> Void
     let openReference: (Int) -> Void
 
-    private let readingState = BookReadingStateStore()
+    private let readingState = LampBookReadingStateStore()
     private var selectedBook: LampBook? {
         books.first { $0.id == selectedBookID }
     }
@@ -197,6 +197,14 @@ struct BookModulesView: View {
                 // list is only right again after the move.
                 await loadContinueReading()
             }
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .lampBookReadingStateChanged)
+        ) { _ in
+            if let selectedBookID {
+                bookmarkIDs = readingState.bookmarkIDs(for: selectedBookID)
+            }
+            Task { await loadContinueReading() }
         }
         .onChange(of: initialBookID) { _, newBookID in
             guard let newBookID, books.contains(where: { $0.id == newBookID }) else { return }
@@ -702,10 +710,10 @@ private struct BookSectionReaderDocument: Sendable {
 
 @MainActor
 private final class BookReadingPositionTracker: ObservableObject {
-    private let store = BookReadingStateStore()
+    private let store = LampBookReadingStateStore()
     private var moduleID: String?
     private var sectionID: String?
-    private var position = BookReadingPositionBuffer()
+    private var position = LampBookReadingPositionBuffer()
     private var isRestoring = false
 
     func prepare(moduleID: String, sectionID: String) -> Int {
@@ -715,12 +723,12 @@ private final class BookReadingPositionTracker: ObservableObject {
         let blockIndex = savedPosition?.sectionID == sectionID
             ? savedPosition?.blockIndex ?? -1
             : -1
-        position = BookReadingPositionBuffer(blockIndex: blockIndex)
+        position = LampBookReadingPositionBuffer(blockIndex: blockIndex)
         isRestoring = true
 
         if savedPosition?.sectionID != sectionID {
             store.save(
-                position: BookReadingPosition(sectionID: sectionID, blockIndex: blockIndex),
+                position: LampBookReadingPosition(sectionID: sectionID, blockIndex: blockIndex),
                 for: moduleID
             )
         }
@@ -740,7 +748,7 @@ private final class BookReadingPositionTracker: ObservableObject {
         guard let moduleID, let sectionID,
               let blockIndex = position.takeChangedBlockIndex() else { return }
         store.save(
-            position: BookReadingPosition(sectionID: sectionID, blockIndex: blockIndex),
+            position: LampBookReadingPosition(sectionID: sectionID, blockIndex: blockIndex),
             for: moduleID
         )
     }
