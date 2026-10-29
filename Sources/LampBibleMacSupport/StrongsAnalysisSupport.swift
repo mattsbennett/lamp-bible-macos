@@ -1,5 +1,6 @@
 import Foundation
 import LampCore
+import LampModuleKit
 
 /// Narrowing a Strong's analysis to the occurrences behind one of its figures.
 ///
@@ -308,5 +309,193 @@ public enum LampStrongsQuery {
         let suffix = rest.dropFirst(digits.count)
         guard suffix.count <= 1, suffix.allSatisfy(\.isLetter) else { return nil }
         return LampStrongsKey.normalized(trimmed)
+    }
+}
+
+/// How the spread is drawn.
+///
+/// One set of numbers, four readings of it. Bars rank, a histogram shows
+/// shape, a grid shows where inside a book, and share shows proportion.
+public enum LampStrongsChartStyle: String, CaseIterable, Identifiable, Sendable {
+    case bars
+    case columns
+    case grid
+    case share
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .bars: "Bars"
+        case .columns: "Spread"
+        case .grid: "Chapters"
+        case .share: "Share"
+        }
+    }
+
+    /// Whether the measure picker means anything here. A grid counts
+    /// occurrences per chapter and a share is a proportion of a whole, so
+    /// neither has a rate to offer.
+    public var usesMeasure: Bool {
+        self == .bars || self == .columns
+    }
+
+    /// Only books carry chapters, so the grid has nothing to draw for
+    /// sections.
+    public var needsBooks: Bool { self == .grid }
+}
+
+/// Each division's proportion of the whole.
+public enum LampStrongsShare {
+    public struct Slice: Identifiable, Equatable, Sendable {
+        public let id: String
+        public let name: String
+        public let value: Int
+        /// 0...1 of the total.
+        public let fraction: Double
+        /// True for the slice that gathers everything past the limit.
+        public let isOther: Bool
+
+        public init(id: String, name: String, value: Int, fraction: Double, isOther: Bool = false) {
+            self.id = id
+            self.name = name
+            self.value = value
+            self.fraction = fraction
+            self.isOther = isOther
+        }
+    }
+
+    /// The largest divisions by count, with the rest gathered into "Other".
+    ///
+    /// Gathered rather than drawn, because a ring of twenty-seven slivers
+    /// answers no question anyone has. Divisions holding nothing are left out
+    /// entirely: a slice of zero is invisible but still takes a label.
+    public static func slices(
+        from divisions: [LampStrongsAnalysis.Division],
+        limit: Int = 6
+    ) -> [Slice] {
+        let total = divisions.reduce(0) { $0 + $1.occurrenceCount }
+        guard total > 0 else { return [] }
+        let ranked = divisions
+            .filter { $0.occurrenceCount > 0 }
+            .sorted { $0.occurrenceCount > $1.occurrenceCount }
+        let kept = ranked.prefix(limit)
+        var slices = kept.map {
+            Slice(
+                id: String($0.id),
+                name: $0.name,
+                value: $0.occurrenceCount,
+                fraction: Double($0.occurrenceCount) / Double(total)
+            )
+        }
+        let rest = ranked.dropFirst(kept.count).reduce(0) { $0 + $1.occurrenceCount }
+        if rest > 0 {
+            slices.append(
+                Slice(
+                    id: "other",
+                    name: "Other",
+                    value: rest,
+                    fraction: Double(rest) / Double(total),
+                    isOther: true
+                )
+            )
+        }
+        return slices
+    }
+}
+
+/// Every chapter of every book, shaded by how often the key occurs.
+public enum LampStrongsGrid {
+    public struct Cell: Identifiable, Equatable, Sendable {
+        public var id: Int { number }
+        public let number: Int
+        public let occurrenceCount: Int
+        /// 0...1 against the busiest chapter anywhere in the grid.
+        public let intensity: Double
+
+        public init(number: Int, occurrenceCount: Int, intensity: Double) {
+            self.number = number
+            self.occurrenceCount = occurrenceCount
+            self.intensity = intensity
+        }
+    }
+
+    public struct Row: Identifiable, Equatable, Sendable {
+        public let id: Int
+        public let name: String
+        public let cells: [Cell]
+        public let occurrenceCount: Int
+
+        public init(id: Int, name: String, cells: [Cell], occurrenceCount: Int) {
+            self.id = id
+            self.name = name
+            self.cells = cells
+            self.occurrenceCount = occurrenceCount
+        }
+    }
+
+    /// Rows for the books that hold the key.
+    ///
+    /// Shaded against the busiest chapter in the whole grid rather than the
+    /// busiest in each row: per-row shading would paint a book with one
+    /// occurrence as darkly as 1 John 4, which is the opposite of what the
+    /// picture is for.
+    public static func rows(
+        from books: [LampStrongsAnalysis.Division],
+        includingEmptyBooks: Bool = false
+    ) -> [Row] {
+        let busiest = books.flatMap(\.chapters).map(\.occurrenceCount).max() ?? 0
+        return books.compactMap { book in
+            guard includingEmptyBooks || book.occurrenceCount > 0 else { return nil }
+            guard !book.chapters.isEmpty else { return nil }
+            return Row(
+                id: book.id,
+                name: book.name,
+                cells: book.chapters.map { chapter in
+                    Cell(
+                        number: chapter.number,
+                        occurrenceCount: chapter.occurrenceCount,
+                        intensity: busiest > 0
+                            ? Double(chapter.occurrenceCount) / Double(busiest)
+                            : 0
+                    )
+                },
+                occurrenceCount: book.occurrenceCount
+            )
+        }
+    }
+}
+
+extension LampStrongsSpread {
+    /// Every book in range, including the ones the key never reaches.
+    ///
+    /// The analysis lists a book when the key occurs there, or when its
+    /// absence is itself notable — right for a ranked list, wrong for a
+    /// shape. Drawing the shape from that list squeezes the empty books out
+    /// and moves the clusters together, which is the one thing the shape is
+    /// supposed to show. So the gaps are put back.
+    public static func everyBook(
+        from books: [LampStrongsAnalysis.Division],
+        in range: ClosedRange<Int>?
+    ) -> [LampStrongsAnalysis.Division] {
+        let found = Dictionary(books.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return LampCanonicalBooks.all
+            .filter { range?.contains($0.number) ?? true }
+            .map { book in
+                found[book.number] ?? LampStrongsAnalysis.Division(
+                    id: book.number,
+                    name: book.name,
+                    bookRange: book.number...book.number,
+                    occurrenceCount: 0,
+                    verseCount: 0,
+                    wordCount: 0,
+                    expectedCount: 0,
+                    // Zero, not "fewer": a book core left out is one whose
+                    // absence it did not find notable, and saying otherwise
+                    // here would invent a finding.
+                    keyness: 0,
+                    chapters: []
+                )
+            }
     }
 }

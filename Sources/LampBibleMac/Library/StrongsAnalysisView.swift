@@ -176,8 +176,12 @@ struct StrongsAnalysisPane: View {
     @Binding var filter: LampStrongsFilter?
     /// Analyses another key, for a companion the reader chooses.
     let analyse: (String) -> Void
+    /// The books being searched, so the shape can put back the ones the key
+    /// never reaches.
+    let bookRange: ClosedRange<Int>?
 
     @State private var section: Section = .overview
+    @State private var style: LampStrongsChartStyle = .bars
     @State private var measure: LampStrongsSpreadMeasure = .occurrences
     @State private var bySection = false
     @State private var openBook: Int?
@@ -369,10 +373,18 @@ struct StrongsAnalysisPane: View {
 
     // MARK: - Spread
 
+    /// Books unless sections were asked for — and always books for the grid,
+    /// which is drawn from chapters that only a book has.
+    private var showsBooks: Bool { !bySection || style.needsBooks }
+
     private func spread(_ analysis: LampStrongsAnalysis) -> some View {
-        let divisions = bySection ? analysis.sections : analysis.books
-        let bars = LampStrongsSpread.bars(divisions, measure: measure)
-        return VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 10) {
+            Picker("Chart", selection: $style) {
+                ForEach(LampStrongsChartStyle.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
             HStack(spacing: 10) {
                 Picker("By", selection: $bySection) {
                     Text("Books").tag(false)
@@ -380,31 +392,257 @@ struct StrongsAnalysisPane: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .frame(width: 160)
-                Spacer()
-                Picker("Measure", selection: $measure) {
-                    ForEach(LampStrongsSpreadMeasure.allCases) { Text($0.title).tag($0) }
-                }
-                .labelsHidden()
                 .frame(width: 150)
-            }
-            if bars.isEmpty {
-                Text("Nothing to chart in these books.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            ForEach(bars) { bar in
-                spreadBar(bar, isBook: !bySection)
-                if !bySection, openBook == bar.id {
-                    chapterStrip(analysis, book: bar.id)
+                .disabled(style.needsBooks)
+                .help(style.needsBooks ? "Chapters belong to books" : "")
+                Spacer()
+                if style.usesMeasure {
+                    Picker("Measure", selection: $measure) {
+                        ForEach(LampStrongsSpreadMeasure.allCases) { Text($0.title).tag($0) }
+                    }
+                    .labelsHidden()
+                    .frame(width: 150)
                 }
             }
-            Text("“More” and “fewer” mean beyond chance, not simply above or below average.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .padding(.top, 2)
+
+            switch style {
+            case .bars: barsChart(analysis)
+            case .columns: columnsChart(analysis)
+            case .grid: gridChart(analysis)
+            case .share: shareChart(analysis)
+            }
+
+            if style != .share {
+                Text("“More” and “fewer” mean beyond chance, not simply above or "
+                    + "below average.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 2)
+            }
         }
         .padding(10)
+    }
+
+    // MARK: - Bars
+
+    @ViewBuilder
+    private func barsChart(_ analysis: LampStrongsAnalysis) -> some View {
+        let divisions = showsBooks ? analysis.books : analysis.sections
+        let bars = LampStrongsSpread.bars(divisions, measure: measure)
+        if bars.isEmpty {
+            nothingToChart
+        }
+        ForEach(bars) { bar in
+            spreadBar(bar, isBook: showsBooks)
+            if showsBooks, openBook == bar.id {
+                chapterStrip(analysis, book: bar.id)
+            }
+        }
+    }
+
+    // MARK: - The shape across the canon
+
+    /// One column per book in Bible order, gaps and all.
+    ///
+    /// Fitted to the width rather than scrolled: a shape you have to scroll
+    /// through is not a shape, and the whole point is seeing where the key
+    /// gathers in one look.
+    @ViewBuilder
+    private func columnsChart(_ analysis: LampStrongsAnalysis) -> some View {
+        let divisions = showsBooks
+            ? LampStrongsSpread.everyBook(from: analysis.books, in: bookRange)
+            : analysis.sections
+        let bars = LampStrongsSpread.bars(divisions, measure: measure)
+        if bars.isEmpty {
+            nothingToChart
+        } else {
+            let tallest = bars.max { $0.share < $1.share }
+            VStack(alignment: .leading, spacing: 5) {
+                GeometryReader { proxy in
+                    let gap: Double = bars.count > 40 ? 1 : 2
+                    let width = max(
+                        2,
+                        (proxy.size.width - gap * Double(bars.count - 1)) / Double(bars.count)
+                    )
+                    HStack(alignment: .bottom, spacing: gap) {
+                        ForEach(bars) { bar in
+                            Button {
+                                choose(.book(number: bar.id))
+                            } label: {
+                                RoundedRectangle(cornerRadius: min(2, width / 2))
+                                    .fill(fill(for: bar.expectation))
+                                    .frame(
+                                        width: width,
+                                        height: bar.share > 0
+                                            ? max(2, 96 * bar.share)
+                                            : 1
+                                    )
+                                    .opacity(bar.share > 0 ? 1 : 0.25)
+                            }
+                            .buttonStyle(.plain)
+                            .help(helpText(bar))
+                        }
+                    }
+                    .frame(height: 96, alignment: .bottom)
+                }
+                .frame(height: 96)
+
+                // Selective labels: the ends anchor the order, and the tallest
+                // is the one anyone will ask about. A name on all sixty-six
+                // would be a grey smear.
+                HStack(spacing: 4) {
+                    Text(bars.first?.name ?? "").font(.caption2)
+                    Spacer()
+                    if let tallest, tallest.occurrenceCount > 0 {
+                        Text("\(tallest.name) \(tallest.occurrenceCount)")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.tint)
+                    }
+                    Spacer()
+                    Text(bars.last?.name ?? "").font(.caption2)
+                }
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
+        }
+    }
+
+    // MARK: - Chapters
+
+    /// Every chapter of every book the key reaches, shaded by how often.
+    @ViewBuilder
+    private func gridChart(_ analysis: LampStrongsAnalysis) -> some View {
+        let rows = LampStrongsGrid.rows(from: analysis.books)
+        if rows.isEmpty {
+            nothingToChart
+        } else {
+            let busiest = rows.flatMap(\.cells).map(\.occurrenceCount).max() ?? 0
+            VStack(alignment: .leading, spacing: 3) {
+                ForEach(rows) { row in
+                    HStack(spacing: 5) {
+                        Text(row.name)
+                            .font(.caption2)
+                            .lineLimit(1)
+                            .frame(width: 74, alignment: .trailing)
+                            .foregroundStyle(.secondary)
+                        GeometryReader { proxy in
+                            let gap: Double = 1
+                            let width = max(
+                                2,
+                                (proxy.size.width - gap * Double(row.cells.count - 1))
+                                    / Double(row.cells.count)
+                            )
+                            HStack(spacing: gap) {
+                                ForEach(row.cells) { cell in
+                                    Button {
+                                        choose(.chapter(book: row.id, number: cell.number))
+                                    } label: {
+                                        RoundedRectangle(cornerRadius: 1)
+                                            .fill(.tint)
+                                            // A floor, so one occurrence is
+                                            // still visible against the
+                                            // background rather than a guess.
+                                            .opacity(
+                                                cell.occurrenceCount == 0
+                                                    ? 0.07
+                                                    : 0.25 + 0.75 * cell.intensity
+                                            )
+                                            .frame(width: width, height: 11)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("\(row.name) \(cell.number): "
+                                        + "\(cell.occurrenceCount)")
+                                }
+                            }
+                        }
+                        .frame(height: 11)
+                    }
+                }
+                // The grid cannot label every cell, so it says what the shade
+                // means and at what value it tops out.
+                HStack(spacing: 5) {
+                    Text("Darker = more").font(.caption2).foregroundStyle(.secondary)
+                    ForEach([0.07, 0.4, 0.7, 1.0], id: \.self) { step in
+                        RoundedRectangle(cornerRadius: 1)
+                            .fill(.tint)
+                            .opacity(step)
+                            .frame(width: 11, height: 9)
+                    }
+                    Text("up to \(busiest) in a chapter")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.top, 3)
+            }
+        }
+    }
+
+    // MARK: - Share
+
+    /// Each division's proportion of the whole.
+    ///
+    /// Every slice is named with its count and percentage beside the ring, so
+    /// nothing here is carried by colour alone — which matters more than
+    /// usual, since the slices are one hue at different strengths rather than
+    /// separate colours.
+    @ViewBuilder
+    private func shareChart(_ analysis: LampStrongsAnalysis) -> some View {
+        let slices = LampStrongsShare.slices(
+            from: showsBooks ? analysis.books : analysis.sections
+        )
+        if slices.isEmpty {
+            nothingToChart
+        } else {
+            HStack(alignment: .top, spacing: 14) {
+                ZStack {
+                    ForEach(Array(slices.enumerated()), id: \.element.id) { index, slice in
+                        DonutSlice(
+                            start: slices.prefix(index).reduce(0) { $0 + $1.fraction },
+                            extent: slice.fraction
+                        )
+                        .fill(.tint)
+                        .opacity(sliceOpacity(index, of: slices.count, isOther: slice.isOther))
+                        .help("\(slice.name): \(slice.value)")
+                    }
+                }
+                .frame(width: 104, height: 104)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(slices.enumerated()), id: \.element.id) { index, slice in
+                        HStack(spacing: 6) {
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(.tint)
+                                .opacity(
+                                    sliceOpacity(index, of: slices.count, isOther: slice.isOther)
+                                )
+                                .frame(width: 9, height: 9)
+                            Text(slice.name).font(.caption).lineLimit(1)
+                            Spacer(minLength: 4)
+                            Text("\(slice.value)")
+                                .font(.caption.monospacedDigit())
+                            Text("\(Int((slice.fraction * 100).rounded()))%")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                .frame(width: 34, alignment: .trailing)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// One hue, strongest for the largest slice. "Other" is always faintest,
+    /// because it is a leftover rather than a finding.
+    private func sliceOpacity(_ index: Int, of count: Int, isOther: Bool) -> Double {
+        guard !isOther else { return 0.2 }
+        guard count > 1 else { return 1 }
+        return 1 - 0.6 * (Double(index) / Double(count - 1))
+    }
+
+    private var nothingToChart: some View {
+        Text("Nothing to chart in these books.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
     }
 
     private func spreadBar(_ bar: LampStrongsSpreadBar, isBook: Bool) -> some View {
@@ -655,5 +893,31 @@ struct StrongsAnalysisPane: View {
     /// narrows and widens and nobody has to find the chip to get back.
     private func choose(_ next: LampStrongsFilter) {
         filter = filter == next ? nil : next
+    }
+}
+
+/// One wedge of a donut, as a fraction of the whole turn.
+///
+/// Drawn from twelve o'clock clockwise, which is where a reader expects a
+/// share to start.
+private struct DonutSlice: Shape {
+    /// Where this wedge begins, 0...1 of the turn.
+    let start: Double
+    /// How much of the turn it covers.
+    let extent: Double
+    var thickness: Double = 0.38
+
+    func path(in rect: CGRect) -> Path {
+        let centre = CGPoint(x: rect.midX, y: rect.midY)
+        let outer = min(rect.width, rect.height) / 2
+        let inner = outer * (1 - thickness)
+        let from = Angle.degrees(start * 360 - 90)
+        let to = Angle.degrees((start + extent) * 360 - 90)
+
+        var path = Path()
+        path.addArc(center: centre, radius: outer, startAngle: from, endAngle: to, clockwise: false)
+        path.addArc(center: centre, radius: inner, startAngle: to, endAngle: from, clockwise: true)
+        path.closeSubpath()
+        return path
     }
 }

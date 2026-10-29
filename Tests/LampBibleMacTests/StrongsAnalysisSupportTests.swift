@@ -465,3 +465,153 @@ struct StrongsQueryTests {
         )
     }
 }
+
+/// The other readings of one set of numbers.
+struct StrongsChartStyleTests {
+    private static func division(
+        id: Int, name: String, occurrences: Int, chapters: [(Int, Int)] = []
+    ) -> LampStrongsAnalysis.Division {
+        LampStrongsAnalysis.Division(
+            id: id, name: name, bookRange: id...id,
+            occurrenceCount: occurrences, verseCount: occurrences, wordCount: 1_000,
+            expectedCount: 0, keyness: 0,
+            chapters: chapters.map {
+                LampStrongsAnalysis.Chapter(
+                    number: $0.0, occurrenceCount: $0.1, wordCount: 500
+                )
+            }
+        )
+    }
+
+    // MARK: - Putting the gaps back
+
+    /// The shape is made of its gaps. The analysis leaves out a book the key
+    /// never reaches, so drawing straight from it moves Romans next to
+    /// Matthew and invents a cluster.
+    @Test func theshapeIncludesBooksTheKeyNeverReaches() {
+        let sparse = [
+            Self.division(id: 40, name: "Matthew", occurrences: 3),
+            Self.division(id: 45, name: "Romans", occurrences: 9),
+        ]
+
+        let padded = LampStrongsSpread.everyBook(from: sparse, in: 40...45)
+        #expect(padded.count == 6, "Matthew through Romans is six books")
+        #expect(padded.map(\.id) == [40, 41, 42, 43, 44, 45])
+        #expect(padded.map(\.occurrenceCount) == [3, 0, 0, 0, 0, 9])
+    }
+
+    /// A book core left out is one whose absence it did not find notable, so
+    /// the filler must not claim otherwise.
+    @Test func afilledBookIsNotMarkedAsFewerThanExpected() {
+        let padded = LampStrongsSpread.everyBook(
+            from: [Self.division(id: 40, name: "Matthew", occurrences: 3)],
+            in: 40...42
+        )
+        #expect(padded.dropFirst().allSatisfy { $0.expectation == .asExpected })
+        #expect(padded.allSatisfy { $0.ratePerThousandWords.isFinite })
+    }
+
+    @Test func nopaddingHappensOutsideTheChosenRange() {
+        let padded = LampStrongsSpread.everyBook(
+            from: [Self.division(id: 1, name: "Genesis", occurrences: 5)],
+            in: 40...41
+        )
+        #expect(padded.map(\.id) == [40, 41], "Genesis is out of range and is dropped")
+    }
+
+    // MARK: - Share
+
+    @Test func sharesAreProportionsOfTheWhole() {
+        let slices = LampStrongsShare.slices(
+            from: [
+                Self.division(id: 1, name: "Gospels", occurrences: 25),
+                Self.division(id: 2, name: "Paul", occurrences: 75),
+            ]
+        )
+        #expect(slices.map(\.name) == ["Paul", "Gospels"], "largest first")
+        #expect(slices[0].fraction == 0.75)
+        #expect(slices[1].fraction == 0.25)
+        #expect(abs(slices.reduce(0) { $0 + $1.fraction } - 1) < 0.000_001)
+    }
+
+    /// A ring of twenty-seven slivers answers nothing, so the tail is
+    /// gathered — and the gathered slice still has to carry its real count.
+    @Test func thetailIsGatheredIntoOther() {
+        let divisions = (1...10).map {
+            Self.division(id: $0, name: "Book \($0)", occurrences: 11 - $0)
+        }
+
+        let slices = LampStrongsShare.slices(from: divisions, limit: 3)
+        #expect(slices.count == 4)
+        #expect(slices.last?.isOther == true)
+        #expect(slices.last?.name == "Other")
+        // 10+9+8 named, the remaining 7...1 gathered.
+        #expect(slices.last?.value == 28)
+        #expect(abs(slices.reduce(0) { $0 + $1.fraction } - 1) < 0.000_001)
+    }
+
+    @Test func nothingToShareDrawsNoSlices() {
+        #expect(LampStrongsShare.slices(from: []).isEmpty)
+        #expect(
+            LampStrongsShare.slices(
+                from: [Self.division(id: 1, name: "Gospels", occurrences: 0)]
+            ).isEmpty,
+            "a slice of nothing is invisible but still takes a label"
+        )
+    }
+
+    @Test func anexactFitAddsNoOtherSlice() {
+        let slices = LampStrongsShare.slices(
+            from: [
+                Self.division(id: 1, name: "A", occurrences: 2),
+                Self.division(id: 2, name: "B", occurrences: 1),
+            ],
+            limit: 6
+        )
+        #expect(slices.count == 2)
+        #expect(slices.contains { $0.isOther } == false)
+    }
+
+    // MARK: - Grid
+
+    /// Shaded against the busiest chapter anywhere, not the busiest in each
+    /// row. Per-row shading would paint a book with one occurrence as darkly
+    /// as the book with twenty.
+    @Test func thegridIsShadedAgainstTheBusiestChapterAnywhere() {
+        let rows = LampStrongsGrid.rows(from: [
+            Self.division(id: 43, name: "John", occurrences: 2, chapters: [(1, 1), (2, 1)]),
+            Self.division(id: 62, name: "1 John", occurrences: 21, chapters: [(1, 1), (4, 20)]),
+        ])
+
+        #expect(rows.count == 2)
+        let john = try! #require(rows.first { $0.name == "John" })
+        let first = try! #require(rows.first { $0.name == "1 John" })
+        #expect(first.cells.last?.intensity == 1, "the busiest chapter anchors the ramp")
+        #expect(john.cells.first?.intensity == 0.05, "one against twenty, not one against one")
+    }
+
+    @Test func booksWithNoChaptersOrNoOccurrencesAreLeftOut() {
+        let rows = LampStrongsGrid.rows(from: [
+            Self.division(id: 43, name: "John", occurrences: 2, chapters: [(1, 2)]),
+            Self.division(id: 41, name: "Mark", occurrences: 0, chapters: [(1, 0)]),
+            Self.division(id: 40, name: "Matthew", occurrences: 5),
+        ])
+        #expect(rows.map(\.name) == ["John"])
+    }
+
+    @Test func anemptyGridDoesNotDivideByZero() {
+        let rows = LampStrongsGrid.rows(
+            from: [Self.division(id: 43, name: "John", occurrences: 0, chapters: [(1, 0)])],
+            includingEmptyBooks: true
+        )
+        #expect(rows.first?.cells.allSatisfy { $0.intensity == 0 } == true)
+    }
+
+    @Test func onlybarsAndColumnsHaveARate() {
+        #expect(LampStrongsChartStyle.bars.usesMeasure)
+        #expect(LampStrongsChartStyle.columns.usesMeasure)
+        #expect(!LampStrongsChartStyle.grid.usesMeasure)
+        #expect(!LampStrongsChartStyle.share.usesMeasure)
+        #expect(LampStrongsChartStyle.grid.needsBooks)
+    }
+}

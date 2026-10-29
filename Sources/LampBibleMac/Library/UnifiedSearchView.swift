@@ -92,21 +92,7 @@ struct UnifiedSearchView: View {
     var body: some View {
         Group {
             if showsStrongsAnalysis {
-                HSplitView {
-                    strongsOccurrences
-                    StrongsAnalysisPane(
-                        key: strongsRequest.key,
-                        loader: strongsLoader,
-                        filter: $strongsFilter,
-                        analyse: { strongsKey = $0 }
-                    )
-                }
-                .task(id: strongsRequest) {
-                    // A rendering or chapter chosen for the last key means
-                    // nothing for this one.
-                    strongsFilter = nil
-                    strongsLoader.load(strongsRequest, library: model.library)
-                }
+                strongsAnalysis
             } else if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 && !hasActiveStrongsFilter && !hasActiveHighlightColor {
                 searchLanding
@@ -325,6 +311,31 @@ struct UnifiedSearchView: View {
     private func strongsReference(_ reference: Int) -> String {
         let parts = LampBibleReferenceFormatter.components(of: reference)
         return "\(LampBibleReferenceFormatter.bookName(parts.book)) \(parts.chapter):\(parts.verse)"
+    }
+
+    /// The occurrence list beside the analysis.
+    ///
+    /// Held apart from `body` because the view builder's type checking gives
+    /// up once one expression carries this much: the error it reports lands
+    /// on whatever line it was reading at the time, which is rarely the one
+    /// at fault.
+    private var strongsAnalysis: some View {
+        HSplitView {
+            strongsOccurrences
+            StrongsAnalysisPane(
+                key: strongsRequest.key,
+                loader: strongsLoader,
+                filter: $strongsFilter,
+                analyse: { strongsKey = $0 },
+                bookRange: bookScope.range
+            )
+        }
+        .task(id: strongsRequest) {
+            // A rendering or chapter chosen for the last key means nothing
+            // for this one.
+            strongsFilter = nil
+            strongsLoader.load(strongsRequest, library: model.library)
+        }
     }
 
     /// Offers the analysis when the search box holds a Strong's key.
