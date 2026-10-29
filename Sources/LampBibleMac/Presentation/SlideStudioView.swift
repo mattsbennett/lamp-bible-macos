@@ -1432,7 +1432,7 @@ private struct LampSlideChartEditor: View {
                         }
                     }
                     .labelsHidden()
-                    TextField("Books (optional)", text: Binding(
+                    TextField("Books", text: Binding(
                         get: { chart.wrappedValue.source.range ?? "" },
                         set: { chart.wrappedValue.source.range = $0.isEmpty ? nil : $0 }
                     ))
@@ -1494,6 +1494,36 @@ private struct LampSlideChartEditor: View {
         }
     }
 
+    /// What this style draws, for counting them in the status line. A grid
+    /// draws a row per book, not a bar.
+    private func drawnThings(_ style: LampPresentationChart.Style) -> String {
+        switch style {
+        case .bars: "bars"
+        case .columns: "columns"
+        case .grid: "books"
+        case .share: "slices"
+        }
+    }
+
+    /// Too much to read, in the terms that style is read in.
+    ///
+    /// Each style has its own limit and they are not interchangeable: 27
+    /// columns are exactly what columns are for, while 27 bars are a wall.
+    /// The same split is in `LampPresentationDeckValidator` and in the
+    /// skill's `validate_deck.py`, so all three say one thing.
+    private func crowding(_ count: Int, style: LampPresentationChart.Style) -> String? {
+        switch style {
+        case .bars where count > LampPresentationChart.readableBars:
+            "\(count) bars — hard to read from the back of a room; try grouping by section."
+        case .grid where count > LampPresentationChart.readableGridRows:
+            "A grid of \(count) books is too dense to read. Narrow the range."
+        case .share where count > LampPresentationChart.shareSlices:
+            "\(count) slices cannot be told apart; the smallest are gathered."
+        default:
+            nil
+        }
+    }
+
     /// Named for what the chart shows rather than by its raw value, which
     /// is the deck format's word and not a reader's.
     private func studioStyleName(_ style: LampPresentationChart.Style) -> String {
@@ -1534,10 +1564,9 @@ private struct LampSlideChartEditor: View {
             if values.isEmpty {
                 status = "Nothing to chart in this range."
             } else {
-                status = values.count > LampPresentationChart.readableBars
-                    ? "\(values.count) bars — hard to read from the back of a room; "
-                        + "try grouping by section."
-                    : "\(values.count) bars from \(chart.source.translationID)."
+                status = crowding(values.count, style: chart.drawnStyle)
+                    ?? "\(values.count) \(drawnThings(chart.drawnStyle)) "
+                        + "from \(chart.source.translationID)."
             }
         } catch {
             // An unreadable range arrives here, which is the one mistake easy
