@@ -57,6 +57,7 @@ struct LampMCPCommand {
             }
             try await LampMCPServerFactory.runStdio(
                 library: library,
+                libraryRootURL: libraryRootURL,
                 policyURL: policyURL,
                 workspaceURL: options.workspaceURL
             )
@@ -85,23 +86,21 @@ struct LampMCPCommand {
     /// Derives what a deck can derive — its speaker notes and any missing
     /// identifiers — and says what it could not.
     private static func buildDeck(_ deckURL: URL, options: Options) throws {
-        let report = try LampDeckBuild.build(
+        let built = try LampDeckTools.buildFile(
             deckURL: deckURL,
             manuscriptURL: options.manuscriptURL
         )
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        FileHandle.standardOutput.write(try encoder.encode(report))
+        FileHandle.standardOutput.write(built.json)
         FileHandle.standardOutput.write(Data("\n".utf8))
         // A broken anchor is the one failure worth a non-zero status: it means
         // a slide's notes are no longer the manuscript's.
-        if !report.resolved { exit(1) }
+        if !built.resolved { exit(1) }
     }
 
     /// Draws a deck's slides to PNGs and prints what the drawing showed.
     @MainActor
     private static func renderDeck(_ deckURL: URL, options: Options) async throws {
-        let report = try await LampDeckPreview.render(
+        let json = try await LampDeckTools.renderFile(
             deckURL: deckURL,
             outputDirectory: options.outputURL
                 ?? deckURL.deletingLastPathComponent()
@@ -112,9 +111,7 @@ struct LampMCPCommand {
             slideNumbers: options.slideNumbers,
             width: options.renderWidth
         )
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        FileHandle.standardOutput.write(try encoder.encode(report))
+        FileHandle.standardOutput.write(json)
         FileHandle.standardOutput.write(Data("\n".utf8))
     }
 

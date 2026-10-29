@@ -9,7 +9,8 @@ struct LampMCPServerTests {
     @Test func advertisesOnlyReadOnlyToolsWithValidObjectSchemas() {
         let all = LampMCPToolCatalog.tools(workspace: true)
         #expect(LampMCPToolCatalog.tools.count == 15)
-        #expect(all.count == 16)
+        #expect(LampMCPToolCatalog.deckTools.count == 3)
+        #expect(all.count == 19)
         #expect(Set(all.map(\.name)).count == all.count)
         #expect(all.allSatisfy { $0.annotations.readOnlyHint == true })
         #expect(all.allSatisfy {

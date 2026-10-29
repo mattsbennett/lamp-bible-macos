@@ -13,29 +13,15 @@ Create or revise `presentation.lampdeck` in the current devotional workspace. Tr
 2. Read [references/deck-format.md](references/deck-format.md). When revising an existing `presentation.lampdeck`, preserve deck, slide, and block IDs for content that survives the revision.
 3. Outline one communicative purpose per slide. Prefer a clear narrative arc over mirroring every paragraph of the writing.
 4. Write the complete deck to `presentation.lampdeck`. Use UUIDs for all new IDs and link `source.id` to the exact value in `DEVOTIONAL_ID`.
-5. Validate the artifact:
-
-   ```sh
-   python3 .agents/skills/build-lamp-deck/scripts/validate_deck.py presentation.lampdeck
-   ```
-
+5. Validate the artifact with the `validate_deck` tool, passing the deck's text as `deck`. It reports every error and warning with the field it is at, and a missing required field by name. These are the same rules Lamp applies when it imports a deck.
 6. Fix every reported error. Review warnings and retain them only when the content genuinely requires the extra density.
-7. Derive what Lamp can derive. For a talk, this fills in the speaker notes and gives any new slide or block a UUID:
+7. Derive what Lamp can derive with the `build_deck` tool, passing the deck and — for a talk — `draft.md` as `manuscript`. It fills in the speaker notes, gives any new slide or block a UUID, and returns the filled-in deck for you to write back to `presentation.lampdeck`.
 
-   ```sh
-   "$HELPER" --build-deck presentation.lampdeck --manuscript draft.md
-   ```
+   Lamp derives these notes by itself on every save; this puts the same notes into your copy of the deck, and reports what it could not do. Its report's `resolved` is false when an anchor is no longer in the manuscript, and names the slide — under that slide's entry in `slides`, and by number in the top-level `slidesWithProblems`. Running it twice changes nothing.
+8. Look at the slides with the `render_deck` tool, passing the deck and `draft.md` as `manuscript`. It returns one picture per slide with a report.
 
-   Lamp derives these notes by itself on every save; this writes the same notes into your copy of the deck, assigns any missing IDs, and reports what it could not do. It exits non-zero when an anchor is no longer in the manuscript, and names the slide — under that slide's entry in `slides`, and by number in the top-level `slidesWithProblems`. Running it twice changes nothing.
-8. Look at the slides. The validator cannot see a layout, and most layout mistakes are invisible until something is drawn:
+   The validator cannot see a layout, and most layout mistakes are invisible until something is drawn. View the pictures. Act on every `note`: a block the layout will not draw, text shrunk to fit, content running off the slide, and — when a scripture block carries a `scriptureReference` — a quotation that does not match the installed translation. The top-level `slidesWithProblems` names the slides that have one, out of the slides this run drew. Pass `slides` to redraw just the ones you changed — remembering that a run narrowed that way can say nothing about the slides it skipped, so finish on a full run.
 
-   ```sh
-   HELPER=$(python3 -c "import json;print(json.load(open('.mcp.json'))['mcpServers']['lamp']['command'])")
-   "$HELPER" --render-deck presentation.lampdeck --output presentation-preview      --library-root "$(python3 -c "import json;a=json.load(open('.mcp.json'))['mcpServers']['lamp']['args'];print(a[a.index('--library-root')+1])")" \
-     --manuscript draft.md
-   ```
-
-   This writes one PNG per slide and prints a report. View the PNGs. Act on every `note`: a block the layout will not draw, text shrunk to fit, content running off the slide, and — when a scripture block carries a `scriptureReference` and `--library-root` is given — a quotation that does not match the installed translation. The top-level `slidesWithProblems` names the slides that have one, out of the slides this run drew. Add `--slides 3,7` to redraw just the ones you changed — remembering that a run narrowed that way can say nothing about the slides it skipped, so finish on a full run. `--overview presentation-preview/overview.jpg` tiles whatever was drawn into one numbered image, which is the way to review a run of slides together.
 9. Read `presentation-import.json` to confirm Lamp took the deck. Lamp writes it each time it looks at the artifact, and amends its `speakerNotes` whenever the writing is saved — so after the writer edits the prose, this is where a broken anchor appears, with the slide named.
 
    When the writer has edited while you worked, `writing_changes` shows what they changed, as diffs, so you need not keep copies of `draft.md` to compare. What a slide *summarises* is not checked by anything: after a passage changes, read the slides that stood on it.

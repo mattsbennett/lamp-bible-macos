@@ -166,9 +166,74 @@ public enum LampMCPToolCatalog {
         ),
     ]
 
+    /// Checking, deriving and drawing a deck.
+    ///
+    /// Offered to every session, workspace or not. The skill that used these
+    /// reached them through a shell — a `python3` validator and two flags on
+    /// this helper — which an app with no working folder cannot do, and which
+    /// was already failing on any Mac without the developer tools installed,
+    /// since macOS does not ship `python3`. The deck goes in as text and the
+    /// answer comes back as values, so the work is the same wherever it runs.
+    public static let deckTools: [Tool] = [
+        tool(
+            "validate_deck",
+            """
+            Check a Lamp deck against the rules Lamp applies when it imports \
+            one, and return every error and warning with the path it is at. \
+            Fix every error; keep a warning only where the content genuinely \
+            needs it. This is the same check as the skill's validate_deck.py, \
+            and needs no Python.
+            """,
+            properties: [
+                "deck": string("The deck's complete JSON."),
+            ],
+            required: ["deck"]
+        ),
+        tool(
+            "build_deck",
+            """
+            Derive what a deck can derive and return the filled-in deck with a \
+            report: speaker notes taken from the manuscript for each slide's \
+            notesAnchor, and identifiers for anything newly added. Running it \
+            twice changes nothing. The report's `resolved` is false when an \
+            anchor is no longer in the manuscript, and names the slide.
+            """,
+            properties: [
+                "deck": string("The deck's complete JSON."),
+                "manuscript": string(
+                    "The writing the talk is given from, as Markdown. Needed "
+                        + "for a deck whose speakerNotesSource is manuscript."
+                ),
+            ],
+            required: ["deck"]
+        ),
+        tool(
+            "render_deck",
+            """
+            Draw the deck's slides and return the pictures with a report. A \
+            format check cannot see a layout: a block that will not draw, text \
+            shrunk to fit, content running off the slide, and a quotation that \
+            does not match the installed translation are all invisible until \
+            something is drawn. Look at the pictures, and act on every note.
+            """,
+            properties: [
+                "deck": string("The deck's complete JSON."),
+                "manuscript": string("Optional manuscript, for checking a slide's notes anchor."),
+                "slides": arrayOfStrings(
+                    "Optional slide numbers to draw, such as [\"3\", \"7\"]. A run "
+                        + "narrowed this way says nothing about the slides it skipped, "
+                        + "so finish on a full run."
+                ),
+                "width": integer("Pixel width of each slide. Defaults to 1600."),
+            ],
+            required: ["deck"]
+        ),
+    ]
+
     /// Everything a session with a workspace is offered.
     public static func tools(workspace: Bool) -> [Tool] {
-        workspace ? tools + workspaceTools : tools
+        let base = tools + deckTools
+        return workspace ? base + workspaceTools : base
     }
 
     private static func tool(

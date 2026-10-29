@@ -8,6 +8,8 @@
 
 /* Begin PBXBuildFile section */
 		A10000000000000000000051 /* WritingChangesSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000004E /* WritingChangesSupport.swift */; };
+		A10000000000000000000227 /* LampMCPPromptCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000021B /* LampMCPPromptCatalog.swift */; };
+		A10000000000000000000226 /* DeckToolSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000021A /* DeckToolSupport.swift */; };
 		A10000000000000000000222 /* AgentDescriptorSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000218 /* AgentDescriptorSupport.swift */; };
 		A10000000000000000000210 /* FootnoteFieldSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000211 /* FootnoteFieldSupport.swift */; };
 		A10000000000000000000212 /* PendingWritesSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000212 /* PendingWritesSupport.swift */; };
@@ -83,8 +85,8 @@
 		A10000000000000000000028 /* AgentMCPConfigurationSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000026 /* AgentMCPConfigurationSupport.swift */; };
 		A10000000000000000000029 /* AgentModuleAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000027 /* AgentModuleAccess.swift */; };
 		A1000000000000000000002A /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000028 /* main.swift */; };
-		A100000000000000000000F1 /* DeckPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000F1 /* DeckPreview.swift */; };
-		A100000000000000000000F4 /* DeckBuild.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000F4 /* DeckBuild.swift */; };
+		A100000000000000000000F1 /* DeckPreviewSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000F1 /* DeckPreviewSupport.swift */; };
+		A100000000000000000000F4 /* DeckBuildSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000F4 /* DeckBuildSupport.swift */; };
 		A1000000000000000000002B /* LampMCPToolCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000029 /* LampMCPToolCatalog.swift */; };
 		A1000000000000000000002C /* LampMCPToolHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000002A /* LampMCPToolHandler.swift */; };
 		A1000000000000000000002D /* LampMCPServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000002B /* LampMCPServer.swift */; };
@@ -196,8 +198,8 @@
 		B10000000000000000000026 /* AgentMCPConfigurationSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/AgentMCPConfigurationSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000027 /* AgentModuleAccess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/AgentModuleAccess.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000028 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampMCP/main.swift; sourceTree = SOURCE_ROOT; };
-		B100000000000000000000F1 /* DeckPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampMCP/DeckPreview.swift; sourceTree = SOURCE_ROOT; };
-		B100000000000000000000F4 /* DeckBuild.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampMCP/DeckBuild.swift; sourceTree = SOURCE_ROOT; };
+		B100000000000000000000F1 /* DeckPreviewSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/DeckPreviewSupport.swift; sourceTree = SOURCE_ROOT; };
+		B100000000000000000000F4 /* DeckBuildSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/DeckBuildSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000029 /* LampMCPToolCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampMCPServer/LampMCPToolCatalog.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000002A /* LampMCPToolHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampMCPServer/LampMCPToolHandler.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000002B /* LampMCPServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampMCPServer/LampMCPServer.swift; sourceTree = SOURCE_ROOT; };
@@ -222,6 +224,8 @@
 		B100000000000000000000F2 /* PresentationImportStatusSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/PresentationImportStatusSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000111 /* TranslationImportSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/TranslationImportSheet.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000004E /* WritingChangesSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/WritingChangesSupport.swift; sourceTree = SOURCE_ROOT; };
+		B1000000000000000000021B /* LampMCPPromptCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampMCPServer/LampMCPPromptCatalog.swift; sourceTree = SOURCE_ROOT; };
+		B1000000000000000000021A /* DeckToolSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/DeckToolSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000218 /* AgentDescriptorSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/AgentDescriptorSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000211 /* FootnoteFieldSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/FootnoteFieldSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000212 /* PendingWritesSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/PendingWritesSupport.swift; sourceTree = SOURCE_ROOT; };
@@ -363,6 +367,8 @@
 				B100000000000000000000F5 /* AgentMarkdownMessageView.swift */,
 				B100000000000000000000F2 /* PresentationImportStatusSupport.swift */,
 				B1000000000000000000004E /* WritingChangesSupport.swift */,
+				B1000000000000000000021B /* LampMCPPromptCatalog.swift */,
+				B1000000000000000000021A /* DeckToolSupport.swift */,
 				B10000000000000000000218 /* AgentDescriptorSupport.swift */,
 				B10000000000000000000211 /* FootnoteFieldSupport.swift */,
 				B10000000000000000000212 /* PendingWritesSupport.swift */,
@@ -427,8 +433,8 @@
 			isa = PBXGroup;
 			children = (
 				B10000000000000000000028 /* main.swift */,
-				B100000000000000000000F1 /* DeckPreview.swift */,
-				B100000000000000000000F4 /* DeckBuild.swift */,
+				B100000000000000000000F1 /* DeckPreviewSupport.swift */,
+				B100000000000000000000F4 /* DeckBuildSupport.swift */,
 				B10000000000000000000029 /* LampMCPToolCatalog.swift */,
 				B1000000000000000000002A /* LampMCPToolHandler.swift */,
 				B1000000000000000000002B /* LampMCPServer.swift */,
@@ -652,6 +658,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000051 /* WritingChangesSupport.swift in Sources */,
+				A10000000000000000000227 /* LampMCPPromptCatalog.swift in Sources */,
+				A10000000000000000000226 /* DeckToolSupport.swift in Sources */,
 				A10000000000000000000222 /* AgentDescriptorSupport.swift in Sources */,
 				A10000000000000000000210 /* FootnoteFieldSupport.swift in Sources */,
 				A10000000000000000000212 /* PendingWritesSupport.swift in Sources */,
@@ -663,8 +671,8 @@
 				A10000000000000000000050 /* UnifiedDiffSupport.swift in Sources */,
 				A1000000000000000000004F /* AgentRevisionSupport.swift in Sources */,
 				A1000000000000000000002A /* main.swift in Sources */,
-				A100000000000000000000F1 /* DeckPreview.swift in Sources */,
-				A100000000000000000000F4 /* DeckBuild.swift in Sources */,
+				A100000000000000000000F1 /* DeckPreviewSupport.swift in Sources */,
+				A100000000000000000000F4 /* DeckBuildSupport.swift in Sources */,
 				A1000000000000000000002B /* LampMCPToolCatalog.swift in Sources */,
 				A1000000000000000000002C /* LampMCPToolHandler.swift in Sources */,
 				A1000000000000000000002D /* LampMCPServer.swift in Sources */,

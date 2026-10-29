@@ -148,6 +148,11 @@ struct XcodeProjectSourcesTests {
             .prefix(while: { $0 != ")" })
         for name in [
             "AgentDescriptorSupport.swift",
+            // The deck tools and the two files behind them: the helper serves
+            // them over MCP, and the app target compiles none of the three.
+            "DeckBuildSupport.swift",
+            "DeckPreviewSupport.swift",
+            "DeckToolSupport.swift",
             "AgentRevisionSupport.swift",
             "UnifiedDiffSupport.swift",
             "WritingChangesSupport.swift",

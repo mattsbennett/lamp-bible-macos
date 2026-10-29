@@ -8,6 +8,11 @@ import MCP
 
 public actor LampMCPToolHandler {
     private let library: LampAgentLibrary
+    /// Where the library is, for the one tool that needs the path rather than
+    /// the library's own API: drawing a deck checks its quotations against the
+    /// installed translations. `LampAgentLibrary` does not publish its root,
+    /// and this is not reason enough to make it.
+    private let libraryRootURL: URL?
     private let policyURL: URL?
     /// The agent workspace this session serves, when it has one. Only the
     /// writing's own history is reachable, and only to read.
@@ -16,10 +21,12 @@ public actor LampMCPToolHandler {
 
     public init(
         library: LampAgentLibrary,
+        libraryRootURL: URL? = nil,
         policyURL: URL? = nil,
         workspaceURL: URL? = nil
     ) {
         self.library = library
+        self.libraryRootURL = libraryRootURL
         self.policyURL = policyURL
         self.workspaceURL = workspaceURL
         encoder = JSONEncoder()
@@ -121,9 +128,100 @@ public actor LampMCPToolHandler {
         case "writing_changes":
             return try result(try writingChanges(arguments))
 
+        case "validate_deck":
+            return try result(LampDeckTools.validate(
+                deckJSON: try deckJSON(arguments)
+            ))
+
+        case "build_deck":
+            let built = try LampDeckTools.build(
+                deckJSON: try deckJSON(arguments),
+                manuscript: arguments["manuscript"]?.stringValue
+            )
+            // The deck itself goes back as text beside the report, since a
+            // caller with no folder cannot read it off disk afterwards.
+            return CallTool.Result(
+                content: [
+                    .text(
+                        text: String(decoding: built.reportJSON, as: UTF8.self),
+                        annotations: nil,
+                        _meta: nil
+                    ),
+                    .text(
+                        text: String(decoding: built.deckJSON, as: UTF8.self),
+                        annotations: nil,
+                        _meta: nil
+                    ),
+                ],
+                structuredContent: Value?.some(
+                    try structuredContent(from: built.reportJSON)
+                ),
+                isError: !built.resolved
+            )
+
+        case "render_deck":
+            return try await renderDeck(arguments)
+
         default:
             throw LampMCPToolError.unknownTool(name)
         }
+    }
+
+    /// A deck's JSON from the arguments, as text rather than a path: the
+    /// apps this is for have no folder to put a file in.
+    private func deckJSON(_ arguments: [String: Value]) throws -> Data {
+        Data(try requiredString("deck", in: arguments).utf8)
+    }
+
+    /// Draws the slides and sends the pictures back with the report.
+    ///
+    /// Each image is its own content item, titled, because a client shows them
+    /// in order and the reader needs to know which slide they are looking at.
+    private func renderDeck(_ arguments: [String: Value]) async throws -> CallTool.Result {
+        let slides = strings(arguments["slides"])?.compactMap(Int.init)
+        let rendered = try await LampDeckTools.render(
+            deckJSON: try deckJSON(arguments),
+            manuscript: arguments["manuscript"]?.stringValue,
+            libraryRoot: libraryRootURL,
+            slideNumbers: slides?.isEmpty == true ? nil : slides,
+            width: Double(arguments["width"]?.intValue ?? 1_600)
+        )
+        var content: [Tool.Content] = [
+            .text(
+                text: String(decoding: rendered.reportJSON, as: UTF8.self),
+                annotations: nil,
+                _meta: nil
+            ),
+        ]
+        if !rendered.unreadable.isEmpty {
+            content.append(.text(
+                text: "These slides were drawn but their pictures could not be read back: "
+                    + rendered.unreadable.map(String.init).joined(separator: ", ")
+                    + ".",
+                annotations: nil,
+                _meta: nil
+            ))
+        }
+        for image in rendered.images {
+            content.append(.text(
+                text: "Slide \(image.slideNumber): \(image.title)",
+                annotations: nil,
+                _meta: nil
+            ))
+            content.append(.image(
+                data: image.pngData.base64EncodedString(),
+                mimeType: "image/png",
+                annotations: nil,
+                _meta: nil
+            ))
+        }
+        return CallTool.Result(
+            content: content,
+            structuredContent: Value?.some(
+                try structuredContent(from: rendered.reportJSON)
+            ),
+            isError: false
+        )
     }
 
     /// What has changed in the writing, as diffs.
