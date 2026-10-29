@@ -113,8 +113,14 @@ struct UnifiedSearchView: View {
             } else if model.isModuleSearching && model.moduleSearchResults.isEmpty {
                 ProgressView("Searching Library…")
             } else if model.moduleSearchResults.isEmpty {
-                ContentUnavailableView.search(text: query.isEmpty
-                    ? (hasActiveStrongsFilter ? strongsKey : highlightColor) : query)
+                // The offer belongs here too: a key searched as words may find
+                // nothing at all, which is exactly when being told the
+                // analysis exists is most use.
+                VStack(spacing: 0) {
+                    strongsAnalysisOffer
+                    ContentUnavailableView.search(text: query.isEmpty
+                        ? (hasActiveStrongsFilter ? strongsKey : highlightColor) : query)
+                }
             } else {
                 HSplitView {
                     resultsList
@@ -128,7 +134,16 @@ struct UnifiedSearchView: View {
         }
         .navigationTitle("Search")
         .searchable(text: $query, placement: .toolbar, prompt: "Search Bibles and modules")
-        .onSubmit(of: .search) { saveSearch() }
+        .onSubmit(of: .search) {
+            // On submit rather than as it is typed: "H7" is a plausible key
+            // while someone is still typing "H7225", and moving the text out
+            // of the box mid-word would be maddening.
+            if let typed = LampStrongsQuery.key(in: query) {
+                analyse(typed)
+            } else {
+                saveSearch()
+            }
+        }
         .onChange(of: query) { _, _ in runSearch() }
         .onChange(of: selectedKind) { _, _ in
             selectedModuleID = nil
@@ -312,8 +327,53 @@ struct UnifiedSearchView: View {
         return "\(LampBibleReferenceFormatter.bookName(parts.book)) \(parts.chapter):\(parts.verse)"
     }
 
+    /// Offers the analysis when the search box holds a Strong's key.
+    ///
+    /// The analysis has its own toolbar field, which only appears once the
+    /// content picker is on Scripture — so someone who types a key into the
+    /// search box gets a text search and no sign the analysis is there at all.
+    /// This is the signpost. Choosing it fills the toolbar in, which is also
+    /// how you find the controls the second time.
+    @ViewBuilder
+    private var strongsAnalysisOffer: some View {
+        if let typed = LampStrongsQuery.key(in: query) {
+            Button {
+                analyse(typed)
+            } label: {
+                HStack(spacing: 9) {
+                    Image(systemName: "chart.bar.xaxis")
+                        .foregroundStyle(.tint)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Analyse \(typed)").font(.headline)
+                        Text("Where it is found, how translators rendered it, "
+                            + "and the keys it keeps company with.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+                }
+                .padding(10)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Divider()
+        }
+    }
+
+    /// Moves a key into the field that drives the analysis.
+    ///
+    /// The query is cleared rather than left behind, so the toolbar alone says
+    /// what is being shown: Scripture, and the key in its own field.
+    private func analyse(_ key: String) {
+        selectedKind = .translation
+        strongsKey = key
+        query = ""
+    }
+
     private var resultsList: some View {
         VStack(spacing: 0) {
+            strongsAnalysisOffer
             if selectedKind == .devotional {
                 HStack(spacing: 8) {
                     TextField("Date (YYYY-MM-DD or MM-DD)", text: $devotionalDate)

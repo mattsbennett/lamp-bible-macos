@@ -437,3 +437,31 @@ struct StrongsContextTests {
         #expect(analysis.verseTexts.isEmpty)
     }
 }
+
+/// Spotting a Strong's key typed into the search box.
+struct StrongsQueryTests {
+    @Test(arguments: [
+        ("H7225", "H7225"),
+        ("h7225", "H7225"),
+        (" G26 ", "G26"),
+        ("G0026", "G26"),
+        ("G1234a", "G1234A"),
+        ("TH1234", "TH1234"),
+    ])
+    func akeyIsRecognisedAndNormalised(typed: String, expected: String) {
+        #expect(LampStrongsQuery.key(in: typed) == expected)
+    }
+
+    /// The costly mistake: a word that happens to start with H or G being
+    /// taken for a key would hijack an ordinary search.
+    @Test(arguments: [
+        "Genesis", "God", "grace", "Hebrews", "Hebrews 1", "hope",
+        "holy", "H", "G", "", "   ", "John 1:1", "7225", "G 26", "G26x9",
+    ])
+    func wordsAreNotMistakenForKeys(typed: String) {
+        #expect(
+            LampStrongsQuery.key(in: typed) == nil,
+            "\(typed.debugDescription) must stay an ordinary search"
+        )
+    }
+}

@@ -277,3 +277,36 @@ public enum LampStrongsContext {
         )
     }
 }
+
+/// Recognising a Strong's key someone has typed into a search box.
+///
+/// The analysis has its own field in the toolbar, which only appears once the
+/// content picker is on Scripture — so someone who types a key into the search
+/// box gets a text search and no sign that the analysis exists. Reading the
+/// box lets the obvious thing happen instead.
+public enum LampStrongsQuery {
+    /// The key this text names, or nil when it is words.
+    ///
+    /// Deliberately strict. "Genesis" and "Hebrews 1" both begin with a letter
+    /// this would accept, so a key is only a key when digits follow the
+    /// prefix immediately — and a disambiguating suffix is one letter at most,
+    /// as in G1234a.
+    public static func key(in text: String) -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let upper = trimmed.uppercased()
+        let prefix: String
+        if upper.hasPrefix("TH") {
+            prefix = "TH"
+        } else if upper.hasPrefix("H") || upper.hasPrefix("G") {
+            prefix = String(upper.prefix(1))
+        } else {
+            return nil
+        }
+        let rest = upper.dropFirst(prefix.count)
+        let digits = rest.prefix { $0.isASCII && $0.isNumber }
+        guard !digits.isEmpty else { return nil }
+        let suffix = rest.dropFirst(digits.count)
+        guard suffix.count <= 1, suffix.allSatisfy(\.isLetter) else { return nil }
+        return LampStrongsKey.normalized(trimmed)
+    }
+}
