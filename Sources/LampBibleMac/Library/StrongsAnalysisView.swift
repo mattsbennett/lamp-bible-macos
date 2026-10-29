@@ -84,7 +84,13 @@ final class StrongsAnalysisLoader {
                 let found = try await library.strongsAnalyses(
                     key: request.key,
                     moduleIDs: [translationID],
-                    bookRange: request.bookRange
+                    bookRange: request.bookRange,
+                    // Only the translation being read, which is the only one
+                    // whose occurrences are listed. A common key's verses run
+                    // to about a megabyte, and Compare shows counts and
+                    // renderings — never a verse — so asking for the rest
+                    // would hold five copies nothing reads.
+                    includingVerseText: index == 0
                 )
                 if Task.isCancelled || requested != request { return }
                 analyses = LampStrongsAnalysisOrder.ordered(

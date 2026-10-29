@@ -329,3 +329,112 @@ struct StudioBlockKindTests {
         )
     }
 }
+
+/// Showing a verse around the word that carries the key.
+struct StrongsContextTests {
+    @Test func theverseIsSplitAroundTheTaggedWord() {
+        let snippet = LampStrongsContext.snippet(
+            of: "In the beginning was the Word, and the Word was with God.",
+            from: 25,
+            to: 29
+        )
+
+        #expect(snippet.before == "In the beginning was the ")
+        #expect(snippet.word == "Word")
+        #expect(snippet.after == ", and the Word was with God.")
+        #expect(!snippet.isTrimmedAtStart)
+        #expect(!snippet.isTrimmedAtEnd)
+    }
+
+    /// Offsets count Characters, not Unicode scalars. A decomposed accent
+    /// earlier in the verse makes the two disagree, and slicing by scalars
+    /// moves the highlight off the word — the same mistake the book readers
+    /// made in the other direction.
+    @Test func adecomposedAccentEarlierInTheVerseDoesNotMoveTheWord() {
+        // "Café" with a combining acute: five scalars, four characters.
+        let verse = "Cafe\u{301} and love abide"
+        #expect(verse.unicodeScalars.count != Array(verse).count, "the two must disagree here")
+
+        let characters = Array(verse)
+        let start = 9
+        let end = 13
+        #expect(String(characters[start..<end]) == "love", "the fixture's own offsets")
+
+        let snippet = LampStrongsContext.snippet(of: verse, from: start, to: end)
+        #expect(snippet.word == "love")
+        #expect(snippet.after == " abide")
+    }
+
+    /// An offset past the end of the verse. Clamped, because a tag that
+    /// disagrees with its verse must not take a row down — and must not
+    /// silently highlight the wrong words either.
+    @Test func offsetsPastTheEndAreClampedRatherThanTrusted() {
+        let verse = "Short verse."
+
+        let past = LampStrongsContext.snippet(of: verse, from: 400, to: 500)
+        #expect(past.before == verse)
+        #expect(past.word.isEmpty)
+        #expect(past.after.isEmpty)
+
+        let straddling = LampStrongsContext.snippet(of: verse, from: 6, to: 900)
+        #expect(straddling.before == "Short ")
+        #expect(straddling.word == "verse.")
+        #expect(straddling.after.isEmpty)
+    }
+
+    @Test func negativeAndReversedOffsetsGiveNoWordRatherThanACrash() {
+        let verse = "In the beginning"
+
+        let negative = LampStrongsContext.snippet(of: verse, from: -5, to: 2)
+        #expect(negative.before.isEmpty)
+        #expect(negative.word == "In")
+
+        let reversed = LampStrongsContext.snippet(of: verse, from: 9, to: 3)
+        #expect(reversed.word.isEmpty, "an end before its start describes nothing")
+        #expect(reversed.before == "In the be")
+    }
+
+    @Test func alongVerseIsTrimmedEitherSideAndSaysSo() {
+        let filler = String(repeating: "word ", count: 60)
+        let snippet = LampStrongsContext.snippet(
+            of: filler + "LOVE " + filler,
+            from: filler.count,
+            to: filler.count + 4,
+            window: 20
+        )
+
+        #expect(snippet.word == "LOVE")
+        #expect(snippet.isTrimmedAtStart)
+        #expect(snippet.isTrimmedAtEnd)
+        #expect(snippet.before.count <= 20)
+        #expect(snippet.after.count <= 20)
+    }
+
+    /// Trimming stops at a space, so a row never opens or closes on half a
+    /// word.
+    @Test func trimmingDoesNotCutAWordInHalf() {
+        let snippet = LampStrongsContext.snippet(
+            of: "Jerusalem Jerusalem Jerusalem LOVE Jerusalem Jerusalem",
+            from: 30,
+            to: 34,
+            window: 15
+        )
+
+        #expect(snippet.word == "LOVE")
+        #expect(!snippet.before.hasPrefix("salem"), "it must not start mid-word")
+        #expect(!snippet.after.hasSuffix("Jerus"), "nor end mid-word")
+    }
+
+    /// A verse that was never asked for. The pane only requests verses for the
+    /// translation being read, so the rest have none and must simply show no
+    /// snippet.
+    @Test func atranslationWithNoVersesKeptHasNoSnippets() {
+        let analysis = LampStrongsAnalysis(
+            key: "G3056", translationID: "KJVs", translationName: "KJV",
+            translationAbbreviation: "KJV", wordCount: 10, taggedVerseCount: 1,
+            occurrences: [], references: [], renderings: [], forms: [],
+            parsings: [], grammar: [], books: [], sections: [], companions: []
+        )
+        #expect(analysis.verseTexts.isEmpty)
+    }
+}

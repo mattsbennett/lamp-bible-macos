@@ -190,3 +190,90 @@ extension LampPresentationBlockKind {
         allCases.filter { $0 != .chart || $0 == kind }
     }
 }
+
+/// A verse around the word that carries the key.
+///
+/// Only the translation being read is asked for its verses — the others cost
+/// about a megabyte each for a common key and nothing reads them — so a
+/// snippet is drawn from `LampStrongsAnalysis.verseTexts`, which is empty
+/// unless it was asked for.
+public enum LampStrongsContext {
+    public struct Snippet: Equatable, Sendable {
+        public var before: String
+        /// The words the tag covers, which the row draws emphasised.
+        public var word: String
+        public var after: String
+        /// Text was dropped from that end to keep the row short.
+        public var isTrimmedAtStart: Bool
+        public var isTrimmedAtEnd: Bool
+
+        public init(
+            before: String,
+            word: String,
+            after: String,
+            isTrimmedAtStart: Bool = false,
+            isTrimmedAtEnd: Bool = false
+        ) {
+            self.before = before
+            self.word = word
+            self.after = after
+            self.isTrimmedAtStart = isTrimmedAtStart
+            self.isTrimmedAtEnd = isTrimmedAtEnd
+        }
+    }
+
+    /// The verse split around `startOffset..<endOffset`, trimmed to `window`
+    /// characters either side.
+    ///
+    /// Offsets count `Character`s, as every annotation offset in Lamp does.
+    /// Slicing `Array(verse)` rather than the scalars is the whole point: a
+    /// verse with a decomposed accent earlier in it has more scalars than
+    /// characters, and cutting by scalars moves the highlight off the word.
+    ///
+    /// Out-of-range offsets are clamped rather than trusted. They have been
+    /// wrong before — the book readers indexed characters while the converters
+    /// counted scalars — and a verse is the one place where being wrong by a
+    /// little means slicing a sentence mid-word instead of crashing, which is
+    /// harder to notice.
+    public static func snippet(
+        of verse: String,
+        from startOffset: Int,
+        to endOffset: Int,
+        window: Int = 72
+    ) -> Snippet {
+        let characters = Array(verse)
+        let start = min(max(0, startOffset), characters.count)
+        let end = min(max(start, endOffset), characters.count)
+
+        var before = String(characters[..<start])
+        var after = String(characters[end...])
+        let word = String(characters[start..<end])
+
+        var trimmedStart = false
+        if before.count > window {
+            before = String(before.suffix(window))
+            // Not mid-word: start at the next space, so a row never opens on
+            // half of a word.
+            if let space = before.firstIndex(of: " ") {
+                before = String(before[before.index(after: space)...])
+            }
+            trimmedStart = true
+        }
+        var trimmedEnd = false
+        if after.count > window {
+            after = String(after.prefix(window))
+            if let space = after.lastIndex(of: " ") {
+                after = String(after[..<space])
+            }
+            trimmedEnd = true
+        }
+
+        return Snippet(
+            before: before,
+            word: word,
+            after: after,
+            isTrimmedAtStart: trimmedStart,
+            isTrimmedAtEnd: trimmedEnd
+        )
+    }
+}

@@ -260,7 +260,17 @@ struct UnifiedSearchView: View {
                                             .foregroundStyle(.secondary)
                                     }
                                 }
-                                if !occurrence.text.isEmpty {
+                                if let verse = analysis?.verseTexts[occurrence.reference] {
+                                    // The outer style is the default for spans
+                                    // that set none, so the tagged word keeps
+                                    // the tint it was given.
+                                    strongsSnippet(of: verse, at: occurrence)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(3)
+                                } else if !occurrence.text.isEmpty {
+                                    // No verse kept for this translation, so
+                                    // the rendered words on their own.
                                     Text("“\(occurrence.text)”")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
@@ -277,6 +287,24 @@ struct UnifiedSearchView: View {
             }
         }
         .frame(minWidth: 300, idealWidth: 380)
+    }
+
+    /// The verse with the tagged word picked out, so a row reads as the
+    /// sentence it came from rather than as a word on its own.
+    private func strongsSnippet(
+        of verse: String,
+        at occurrence: LampStrongsAnalysis.Occurrence
+    ) -> Text {
+        let snippet = LampStrongsContext.snippet(
+            of: verse,
+            from: occurrence.startOffset,
+            to: occurrence.endOffset
+        )
+        return Text(snippet.isTrimmedAtStart ? "…" : "")
+            + Text(snippet.before)
+            + Text(snippet.word).bold().foregroundStyle(.tint)
+            + Text(snippet.after)
+            + Text(snippet.isTrimmedAtEnd ? "…" : "")
     }
 
     private func strongsReference(_ reference: Int) -> String {
