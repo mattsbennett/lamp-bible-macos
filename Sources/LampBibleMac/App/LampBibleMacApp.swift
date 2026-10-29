@@ -259,6 +259,7 @@ private struct ReaderSettingsView: View {
     @AppStorage("quiz.defaultAgeGroup") private var defaultQuizAgeGroup = ""
     @AppStorage("agent.moduleAccess.enabled") private var agentModuleAccessEnabled = true
     @AppStorage("agent.moduleAccess.scope") private var agentModuleAccessScope = AgentModuleAccessScope.enabledModules.rawValue
+    @State private var externalAppsStatus: String?
     @AppStorage(AgentModuleAccessPreferences.allowsExternalAppsKey)
     private var agentAllowsExternalApps = false
     @AppStorage("agent.moduleAccess.personal") private var agentPersonalContentEnabled = false
@@ -549,6 +550,27 @@ private struct ReaderSettingsView: View {
                             Label(agentModuleAccessStatus, systemImage: "server.rack")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    Section("Use Lamp in Other Apps") {
+                        Toggle(
+                            "Allow other apps to read my library",
+                            isOn: $agentAllowsExternalApps
+                        )
+                        .disabled(!agentModuleAccessEnabled)
+                        Text(
+                            """
+                            Separate from writing: these apps can read, and \
+                            nothing more. What they read goes to whichever AI \
+                            provider that app uses, not to Lamp's.
+                            """
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                        if agentModuleAccessEnabled, agentAllowsExternalApps {
+                            externalAppsSetup
                         }
                     }
                     // The helper reads the policy and the descriptor from
@@ -905,6 +927,153 @@ private struct ReaderSettingsView: View {
         )
     }
 
+    /// What every outside app's configuration will name, once the launcher is
+    /// installed beside the descriptor.
+    private var externalAppSetup: LampExternalAppSetup? {
+        guard let applicationSupport =
+            LampAgentDescriptorStore.defaultApplicationSupportURL() else { return nil }
+        return LampExternalAppSetup(
+            launcherURL: LampExternalAppSetup.launcherURL(
+                inApplicationSupport: applicationSupport
+            ),
+            appVersion: Bundle.main
+                .object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.0"
+        )
+    }
+
+    @ViewBuilder private var externalAppsSetup: some View {
+        if let setup = externalAppSetup {
+            HStack {
+                Text("Claude Desktop")
+                Spacer()
+                Button("Add to Claude Desktop…", systemImage: "square.and.arrow.down") {
+                    addToClaudeDesktop(setup)
+                }
+                .controlSize(.small)
+            }
+            Text(
+                """
+                Opens a bundle for Claude Desktop to install. Claude asks \
+                before adding it; Lamp does not change another app's settings.
+                """
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            Divider()
+
+            ForEach(setup.pasteableApps) { app in
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(app.name)
+                        Text(app.destination)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                    Spacer()
+                    Button("Copy", systemImage: "doc.on.doc") {
+                        copyExternalAppSnippet(app)
+                    }
+                    .controlSize(.small)
+                }
+            }
+            Text("Paste each one into that app's own configuration file yourself.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if let externalAppsStatus {
+                Label(externalAppsStatus, systemImage: "app.badge.checkmark")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } else {
+            Label(
+                "No Application Support folder, so other apps cannot be set up.",
+                systemImage: "exclamationmark.triangle"
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private func copyExternalAppSnippet(_ app: LampExternalApp) {
+        // The launcher has to exist before anyone pastes a config naming it.
+        installExternalLauncher()
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(app.snippet, forType: .string)
+        externalAppsStatus = "Copied the \(app.name) snippet. Paste it into \(app.destination)."
+    }
+
+    /// Builds the `.mcpb` and hands it to Claude Desktop, whose own dialog
+    /// does the installing. Lamp writes nothing into Claude's configuration.
+    private func addToClaudeDesktop(_ setup: LampExternalAppSetup) {
+        externalAppsStatus = "Building the bundle…"
+        Task {
+            do {
+                installExternalLauncher()
+                let staging = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("lamp-mcpb-\(UUID().uuidString)", isDirectory: true)
+                try FileManager.default.createDirectory(
+                    at: staging, withIntermediateDirectories: true
+                )
+                defer { try? FileManager.default.removeItem(at: staging) }
+                let contents = staging.appendingPathComponent("bundle", isDirectory: true)
+                try FileManager.default.createDirectory(
+                    at: contents, withIntermediateDirectories: true
+                )
+                try LampExternalAppInstaller.writeBundleContents(setup, to: contents)
+
+                // Somewhere it will still exist after this function returns,
+                // since Claude Desktop opens it asynchronously.
+                let bundleURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("lamp-bible.mcpb")
+                try? FileManager.default.removeItem(at: bundleURL)
+                try await compressDirectory(contents, to: bundleURL)
+
+                NSWorkspace.shared.open(bundleURL)
+                externalAppsStatus = "Opened lamp-bible.mcpb — Claude Desktop will ask to install it."
+            } catch {
+                externalAppsStatus = error.localizedDescription
+            }
+        }
+    }
+
+    private func installExternalLauncher() {
+        guard let applicationSupport =
+            LampAgentDescriptorStore.defaultApplicationSupportURL() else { return }
+        try? LampExternalAppInstaller.installLauncher(inApplicationSupport: applicationSupport)
+    }
+
+    /// `ditto -c -k` with no `--keepParent`, so the manifest lands at the root
+    /// of the archive where the format expects it.
+    ///
+    /// `--norsrc --noextattr` because without them ditto writes an AppleDouble
+    /// `._` sidecar beside every entry, and `._manifest.json` next to the
+    /// manifest is not something to hand another app as a bundle. The
+    /// executable bit on the launcher survives either way; it is stored in the
+    /// zip entry's own mode, not in an extended attribute.
+    private func compressDirectory(_ directory: URL, to destination: URL) async throws {
+        try await Task.detached(priority: .userInitiated) {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+            process.arguments = [
+                "-c", "-k", "--norsrc", "--noextattr", directory.path, destination.path,
+            ]
+            let errors = Pipe()
+            process.standardError = errors
+            try process.run()
+            let data = errors.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else {
+                throw ExternalAppSetupFailure(
+                    detail: String(decoding: data, as: UTF8.self)
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                )
+            }
+        }.value
+    }
+
     /// The archive the bundled modules live in, which both the descriptor and
     /// the health check have to name identically — they are the same library.
     private var bundledModulesArchiveURL: URL? {
@@ -990,4 +1159,15 @@ private enum ConfigurableModuleType: String, CaseIterable, Identifiable {
 
     var id: Self { self }
     var title: String { rawValue.capitalized }
+}
+
+/// Why setting another app up did not work, with whatever the tool said.
+private struct ExternalAppSetupFailure: Error, LocalizedError {
+    let detail: String
+
+    var errorDescription: String? {
+        detail.isEmpty
+            ? "The Claude Desktop bundle could not be built."
+            : "The Claude Desktop bundle could not be built: \(detail)"
+    }
 }
