@@ -234,9 +234,42 @@ struct XcodeProjectSourcesTests {
         let mac = try #require(written["LampMacCommit"] as? String)
         #expect(mac == commit || mac == commit + "-modified")
         let core = try #require(written["LampCoreCommit"] as? String)
-        #expect(core == "unknown" || core.wholeMatch(of: #/[0-9a-f]{40}(-modified)?/#) != nil)
+        #expect(core.wholeMatch(of: #/[0-9a-f]{40}(-modified)?/#) != nil)
         let archive = try #require(written["LampBundledModulesSHA256"] as? String)
         #expect(archive == "missing" || archive.wholeMatch(of: #/[0-9a-f]{64}/#) != nil)
         #expect(written["CFBundleIdentifier"] as? String == "test", "the rest of the plist is kept")
+    }
+
+    /// Builds are made again from what they name rather than kept, so one
+    /// that cannot name its commit has to fail rather than ship nameless.
+    @Test func theStampFailsWhereThereIsNoCommitToName() throws {
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("stamp-\(UUID().uuidString)", isDirectory: true)
+        let checkout = scratch.appendingPathComponent("not-a-checkout", isDirectory: true)
+        try FileManager.default.createDirectory(at: checkout, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let plist = scratch.appendingPathComponent("Info.plist")
+        let original = try PropertyListSerialization.data(
+            fromPropertyList: ["CFBundleIdentifier": "test"], format: .xml, options: 0
+        )
+        try original.write(to: plist)
+
+        let stamp = Process()
+        stamp.executableURL = repositoryRoot
+            .appendingPathComponent("scripts/stamp-build-sources.sh")
+        stamp.environment = [
+            "PATH": "/usr/bin:/bin",
+            // Outside any repository, so git has no commit to give.
+            "GIT_CEILING_DIRECTORIES": scratch.path,
+            "PROJECT_DIR": checkout.path,
+            "TARGET_BUILD_DIR": scratch.path,
+            "INFOPLIST_PATH": "Info.plist",
+        ]
+        stamp.standardError = Pipe()
+        try stamp.run()
+        stamp.waitUntilExit()
+
+        #expect(stamp.terminationStatus != 0)
+        #expect(try Data(contentsOf: plist) == original, "nothing is written for a nameless build")
     }
 }

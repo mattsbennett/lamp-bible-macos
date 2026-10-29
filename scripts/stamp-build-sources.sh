@@ -14,6 +14,10 @@
 # untracked files included: core's package compiles whatever is in its
 # Sources folder. Such a build cannot be made again from the commit alone.
 #
+# A checkout with no commit to read fails the build. Old builds are not kept,
+# on the understanding that any build can be made again from what it names,
+# so a build that names nothing is the one thing this must not produce.
+#
 # Run by the app target's last build phase, after the plist is processed and
 # before the bundle is signed. Reads TARGET_BUILD_DIR, INFOPLIST_PATH and
 # PROJECT_DIR as Xcode sets them.
@@ -24,7 +28,10 @@ plist="${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
 sibling="${PROJECT_DIR}/.."
 
 source_of() {
-    commit=$(git -C "$1" rev-parse HEAD 2>/dev/null) || { echo "unknown"; return; }
+    if ! commit=$(git -C "$1" rev-parse HEAD 2>/dev/null); then
+        echo "error: $1 is not a git checkout, so this build could not say what it was made from" >&2
+        exit 1
+    fi
     if [ -n "$(git -C "$1" status --porcelain 2>/dev/null)" ]; then
         commit="${commit}-modified"
     fi
@@ -43,6 +50,9 @@ set_string() {
         || /usr/libexec/PlistBuddy -c "Add :$1 string $2" "$plist"
 }
 
-set_string LampMacCommit "$(source_of "$PROJECT_DIR")"
-set_string LampCoreCommit "$(source_of "${sibling}/lamp-bible-core")"
+mac=$(source_of "$PROJECT_DIR")
+core=$(source_of "${sibling}/lamp-bible-core")
+
+set_string LampMacCommit "$mac"
+set_string LampCoreCommit "$core"
 set_string LampBundledModulesSHA256 "$archive_sha"
