@@ -58,6 +58,7 @@ struct LampMCPCommand {
             try await LampMCPServerFactory.runStdio(
                 library: library,
                 libraryRootURL: libraryRootURL,
+                policy: policy,
                 policyURL: policyURL,
                 workspaceURL: options.workspaceURL
             )

@@ -223,4 +223,147 @@ struct LampMCPClientCompatibilityTests {
             #expect(LampMCPServerFactory.compatibleClientMessage(data) == data)
         }
     }
+
+    // MARK: - Writing from outside Lamp
+
+    private struct WritingFixture {
+        let library: LampLibrary
+        let agent: LampAgentLibrary
+        let root: URL
+        let support: URL
+        let content: String
+        let writingID = "living-hope"
+    }
+
+    /// A real library with a real writing, because the write tool's second
+    /// check reads the writing as Lamp holds it, and no test could reach that
+    /// path until the descriptor's location became injectable.
+    private func writingFixture(allowsWriting: Bool) async throws -> WritingFixture {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-write-mcp-\(UUID().uuidString)", isDirectory: true)
+        let libraryRoot = root.appendingPathComponent("Library", isDirectory: true)
+        let support = root.appendingPathComponent("Support", isDirectory: true)
+        try FileManager.default.createDirectory(at: libraryRoot, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+
+        let content = "# Living Hope\n\nIt asks that we hold to it.\n"
+        let library = LampLibrary(rootURL: libraryRoot)
+        _ = try await library.savePersonalDevotional(
+            LampDevotional(
+                id: "living-hope",
+                moduleID: "personal-devotionals",
+                moduleName: "My Writing",
+                title: "Living Hope",
+                content: content
+            )
+        )
+
+        let workspace = LampWritingWorkspace.url(
+            libraryRootURL: libraryRoot, writingID: "living-hope"
+        )
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        try Data(content.utf8).write(
+            to: workspace.appendingPathComponent(LampWritingWorkspace.draftFilename)
+        )
+        try LampAgentDescriptorStore.write(
+            LampAgentDescriptor(
+                libraryRootPath: libraryRoot.path,
+                policyPath: libraryRoot.appendingPathComponent("p.json").path,
+                allowsExternalApps: true,
+                allowsExternalWriting: allowsWriting
+            ),
+            inApplicationSupport: support
+        )
+        return WritingFixture(
+            library: library,
+            agent: LampAgentLibrary(
+                libraryRootURL: libraryRoot,
+                policy: LampAgentAccessPolicy(includesPersonalContent: true)
+            ),
+            root: root,
+            support: support,
+            content: content
+        )
+    }
+
+    private func handler(_ fixture: WritingFixture) -> LampMCPToolHandler {
+        LampMCPToolHandler(
+            library: fixture.agent,
+            libraryRootURL: fixture.root.appendingPathComponent("Library", isDirectory: true),
+            applicationSupportURL: fixture.support,
+            policy: LampAgentAccessPolicy(includesPersonalContent: true)
+        )
+    }
+
+    @Test func awriteIsRefusedWhileTheSettingIsOffAndSaysWhichSetting() async throws {
+        let fixture = try await writingFixture(allowsWriting: false)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        await #expect(throws: LampMCPToolError.writingNotAllowed) {
+            try await handler(fixture).call(name: "write_writing_draft", arguments: [
+                "writing_id": .string(fixture.writingID),
+                "draft": .string("rewritten"),
+                "based_on": .string(fixture.content),
+            ])
+        }
+        let message = LampMCPToolError.writingNotAllowed.localizedDescription
+        #expect(message.contains("Allow other apps to change my writings"))
+        #expect(message.contains("Settings"))
+    }
+
+    @Test func awriteGoesToTheDraftWhenTheSettingIsOn() async throws {
+        let fixture = try await writingFixture(allowsWriting: true)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let revised = "# Living Hope\n\nIt asks that we hold to it before anything changes.\n"
+
+        let response = try await handler(fixture).call(
+            name: "write_writing_draft",
+            arguments: [
+                "writing_id": .string(fixture.writingID),
+                "draft": .string(revised),
+                "based_on": .string(fixture.content),
+            ]
+        )
+
+        #expect(response.isError == false)
+        #expect(
+            try LampWritingWorkspace.readDraft(
+                libraryRootURL: fixture.root.appendingPathComponent("Library", isDirectory: true),
+                writingID: fixture.writingID
+            ) == revised
+        )
+    }
+
+    /// The check this test exists for: the writer edited in Lamp's own editor,
+    /// which never touches `draft.md`. The draft on disk still matches what the
+    /// agent read, so only the library has moved — and the write must be
+    /// refused on that alone.
+    @Test func awriteIsRefusedWhenOnlyTheLibraryHasMoved() async throws {
+        let fixture = try await writingFixture(allowsWriting: true)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        _ = try await fixture.library.savePersonalDevotional(
+            LampDevotional(
+                id: fixture.writingID,
+                moduleID: "personal-devotionals",
+                moduleName: "My Writing",
+                title: "Living Hope",
+                content: fixture.content + "\nA sentence the writer added in Lamp.\n"
+            )
+        )
+
+        await #expect(throws: LampWritingWrite.WriteError.writingChangedInLamp) {
+            try await handler(fixture).call(name: "write_writing_draft", arguments: [
+                "writing_id": .string(fixture.writingID),
+                "draft": .string("rewritten"),
+                "based_on": .string(fixture.content),
+            ])
+        }
+        #expect(
+            try LampWritingWorkspace.readDraft(
+                libraryRootURL: fixture.root.appendingPathComponent("Library", isDirectory: true),
+                writingID: fixture.writingID
+            ) == fixture.content,
+            "the draft must be left exactly as it was"
+        )
+    }
 }

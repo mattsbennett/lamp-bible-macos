@@ -13,6 +13,11 @@ public actor LampMCPToolHandler {
     /// installed translations. `LampAgentLibrary` does not publish its root,
     /// and this is not reason enough to make it.
     private let libraryRootURL: URL?
+    /// Where the descriptor is, which carries the writing switch. Injected
+    /// rather than looked up, so the check can be tested without reading the
+    /// machine's own Application Support — an untestable permission check is
+    /// one nobody can be sure of.
+    private let applicationSupportURL: URL?
     private let policyURL: URL?
     /// The agent workspace this session serves, when it has one. Only the
     /// writing's own history is reachable, and only to read.
@@ -25,26 +30,37 @@ public actor LampMCPToolHandler {
     /// session with no policy file to read denies it. Failing closed is the
     /// only safe direction for a permission: a missing answer must not read as
     /// yes.
-    private var policy = LampAgentAccessPolicy()
+    /// The policy as last read.
+    ///
+    /// Given at startup rather than left at the default, so it cannot
+    /// disagree with the library it was handed: a session started without a
+    /// policy file to re-read would otherwise deny personal content that the
+    /// library itself permits. Still defaults to the policy where personal
+    /// content is *not* included, because a missing answer must not read as
+    /// yes.
+    private var policy: LampAgentAccessPolicy
 
     /// Whether outside apps may change a writing, read from the descriptor at
     /// each call rather than held from startup: the setting can be turned off
     /// while an app is connected, and the next write should see that.
     private var allowsExternalWriting: Bool {
-        guard let applicationSupport =
-            LampAgentDescriptorStore.defaultApplicationSupportURL() else { return false }
-        return (try? LampAgentDescriptorStore.read(inApplicationSupport: applicationSupport))?
+        guard let applicationSupportURL else { return false }
+        return (try? LampAgentDescriptorStore.read(inApplicationSupport: applicationSupportURL))?
             .allowsExternalWriting ?? false
     }
 
     public init(
         library: LampAgentLibrary,
         libraryRootURL: URL? = nil,
+        applicationSupportURL: URL? = LampAgentDescriptorStore.defaultApplicationSupportURL(),
+        policy: LampAgentAccessPolicy = LampAgentAccessPolicy(),
         policyURL: URL? = nil,
         workspaceURL: URL? = nil
     ) {
         self.library = library
         self.libraryRootURL = libraryRootURL
+        self.applicationSupportURL = applicationSupportURL
+        self.policy = policy
         self.policyURL = policyURL
         self.workspaceURL = workspaceURL
         encoder = JSONEncoder()
@@ -255,6 +271,38 @@ public actor LampMCPToolHandler {
         )
     }
 
+    /// The writing as the library holds it, for comparing against what the
+    /// caller read — or nil when there is nothing comparable to compare.
+    ///
+    /// This is a second, earlier guard. It catches the writer editing in
+    /// Lamp's own editor, which never reaches `draft.md`, and so gives the
+    /// agent a refusal at write time rather than a surprise at import. The
+    /// guard that actually protects the writer's words is the one at import,
+    /// which compares the note's base against Lamp's own full copy of the
+    /// writing; so where this returns nil, nothing is lost but the early
+    /// warning.
+    ///
+    /// Nil for two reasons, and only these two. A writing that exists as a
+    /// workspace and not in the library has nothing to compare. And a writing
+    /// past the read limit comes back truncated, with a marker appended:
+    /// hashing that against a full draft would refuse *every* write to a long
+    /// writing, and tell the writer their own editing was the cause.
+    ///
+    /// Any other failure refuses. A read that did not work is not permission
+    /// to skip the check.
+    private func writingAsLampHoldsIt(_ writingID: String) async throws -> String? {
+        do {
+            let text = try await library.readDevotional(
+                moduleID: "personal-devotionals", devotionalID: writingID
+            ).content
+            // `limitedText` appends its notice, so a truncated result is
+            // always longer than the limit it was cut to.
+            return text.count > policy.maximumItemCharacters ? nil : text
+        } catch LampAgentError.itemNotFound {
+            return nil
+        }
+    }
+
     /// Replaces a writing's draft, if the writer has not moved it underneath.
     ///
     /// The switch is checked here rather than by hiding the tool, so an app
@@ -267,16 +315,11 @@ public actor LampMCPToolHandler {
         let draft = try requiredString("draft", in: arguments)
         let basedOn = try requiredString("based_on", in: arguments)
 
-        // What Lamp holds, which an editor can have moved without touching
-        // draft.md. Absent when the writing is not in the library at all, in
-        // which case the draft on disk is the only thing to check against.
-        let libraryText = try? await library.readDevotional(
-            moduleID: "personal-devotionals", devotionalID: writingID
-        ).content
+        let libraryText = try await writingAsLampHoldsIt(writingID)
 
         let note = try LampWritingWrite.writeDraft(
             libraryRootURL: root,
-            applicationSupportURL: LampAgentDescriptorStore.defaultApplicationSupportURL(),
+            applicationSupportURL: applicationSupportURL,
             writingID: writingID,
             draft: draft,
             basedOn: basedOn,

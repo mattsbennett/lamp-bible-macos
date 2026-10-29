@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(LampBibleMacSupport)
+import LampBibleMacSupport
+#endif
 import LampCore
 import MCP
 import System
@@ -11,12 +14,16 @@ public enum LampMCPServerFactory {
     public static func makeServer(
         library: LampAgentLibrary,
         libraryRootURL: URL? = nil,
+        applicationSupportURL: URL? = LampAgentDescriptorStore.defaultApplicationSupportURL(),
+        policy: LampAgentAccessPolicy = LampAgentAccessPolicy(),
         policyURL: URL? = nil,
         workspaceURL: URL? = nil
     ) async -> Server {
         let handler = LampMCPToolHandler(
             library: library,
             libraryRootURL: libraryRootURL,
+            applicationSupportURL: applicationSupportURL,
+            policy: policy,
             policyURL: policyURL,
             workspaceURL: workspaceURL
         )
@@ -74,12 +81,15 @@ public enum LampMCPServerFactory {
     public static func runStdio(
         library: LampAgentLibrary,
         libraryRootURL: URL? = nil,
+        applicationSupportURL: URL? = LampAgentDescriptorStore.defaultApplicationSupportURL(),
+        policy: LampAgentAccessPolicy = LampAgentAccessPolicy(),
         policyURL: URL? = nil,
         workspaceURL: URL? = nil
     ) async throws {
         let server = await makeServer(
             library: library,
             libraryRootURL: libraryRootURL,
+            applicationSupportURL: applicationSupportURL,
             policyURL: policyURL,
             workspaceURL: workspaceURL
         )
