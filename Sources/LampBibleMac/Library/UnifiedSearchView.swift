@@ -89,12 +89,74 @@ struct UnifiedSearchView: View {
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
+    /// The date, tag and category fields.
+    ///
+    /// Above the results rather than inside them. Drawn within the results
+    /// list, they vanished the moment a filter matched nothing — which is
+    /// exactly when you need to reach them, because the filter you cannot see
+    /// is the one you want to clear.
+    @ViewBuilder
+    private var devotionalFilters: some View {
+        if selectedKind == .devotional {
+            HStack(spacing: 8) {
+                TextField("Date (YYYY-MM-DD or MM-DD)", text: $devotionalDate)
+                    .frame(width: 170)
+                TextField("Tag", text: $devotionalTag)
+                    .frame(width: 110)
+                TextField("Category", text: $devotionalCategory)
+                    .frame(width: 110)
+                if hasActiveDevotionalFilter {
+                    Button("Clear", action: clearDevotionalFilters)
+                        .help("Clear the date, tag and category")
+                }
+                Spacer(minLength: 0)
+            }
+            .textFieldStyle(.roundedBorder)
+            .padding(10)
+            Divider()
+        }
+    }
+
+    private var hasActiveDevotionalFilter: Bool {
+        selectedKind == .devotional && devotionalCriteria != LampDevotionalSearchCriteria()
+    }
+
+    /// The criteria the fields describe, built once and used both to search
+    /// and to tell whether anything is filtered at all.
+    private var devotionalCriteria: LampDevotionalSearchCriteria {
+        guard selectedKind == .devotional else { return .init() }
+        let date = devotionalDate.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tag = devotionalTag.trimmingCharacters(in: .whitespacesAndNewlines)
+        let category = devotionalCategory.trimmingCharacters(in: .whitespacesAndNewlines)
+        return LampDevotionalSearchCriteria(
+            date: date.count == 10 ? date : nil,
+            monthDay: date.count == 5 ? date : nil,
+            tags: tag.isEmpty ? nil : [tag],
+            categories: category.isEmpty ? nil : [category]
+        )
+    }
+
+    /// A snippet with core's match markup taken out.
+    private func unmarked(_ snippet: String) -> String {
+        snippet.replacingOccurrences(of: "<mark>", with: "")
+            .replacingOccurrences(of: "</mark>", with: "")
+    }
+
+    private func clearDevotionalFilters() {
+        devotionalDate = ""
+        devotionalTag = ""
+        devotionalCategory = ""
+    }
+
     var body: some View {
+        VStack(spacing: 0) {
+        devotionalFilters
         Group {
             if showsStrongsAnalysis {
                 strongsAnalysis
             } else if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                && !hasActiveStrongsFilter && !hasActiveHighlightColor {
+                && !hasActiveStrongsFilter && !hasActiveHighlightColor
+                && !hasActiveDevotionalFilter {
                 searchLanding
             } else if model.isModuleSearching && model.moduleSearchResults.isEmpty {
                 ProgressView("Searching Library…")
@@ -124,7 +186,7 @@ struct UnifiedSearchView: View {
             // On submit rather than as it is typed: "H7" is a plausible key
             // while someone is still typing "H7225", and moving the text out
             // of the box mid-word would be maddening.
-            if let typed = LampStrongsQuery.key(in: query) {
+            if let typed = LampStrongsKey.typedKey(query) {
                 analyse(typed)
             } else {
                 saveSearch()
@@ -132,7 +194,14 @@ struct UnifiedSearchView: View {
         }
         .onChange(of: query) { _, _ in runSearch() }
         .onChange(of: selectedKind) { _, _ in
-            selectedModuleID = nil
+            // Only when it no longer belongs. Clearing unconditionally threw
+            // away the module a history entry had just restored, because
+            // restoring an entry sets the kind as well.
+            if let id = selectedModuleID,
+               !availableModules.contains(where: { $0.id == id }) {
+                selectedModuleID = nil
+            }
+            if selectedKind != .devotional { clearDevotionalFilters() }
             runSearch()
         }
         .onChange(of: selectedModuleID) { _, _ in runSearch() }
@@ -155,6 +224,7 @@ struct UnifiedSearchView: View {
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 9))
                     .padding()
             }
+        }
         }
     }
 
@@ -347,7 +417,7 @@ struct UnifiedSearchView: View {
     /// how you find the controls the second time.
     @ViewBuilder
     private var strongsAnalysisOffer: some View {
-        if let typed = LampStrongsQuery.key(in: query) {
+        if let typed = LampStrongsKey.typedKey(query) {
             Button {
                 analyse(typed)
             } label: {
@@ -385,18 +455,6 @@ struct UnifiedSearchView: View {
     private var resultsList: some View {
         VStack(spacing: 0) {
             strongsAnalysisOffer
-            if selectedKind == .devotional {
-                HStack(spacing: 8) {
-                    TextField("Date (YYYY-MM-DD or MM-DD)", text: $devotionalDate)
-                        .frame(width: 170)
-                    TextField("Tag", text: $devotionalTag)
-                        .frame(width: 110)
-                    TextField("Category", text: $devotionalCategory)
-                        .frame(width: 110)
-                }
-                .textFieldStyle(.roundedBorder)
-                .padding(10)
-            }
             List(selection: $selectedResultID) {
                 ForEach(model.moduleSearchResults) { result in
                     VStack(alignment: .leading, spacing: 7) {
@@ -552,17 +610,7 @@ struct UnifiedSearchView: View {
     }
 
     private func runSearch() {
-        let date = devotionalDate.trimmingCharacters(in: .whitespacesAndNewlines)
-        let tag = devotionalTag.trimmingCharacters(in: .whitespacesAndNewlines)
-        let category = devotionalCategory.trimmingCharacters(in: .whitespacesAndNewlines)
-        let criteria = selectedKind == .devotional
-            ? LampDevotionalSearchCriteria(
-                date: date.count == 10 ? date : nil,
-                monthDay: date.count == 5 ? date : nil,
-                tags: tag.isEmpty ? nil : [tag],
-                categories: category.isEmpty ? nil : [category]
-            )
-            : LampDevotionalSearchCriteria()
+        let criteria = devotionalCriteria
         model.searchModules(
             query, kind: selectedKind, moduleID: selectedModuleID,
             bookRange: (selectedKind == .translation || selectedKind == .highlights)
@@ -596,12 +644,31 @@ struct UnifiedSearchView: View {
     /// A translation result's module is the translation. Everything else — a
     /// commentary, a note — points at scripture without being scripture, so it
     /// opens in whatever is being read.
+    /// The translation a result should open in.
+    ///
+    /// A highlight's module is `personal-highlights:<translation>`, and that
+    /// translation is the one it was made in. Returning nil for it opened the
+    /// verse in whatever translation happened to be on screen, where the
+    /// highlight is not.
     private func translationID(of result: LampModuleSearchResult) -> String? {
-        result.kind == .translation ? result.moduleID : nil
+        switch result.kind {
+        case .translation:
+            return result.moduleID
+        case .highlights:
+            let prefix = "\(LampModuleKind.highlights.rawValue):"
+            guard result.moduleID.hasPrefix(prefix) else { return nil }
+            let id = String(result.moduleID.dropFirst(prefix.count))
+            return id.isEmpty ? nil : id
+        default:
+            return nil
+        }
     }
 
     private func copy(_ result: LampModuleSearchResult) {
-        let text = [result.title, result.referenceDescription, result.snippet]
+        // Without the marks. Core wraps each matched term in <mark> so the
+        // list can highlight it; pasting that markup into someone's notes is
+        // not what Copy means.
+        let text = [result.title, result.referenceDescription, unmarked(result.snippet)]
             .compactMap { $0 }
             .joined(separator: "\n")
         NSPasteboard.general.clearContents()

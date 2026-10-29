@@ -16,11 +16,18 @@ enum BiblicalOriginalLanguage: String, CaseIterable {
     case greek
     case hebrew
 
+    /// The language a Strong's key belongs to, or nil for ordinary words.
+    ///
+    /// Only from a real key. This used to read the first letter of whatever
+    /// was typed, so searching "grace" looked in the Greek lexicon alone and
+    /// "hope" in the Hebrew one — the wrong dictionary, with nothing on
+    /// screen to say the others had been dropped.
     static func inferred(from key: String) -> Self? {
-        switch key.trimmingCharacters(in: .whitespacesAndNewlines).uppercased().first {
-        case "G": .greek
-        case "H": .hebrew
-        default: nil
+        guard let key = LampStrongsKey.typedKey(key) else { return nil }
+        switch key.first {
+        case "G": return .greek
+        case "H": return .hebrew
+        default: return nil
         }
     }
 }
@@ -547,9 +554,12 @@ final class LibraryModel: ObservableObject {
     ) {
         moduleSearchTask?.cancel()
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A date, tag or category is a search in its own right: core answers
+        // one now, and without this the fields did nothing on their own.
         guard !trimmedQuery.isEmpty
             || strongsKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-            || highlightColors?.isEmpty == false else {
+            || highlightColors?.isEmpty == false
+            || devotionalCriteria != LampDevotionalSearchCriteria() else {
             moduleSearchResults = []
             isModuleSearching = false
             return

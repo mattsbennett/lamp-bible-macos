@@ -439,6 +439,11 @@ struct StrongsContextTests {
 }
 
 /// Spotting a Strong's key typed into the search box.
+///
+/// The rule lives in core (`LampStrongsKey.typedKey`) so that the Mac, iOS
+/// and the agent tools agree on it. These stay because they pin what the
+/// Mac's search box depends on: loosen the rule and an ordinary search for
+/// "Genesis" would be hijacked into a Strong's analysis.
 struct StrongsQueryTests {
     @Test(arguments: [
         ("H7225", "H7225"),
@@ -449,7 +454,7 @@ struct StrongsQueryTests {
         ("TH1234", "TH1234"),
     ])
     func akeyIsRecognisedAndNormalised(typed: String, expected: String) {
-        #expect(LampStrongsQuery.key(in: typed) == expected)
+        #expect(LampStrongsKey.typedKey(typed) == expected)
     }
 
     /// The costly mistake: a word that happens to start with H or G being
@@ -460,7 +465,7 @@ struct StrongsQueryTests {
     ])
     func wordsAreNotMistakenForKeys(typed: String) {
         #expect(
-            LampStrongsQuery.key(in: typed) == nil,
+            LampStrongsKey.typedKey(typed) == nil,
             "\(typed.debugDescription) must stay an ordinary search"
         )
     }
