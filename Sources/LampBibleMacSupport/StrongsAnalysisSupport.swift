@@ -169,25 +169,25 @@ public enum LampStrongsSpread {
 extension LampPresentationBlockKind {
     /// The roles Slide Studio can add by hand.
     ///
-    /// A chart is *drawn* here — core's canvas handles it through the picture
-    /// slot — but not yet built here. It needs a key, a translation, a
-    /// grouping and a measure, and a block carrying none of those is invalid
-    /// the moment it is added, which is what offering it in the menu did. Until
-    /// Studio has an editor for those four, a chart reaches a deck from an
-    /// agent that wrote all of them, or from the analysis pane.
+    /// Every one of them. A chart was held back while Studio could draw one
+    /// but not build one — adding it then made a block that was invalid the
+    /// moment it appeared — and it came back when the editor did, which adds
+    /// a chart with its translation already chosen.
     public static var authorableHere: [LampPresentationBlockKind] {
-        allCases.filter { $0 != .chart }
+        allCases
     }
 
-    /// The same list, with `kind` kept in it whether or not it is authorable.
+    /// The same list, with `kind` in it whether or not it is authorable.
     ///
-    /// For a picker bound to an existing block: a selection with no matching
-    /// tag draws blank and can be reset to the first entry, which would
-    /// silently turn a chart into a title.
+    /// Kept for a picker bound to an existing block: a selection with no
+    /// matching tag draws blank and can be reset to the first entry, silently
+    /// turning one kind of block into another. Nothing is held back today, so
+    /// this is the same list — and it is the guard that has to stay if
+    /// anything is held back again.
     public static func authorableHere(
         including kind: LampPresentationBlockKind
     ) -> [LampPresentationBlockKind] {
-        allCases.filter { $0 != .chart || $0 == kind }
+        authorableHere.contains(kind) ? authorableHere : authorableHere + [kind]
     }
 }
 

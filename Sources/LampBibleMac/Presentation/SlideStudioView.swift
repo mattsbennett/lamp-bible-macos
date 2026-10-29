@@ -1107,6 +1107,23 @@ struct SlideStudioView: View {
                 assetPath: "\(LampPresentationDeckStore.assetsDirectoryName)/image.jpg",
                 altText: "Describe the image"
             )
+        } else if kind == .chart {
+            // With a translation already chosen, so the block is one field
+            // short of valid rather than two. The key has no sensible default
+            // — it is the whole question the chart asks.
+            block = .init(
+                kind: .chart,
+                text: "",
+                chart: LampPresentationChart(
+                    source: .init(
+                        strongs: "",
+                        translationID: model.selectedTranslationID
+                            ?? model.translations.first?.id
+                            ?? ""
+                    ),
+                    by: .book
+                )
+            )
         } else {
             block = .init(kind: kind, text: kind == .title ? "New Title" : "New content")
         }
@@ -1326,6 +1343,13 @@ private struct LampSlideBlockEditor: View {
                     )
                 }
 
+                if block.kind == .chart {
+                    LampSlideChartEditor(block: $block)
+                    Text("An optional heading, drawn over the bars.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 TextEditor(text: $block.text)
                     .font(.body)
                     .frame(minHeight: block.kind == .body ? 90 : 52)
@@ -1348,6 +1372,138 @@ private struct LampSlideBlockEditor: View {
             if kind != .image {
                 block.placement = nil
             }
+        }
+    }
+}
+
+/// Builds a chart block: what to count, where, and how to group it.
+///
+/// The values themselves are never typed. They are worked out from the
+/// library whenever the source changes, which is the same rule the build
+/// command and the deck import follow — a chart is a question about the
+/// library, and only the library can answer it.
+private struct LampSlideChartEditor: View {
+    @Binding var block: LampPresentationBlock
+    @EnvironmentObject private var model: LibraryModel
+    @State private var status: String?
+    @State private var isWorking = false
+
+    /// What a refill depends on.
+    ///
+    /// The values are deliberately not part of this: writing them back would
+    /// change the chart, which would ask for them again, for ever.
+    private struct Source: Equatable {
+        var strongs = ""
+        var translationID = ""
+        var range = ""
+        var by = LampPresentationChart.Grouping.book
+        var measure = LampPresentationChart.Measure.occurrences
+    }
+
+    private var source: Source {
+        guard let chart = block.chart else { return Source() }
+        return Source(
+            strongs: chart.source.strongs,
+            translationID: chart.source.translationID,
+            range: chart.source.range ?? "",
+            by: chart.by,
+            measure: chart.measure
+        )
+    }
+
+    var body: some View {
+        if let chart = Binding($block.chart) {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 8) {
+                    TextField("Strong's key", text: chart.source.strongs)
+                        .frame(width: 110)
+                        .help("A key such as G26 or H3068")
+                    Picker("Translation", selection: chart.source.translationID) {
+                        // Every translation, not only the tagged ones: Lamp
+                        // says below when one has no tags for this key, which
+                        // is a more useful answer than a shorter menu.
+                        ForEach(model.translations, id: \.id) { translation in
+                            Text(translation.abbreviation ?? translation.name).tag(translation.id)
+                        }
+                    }
+                    .labelsHidden()
+                    TextField("Books (optional)", text: Binding(
+                        get: { chart.wrappedValue.source.range ?? "" },
+                        set: { chart.wrappedValue.source.range = $0.isEmpty ? nil : $0 }
+                    ))
+                    .help("Whole books: NT, Romans, Matthew-John. Empty means the whole translation.")
+                }
+                // One per row. Side by side, the inspector is too narrow for
+                // two labelled pickers and the measure drew as "Occurr…".
+                Picker("Group by", selection: chart.by) {
+                    ForEach(LampPresentationChart.Grouping.allCases) { grouping in
+                        Text(grouping.rawValue.capitalized).tag(grouping)
+                    }
+                }
+                Picker("Measure", selection: chart.measure) {
+                    Text("Occurrences").tag(LampPresentationChart.Measure.occurrences)
+                    Text("Per 1,000 words").tag(LampPresentationChart.Measure.perThousandWords)
+                }
+                HStack(spacing: 6) {
+                    if isWorking { ProgressView().controlSize(.small) }
+                    if let status {
+                        Text(status).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .textFieldStyle(.roundedBorder)
+            .task(id: source) { await fill() }
+        } else {
+            // A chart block that arrived with no chart in it. Invalid, and the
+            // validator says so, but it is repairable here rather than only in
+            // a text editor.
+            Button("Add Chart Details") {
+                block.chart = LampPresentationChart(
+                    source: .init(strongs: "", translationID: defaultTranslationID),
+                    by: .book
+                )
+            }
+        }
+    }
+
+    private var defaultTranslationID: String {
+        model.selectedTranslationID ?? model.translations.first?.id ?? ""
+    }
+
+    private func fill() async {
+        guard var chart = block.chart,
+              !chart.source.strongs.trimmingCharacters(in: .whitespaces).isEmpty,
+              !chart.source.translationID.isEmpty
+        else {
+            status = "Name a key and a translation to draw."
+            return
+        }
+        isWorking = true
+        defer { isWorking = false }
+        do {
+            guard let values = try await model.library.chartValues(chart) else {
+                status = "\(chart.source.translationID) has no tags for "
+                    + "\(chart.source.strongs) here, so the chart draws empty."
+                return
+            }
+            // Only when they differ, so opening a slide does not mark its deck
+            // changed and send it round the sync for nothing.
+            if chart.values != values {
+                chart.values = values
+                block.chart = chart
+            }
+            if values.isEmpty {
+                status = "Nothing to chart in this range."
+            } else {
+                status = values.count > LampPresentationChart.readableBars
+                    ? "\(values.count) bars — hard to read from the back of a room; "
+                        + "try grouping by section."
+                    : "\(values.count) bars from \(chart.source.translationID)."
+            }
+        } catch {
+            // An unreadable range arrives here, which is the one mistake easy
+            // to make in the books field.
+            status = error.localizedDescription
         }
     }
 }

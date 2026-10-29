@@ -300,33 +300,32 @@ struct StrongsAnalysisSupportTests {
 
 /// Which block roles Slide Studio offers.
 struct StudioBlockKindTests {
-    /// Studio draws a chart but cannot yet build one, and a chart block with no
-    /// chart in it is invalid the moment it is added.
-    @Test func achartIsNotOfferedAsSomethingToAdd() {
-        #expect(!LampPresentationBlockKind.authorableHere.contains(.chart))
+    /// A chart was held back while Studio could draw one but not build one.
+    /// It has an editor now, so every role is offered again.
+    @Test func everyRoleCanBeAddedNowThatChartsHaveAnEditor() {
+        #expect(LampPresentationBlockKind.authorableHere.contains(.chart))
         #expect(
             LampPresentationBlockKind.authorableHere.count
-                == LampPresentationBlockKind.allCases.count - 1,
-            "only the chart is held back"
-        )
-        for kind in LampPresentationBlockKind.allCases where kind != .chart {
-            #expect(LampPresentationBlockKind.authorableHere.contains(kind))
-        }
-    }
-
-    /// A picker bound to an existing chart has to list `chart`, or SwiftUI
-    /// finds no tag matching the selection and can reset it — turning an
-    /// agent's chart into whatever role comes first.
-    @Test func anexistingChartKeepsItsOwnRoleInThePicker() {
-        #expect(LampPresentationBlockKind.authorableHere(including: .chart).contains(.chart))
-        #expect(
-            !LampPresentationBlockKind.authorableHere(including: .title).contains(.chart),
-            "a title block is not an excuse to offer charts"
-        )
-        #expect(
-            LampPresentationBlockKind.authorableHere(including: .chart).count
                 == LampPresentationBlockKind.allCases.count
         )
+    }
+
+    /// The invariant that outlives whatever is held back: a picker bound to a
+    /// block must list that block's own role. Without it SwiftUI finds no tag
+    /// matching the selection, draws blank, and can reset the value — turning
+    /// one kind of block into another just by looking at it.
+    ///
+    /// Written over every role rather than over the chart, because the next
+    /// role to be held back is the one nobody will think to test.
+    @Test func apickerAlwaysListsTheBlocksOwnRole() {
+        for kind in LampPresentationBlockKind.allCases {
+            let offered = LampPresentationBlockKind.authorableHere(including: kind)
+            #expect(offered.contains(kind), "\(kind) must appear in its own picker")
+            #expect(
+                Set(offered).count == offered.count,
+                "\(kind) must not be listed twice"
+            )
+        }
     }
 }
 
