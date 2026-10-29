@@ -557,6 +557,18 @@ struct StrongsAnalysisPane: View {
                 .help("Analyse \(companion.key)")
                 Divider()
             }
+            if !analysis.companions.isEmpty {
+                // Without this the figures read as badly sorted. They are
+                // ordered by how strongly the association shows, which is not
+                // the multiple beside them: σπλάγχνα at 25× chance rests on
+                // three shared verses, and πίστις at 9× on twenty-two.
+                Text("Strongest association first, which is not the largest multiple: "
+                    + "a high multiple over few verses says less than a smaller one "
+                    + "over many.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 2)
+            }
         }
         .padding(10)
     }
