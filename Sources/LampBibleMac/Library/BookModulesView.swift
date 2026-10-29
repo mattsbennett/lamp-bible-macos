@@ -713,15 +713,29 @@ private final class BookReadingPositionTracker: ObservableObject {
     private let store = LampBookReadingStateStore()
     private var moduleID: String?
     private var sectionID: String?
+    /// The section's blocks, kept from `prepare` so that `flush` cannot be
+    /// called without them. Taking them per flush instead would mean reading
+    /// them from an optional `@State` at `onDisappear` — the ordinary way a
+    /// position gets written — where an empty array would quietly save a
+    /// position with no anchor.
+    private var blocks: [BookReaderContentBlock] = []
     private var position = LampBookReadingPositionBuffer()
     private var isRestoring = false
 
-    func prepare(moduleID: String, sectionID: String) -> Int {
+    func prepare(
+        moduleID: String,
+        sectionID: String,
+        blocks: [BookReaderContentBlock]
+    ) -> Int {
         self.moduleID = moduleID
         self.sectionID = sectionID
+        self.blocks = blocks
         let savedPosition = store.position(for: moduleID)
+        // The block to open at, which is not always the one recorded: a
+        // rebuilt book renumbers its blocks, and the anchor is what finds the
+        // paragraph again. The record itself is left as it was.
         let blockIndex = savedPosition?.sectionID == sectionID
-            ? savedPosition?.blockIndex ?? -1
+            ? savedPosition?.blockIndex(in: blocks) ?? -1
             : -1
         position = LampBookReadingPositionBuffer(blockIndex: blockIndex)
         isRestoring = true
@@ -748,7 +762,9 @@ private final class BookReadingPositionTracker: ObservableObject {
         guard let moduleID, let sectionID,
               let blockIndex = position.takeChangedBlockIndex() else { return }
         store.save(
-            position: LampBookReadingPosition(sectionID: sectionID, blockIndex: blockIndex),
+            position: LampBookReadingPosition(
+                sectionID: sectionID, blockIndex: blockIndex, in: blocks
+            ),
             for: moduleID
         )
     }
@@ -1002,7 +1018,8 @@ private struct BookSectionReaderView: View {
             .task(id: document.sectionID) {
                 let blockIndex = positionTracker.prepare(
                     moduleID: book.id,
-                    sectionID: section.id
+                    sectionID: section.id,
+                    blocks: document.decoded.blocks
                 )
                 await Task.yield()
                 proxy.scrollTo(blockIndex, anchor: .top)
