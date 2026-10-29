@@ -29,6 +29,7 @@ struct BookModulesView: View {
     @State private var bookmarkIDs: Set<String> = []
     @State private var showsBookInformation = false
     @State private var errorMessage: String?
+    @State private var continueReading: [BookContinueReadingEntry] = []
 
     var initialBookID: String? = nil
     var initialSectionID: String? = nil
@@ -189,7 +190,12 @@ struct BookModulesView: View {
         .task(id: reloadID) { await loadBooks() }
         .onChange(of: selectedBookID) { _, _ in
             sectionSearchText = ""
-            Task { await loadSections() }
+            Task {
+                await loadSections()
+                // Leaving a book is when its position was written, so the
+                // list is only right again after the move.
+                await loadContinueReading()
+            }
         }
         .onChange(of: initialBookID) { _, newBookID in
             guard let newBookID, books.contains(where: { $0.id == newBookID }) else { return }
@@ -216,27 +222,62 @@ struct BookModulesView: View {
 
     private var booksList: some View {
         List(selection: $selectedBookID) {
-            ForEach(books) { book in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(book.title).font(.headline)
-                    if let author = book.author, !author.isEmpty {
-                        Text(author).font(.caption).foregroundStyle(.secondary)
-                    }
-                    if let position = readingState.position(for: book.id) {
-                        let sectionTitle = book.id == selectedBookID
-                            ? sections.first(where: { $0.id == position.sectionID })?.title
-                            : nil
-                        Label(sectionTitle ?? "Resume reading", systemImage: "bookmark")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
+            // The list below is alphabetical, which is how you find a book you
+            // mean to open and no help at all in finding the one you were in
+            // the middle of. These name the section as well, which the rows
+            // below can only do for the book whose sections are loaded.
+            if continueReading.count > 1 {
+                Section("Continue Reading") {
+                    ForEach(continueReading) { entry in
+                        Button {
+                            selectedBookID = entry.book.id
+                        } label: {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(entry.book.title)
+                                    .font(.subheadline.weight(.medium))
+                                    .lineLimit(1)
+                                Label(
+                                    entry.sectionTitle ?? "Resume reading",
+                                    systemImage: "bookmark"
+                                )
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
-                .padding(.vertical, 4)
-                .tag(Optional(book.id))
+                Section("All Books") { bookRows }
+            } else {
+                bookRows
             }
         }
         .listStyle(.sidebar)
+    }
+
+    private var bookRows: some View {
+        ForEach(books) { book in
+            VStack(alignment: .leading, spacing: 4) {
+                Text(book.title).font(.headline)
+                if let author = book.author, !author.isEmpty {
+                    Text(author).font(.caption).foregroundStyle(.secondary)
+                }
+                if let position = readingState.position(for: book.id) {
+                    let sectionTitle = book.id == selectedBookID
+                        ? sections.first(where: { $0.id == position.sectionID })?.title
+                        : nil
+                    Label(sectionTitle ?? "Resume reading", systemImage: "bookmark")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+            }
+            .padding(.vertical, 4)
+            .tag(Optional(book.id))
+        }
     }
 
     private var contentsList: some View {
@@ -330,9 +371,37 @@ struct BookModulesView: View {
         }
     }
 
+    /// The books most recently read, with the section each was left in.
+    ///
+    /// The reader writes its position when it goes away, so this is accurate
+    /// as of the last section left rather than the line being read now. It
+    /// asks for titles one at a time instead of loading each book's sections,
+    /// because that call carries every section's text with it.
+    private func loadContinueReading() async {
+        let recent = books
+            .compactMap { book in
+                readingState.position(for: book.id).map { (book: book, position: $0) }
+            }
+            .sorted { $0.position.updatedAt > $1.position.updatedAt }
+            .prefix(3)
+
+        var entries: [BookContinueReadingEntry] = []
+        for item in recent {
+            let title = try? await model.library.bookSectionTitle(
+                moduleID: item.book.id,
+                sectionID: item.position.sectionID
+            )
+            entries.append(
+                BookContinueReadingEntry(book: item.book, sectionTitle: title ?? nil)
+            )
+        }
+        continueReading = entries
+    }
+
     private func loadBooks() async {
         do {
             books = try await model.library.bookModules()
+            await loadContinueReading()
             errorMessage = nil
             if !books.contains(where: { $0.id == selectedBookID }) {
                 let requested = books.first(where: { $0.id == initialBookID })?.id
@@ -521,6 +590,15 @@ private struct BookReaderColumnResizeHandle: View {
             NSCursor.pop()
         }
     }
+}
+
+private struct BookContinueReadingEntry: Identifiable {
+    let book: LampBook
+    /// Absent when the book no longer has the section the position names,
+    /// which a rebuilt module can do.
+    let sectionTitle: String?
+
+    var id: String { book.id }
 }
 
 private struct BookSectionNode: Identifiable {
@@ -1107,14 +1185,19 @@ private struct BookContentBlockView: View {
                 ))
                 .padding(.top, 6)
         case "blockquote":
+            // Some books quote more than they write: in christadelphian-instructor
+            // and declaration-of-the-truth the quotations outnumber the author's
+            // own paragraphs, so secondary italic was most of the page and hard
+            // to read for any length. The rule beside it already says this is a
+            // quotation, which leaves the text free to stay in the primary
+            // colour and merely step down a point.
             HStack(alignment: .top, spacing: 12) {
                 RoundedRectangle(cornerRadius: 1.5)
-                    .fill(.secondary.opacity(0.45))
+                    .fill(.tint.opacity(0.55))
                     .frame(width: 3)
                 prose(block.content)
-                    .font(.system(size: fontSize, design: typeface.design).italic())
+                    .font(.system(size: fontSize - 1, design: typeface.design))
                     .lineSpacing(lineSpacing)
-                    .foregroundStyle(.secondary)
             }
         case "list":
             VStack(alignment: .leading, spacing: 8) {
@@ -1524,6 +1607,11 @@ private enum BookAttributedTextRenderer {
             }
         }
 
+        // Page markers are deliberately absent. `pageNum` carries the page
+        // index of the PDF a book was converted from, not the page number
+        // printed on it — rome-2's PDF page 41 is its printed page 6 — so
+        // "[p. 41]" told a reader to look somewhere the book does not have.
+        // They come back when the data carries printed pages.
         var insertions: [(offset: Int, marker: AttributedString)] = []
         for reference in content.footnoteReferences {
             let number = footnotes.firstIndex { $0.id == reference.id }.map { $0 + 1 }
@@ -1533,30 +1621,13 @@ private enum BookAttributedTextRenderer {
             marker.font = .caption
             insertions.append((reference.offset, marker))
         }
-        for annotation in content.annotations where annotation.type == "page" {
-            guard let pageNumber = annotation.data?.pageNumber else { continue }
-            var marker = AttributedString(" [p. \(pageNumber)] ")
-            marker.font = .caption
-            marker.inlinePresentationIntent = .emphasized
-            insertions.append((annotation.start, marker))
-        }
         for insertion in insertions.sorted(by: { $0.offset > $1.offset }) {
-            guard let index = index(at: insertion.offset, in: value) else { continue }
+            guard let index = BookReaderTextOffsets.insertionIndex(
+                at: insertion.offset, in: value
+            ) else { continue }
             value.insert(insertion.marker, at: index)
         }
         return value
-    }
-
-    private static func index(
-        at offset: Int,
-        in value: AttributedString
-    ) -> AttributedString.Index? {
-        guard offset >= 0 else { return nil }
-        return value.characters.index(
-            value.characters.startIndex,
-            offsetBy: offset,
-            limitedBy: value.characters.endIndex
-        )
     }
 
     private static func range(
@@ -1564,11 +1635,7 @@ private enum BookAttributedTextRenderer {
         to end: Int,
         in value: AttributedString
     ) -> Range<AttributedString.Index>? {
-        guard start >= 0, end >= start,
-              let lower = index(at: start, in: value),
-              let upper = index(at: end, in: value),
-              lower < upper else { return nil }
-        return lower..<upper
+        BookReaderTextOffsets.range(from: start, to: end, in: value)
     }
 
     private static func makeFootnoteURL(_ id: String) -> URL? {
