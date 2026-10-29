@@ -219,7 +219,8 @@ struct StrongsAnalysisPane: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .padding(10)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
                 Divider()
                 ScrollView {
                     switch section {
@@ -280,7 +281,8 @@ struct StrongsAnalysisPane: View {
                 }
             }
         }
-        .padding(10)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
     }
 
     /// Both verse counts are named, because they answer different questions
@@ -295,7 +297,7 @@ struct StrongsAnalysisPane: View {
     // MARK: - Overview
 
     private func overview(_ analysis: LampStrongsAnalysis) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 18) {
             if !analysis.renderings.isEmpty {
                 group("Rendered As") {
                     ForEach(analysis.renderings) { rendering in
@@ -343,7 +345,8 @@ struct StrongsAnalysisPane: View {
                 }
             }
         }
-        .padding(10)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
     }
 
     private func renderingRow(_ rendering: LampStrongsAnalysis.Rendering) -> some View {
@@ -383,40 +386,48 @@ struct StrongsAnalysisPane: View {
     /// which is drawn from chapters that only a book has.
     private var showsBooks: Bool { !bySection || style.needsBooks }
 
+    /// One light row of menus rather than two more bands of segmented
+    /// controls.
+    ///
+    /// With the section picker above it, segmented controls here made three
+    /// stacked bars of buttons before any chart appeared, and they read as
+    /// more important than the chart they were describing. Menus state the
+    /// current choice in a word and recede.
     private func spread(_ analysis: LampStrongsAnalysis) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Picker("Chart", selection: $style) {
-                ForEach(LampStrongsChartStyle.allCases) { Text($0.title).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-
+        VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 10) {
+                Picker("Chart", selection: $style) {
+                    ForEach(LampStrongsChartStyle.allCases) { Text($0.title).tag($0) }
+                }
+                .labelsHidden()
+                .fixedSize()
+                .help("How to draw it")
+
                 Picker("By", selection: $bySection) {
                     Text("Books").tag(false)
                     Text("Sections").tag(true)
                 }
-                .pickerStyle(.segmented)
                 .labelsHidden()
-                .frame(width: 150)
+                .fixedSize()
                 .disabled(style.needsBooks)
-                .help(style.needsBooks ? "Chapters belong to books" : "")
-                Spacer()
+                .help(style.needsBooks ? "Chapters belong to books" : "What to group by")
+
                 if style.usesMeasure {
                     Picker("Measure", selection: $measure) {
                         ForEach(LampStrongsSpreadMeasure.allCases) { Text($0.title).tag($0) }
                     }
                     .labelsHidden()
-                    .frame(width: 150)
+                    .fixedSize()
+                    .help("What to count")
                 } else if style == .share {
                     Picker("Shape", selection: $shareAsRing) {
                         Text("Ring").tag(true)
                         Text("Pie").tag(false)
                     }
-                    .pickerStyle(.segmented)
                     .labelsHidden()
-                    .frame(width: 110)
+                    .fixedSize()
                 }
+                Spacer(minLength: 0)
             }
 
             switch style {
@@ -434,7 +445,8 @@ struct StrongsAnalysisPane: View {
                     .padding(.top, 2)
             }
         }
-        .padding(10)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
     }
 
     // MARK: - Bars
@@ -628,7 +640,7 @@ struct StrongsAnalysisPane: View {
         if slices.isEmpty {
             nothingToChart
         } else {
-            HStack(alignment: .top, spacing: 14) {
+            HStack(alignment: .center, spacing: 20) {
                 ZStack {
                     ForEach(Array(slices.enumerated()), id: \.element.id) { index, slice in
                         DonutSlice(
@@ -645,28 +657,28 @@ struct StrongsAnalysisPane: View {
                     if shareAsRing {
                         VStack(spacing: 0) {
                             Text("\(slices.reduce(0) { $0 + $1.value })")
-                                .font(.callout.weight(.semibold).monospacedDigit())
-                            Text("in all").font(.caption2).foregroundStyle(.secondary)
+                                .font(.title3.weight(.semibold).monospacedDigit())
+                            Text("in all").font(.caption).foregroundStyle(.secondary)
                         }
                     }
                 }
-                .frame(width: 104, height: 104)
+                .frame(width: 164, height: 164)
 
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 8) {
                     ForEach(Array(slices.enumerated()), id: \.element.id) { index, slice in
-                        HStack(spacing: 6) {
+                        HStack(spacing: 8) {
                             RoundedRectangle(cornerRadius: 2)
                                 .fill(.tint)
                                 .opacity(
                                     sliceOpacity(index, of: slices.count, isOther: slice.isOther)
                                 )
-                                .frame(width: 9, height: 9)
-                            Text(slice.name).font(.caption).lineLimit(1)
+                                .frame(width: 10, height: 10)
+                            Text(slice.name).font(.callout).lineLimit(1)
                             Spacer(minLength: 4)
                             Text("\(slice.value)")
-                                .font(.caption.monospacedDigit())
+                                .font(.callout.monospacedDigit())
                             Text("\(Int((slice.fraction * 100).rounded()))%")
-                                .font(.caption.monospacedDigit())
+                                .font(.callout.monospacedDigit())
                                 .foregroundStyle(.secondary)
                                 .frame(width: 34, alignment: .trailing)
                         }
@@ -806,7 +818,7 @@ struct StrongsAnalysisPane: View {
     // MARK: - Companions
 
     private func companions(_ analysis: LampStrongsAnalysis) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 12) {
             if analysis.companions.isEmpty {
                 Text("No other key shares enough verses with this one.")
                     .font(.caption)
@@ -853,13 +865,14 @@ struct StrongsAnalysisPane: View {
                     .padding(.top, 2)
             }
         }
-        .padding(10)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
     }
 
     // MARK: - Compare
 
     private var compare: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 12) {
             ForEach(loader.analyses, id: \.translationID) { analysis in
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
@@ -892,7 +905,8 @@ struct StrongsAnalysisPane: View {
                 .foregroundStyle(.secondary)
                 .padding(.top, 2)
         }
-        .padding(10)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
     }
 
     // MARK: - Pieces

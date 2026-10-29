@@ -327,7 +327,7 @@ public enum LampStrongsChartStyle: String, CaseIterable, Identifiable, Sendable 
     public var title: String {
         switch self {
         case .bars: "Bars"
-        case .columns: "Spread"
+        case .columns: "Columns"
         case .grid: "Chapters"
         case .share: "Share"
         }
