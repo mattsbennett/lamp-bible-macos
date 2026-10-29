@@ -56,11 +56,26 @@ struct LampMCPServerTests {
         #expect(description.contains("Settings"))
     }
 
-    /// A session with no workspace has no writing history, and a tool that can
-    /// only answer "there is no workspace" is worse than no tool.
-    @Test func offersTheWritingHistoryOnlyToASessionWithAWorkspace() {
-        #expect(!LampMCPToolCatalog.tools(workspace: false).contains { $0.name == "writing_changes" })
-        #expect(LampMCPToolCatalog.tools(workspace: true).contains { $0.name == "writing_changes" })
+    /// Once, a session without a workspace was not offered the writing
+    /// history at all, because there was nothing for it to report on. A
+    /// writing can be named now, so it is offered either way — and refuses
+    /// with the argument to pass when nothing names one.
+    @Test func thewritingHistoryIsOfferedEitherWayAndSaysWhatItNeeds() async throws {
+        for workspace in [true, false] {
+            #expect(
+                LampMCPToolCatalog.tools(workspace: workspace)
+                    .contains { $0.name == "writing_changes" }
+            )
+        }
+        let tool = try #require(
+            LampMCPToolCatalog.workspaceTools.first { $0.name == "writing_changes" }
+        )
+        #expect(tool.inputSchema.objectValue?["properties"]?.objectValue?["writing_id"] != nil)
+
+        #expect(
+            LampMCPToolError.noWorkspace.localizedDescription.contains("writing_id"),
+            "the refusal has to name the argument that fixes it"
+        )
     }
 
     @Test func refusesTheWritingHistoryWithoutAWorkspace() async throws {

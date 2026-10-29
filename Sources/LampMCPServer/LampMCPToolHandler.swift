@@ -378,12 +378,35 @@ public actor LampMCPToolHandler {
     ///
     /// An agent is told `draft.md` changed but not what changed, and used to
     /// keep private copies of the draft to compare. Lamp has the revisions.
-    private func writingChanges(_ arguments: [String: Value]) throws -> [WritingChange] {
-        guard let workspaceURL else {
+    /// The workspace whose history to read.
+    ///
+    /// A session launched with `--workspace` serves that one, as it always
+    /// has. An app reached through the descriptor has no workspace of its own,
+    /// so it names a writing instead, and the folder is found from the
+    /// identifier. Naming one is also how an outside app reads the history of
+    /// a writing it has just been asked to revise.
+    ///
+    /// The session's own workspace wins when it has one: a workspace session
+    /// is scoped to a single writing on purpose, and letting a `writing_id`
+    /// widen that would quietly undo the scoping.
+    private func writingHistoryWorkspace(_ arguments: [String: Value]) throws -> URL {
+        if let workspaceURL { return workspaceURL }
+        guard let writingID = arguments["writing_id"]?.stringValue,
+              !writingID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw LampMCPToolError.noWorkspace
         }
+        try requirePersonalContent()
+        let root = try writingLibraryRoot()
+        guard LampWritingWorkspace.exists(libraryRootURL: root, writingID: writingID) else {
+            throw LampMCPToolError.noWritingWorkspace(writingID)
+        }
+        return LampWritingWorkspace.url(libraryRootURL: root, writingID: writingID)
+    }
+
+    private func writingChanges(_ arguments: [String: Value]) throws -> [WritingChange] {
+        let workspace = try writingHistoryWorkspace(arguments)
         let changes = try LampWritingChanges.changes(
-            in: workspaceURL,
+            in: workspace,
             documentPath: arguments["document_path"]?.stringValue
                 ?? DevotionalAgentRevisionStore.primaryDocumentPath,
             since: LampWritingChanges.since(arguments["since"]?.stringValue),
@@ -544,7 +567,11 @@ public enum LampMCPToolError: Error, LocalizedError, Equatable, Sendable {
         case .invalidArgument(let name, let message):
             "The ‘\(name)’ argument is invalid. \(message)"
         case .noWorkspace:
-            "This session serves no agent workspace, so it has no writing history to read."
+            """
+            This session serves no agent workspace, so name the writing: pass \
+            `writing_id`, from list_writings, for the writing whose history \
+            you want.
+            """
         case .accessDisabled:
             """
             Lamp is not letting agents use the library. Turn on "Allow agents \

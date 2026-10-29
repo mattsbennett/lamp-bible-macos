@@ -137,9 +137,13 @@ public enum LampMCPToolCatalog {
 
     /// Reads the history of the writing this workspace holds.
     ///
-    /// Offered only to a session that was given a workspace: there is nothing
-    /// to report on without one, and a tool that always answers "no workspace"
-    /// is worse than no tool.
+    /// Reading what has changed in a writing.
+    ///
+    /// Once offered only to a session given a workspace, because without one
+    /// there was nothing to report on. A writing can be named now, so there
+    /// is: an app reached through the descriptor passes `writing_id`, and a
+    /// session launched with `--workspace` keeps serving that writing and
+    /// ignores the argument.
     public static let workspaceTools: [Tool] = [
         tool(
             "writing_changes",
@@ -150,6 +154,11 @@ public enum LampMCPToolCatalog {
             writer's edits from your own before moving a slide's notes anchor.
             """,
             properties: [
+                "writing_id": string(
+                    "Which writing's history to read, from list_writings. A "
+                        + "session opened on one writing serves that one and "
+                        + "ignores this."
+                ),
                 "since": string(
                     "A change ID from an earlier call, or an ISO 8601 time. "
                         + "Omitted, the most recent changes are returned."
@@ -265,8 +274,9 @@ public enum LampMCPToolCatalog {
 
     /// Everything a session with a workspace is offered.
     public static func tools(workspace: Bool) -> [Tool] {
-        let base = tools + deckTools + writingTools + writeTools
-        return workspace ? base + workspaceTools : base
+        // `workspaceTools` is offered either way now: with a workspace it
+        // serves that writing, and without one it takes a named writing.
+        tools + deckTools + writingTools + writeTools + workspaceTools
     }
 
     /// The one tool that changes something of the user's.
