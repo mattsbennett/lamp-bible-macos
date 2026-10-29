@@ -271,38 +271,6 @@ public actor LampMCPToolHandler {
         )
     }
 
-    /// The writing as the library holds it, for comparing against what the
-    /// caller read — or nil when there is nothing comparable to compare.
-    ///
-    /// This is a second, earlier guard. It catches the writer editing in
-    /// Lamp's own editor, which never reaches `draft.md`, and so gives the
-    /// agent a refusal at write time rather than a surprise at import. The
-    /// guard that actually protects the writer's words is the one at import,
-    /// which compares the note's base against Lamp's own full copy of the
-    /// writing; so where this returns nil, nothing is lost but the early
-    /// warning.
-    ///
-    /// Nil for two reasons, and only these two. A writing that exists as a
-    /// workspace and not in the library has nothing to compare. And a writing
-    /// past the read limit comes back truncated, with a marker appended:
-    /// hashing that against a full draft would refuse *every* write to a long
-    /// writing, and tell the writer their own editing was the cause.
-    ///
-    /// Any other failure refuses. A read that did not work is not permission
-    /// to skip the check.
-    private func writingAsLampHoldsIt(_ writingID: String) async throws -> String? {
-        do {
-            let text = try await library.readDevotional(
-                moduleID: "personal-devotionals", devotionalID: writingID
-            ).content
-            // `limitedText` appends its notice, so a truncated result is
-            // always longer than the limit it was cut to.
-            return text.count > policy.maximumItemCharacters ? nil : text
-        } catch LampAgentError.itemNotFound {
-            return nil
-        }
-    }
-
     /// Replaces a writing's draft, if the writer has not moved it underneath.
     ///
     /// The switch is checked here rather than by hiding the tool, so an app
@@ -315,7 +283,13 @@ public actor LampMCPToolHandler {
         let draft = try requiredString("draft", in: arguments)
         let basedOn = try requiredString("based_on", in: arguments)
 
-        let libraryText = try await writingAsLampHoldsIt(writingID)
+        // A fingerprint of the whole body, from core: no length limit and no
+        // read policy in the way, and it discloses no text. Nil only when
+        // there is no such writing in the library, which a workspace-only
+        // writing is — then the draft on disk is the one thing to check
+        // against. Any failure propagates, because a check that could not be
+        // made is not a check that passed.
+        let libraryRevision = try await library.personalDevotionalRevision(writingID)
 
         let note = try LampWritingWrite.writeDraft(
             libraryRootURL: root,
@@ -323,7 +297,7 @@ public actor LampMCPToolHandler {
             writingID: writingID,
             draft: draft,
             basedOn: basedOn,
-            libraryText: libraryText
+            libraryRevision: libraryRevision
         )
         return try result(WritingWriteOutcome(
             writingID: writingID,

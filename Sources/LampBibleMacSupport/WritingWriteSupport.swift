@@ -81,6 +81,15 @@ public enum LampWritingWrite {
     /// Lamp, which does not reach `draft.md` from every editor. Either way the
     /// write is refused rather than merged, because reconciling someone's
     /// prose is not a thing to do without them.
+    ///
+    /// `libraryRevision` is `LampAgentLibrary.personalDevotionalRevision`, a
+    /// fingerprint of the whole body — not the body itself. It used to be the
+    /// text from the agent-facing read, which was the wrong source twice over:
+    /// that read is cut to a length limit, so a long writing compared as
+    /// changed when it had not, and it applies the read policy, so it could
+    /// fail for reasons that have nothing to do with whether the writing
+    /// moved. Nil means there is nothing to compare — no such writing — and
+    /// never "do not bother checking".
     @discardableResult
     public static func writeDraft(
         libraryRootURL: URL,
@@ -88,7 +97,7 @@ public enum LampWritingWrite {
         writingID: String,
         draft: String,
         basedOn: String,
-        libraryText: String?,
+        libraryRevision: String?,
         now: Date = Date()
     ) throws -> Note {
         guard LampWritingWorkspace.exists(
@@ -101,7 +110,7 @@ public enum LampWritingWrite {
             libraryRootURL: libraryRootURL, writingID: writingID
         )
         guard fingerprint(onDisk) == base else { throw WriteError.draftMovedOnDisk }
-        if let libraryText, fingerprint(libraryText) != base {
+        if let libraryRevision, libraryRevision != base {
             throw WriteError.writingChangedInLamp
         }
 
@@ -210,6 +219,10 @@ public enum LampWritingWrite {
     /// since the draft was based on it, and the base fingerprint answers that
     /// exactly.
     ///
+    /// `libraryRevision` is a fingerprint, as the write-time check takes, so
+    /// that "has this writing moved?" is asked the same way in both places. A
+    /// caller holding the text itself passes `fingerprint(text)`.
+    ///
     /// A note whose `draftFingerprint` is not the draft now on disk describes
     /// a draft that has since been replaced — by the writer in the workspace,
     /// or by a later write — so it is ignored rather than applied to a draft
@@ -217,12 +230,12 @@ public enum LampWritingWrite {
     public static func resolve(
         note: Note?,
         draftOnDisk: String,
-        libraryText: String
+        libraryRevision: String
     ) -> Resolution {
         guard let note, note.draftFingerprint == fingerprint(draftOnDisk) else {
             return .takeDraftUnrecorded
         }
-        return note.baseFingerprint == fingerprint(libraryText)
+        return note.baseFingerprint == libraryRevision
             ? .takeDraft
             : .keepWritingAndRecordDraft
     }

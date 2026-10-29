@@ -381,4 +381,61 @@ struct LampMCPClientCompatibilityTests {
             "the draft must be left exactly as it was"
         )
     }
+
+    /// Core's `personalDevotionalRevision` and this app's
+    /// `LampWritingWrite.fingerprint` are two implementations of one rule, and
+    /// a write is refused when they disagree. Nothing else holds them
+    /// together, so this does: if either side's normalisation or digest ever
+    /// moves, every write to every writing starts being refused and the
+    /// message blames the writer's own editing.
+    ///
+    /// Both sides are also checked against a value computed from neither, so
+    /// the test cannot pass by both drifting the same way.
+    @Test func coresRevisionAndThisAppsFingerprintAgree() async throws {
+        let fixture = try await writingFixture(allowsWriting: true)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let revision = try await fixture.agent.personalDevotionalRevision(fixture.writingID)
+        #expect(revision == LampWritingWrite.fingerprint(fixture.content))
+        #expect(
+            revision == "50ba0fa9cd13352cd4ca22ea7216cd172d487bd7d217bf44a55e2394c6629636",
+            "an independently computed SHA-256 of the NFC body"
+        )
+
+        // A writing that is not there has no revision, which is not the same
+        // answer as "unchanged".
+        #expect(try await fixture.agent.personalDevotionalRevision("never-written") == nil)
+    }
+
+    /// The body stored decomposed still fingerprints as the composed one, so a
+    /// writing whose text was pasted from somewhere that decomposes accents is
+    /// still writable. Without composing on both sides this is where it would
+    /// break, and it would break for that writing only.
+    @Test func adecomposedBodyAgreesWithItsComposedFingerprint() async throws {
+        let fixture = try await writingFixture(allowsWriting: true)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let decomposed = "# Cafe\u{301} Hope\n\nIt asks that we hold to it.\n"
+        #expect(
+            Array(decomposed.utf8)
+                != Array(decomposed.precomposedStringWithCanonicalMapping.utf8),
+            "the fixture has to really differ in its bytes"
+        )
+        _ = try await fixture.library.savePersonalDevotional(
+            LampDevotional(
+                id: fixture.writingID,
+                moduleID: "personal-devotionals",
+                moduleName: "My Writing",
+                title: "Living Hope",
+                content: decomposed
+            )
+        )
+
+        let revision = try await fixture.agent.personalDevotionalRevision(fixture.writingID)
+        #expect(revision == LampWritingWrite.fingerprint(decomposed))
+        #expect(
+            revision
+                == LampWritingWrite.fingerprint(decomposed.precomposedStringWithCanonicalMapping),
+            "the two spellings are one writing"
+        )
+    }
 }

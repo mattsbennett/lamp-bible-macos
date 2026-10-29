@@ -1423,7 +1423,9 @@ struct DevotionalAgentWorkspaceView: View {
         let resolution = LampWritingWrite.resolve(
             note: note,
             draftOnDisk: diskDraft,
-            libraryText: draftMarkdown
+            // This view holds Lamp's own full copy, so it fingerprints that
+            // rather than asking the library — same rule, no round trip.
+            libraryRevision: LampWritingWrite.fingerprint(draftMarkdown)
         )
         // Spent either way: it describes this draft, and this is the decision
         // it was left for.

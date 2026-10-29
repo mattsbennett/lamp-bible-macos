@@ -74,7 +74,7 @@ struct WritingWriteTests {
             writingID: writingID,
             draft: revised,
             basedOn: original,
-            libraryText: original
+            libraryRevision: LampWritingWrite.fingerprint(original)
         )
 
         #expect(try draft(in: library) == revised)
@@ -94,7 +94,7 @@ struct WritingWriteTests {
                 writingID: writingID,
                 draft: "anything",
                 basedOn: "a draft that was never on disk",
-                libraryText: nil
+                libraryRevision: nil
             )
         }
         #expect(try draft(in: library) == original, "the draft must be untouched")
@@ -114,7 +114,9 @@ struct WritingWriteTests {
                 writingID: writingID,
                 draft: "anything",
                 basedOn: original,
-                libraryText: original + "\nA sentence the writer added in Lamp.\n"
+                libraryRevision: LampWritingWrite.fingerprint(
+                    original + "\nA sentence the writer added in Lamp.\n"
+                )
             )
         }
         #expect(try draft(in: library) == original)
@@ -131,7 +133,7 @@ struct WritingWriteTests {
                 writingID: "never-opened",
                 draft: "anything",
                 basedOn: "",
-                libraryText: nil
+                libraryRevision: nil
             )
         }
         #expect(
@@ -167,7 +169,7 @@ struct WritingWriteTests {
             writingID: writingID,
             draft: "# Living Hope\n\nRevised.\n",
             basedOn: original,
-            libraryText: original
+            libraryRevision: LampWritingWrite.fingerprint(original)
         )
 
         let note = LampWritingWrite.noteURL(
@@ -190,7 +192,7 @@ struct WritingWriteTests {
             writingID: writingID,
             draft: "# Living Hope\n\nRevised.\n",
             basedOn: original,
-            libraryText: original
+            libraryRevision: LampWritingWrite.fingerprint(original)
         )
 
         #expect(LampWritingWrite.note(applicationSupportURL: support, writingID: writingID) != nil)
@@ -209,7 +211,7 @@ struct WritingWriteTests {
 
         #expect(
             LampWritingWrite.resolve(
-                note: note, draftOnDisk: revised, libraryText: original
+                note: note, draftOnDisk: revised, libraryRevision: LampWritingWrite.fingerprint(original)
             ) == .takeDraft
         )
     }
@@ -227,7 +229,9 @@ struct WritingWriteTests {
             LampWritingWrite.resolve(
                 note: note,
                 draftOnDisk: revised,
-                libraryText: original + "\nAnd a sentence of the writer's own.\n"
+                libraryRevision: LampWritingWrite.fingerprint(
+                    original + "\nAnd a sentence of the writer's own.\n"
+                )
             ) == .keepWritingAndRecordDraft
         )
     }
@@ -237,7 +241,7 @@ struct WritingWriteTests {
     @Test func adraftWithNoNoteIsTakenAsBefore() {
         #expect(
             LampWritingWrite.resolve(
-                note: nil, draftOnDisk: "anything", libraryText: original
+                note: nil, draftOnDisk: "anything", libraryRevision: LampWritingWrite.fingerprint(original)
             ) == .takeDraftUnrecorded
         )
     }
@@ -255,7 +259,7 @@ struct WritingWriteTests {
             LampWritingWrite.resolve(
                 note: note,
                 draftOnDisk: "what the writer has typed since",
-                libraryText: original
+                libraryRevision: LampWritingWrite.fingerprint(original)
             ) == .takeDraftUnrecorded
         )
     }
