@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		A10000000000000000000051 /* WritingChangesSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000004E /* WritingChangesSupport.swift */; };
 		A1000000000000000000022B /* WritingWriteSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000021D /* WritingWriteSupport.swift */; };
+		A1000000000000000000022D /* StrongsAnalysisSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000021E /* StrongsAnalysisSupport.swift */; };
 		A10000000000000000000229 /* WritingWorkspaceSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000021C /* WritingWorkspaceSupport.swift */; };
 		A10000000000000000000227 /* LampMCPPromptCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000021B /* LampMCPPromptCatalog.swift */; };
 		A10000000000000000000226 /* DeckToolSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000021A /* DeckToolSupport.swift */; };
@@ -39,6 +40,7 @@
 		A1000000000000000000000D /* DevotionalsAndQuizzesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000C /* DevotionalsAndQuizzesView.swift */; };
 		A1000000000000000000000E /* bundled_modules.db.zlib in Resources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000D /* bundled_modules.db.zlib */; };
 		A1000000000000000000000F /* UnifiedSearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000E /* UnifiedSearchView.swift */; };
+		A1000000000000000000022E /* StrongsAnalysisView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000021F /* StrongsAnalysisView.swift */; };
 		A10000000000000000000010 /* ReaderSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000F /* ReaderSupport.swift */; };
 		A10000000000000000000011 /* DevotionalEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000010 /* DevotionalEditorView.swift */; };
 		A10000000000000000000012 /* ReadAloudController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000011 /* ReadAloudController.swift */; };
@@ -116,6 +118,7 @@
 		A10000000000000000000111 /* TranslationImportSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000111 /* TranslationImportSheet.swift */; };
 		A1000000000000000000004E /* WritingChangesSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000004E /* WritingChangesSupport.swift */; };
 		A1000000000000000000022A /* WritingWriteSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000021D /* WritingWriteSupport.swift */; };
+		A1000000000000000000022C /* StrongsAnalysisSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000021E /* StrongsAnalysisSupport.swift */; };
 		A10000000000000000000228 /* WritingWorkspaceSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000021C /* WritingWorkspaceSupport.swift */; };
 		A10000000000000000000221 /* AgentDescriptorSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000218 /* AgentDescriptorSupport.swift */; };
 		A10000000000000000000211 /* FootnoteFieldSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000211 /* FootnoteFieldSupport.swift */; };
@@ -155,6 +158,7 @@
 		B1000000000000000000000C /* DevotionalsAndQuizzesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/DevotionalsAndQuizzesView.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000000D /* bundled_modules.db.zlib */ = {isa = PBXFileReference; lastKnownFileType = file; name = bundled_modules.db.zlib; path = ../lamp-bible-modules/modules_db/bundled_modules.db.zlib; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000000E /* UnifiedSearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/UnifiedSearchView.swift; sourceTree = SOURCE_ROOT; };
+		B1000000000000000000021F /* StrongsAnalysisView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/StrongsAnalysisView.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000000F /* ReaderSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/ReaderSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000010 /* DevotionalEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/DevotionalEditorView.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000011 /* ReadAloudController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/ReadAloudController.swift; sourceTree = SOURCE_ROOT; };
@@ -229,6 +233,7 @@
 		B10000000000000000000111 /* TranslationImportSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/TranslationImportSheet.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000004E /* WritingChangesSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/WritingChangesSupport.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000021D /* WritingWriteSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/WritingWriteSupport.swift; sourceTree = SOURCE_ROOT; };
+		B1000000000000000000021E /* StrongsAnalysisSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/StrongsAnalysisSupport.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000021C /* WritingWorkspaceSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/WritingWorkspaceSupport.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000021B /* LampMCPPromptCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampMCPServer/LampMCPPromptCatalog.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000021A /* DeckToolSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/DeckToolSupport.swift; sourceTree = SOURCE_ROOT; };
@@ -343,6 +348,7 @@
 				B10000000000000000000011 /* ReadAloudController.swift */,
 				B10000000000000000000012 /* VerseHighlightEditorView.swift */,
 				B1000000000000000000000E /* UnifiedSearchView.swift */,
+				B1000000000000000000021F /* StrongsAnalysisView.swift */,
 				B10000000000000000000005 /* ReadingPlansView.swift */,
 				B10000000000000000000006 /* StudyHighlightPalette.swift */,
 				B10000000000000000000007 /* StudyInspectorView.swift */,
@@ -374,6 +380,7 @@
 				B100000000000000000000F2 /* PresentationImportStatusSupport.swift */,
 				B1000000000000000000004E /* WritingChangesSupport.swift */,
 				B1000000000000000000021D /* WritingWriteSupport.swift */,
+				B1000000000000000000021E /* StrongsAnalysisSupport.swift */,
 				B1000000000000000000021C /* WritingWorkspaceSupport.swift */,
 				B1000000000000000000021B /* LampMCPPromptCatalog.swift */,
 				B1000000000000000000021A /* DeckToolSupport.swift */,
@@ -618,6 +625,7 @@
 				A1000000000000000000000A /* StudioDocument.swift in Sources */,
 				A1000000000000000000000D /* DevotionalsAndQuizzesView.swift in Sources */,
 				A1000000000000000000000F /* UnifiedSearchView.swift in Sources */,
+				A1000000000000000000022E /* StrongsAnalysisView.swift in Sources */,
 				A10000000000000000000010 /* ReaderSupport.swift in Sources */,
 				A10000000000000000000015 /* SyncSupport.swift in Sources */,
 				A1000000000000000000001B /* ScrollLinkSupport.swift in Sources */,
@@ -642,6 +650,7 @@
 				A100000000000000000000F2 /* PresentationImportStatusSupport.swift in Sources */,
 				A1000000000000000000004E /* WritingChangesSupport.swift in Sources */,
 				A1000000000000000000022A /* WritingWriteSupport.swift in Sources */,
+				A1000000000000000000022C /* StrongsAnalysisSupport.swift in Sources */,
 				A10000000000000000000228 /* WritingWorkspaceSupport.swift in Sources */,
 				A10000000000000000000221 /* AgentDescriptorSupport.swift in Sources */,
 				A10000000000000000000211 /* FootnoteFieldSupport.swift in Sources */,
@@ -693,6 +702,7 @@
 			files = (
 				A10000000000000000000051 /* WritingChangesSupport.swift in Sources */,
 				A1000000000000000000022B /* WritingWriteSupport.swift in Sources */,
+				A1000000000000000000022D /* StrongsAnalysisSupport.swift in Sources */,
 				A10000000000000000000229 /* WritingWorkspaceSupport.swift in Sources */,
 				A10000000000000000000227 /* LampMCPPromptCatalog.swift in Sources */,
 				A10000000000000000000226 /* DeckToolSupport.swift in Sources */,

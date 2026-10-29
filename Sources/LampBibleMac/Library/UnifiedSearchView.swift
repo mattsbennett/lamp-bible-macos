@@ -19,6 +19,8 @@ struct UnifiedSearchView: View {
     @State private var bookScope: BookSearchScope = .all
     @State private var strongsKey = ""
     @State private var highlightColor = ""
+    @State private var strongsLoader = StrongsAnalysisLoader()
+    @State private var strongsFilter: LampStrongsFilter?
 
     let showImporter: () -> Void
     /// Opens a reference, in the translation it was found in when the result
@@ -35,6 +37,26 @@ struct UnifiedSearchView: View {
     private var hasActiveStrongsFilter: Bool {
         (selectedKind == .translation || selectedKind == .dictionary)
             && !strongsKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// The analysis belongs to a key on translations. The same field over
+    /// dictionaries is a lexicon lookup, which has no occurrences to count.
+    private var showsStrongsAnalysis: Bool {
+        selectedKind == .translation
+            && !strongsKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Analysing the translation on screen, then the rest.
+    ///
+    /// Narrowed to one module when the module picker names one, so the picker
+    /// means the same thing here as it does for a search.
+    private var strongsRequest: StrongsAnalysisLoader.Request {
+        StrongsAnalysisLoader.Request(
+            key: strongsKey.trimmingCharacters(in: .whitespacesAndNewlines),
+            activeTranslationID: selectedModuleID ?? model.selectedTranslationID,
+            bookRange: bookScope.range,
+            translationIDs: selectedModuleID.map { [$0] } ?? model.translations.map(\.id)
+        )
     }
 
     private var hasActiveHighlightColor: Bool {
@@ -69,7 +91,23 @@ struct UnifiedSearchView: View {
 
     var body: some View {
         Group {
-            if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            if showsStrongsAnalysis {
+                HSplitView {
+                    strongsOccurrences
+                    StrongsAnalysisPane(
+                        key: strongsRequest.key,
+                        loader: strongsLoader,
+                        filter: $strongsFilter,
+                        analyse: { strongsKey = $0 }
+                    )
+                }
+                .task(id: strongsRequest) {
+                    // A rendering or chapter chosen for the last key means
+                    // nothing for this one.
+                    strongsFilter = nil
+                    strongsLoader.load(strongsRequest, library: model.library)
+                }
+            } else if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 && !hasActiveStrongsFilter && !hasActiveHighlightColor {
                 searchLanding
             } else if model.isModuleSearching && model.moduleSearchResults.isEmpty {
@@ -170,6 +208,80 @@ struct UnifiedSearchView: View {
                 }
             }
         }
+    }
+
+    /// Every occurrence of the key in range, narrowed to whatever the pane has
+    /// chosen.
+    ///
+    /// Taken from the analysis rather than from a search. A search stops at a
+    /// page of hits — 250 — which is fewer than a common key has, so filtering
+    /// a search's results by a rendering would show a subset of a subset, and
+    /// the list would disagree with the figure that was clicked to narrow it.
+    /// The analysis already holds every occurrence in range, which is why
+    /// choosing a rendering needs no second query.
+    private var strongsOccurrences: some View {
+        let analysis = strongsLoader.analyses.first
+        let occurrences = analysis?.occurrences(matching: strongsFilter) ?? []
+        return VStack(spacing: 0) {
+            if let analysis {
+                HStack(spacing: 6) {
+                    Text(strongsFilter == nil
+                        ? "\(occurrences.count) occurrences"
+                        : "\(occurrences.count) of \(analysis.occurrenceCount) occurrences")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text(analysis.translationAbbreviation ?? analysis.translationName)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                Divider()
+            }
+            if strongsLoader.isLoadingFirst {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List {
+                    // By position, because one verse can carry the key twice
+                    // and a reference would not tell those two rows apart.
+                    ForEach(Array(occurrences.enumerated()), id: \.offset) { _, occurrence in
+                        Button {
+                            openReference(occurrence.reference, analysis?.translationID)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 3) {
+                                HStack(spacing: 8) {
+                                    Text(strongsReference(occurrence.reference))
+                                        .font(.callout.weight(.medium))
+                                    Spacer()
+                                    if let form = occurrence.form, !form.isEmpty {
+                                        Text(form)
+                                            .font(.callout)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                if !occurrence.text.isEmpty {
+                                    Text("“\(occurrence.text)”")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .padding(.vertical, 3)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help("Open \(strongsReference(occurrence.reference))")
+                    }
+                }
+                .listStyle(.inset)
+            }
+        }
+        .frame(minWidth: 300, idealWidth: 380)
+    }
+
+    private func strongsReference(_ reference: Int) -> String {
+        let parts = LampBibleReferenceFormatter.components(of: reference)
+        return "\(LampBibleReferenceFormatter.bookName(parts.book)) \(parts.chapter):\(parts.verse)"
     }
 
     private var resultsList: some View {
