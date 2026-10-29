@@ -185,6 +185,8 @@ struct StrongsAnalysisPane: View {
     @State private var measure: LampStrongsSpreadMeasure = .occurrences
     @State private var bySection = false
     @State private var openBook: Int?
+    /// Set once rather than per search, so it is remembered.
+    @AppStorage("strongs.shareAsRing") private var shareAsRing = true
 
     /// The analysis the pane describes: the translation being read, which
     /// `LampStrongsAnalysisOrder` keeps at the front.
@@ -406,6 +408,14 @@ struct StrongsAnalysisPane: View {
                     }
                     .labelsHidden()
                     .frame(width: 150)
+                } else if style == .share {
+                    Picker("Shape", selection: $shareAsRing) {
+                        Text("Ring").tag(true)
+                        Text("Pie").tag(false)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 110)
                 }
             }
 
@@ -453,12 +463,12 @@ struct StrongsAnalysisPane: View {
     /// gathers in one look.
     @ViewBuilder
     private func columnsChart(_ analysis: LampStrongsAnalysis) -> some View {
-        let divisions = showsBooks
-            ? LampStrongsSpread.everyBook(
-                from: analysis.books,
-                in: LampStrongsSpread.shapeRange(forKey: key, chosen: bookRange)
-            )
-            : analysis.sections
+        // The same list bars use. Core's `books` is already every book with
+        // tags of the key's own language, zeros included — so a Greek key
+        // gives the 27 New Testament books and nothing else. Padding it out
+        // to the whole canon, as this did, is what put two thirds of empty
+        // Old Testament on the chart.
+        let divisions = showsBooks ? analysis.books : analysis.sections
         let bars = LampStrongsSpread.bars(divisions, measure: measure)
         if bars.isEmpty {
             nothingToChart
@@ -586,14 +596,14 @@ struct StrongsAnalysisPane: View {
                 // The grid cannot label every cell, so it says what the shade
                 // means and at what value it tops out.
                 HStack(spacing: 5) {
-                    Text("Darker = more").font(.caption2).foregroundStyle(.secondary)
+                    Text("0").font(.caption2).foregroundStyle(.secondary)
                     ForEach([0.07, 0.4, 0.7, 1.0], id: \.self) { step in
                         RoundedRectangle(cornerRadius: 1)
                             .fill(.tint)
                             .opacity(step)
                             .frame(width: 11, height: 9)
                     }
-                    Text("up to \(busiest) in a chapter")
+                    Text("\(busiest) in a chapter")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -623,11 +633,21 @@ struct StrongsAnalysisPane: View {
                     ForEach(Array(slices.enumerated()), id: \.element.id) { index, slice in
                         DonutSlice(
                             start: slices.prefix(index).reduce(0) { $0 + $1.fraction },
-                            extent: slice.fraction
+                            extent: slice.fraction,
+                            thickness: shareAsRing ? 0.38 : 1
                         )
                         .fill(.tint)
                         .opacity(sliceOpacity(index, of: slices.count, isOther: slice.isOther))
                         .help("\(slice.name): \(slice.value)")
+                    }
+                    // The hole is somewhere to put the total, which is the
+                    // one number a share otherwise leaves you to add up.
+                    if shareAsRing {
+                        VStack(spacing: 0) {
+                            Text("\(slices.reduce(0) { $0 + $1.value })")
+                                .font(.callout.weight(.semibold).monospacedDigit())
+                            Text("in all").font(.caption2).foregroundStyle(.secondary)
+                        }
                     }
                 }
                 .frame(width: 104, height: 104)
@@ -940,6 +960,14 @@ private struct DonutSlice: Shape {
         let to = Angle.degrees((start + extent) * 360 - 90)
 
         var path = Path()
+        guard inner > 0.5 else {
+            // A solid pie: a wedge from the centre, since an arc of radius
+            // nothing draws nothing and would leave the slice open.
+            path.move(to: centre)
+            path.addArc(center: centre, radius: outer, startAngle: from, endAngle: to, clockwise: false)
+            path.closeSubpath()
+            return path
+        }
         path.addArc(center: centre, radius: outer, startAngle: from, endAngle: to, clockwise: false)
         path.addArc(center: centre, radius: inner, startAngle: to, endAngle: from, clockwise: true)
         path.closeSubpath()

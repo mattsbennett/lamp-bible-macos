@@ -485,39 +485,8 @@ struct StrongsChartStyleTests {
 
     // MARK: - Putting the gaps back
 
-    /// The shape is made of its gaps. The analysis leaves out a book the key
-    /// never reaches, so drawing straight from it moves Romans next to
-    /// Matthew and invents a cluster.
-    @Test func theshapeIncludesBooksTheKeyNeverReaches() {
-        let sparse = [
-            Self.division(id: 40, name: "Matthew", occurrences: 3),
-            Self.division(id: 45, name: "Romans", occurrences: 9),
-        ]
 
-        let padded = LampStrongsSpread.everyBook(from: sparse, in: 40...45)
-        #expect(padded.count == 6, "Matthew through Romans is six books")
-        #expect(padded.map(\.id) == [40, 41, 42, 43, 44, 45])
-        #expect(padded.map(\.occurrenceCount) == [3, 0, 0, 0, 0, 9])
-    }
 
-    /// A book core left out is one whose absence it did not find notable, so
-    /// the filler must not claim otherwise.
-    @Test func afilledBookIsNotMarkedAsFewerThanExpected() {
-        let padded = LampStrongsSpread.everyBook(
-            from: [Self.division(id: 40, name: "Matthew", occurrences: 3)],
-            in: 40...42
-        )
-        #expect(padded.dropFirst().allSatisfy { $0.expectation == .asExpected })
-        #expect(padded.allSatisfy { $0.ratePerThousandWords.isFinite })
-    }
-
-    @Test func nopaddingHappensOutsideTheChosenRange() {
-        let padded = LampStrongsSpread.everyBook(
-            from: [Self.division(id: 1, name: "Genesis", occurrences: 5)],
-            in: 40...41
-        )
-        #expect(padded.map(\.id) == [40, 41], "Genesis is out of range and is dropped")
-    }
 
     // MARK: - Share
 
@@ -613,30 +582,5 @@ struct StrongsChartStyleTests {
         #expect(!LampStrongsChartStyle.grid.usesMeasure)
         #expect(!LampStrongsChartStyle.share.usesMeasure)
         #expect(LampStrongsChartStyle.grid.needsBooks)
-    }
-}
-
-/// Which books the shape spans.
-struct StrongsShapeRangeTests {
-    /// A Greek key cannot occur in the Old Testament, so padding to all
-    /// sixty-six spends two thirds of the chart on guaranteed emptiness.
-    @Test func agreekKeyIsShapedOverTheNewTestament() {
-        #expect(LampStrongsSpread.shapeRange(forKey: "G26", chosen: nil) == 40...66)
-        #expect(LampStrongsSpread.shapeRange(forKey: "g26", chosen: nil) == 40...66)
-    }
-
-    @Test func ahebrewKeyIsShapedOverTheOldTestament() {
-        #expect(LampStrongsSpread.shapeRange(forKey: "H7225", chosen: nil) == 1...39)
-    }
-
-    /// A range the reader chose always wins; they asked for it.
-    @Test func achosenRangeIsNotSecondGuessed() {
-        #expect(LampStrongsSpread.shapeRange(forKey: "G26", chosen: 40...43) == 40...43)
-        #expect(LampStrongsSpread.shapeRange(forKey: "H7225", chosen: 40...66) == 40...66)
-    }
-
-    @Test func akeyOfNoKnownLanguageSpansEverything() {
-        #expect(LampStrongsSpread.shapeRange(forKey: "", chosen: nil) == nil)
-        #expect(LampStrongsSpread.shapeRange(forKey: "TH1234", chosen: nil) == nil)
     }
 }
