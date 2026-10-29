@@ -175,7 +175,7 @@ public actor LampMCPToolHandler {
             ))
 
         case "build_deck":
-            let built = try LampDeckTools.build(
+            let built = try await LampDeckTools.build(
                 deckJSON: try deckJSON(arguments),
                 manuscript: arguments["manuscript"]?.stringValue
             )

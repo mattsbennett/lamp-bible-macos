@@ -15,7 +15,9 @@ struct DeckToolTests {
     private func deckJSON(
         title: String = "Living Hope",
         notesSource: String? = nil,
-        notesAnchor: String? = nil
+        notesAnchor: String? = nil,
+        chart: [String: Any]? = nil,
+        bareChartBlock: Bool = false
     ) -> Data {
         var deck: [String: Any] = [
             "schemaVersion": 1,
@@ -68,7 +70,62 @@ struct DeckToolTests {
             ],
         ]
         if let notesSource { deck["speakerNotesSource"] = notesSource }
+        // On the *second* slide, so a chart issue has to be filed under slide
+        // two rather than wherever a zero-based path happens to land.
+        if chart != nil || bareChartBlock, var slides = deck["slides"] as? [[String: Any]] {
+            var blocks = slides[1]["blocks"] as? [[String: Any]] ?? []
+            var block: [String: Any] = [
+                "id": "dd21b8a7-335a-4424-945b-bcb9d949bd67",
+                "kind": "chart",
+                "text": "Where it is found",
+            ]
+            // Without `chart`, which is the error both validators report.
+            if let chart { block["chart"] = chart }
+            blocks.append(block)
+            slides[1]["blocks"] = blocks
+            deck["slides"] = slides
+        }
         return try! JSONSerialization.data(withJSONObject: deck, options: [.sortedKeys])
+    }
+
+    /// A chart source naming a key and a translation, with no values yet —
+    /// which is what an agent writes.
+    private func chartSource(
+        strongs: String = "G26",
+        translationID: String = "ESVs",
+        by: String = "section",
+        measure: String = "occurrences"
+    ) -> [String: Any] {
+        [
+            "source": ["strongs": strongs, "translationID": translationID],
+            "by": by,
+            "measure": measure,
+        ]
+    }
+
+    /// Stands in for a library, so the chart reporting can be tested without
+    /// one holding Strong's-tagged translations. It fills every chart with one
+    /// value and reports whatever issues it was given.
+    private func chartWorker(
+        value: Double = 71,
+        issues: [LampPresentationDeckIssue] = []
+    ) -> LampDeckChartWorker {
+        { deck in
+            var filled = deck
+            var changed = false
+            for slideIndex in filled.slides.indices {
+                for blockIndex in filled.slides[slideIndex].blocks.indices
+                where filled.slides[slideIndex].blocks[blockIndex].kind == .chart {
+                    filled.slides[slideIndex].blocks[blockIndex].chart?.values = [
+                        .init(label: "Paul’s Letters", value: value, standing: .more),
+                    ]
+                    changed = true
+                }
+            }
+            return LampPresentationChartReport(
+                deck: filled, issues: issues, changed: changed
+            )
+        }
     }
 
     // MARK: - Validate
@@ -155,8 +212,8 @@ struct DeckToolTests {
 
     /// The deck comes back as well as the report: a caller with no folder
     /// cannot read it off disk the way the command line does.
-    @Test func buildingReturnsTheFilledInDeckAndItsReport() throws {
-        let built = try LampDeckTools.build(deckJSON: deckJSON(), manuscript: nil)
+    @Test func buildingReturnsTheFilledInDeckAndItsReport() async throws {
+        let built = try await LampDeckTools.build(deckJSON: deckJSON(), manuscript: nil)
 
         #expect(built.resolved)
         #expect(!built.deckJSON.isEmpty)
@@ -167,22 +224,22 @@ struct DeckToolTests {
         #expect(report?["resolved"] as? Bool == true)
     }
 
-    @Test func buildingTwiceChangesNothing() throws {
-        let once = try LampDeckTools.build(deckJSON: deckJSON(), manuscript: nil)
-        let twice = try LampDeckTools.build(deckJSON: once.deckJSON, manuscript: nil)
+    @Test func buildingTwiceChangesNothing() async throws {
+        let once = try await LampDeckTools.build(deckJSON: deckJSON(), manuscript: nil)
+        let twice = try await LampDeckTools.build(deckJSON: once.deckJSON, manuscript: nil)
 
         #expect(once.deckJSON == twice.deckJSON)
     }
 
     /// An anchor the manuscript no longer holds is the one failure worth
     /// reporting as one: the slide's notes have stopped being the writing's.
-    @Test func abrokenAnchorIsNotResolved() throws {
+    @Test func abrokenAnchorIsNotResolved() async throws {
         let deck = deckJSON(
             notesSource: "manuscript",
             notesAnchor: "A sentence that is not in the manuscript at all."
         )
 
-        let built = try LampDeckTools.build(
+        let built = try await LampDeckTools.build(
             deckJSON: deck,
             manuscript: "# Living Hope\n\nSomething else entirely was written here.\n"
         )
@@ -190,9 +247,9 @@ struct DeckToolTests {
         #expect(built.resolved == false)
     }
 
-    @Test func amatchingAnchorTakesItsNotesFromTheManuscript() throws {
+    @Test func amatchingAnchorTakesItsNotesFromTheManuscript() async throws {
         let anchor = "What does a living hope ask of us today?"
-        let built = try LampDeckTools.build(
+        let built = try await LampDeckTools.build(
             deckJSON: deckJSON(notesSource: "manuscript", notesAnchor: anchor),
             manuscript: """
             # Living Hope
@@ -208,6 +265,164 @@ struct DeckToolTests {
             notes.contains("nothing has changed yet"),
             "the manuscript's words should have reached the slide's notes"
         )
+    }
+
+    // MARK: - Charts
+
+    @Test func chartValuesAreFilledFromTheLibrary() async throws {
+        let built = try await LampDeckTools.build(
+            deckJSON: deckJSON(chart: chartSource()),
+            manuscript: nil,
+            charts: chartWorker()
+        )
+
+        let deck = try LampPresentationDeckStore.decodeUnvalidated(built.deckJSON)
+        let chart = try #require(
+            deck.slides[1].blocks.first { $0.kind == .chart }?.chart
+        )
+        #expect(chart.values?.first?.value == 71)
+        #expect(chart.values?.first?.standing == .more)
+        let report = try JSONSerialization.jsonObject(with: built.reportJSON) as? [String: Any]
+        #expect(report?["chartsUpdated"] as? Bool == true)
+    }
+
+    /// A deck whose notes are written by hand still has charts to fill. The
+    /// authored-notes case returns early — before this test it returned before
+    /// the charts were touched, so every hand-written deck drew empty bars.
+    @Test func chartsAreWorkedOutEvenWhenTheNotesAreAuthored() async throws {
+        let built = try await LampDeckTools.build(
+            deckJSON: deckJSON(notesSource: "authored", chart: chartSource()),
+            manuscript: nil,
+            charts: chartWorker(value: 9)
+        )
+
+        let deck = try LampPresentationDeckStore.decodeUnvalidated(built.deckJSON)
+        let chart = try #require(
+            deck.slides[1].blocks.first { $0.kind == .chart }?.chart
+        )
+        #expect(
+            chart.values?.first?.value == 9,
+            "authored notes mean nothing to derive from a manuscript, not nothing to do"
+        )
+    }
+
+    /// The chart is on slide two. Core's issue paths are zero-based and a
+    /// report's slide numbers are one-based, so an off-by-one here files the
+    /// problem under the slide next door — where it is invisible, because that
+    /// slide has no chart on it.
+    @Test func achartIssueIsFiledUnderItsOwnSlide() async throws {
+        let built = try await LampDeckTools.build(
+            deckJSON: deckJSON(chart: chartSource()),
+            manuscript: nil,
+            charts: chartWorker(issues: [
+                .init(
+                    severity: .warning,
+                    path: "slides[1].blocks[2].chart.source",
+                    message: "G26 in ESVs has nothing to chart in this range."
+                ),
+            ])
+        )
+
+        let report = try #require(
+            try JSONSerialization.jsonObject(with: built.reportJSON) as? [String: Any]
+        )
+        let slides = try #require(report["slides"] as? [[String: Any]])
+        #expect((slides[0]["chartProblems"] as? [String])?.isEmpty == true)
+        #expect(
+            (slides[1]["chartProblems"] as? [String])?.first?.contains("nothing to chart") == true
+        )
+        #expect(report["slidesWithProblems"] as? [Int] == [2], "one-based, and only slide two")
+    }
+
+    /// A chart that could not be worked out is a warning, not a failure: the
+    /// exit status means "the notes are no longer the manuscript's", and a
+    /// library without that translation installed says nothing about the notes.
+    @Test func achartWarningDoesNotFailTheBuild() async throws {
+        let built = try await LampDeckTools.build(
+            deckJSON: deckJSON(chart: chartSource()),
+            manuscript: nil,
+            charts: chartWorker(issues: [
+                .init(
+                    severity: .warning,
+                    path: "slides[1].blocks[2].chart.source",
+                    message: "This library has no tagged ESVs."
+                ),
+            ])
+        )
+
+        #expect(built.resolved)
+    }
+
+    @Test func adeckWithChartsAndNoLibrarySaysWhatToPass() async throws {
+        let built = try await LampDeckTools.build(
+            deckJSON: deckJSON(chart: chartSource()),
+            manuscript: nil
+        )
+
+        let report = try #require(
+            try JSONSerialization.jsonObject(with: built.reportJSON) as? [String: Any]
+        )
+        let problems = try #require(report["problems"] as? [String])
+        #expect(
+            problems.contains { $0.contains("--library") },
+            "a chart with no library to fill it from has to say so, and name the flag"
+        )
+        #expect(report["chartsUpdated"] as? Bool == false)
+    }
+
+    /// A deck with no charts at all must not be told to pass --library.
+    @Test func adeckWithNoChartsIsToldNothingAboutLibraries() async throws {
+        let built = try await LampDeckTools.build(deckJSON: deckJSON(), manuscript: nil)
+
+        let report = try #require(
+            try JSONSerialization.jsonObject(with: built.reportJSON) as? [String: Any]
+        )
+        #expect((report["problems"] as? [String])?.contains { $0.contains("--library") } != true)
+    }
+
+    /// The skill's `validate_deck.py` and this Swift check are two validators
+    /// over one format, and they have disagreed before. These are the chart
+    /// cases the Python script was given, asserted here so a change to either
+    /// shows up as a disagreement rather than as an agent being told different
+    /// things depending on which one it ran.
+    @Test func thetwoValidatorsAgreeAboutCharts() throws {
+        let missing = LampDeckTools.validate(deckJSON: deckJSON(bareChartBlock: true))
+        #expect(
+            missing.issues.contains {
+                $0.severity == .error && $0.path.hasSuffix("chart")
+            },
+            "a chart block with no chart is an error in both"
+        )
+
+        let unfilled = LampDeckTools.validate(deckJSON: deckJSON(chart: chartSource()))
+        #expect(
+            unfilled.issues.allSatisfy { $0.severity == .warning },
+            "a chart with no values yet is a warning in both, never an error"
+        )
+        #expect(
+            unfilled.issues.contains { $0.path.contains("chart") },
+            "and it is reported against the chart"
+        )
+    }
+
+    @Test(arguments: [
+        ("slides[0].blocks[1].chart", 0),
+        ("slides[11].blocks[0].chart.values", 11),
+    ])
+    func aslideIndexIsReadFromAnIssuePath(path: String, expected: Int) {
+        #expect(LampDeckBuild.slideIndex(inPath: path) == expected)
+    }
+
+    /// A path that names no slide gives nothing, rather than slide zero —
+    /// which would quietly attach a deck-wide issue to the first slide.
+    @Test(arguments: [
+        "theme.accentColor",
+        "slides[].blocks[0]",
+        "slides[two].blocks[0]",
+        "",
+    ])
+    func apathThatNamesNoSlideGivesNothing(path: String) {
+        #expect(LampDeckBuild.slideIndex(inPath: path) == nil)
     }
 
     /// The deck and the manuscript are the writer's prose, so the directory

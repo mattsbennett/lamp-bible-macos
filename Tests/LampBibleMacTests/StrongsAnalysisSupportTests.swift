@@ -297,3 +297,35 @@ struct StrongsAnalysisSupportTests {
         #expect(LampStrongsAnalysisOrder.ordered([], activeTranslationID: "BSBs").isEmpty)
     }
 }
+
+/// Which block roles Slide Studio offers.
+struct StudioBlockKindTests {
+    /// Studio draws a chart but cannot yet build one, and a chart block with no
+    /// chart in it is invalid the moment it is added.
+    @Test func achartIsNotOfferedAsSomethingToAdd() {
+        #expect(!LampPresentationBlockKind.authorableHere.contains(.chart))
+        #expect(
+            LampPresentationBlockKind.authorableHere.count
+                == LampPresentationBlockKind.allCases.count - 1,
+            "only the chart is held back"
+        )
+        for kind in LampPresentationBlockKind.allCases where kind != .chart {
+            #expect(LampPresentationBlockKind.authorableHere.contains(kind))
+        }
+    }
+
+    /// A picker bound to an existing chart has to list `chart`, or SwiftUI
+    /// finds no tag matching the selection and can reset it — turning an
+    /// agent's chart into whatever role comes first.
+    @Test func anexistingChartKeepsItsOwnRoleInThePicker() {
+        #expect(LampPresentationBlockKind.authorableHere(including: .chart).contains(.chart))
+        #expect(
+            !LampPresentationBlockKind.authorableHere(including: .title).contains(.chart),
+            "a title block is not an excuse to offer charts"
+        )
+        #expect(
+            LampPresentationBlockKind.authorableHere(including: .chart).count
+                == LampPresentationBlockKind.allCases.count
+        )
+    }
+}

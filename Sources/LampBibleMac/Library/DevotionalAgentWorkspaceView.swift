@@ -916,6 +916,11 @@ struct DevotionalAgentWorkspaceView: View {
         stamp: LampPresentationStudioEdits.Stamp,
         edits: LampPresentationImportStatus.StudioEdits?
     )?
+    /// An import is already running. The workspace is polled several times a
+    /// second and taking a deck in is no longer instant — a chart's values
+    /// come from the library — so without this two polls could import the same
+    /// deck at once.
+    @State private var isImportingPresentation = false
 
     private var selectedProvider: AIProviderCLI {
         AIProviderCLI(rawValue: providerID) ?? .codex
@@ -1372,7 +1377,7 @@ struct DevotionalAgentWorkspaceView: View {
                 try takeOrKeep(diskDraft: diskDraft, in: workspace)
             }
             refreshWorkspaceMetadata(in: workspace)
-            importPresentationArtifactIfNeeded(in: workspace)
+            Task { await importPresentationArtifactIfNeeded(in: workspace) }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -1390,7 +1395,7 @@ struct DevotionalAgentWorkspaceView: View {
                 workspaceDraft = diskDraft
             }
             refreshWorkspaceMetadata(in: workspaceURL)
-            importPresentationArtifactIfNeeded(in: workspaceURL)
+            Task { await importPresentationArtifactIfNeeded(in: workspaceURL) }
             collectTerminalTurns(in: workspaceURL)
             refreshErrorMessage = nil
         } catch {
@@ -1600,7 +1605,15 @@ struct DevotionalAgentWorkspaceView: View {
 
     /// Takes a deck the agent wrote, with the images it delivered beside it,
     /// and records the outcome where the agent can read it.
-    private func importPresentationArtifactIfNeeded(in workspace: URL) {
+    ///
+    /// Asynchronous because a chart's values come from the library, which is an
+    /// actor. The workspace is looked at several times a second, so the guard
+    /// below matters: without it a slow import could be started again while
+    /// the first was still saving, and both would write the same deck.
+    private func importPresentationArtifactIfNeeded(in workspace: URL) async {
+        guard !isImportingPresentation else { return }
+        isImportingPresentation = true
+        defer { isImportingPresentation = false }
         let store = LampPresentationDeckStore(rootURL: libraryRootURL)
         do {
             guard let data = try DevotionalAgentWorkspaceStore.changedPresentationData(
@@ -1633,6 +1646,14 @@ struct DevotionalAgentWorkspaceView: View {
             // ran the build command.
             let notesSummary = resolveManuscriptNotes(in: &imported, from: workspace)
 
+            // Charts next, before the deck is saved: an agent writes a chart's
+            // source and never its values, so a deck arriving from a workspace
+            // has empty bars until the library fills them. Done here rather
+            // than left to the build command, which an agent need not have run.
+            let charts = await LampLibrary(rootURL: libraryRootURL)
+                .workingOutCharts(in: imported)
+            imported = charts.deck
+
             // Images arrive in an `Assets` folder beside the deck, because the
             // agent cannot write into the library itself.
             let assets = try store.importAssets(from: workspace, referencedBy: imported)
@@ -1648,11 +1669,14 @@ struct DevotionalAgentWorkspaceView: View {
             LampPresentationStudioEdits.recordWritten(imported, in: workspace)
             studioEditCheck = nil
 
+            // The library's word on the charts goes back with the validator's,
+            // because an agent reading this status is the one who can fix a
+            // chart naming a translation that is not installed.
             let issues = LampPresentationDeckValidator.validate(imported) { assetPath in
                 store.assetURL(forAssetPath: assetPath).map {
                     FileManager.default.fileExists(atPath: $0.path)
                 } ?? false
-            }
+            } + charts.issues
             let advisory = issues.filter { $0.severity == .warning }
             presentationStatus = advisory.isEmpty
                 ? "Imported \(imported.title) into Slide Studio (\(destination.lastPathComponent))."

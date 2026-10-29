@@ -29,8 +29,14 @@ BLOCK_KINDS = {
     "citation",
     "image",
     "caption",
+    "chart",
 }
 HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
+CHART_GROUPINGS = {"book", "section", "rendering", "form"}
+CHART_MEASURES = {"occurrences", "perThousandWords"}
+# Past this many bars a chart is hard to read from the back of a room. Mirrors
+# `LampPresentationChart.readableBars`.
+CHART_READABLE_BARS = 24
 
 # What each layout actually draws. This mirrors `LampPresentationSlidePlan` in
 # LampCore, which the renderer itself draws from; the two must agree, or this
@@ -50,26 +56,28 @@ LAYOUT_CAPACITY: dict[str, dict[str, int | None]] = {
     },
     "title-and-body": {
         "title": 1, "subtitle": None, "body": None, "scripture": None,
-        "quotation": None, "citation": None, "image": 1, "caption": 1,
+        "quotation": None, "citation": None, "image": 1, "chart": 1, "caption": 1,
     },
     "scripture": {
         "scripture": None, "quotation": None, "body": None,
-        "citation": None, "image": 1, "caption": 1,
+        "citation": None, "image": 1, "chart": 1, "caption": 1,
     },
     "quotation": {
         "scripture": None, "quotation": None, "body": None,
-        "citation": None, "image": 1, "caption": 1,
+        "citation": None, "image": 1, "chart": 1, "caption": 1,
     },
     # Columns are grouped rather than counted; see `undrawn_in_columns`.
     "two-column": {},
-    "image": {"title": 1, "image": 1, "caption": 1, "citation": None},
+    "image": {"title": 1, "image": 1, "chart": 1, "caption": 1, "citation": None},
     "blank": {
         "title": None, "subtitle": None, "body": None, "scripture": None,
-        "quotation": None, "citation": None, "image": 1, "caption": 1,
+        "quotation": None, "citation": None, "image": 1, "chart": 1, "caption": 1,
     },
 }
 # `title` and `closing` draw one line under the heading, from either kind.
 SHARED_SUBTITLE_SLOT = {"title", "closing"}
+# A slide draws one picture or one chart, never both: they take the same slot.
+SHARED_PICTURE_SLOT = {"image", "chart"}
 # Past this much text a slide is shrinking its own type to fit. Halved when an
 # image takes the other half of the slide.
 CROWDING_CEILING = 900
@@ -197,8 +205,11 @@ def emphasis_issues(block: dict, highlight_names: set[str]) -> tuple[list[str], 
             errors.append(f"{path}.occurrence: expected a whole number")
     if errors or not emphasis:
         return errors, []
-    if block.get("kind") == "image":
-        return [], ["emphasis: emphasis is drawn on words, and an image block has none"]
+    if block.get("kind") in SHARED_PICTURE_SLOT:
+        return [], [
+            "emphasis: emphasis is drawn on words, and "
+            f"a {block.get('kind')} block has none"
+        ]
 
     warnings: list[str] = []
     text = block.get("text") if isinstance(block.get("text"), str) else ""
@@ -371,6 +382,7 @@ def undrawn_in_layout(layout: str, blocks: list) -> list[tuple[int, str]]:
         return []
     used: dict[str, int] = {}
     subtitle_slot_taken = False
+    picture_slot_taken = False
     undrawn: list[tuple[int, str]] = []
     for index, block in enumerate(blocks):
         if not isinstance(block, dict):
@@ -384,15 +396,24 @@ def undrawn_in_layout(layout: str, blocks: list) -> list[tuple[int, str]]:
                 undrawn.append((index, str(kind)))
             subtitle_slot_taken = True
             continue
+        # One picture or one chart, not one of each: counting them separately
+        # would approve a slide the renderer draws with the chart missing.
+        if kind in SHARED_PICTURE_SLOT:
+            if picture_slot_taken:
+                undrawn.append((index, str(kind)))
+            picture_slot_taken = True
+            continue
         limit = capacity[kind]
         if limit is None:
             continue
         used[kind] = used.get(kind, 0) + 1
         if used[kind] > limit:
             undrawn.append((index, str(kind)))
-    # A caption belongs to a picture; without one it is never drawn.
+    # A caption belongs to a picture or a chart; without either it is never
+    # drawn. A chart is captioned the same way, which is where the translation
+    # a chart counted gets named.
     if layout != "image" and not any(
-        isinstance(b, dict) and b.get("kind") == "image" for b in blocks
+        isinstance(b, dict) and b.get("kind") in SHARED_PICTURE_SLOT for b in blocks
     ):
         for index, block in enumerate(blocks):
             if isinstance(block, dict) and block.get("kind") == "caption":
@@ -419,6 +440,74 @@ def safe_asset_path(value):
         return False
     parts = value.split("/")
     return all(part and part not in (".", "..") and not part.startswith(".") for part in parts)
+
+
+def chart_issues(block: dict) -> tuple[list[str], list[str]]:
+    """Errors and warnings for a chart block, by path within the block.
+
+    Structure only. What a chart is *worth* — whether the key occurs where the
+    values say it does — needs the library, so Lamp works the values out and
+    this script never second-guesses them. Hence "no values yet" is a warning:
+    an agent is meant to write the source and let Lamp fill the rest.
+    """
+    kind = block.get("kind")
+    chart = block.get("chart")
+    if kind != "chart":
+        if chart is None:
+            return [], []
+        return [f"chart: chart data requires chart content, not {kind}"], []
+    if chart is None:
+        return ["chart: a chart block needs a chart to draw"], []
+    if not isinstance(chart, dict):
+        return ["chart: expected an object"], []
+
+    errors: list[str] = []
+    warnings: list[str] = []
+    source = chart.get("source")
+    if not isinstance(source, dict):
+        errors.append("chart.source: expected an object naming a key and a translation")
+    else:
+        strongs = source.get("strongs")
+        if not nonempty(strongs):
+            errors.append("chart.source.strongs: a Strong's key is required")
+        elif not str(strongs).strip()[:1].upper() in {"H", "G"}:
+            warnings.append(
+                "chart.source.strongs: a key usually begins with H or G, as in G26; "
+                f"{str(strongs).strip()!r} may not match any tag"
+            )
+        if not nonempty(source.get("translationID")):
+            errors.append("chart.source.translationID: a translation ID is required")
+        if "range" in source and source.get("range") is not None:
+            # Only that it is a range at all. Reading it needs Lamp's own
+            # reference parser, and guessing here would reject what Lamp takes.
+            if not nonempty(source.get("range")):
+                errors.append(
+                    "chart.source.range: expected whole books, such as NT, "
+                    "Romans or Matthew-John"
+                )
+
+    if chart.get("by") not in CHART_GROUPINGS:
+        errors.append(
+            "chart.by: expected " + ", ".join(sorted(CHART_GROUPINGS))
+        )
+    measure = chart.get("measure")
+    if measure is not None and measure not in CHART_MEASURES:
+        errors.append("chart.measure: expected " + " or ".join(sorted(CHART_MEASURES)))
+
+    values = chart.get("values")
+    if values is None:
+        warnings.append(
+            "chart.values: no values yet. Lamp works these out from the library when "
+            "the deck is built or imported; do not write them by hand."
+        )
+    elif not isinstance(values, list):
+        errors.append("chart.values: expected an array")
+    elif len(values) > CHART_READABLE_BARS:
+        warnings.append(
+            f"chart.values: {len(values)} bars is hard to read from the back of a room; "
+            "chart by section, or narrow the range"
+        )
+    return errors, warnings
 
 
 def nonempty(value: object) -> bool:
@@ -649,6 +738,10 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
             emphasis_errors, emphasis_warnings = emphasis_issues(block, highlight_names)
             errors.extend(f"{block_path}.{issue}" for issue in emphasis_errors)
             warnings.extend(f"{block_path}.{issue}" for issue in emphasis_warnings)
+
+            chart_errors, chart_warnings = chart_issues(block)
+            errors.extend(f"{block_path}.{issue}" for issue in chart_errors)
+            warnings.extend(f"{block_path}.{issue}" for issue in chart_warnings)
 
         # Images the deck names but nobody delivered. They render as
         # placeholders rather than failing, so this is a warning.

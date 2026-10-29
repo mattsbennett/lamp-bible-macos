@@ -507,7 +507,7 @@ struct SlideStudioView: View {
                             }
 
                             Menu("Add Content", systemImage: "plus") {
-                                ForEach(LampPresentationBlockKind.allCases) { kind in
+                                ForEach(LampPresentationBlockKind.authorableHere) { kind in
                                     Button(kind.displayName) { addBlock(kind) }
                                 }
                             }
@@ -1265,8 +1265,12 @@ private struct LampSlideBlockEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack {
+                // Including this block's own role even when it is one Studio
+                // cannot add. A picker whose selection has no matching tag
+                // draws blank and can reset the value, which would turn an
+                // agent's chart into a title the moment it was looked at.
                 Picker("Role", selection: $block.kind) {
-                    ForEach(LampPresentationBlockKind.allCases) { kind in
+                    ForEach(LampPresentationBlockKind.authorableHere(including: block.kind)) { kind in
                         Text(kind.displayName).tag(kind)
                     }
                 }

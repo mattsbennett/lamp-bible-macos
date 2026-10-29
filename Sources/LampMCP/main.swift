@@ -17,7 +17,7 @@ struct LampMCPCommand {
         do {
             let options = try Options(arguments: Array(CommandLine.arguments.dropFirst()))
             if let deckURL = options.buildDeckURL {
-                try buildDeck(deckURL, options: options)
+                try await buildDeck(deckURL, options: options)
                 return
             }
             if let deckURL = options.renderDeckURL {
@@ -86,10 +86,18 @@ struct LampMCPCommand {
 
     /// Derives what a deck can derive — its speaker notes and any missing
     /// identifiers — and says what it could not.
-    private static func buildDeck(_ deckURL: URL, options: Options) throws {
-        let built = try LampDeckTools.buildFile(
+    private static func buildDeck(_ deckURL: URL, options: Options) async throws {
+        // A chart's values come from a library, so they are filled in only
+        // when one was named. Without `--library` the report says so rather
+        // than leaving a chart quietly empty.
+        let charts = options.libraryRootURL.map { root -> LampDeckChartWorker in
+            let library = LampLibrary(rootURL: root)
+            return { deck in await library.workingOutCharts(in: deck) }
+        }
+        let built = try await LampDeckTools.buildFile(
             deckURL: deckURL,
-            manuscriptURL: options.manuscriptURL
+            manuscriptURL: options.manuscriptURL,
+            charts: charts
         )
         FileHandle.standardOutput.write(built.json)
         FileHandle.standardOutput.write(Data("\n".utf8))

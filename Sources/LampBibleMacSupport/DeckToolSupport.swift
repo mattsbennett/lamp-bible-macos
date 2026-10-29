@@ -157,8 +157,12 @@ public enum LampDeckTools {
     ///
     /// Both, because a caller with no folder cannot read the deck back off
     /// disk afterwards the way the command line does.
-    public static func build(deckJSON: Data, manuscript: String?) throws -> BuildResult {
-        try inScratchDirectory { scratch in
+    public static func build(
+        deckJSON: Data,
+        manuscript: String?,
+        charts: LampDeckChartWorker? = nil
+    ) async throws -> BuildResult {
+        try await inScratchDirectory { scratch in
             let deckURL = scratch.appendingPathComponent("presentation.lampdeck")
             try deckJSON.write(to: deckURL)
             let manuscriptURL = try manuscript.map { text -> URL in
@@ -166,7 +170,9 @@ public enum LampDeckTools {
                 try Data(text.utf8).write(to: url)
                 return url
             }
-            let report = try LampDeckBuild.build(deckURL: deckURL, manuscriptURL: manuscriptURL)
+            let report = try await LampDeckBuild.build(
+                deckURL: deckURL, manuscriptURL: manuscriptURL, charts: charts
+            )
             return BuildResult(
                 reportJSON: try encoded(report),
                 // `build` writes the derived deck back over its input.
@@ -178,8 +184,14 @@ public enum LampDeckTools {
 
     /// The command line's own path: the deck is already a file, and is
     /// rewritten in place.
-    public static func buildFile(deckURL: URL, manuscriptURL: URL?) throws -> (json: Data, resolved: Bool) {
-        let report = try LampDeckBuild.build(deckURL: deckURL, manuscriptURL: manuscriptURL)
+    public static func buildFile(
+        deckURL: URL,
+        manuscriptURL: URL?,
+        charts: LampDeckChartWorker? = nil
+    ) async throws -> (json: Data, resolved: Bool) {
+        let report = try await LampDeckBuild.build(
+            deckURL: deckURL, manuscriptURL: manuscriptURL, charts: charts
+        )
         return (try encoded(report), report.resolved)
     }
 

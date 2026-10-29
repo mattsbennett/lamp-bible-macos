@@ -134,7 +134,7 @@ size of the type.
 
 ## Content block
 
-Every block has `id`, `kind`, and `text`. It may also contain `assetPath`, `altText`, `placement`, `listStyle`, `scriptureReference`, or `emphasis`. Supported kinds are:
+Every block has `id`, `kind`, and `text`. It may also contain `assetPath`, `altText`, `placement`, `listStyle`, `scriptureReference`, `chart`, or `emphasis`. Supported kinds are:
 
 - `title`
 - `subtitle`
@@ -144,6 +144,7 @@ Every block has `id`, `kind`, and `text`. It may also contain `assetPath`, `altT
 - `citation`
 - `image`
 - `caption`
+- `chart`
 
 Non-image blocks require non-empty `text`. An image block requires `assetPath` and useful `altText`; its `text` can be empty. Omit optional keys rather than writing `null`.
 
@@ -328,6 +329,59 @@ whole slide behind everything else, on any layout:
   how much of the picture was covered. A picture that needs most of itself
   covered for the words to read is named: a quieter picture, or one with open
   space where the words fall, will show more of it.
+
+## Charts
+
+A `chart` block draws where a Strong's key is found, as bars. Name what to
+count; never write the numbers. Lamp works the values out from the library when
+the deck is built or imported, and overwrites anything it finds there.
+
+```json
+{
+  "id": "…",
+  "kind": "chart",
+  "text": "Where ἀγάπη is found",
+  "chart": {
+    "source": { "strongs": "G26", "translationID": "ESVs", "range": "NT" },
+    "by": "section",
+    "measure": "occurrences"
+  }
+}
+```
+
+- `source.strongs` is a key such as `G26` or `H3068`.
+- `source.translationID` is the translation whose tags are counted. A count is
+  only as good as that translation's tagging, so it is not a fact about the
+  Bible — name the translation in the caption.
+- `source.range` takes whole books: `NT`, `Romans`, `Matthew-John`. Omit it for
+  the whole translation.
+- `by` is `book`, `section`, `rendering`, or `form`. Renderings and forms show
+  the commonest eight.
+- `measure` is `occurrences` or `perThousandWords`. Use the rate when comparing
+  books of unequal length, where a raw count mostly measures how long a book is.
+- `text` is an optional heading drawn over the bars, and may be empty.
+- `values` is Lamp's to write. Leave it out. The validator warns that a chart
+  has none yet, which is the expected state for a deck you have just written.
+
+Use `analyze_strongs` first to find out what is worth charting — which books
+stand out, whether the picture is clearer by section, how many bars a grouping
+would produce. Charting something and looking at it afterwards wastes a render.
+
+A bar marked `more` or `fewer` means **more or fewer than chance would give**,
+tested against the rest of the range, not simply above or below average. Do not
+describe it as "Mark's favourite word" or "Paul uses it most" unless the
+measure actually says so.
+
+### Where a chart goes
+
+A chart takes the same slot as a picture, so a slide draws one or the other,
+never both. It is drawn on `title-and-body`, `scripture`, `quotation`, `blank`,
+and `image` slides, and not at all on `two-column`. A `caption` block goes with
+it exactly as it would with a picture, and is where the translation belongs.
+
+Keep a chart under about 24 bars; past that it cannot be read from the back of
+a room. Charting the 27 books of the New Testament is over that line, and
+`"by": "section"` is usually the better picture anyway.
 
 ## Speaker notes from the manuscript
 
