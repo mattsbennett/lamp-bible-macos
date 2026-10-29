@@ -115,16 +115,21 @@ struct LibraryRootView: View {
     }
 
     var body: some View {
+        // The interface arrives at once, under the splash, and only the splash
+        // fades. An animation on the switch itself also animated the
+        // interface's first layout: the reader's text slid out from under the
+        // sidebar and its tab in from nothing, so the tab had no title until
+        // the slide was over.
         ZStack {
             if model.hasLoadedInitialContent {
                 libraryInterface
-                    .transition(.opacity)
             } else {
                 LampSplashView()
-                    .transition(.opacity)
+                    .transition(.opacity.animation(.easeInOut(duration: 0.28)))
+                    // Above the interface while it fades, not behind it.
+                    .zIndex(1)
             }
         }
-        .animation(.easeInOut(duration: 0.28), value: model.hasLoadedInitialContent)
         // Kept outside the branch above so the library still loads while the
         // splash is what's on screen.
         .onAppear {
