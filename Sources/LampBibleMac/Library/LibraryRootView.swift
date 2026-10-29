@@ -3176,6 +3176,9 @@ private struct TranslationReaderView: View, Equatable {
     @AppStorage("reader.lineSpacing") private var lineSpacing = LampTextScale.readerLineSpacing.defaultValue
     @AppStorage("reader.typeface") private var typeface = ProseTypeface.readerDefault
     @AppStorage("reader.layoutMode") private var readerLayoutMode = ReaderLayoutMode.continuousParagraphs
+    /// The layout side by side was chosen from, which leaving it returns to.
+    @AppStorage("reader.layoutModeBeforeSideBySide") private var layoutModeBeforeSideBySide =
+        ReaderLayoutMode.continuousParagraphs
     /// The translations read beside the selected one, side by side, in column
     /// order, comma-separated. Empty, or only translations no longer there,
     /// means the first other one installed.
@@ -3847,6 +3850,48 @@ private struct TranslationReaderView: View, Equatable {
         singleCompanionTranslationID = ""
     }
 
+    /// The reader's layout, remembering the one side by side is chosen from.
+    private var readerLayoutSelection: Binding<ReaderLayoutMode> {
+        Binding(
+            get: { readerLayoutMode },
+            set: { mode in
+                if mode == .sideBySide, readerLayoutMode != .sideBySide {
+                    layoutModeBeforeSideBySide = readerLayoutMode
+                }
+                readerLayoutMode = mode
+            }
+        )
+    }
+
+    /// Whether the reader is side by side, for the toolbar's toggle: off, it
+    /// goes back to the layout side by side was chosen from.
+    private var readsSideBySide: Binding<Bool> {
+        Binding(
+            get: { readerLayoutMode == .sideBySide },
+            set: { isOn in
+                if isOn {
+                    readerLayoutSelection.wrappedValue = .sideBySide
+                } else if readerLayoutMode == .sideBySide {
+                    readerLayoutMode = layoutModeBeforeSideBySide == .sideBySide
+                        ? .continuousParagraphs
+                        : layoutModeBeforeSideBySide
+                }
+            }
+        )
+    }
+
+    /// Takes a companion's column away. The last one's leaves side by side,
+    /// and is read beside the translation again when side by side comes back.
+    private func removeCompanion(at index: Int, among companions: [LampInstalledModule]) {
+        guard companions.count > 1 else {
+            readsSideBySide.wrappedValue = false
+            return
+        }
+        var ids = companions.map(\.id)
+        ids.remove(at: index)
+        chooseCompanions(ids)
+    }
+
     /// The translations read beside `mainID`, in column order: those chosen
     /// that are installed, and never `mainID` itself, or else the first other
     /// one installed.
@@ -3985,7 +4030,8 @@ private struct TranslationReaderView: View, Equatable {
     /// The translations over their columns, each a menu that changes its own
     /// column, or, with the companions beneath each verse, the same read as a
     /// sentence. A companion's menu can also make it the translation being
-    /// read, or take its column away; the plus beside them adds one.
+    /// read, or take its column away, as its close button does; the plus
+    /// beside them adds one.
     ///
     /// The choice lives here rather than in a toolbar menu because this is
     /// where the translations are named: a column's title changes that column.
@@ -4078,29 +4124,37 @@ private struct TranslationReaderView: View, Equatable {
     }
 
     /// A companion column's title: its translation, and the column's own
-    /// actions.
+    /// actions, with a button beside it that closes the column.
     private func companionMenu(
         at index: Int,
         among companions: [LampInstalledModule],
         reading chapter: LampChapter
     ) -> some View {
         let companion = companions[index]
-        return translationMenu(
-            translationName(companion.id),
-            selection: companionSelection(at: index, among: companions),
-            among: model.translations.filter { $0.id != chapter.translationID }
-        ) {
-            Divider()
-            Button("Read \(companion.name) Here Instead") {
-                makeMain(companion.id, reading: chapter)
-            }
-            if companions.count > 1 {
+        let closes = companions.count > 1
+            ? "Stop reading \(translationName(companion.id)) beside \(translationName(chapter.translationID))"
+            : "Read \(translationName(chapter.translationID)) on its own"
+        return HStack(alignment: .firstTextBaseline, spacing: 4) {
+            translationMenu(
+                translationName(companion.id),
+                selection: companionSelection(at: index, among: companions),
+                among: model.translations.filter { $0.id != chapter.translationID }
+            ) {
+                Divider()
+                Button("Read \(companion.name) Here Instead") {
+                    makeMain(companion.id, reading: chapter)
+                }
                 Button("Remove This Column") {
-                    var ids = companions.map(\.id)
-                    ids.remove(at: index)
-                    chooseCompanions(ids)
+                    removeCompanion(at: index, among: companions)
                 }
             }
+            Button("Remove \(companion.name)", systemImage: "xmark") {
+                removeCompanion(at: index, among: companions)
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.borderless)
+            .imageScale(.small)
+            .help(closes)
         }
     }
 
@@ -5486,8 +5540,19 @@ private struct TranslationReaderView: View, Equatable {
         }
 
         ToolbarItemGroup {
+            Toggle(isOn: readsSideBySide) {
+                Label(ReaderLayoutMode.sideBySide.title, systemImage: ReaderLayoutMode.sideBySide.systemImage)
+            }
+            .toggleStyle(.button)
+            .disabled(readerLayoutMode != .sideBySide && model.translations.count < 2)
+            .help(
+                readerLayoutMode == .sideBySide
+                    ? "Read this translation on its own"
+                    : "Read another translation beside this one"
+            )
+
             Menu("Reader Appearance", systemImage: "textformat") {
-                Picker("Layout", selection: $readerLayoutMode) {
+                Picker("Layout", selection: readerLayoutSelection) {
                     ForEach(ReaderLayoutMode.allCases) { mode in
                         Label(mode.title, systemImage: mode.systemImage)
                             .tag(mode)
