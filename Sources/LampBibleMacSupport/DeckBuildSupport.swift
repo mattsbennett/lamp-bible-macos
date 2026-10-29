@@ -89,10 +89,16 @@ enum LampDeckBuild {
         let hasCharts = deck.slides.contains { slide in
             slide.blocks.contains { $0.kind == .chart }
         }
-        let chartProblems = hasCharts && charts == nil
+        // Deck-wide chart trouble goes in the report's own `problems`, because
+        // the slide entries only carry issues whose path names a slide. An
+        // issue about the deck as a whole — the access policy refusing the
+        // whole call, say — matches no slide, and filing it by slide alone
+        // dropped it entirely.
+        let chartProblems = (hasCharts && charts == nil
             ? ["This deck has charts, and no library was given to work them "
                 + "out from. Pass --library to fill in their values."]
-            : []
+            : [])
+            + chartIssues.filter { slideIndex(inPath: $0.path) == nil }.map(\.message)
 
         guard deck.followsManuscript else {
             try write(deck, to: deckURL, ifChangedFrom: original)

@@ -56,6 +56,49 @@ struct LampMCPServerTests {
         #expect(description.contains("Settings"))
     }
 
+    /// Charts are worked out through the *agent* library, so a key is only
+    /// ever counted in a translation the policy permits.
+    ///
+    /// With access turned off the refusal has to be said. Swallowed, it would
+    /// look like a deck whose charts are simply empty, and an agent would go
+    /// hunting through its own chart sources for a fault that is a setting.
+    @Test func achartIsNotQuietlyEmptiedWhenAgentAccessIsOff() async throws {
+        let fixture = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-chart-policy-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixture, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+
+        let handler = LampMCPToolHandler(
+            library: LampAgentLibrary(
+                libraryRootURL: fixture,
+                policy: LampAgentAccessPolicy(isEnabled: false)
+            )
+        )
+        let deck = """
+        {"schemaVersion":1,"id":"60910124-99b3-48ca-9310-11c63ed118c0",
+         "title":"Living Hope","aspectRatio":"widescreen",
+         "theme":{"id":"lamp-dark","accentColor":"#F59E0B","backgroundColor":"#111827",
+                  "foregroundColor":"#F9FAFB","typeface":"system-serif"},
+         "source":{"id":"60910124-99b3-48ca-9310-11c63ed118c1","kind":"devotional"},
+         "slides":[{"id":"3b184129-31c5-48c8-962e-fe79e2862cc8","layout":"title-and-body",
+           "isHidden":false,"speakerNotes":"n","blocks":[
+             {"id":"b1","kind":"title","text":"Living Hope"},
+             {"id":"b2","kind":"chart","text":"Where","chart":{
+               "source":{"strongs":"G26","translationID":"ESVs"},
+               "by":"section","measure":"occurrences"}}]}]}
+        """
+
+        let response = try await handler.call(
+            name: "build_deck", arguments: ["deck": .string(deck)]
+        )
+        let report = try #require(response.structuredContent?.objectValue)
+        let problems = report["problems"]?.arrayValue?.compactMap(\.stringValue) ?? []
+        #expect(
+            problems.contains { $0.contains("did not work out this deck's charts") },
+            "the report has to say the charts were not worked out: \(problems)"
+        )
+    }
+
     /// Three cautions belong in this description, each naming a way the
     /// numbers mislead whoever takes them at face value: a book marked "more"
     /// is above *chance*, not merely above average; a count is only as good as

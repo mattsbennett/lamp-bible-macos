@@ -17,7 +17,8 @@ struct DeckToolTests {
         notesSource: String? = nil,
         notesAnchor: String? = nil,
         chart: [String: Any]? = nil,
-        bareChartBlock: Bool = false
+        bareChartBlock: Bool = false,
+        alsoAnImage: Bool = false
     ) -> Data {
         var deck: [String: Any] = [
             "schemaVersion": 1,
@@ -81,6 +82,17 @@ struct DeckToolTests {
             ]
             // Without `chart`, which is the error both validators report.
             if let chart { block["chart"] = chart }
+            // A picture too, so the chart has to compete for the one slot a
+            // slide gives either of them.
+            if alsoAnImage {
+                blocks.append([
+                    "id": "ee21b8a7-335a-4424-945b-bcb9d949bd68",
+                    "kind": "image",
+                    "text": "",
+                    "assetPath": "Assets/olive-grove.jpg",
+                    "altText": "An olive grove at dusk",
+                ])
+            }
             blocks.append(block)
             slides[1]["blocks"] = blocks
             deck["slides"] = slides
@@ -353,6 +365,39 @@ struct DeckToolTests {
         #expect(built.resolved)
     }
 
+    /// A chart issue about the deck as a whole — the access policy refusing the
+    /// call, say — matches no slide. The slide entries only carry issues whose
+    /// path names one, so before this it was filed under nothing at all and
+    /// never reached the report.
+    @Test func adeckWideChartProblemIsNotLostBetweenTheSlides() async throws {
+        let built = try await LampDeckTools.build(
+            deckJSON: deckJSON(chart: chartSource()),
+            manuscript: nil,
+            charts: chartWorker(issues: [
+                .init(
+                    severity: .warning,
+                    path: "chart",
+                    message: "Lamp did not work out this deck's charts: access is turned off.",
+                ),
+            ])
+        )
+
+        let report = try #require(
+            try JSONSerialization.jsonObject(with: built.reportJSON) as? [String: Any]
+        )
+        #expect(
+            (report["problems"] as? [String])?.contains {
+                $0.contains("access is turned off")
+            } == true,
+            "a problem belonging to no slide has to appear in the deck's own problems"
+        )
+        let slides = try #require(report["slides"] as? [[String: Any]])
+        #expect(
+            slides.allSatisfy { ($0["chartProblems"] as? [String])?.isEmpty == true },
+            "and must not be pinned on a slide that did not cause it"
+        )
+    }
+
     @Test func adeckWithChartsAndNoLibrarySaysWhatToPass() async throws {
         let built = try await LampDeckTools.build(
             deckJSON: deckJSON(chart: chartSource()),
@@ -402,6 +447,27 @@ struct DeckToolTests {
         #expect(
             unfilled.issues.contains { $0.path.contains("chart") },
             "and it is reported against the chart"
+        )
+    }
+
+    /// The exact words Lamp uses when a slide will not draw a chart.
+    ///
+    /// Pinned because `validate_deck.py` carries a copy of this sentence, hint
+    /// and all, so that an agent reading the script and a writer reading the
+    /// app are told the same thing in the same words. If this assertion fails
+    /// because core reworded the hint, the Python `ignored_hint` needs the same
+    /// change.
+    @Test func asecondPictureOnASlideIsRefusedInTheseExactWords() throws {
+        let report = LampDeckTools.validate(
+            deckJSON: deckJSON(chart: chartSource(), alsoAnImage: true)
+        )
+        let undrawn = try #require(
+            report.issues.first { $0.message.contains("does not draw") }
+        )
+        #expect(
+            undrawn.message
+                == "A title-and-body slide does not draw chart content — a slide draws "
+                    + "one picture or chart. Move it to another slide or change the layout."
         )
     }
 

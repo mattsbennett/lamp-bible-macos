@@ -175,9 +175,34 @@ public actor LampMCPToolHandler {
             ))
 
         case "build_deck":
+            // Charts are worked out through the agent library, not the plain
+            // one: it reads only translations the access policy permits, and
+            // withholds the rest with their values intact. The plain
+            // `LampLibrary.workingOutCharts` would have counted a translation
+            // `list_modules` never showed this caller.
             let built = try await LampDeckTools.build(
                 deckJSON: try deckJSON(arguments),
-                manuscript: arguments["manuscript"]?.stringValue
+                manuscript: arguments["manuscript"]?.stringValue,
+                charts: { [library] deck in
+                    do {
+                        return try await library.workingOutCharts(in: deck)
+                    } catch {
+                        // Said rather than swallowed. A refused policy would
+                        // otherwise look like a deck whose charts are simply
+                        // empty, and the agent would go looking at its own
+                        // chart sources for the fault.
+                        return LampPresentationChartReport(
+                            deck: deck,
+                            issues: [.init(
+                                severity: .warning,
+                                path: "chart",
+                                message: "Lamp did not work out this deck's charts: "
+                                    + error.localizedDescription
+                            )],
+                            changed: false
+                        )
+                    }
+                }
             )
             // The deck itself goes back as text beside the report, since a
             // caller with no folder cannot read it off disk afterwards.

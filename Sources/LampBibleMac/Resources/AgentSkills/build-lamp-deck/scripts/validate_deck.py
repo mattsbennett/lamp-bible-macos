@@ -442,6 +442,30 @@ def safe_asset_path(value):
     return all(part and part not in (".", "..") and not part.startswith(".") for part in parts)
 
 
+def ignored_hint(layout: str, kind: str) -> str:
+    """Why this layout will not draw this kind, in Lamp's own words.
+
+    Mirrors `ignoredHint` in `LampPresentationDeckValidator`. An agent reads
+    this script's message and the app shows Swift's, so two phrasings of one
+    problem read as two problems — which is why these are kept identical
+    rather than merely equivalent.
+    """
+    if layout in {"title", "closing"}:
+        return " beyond its heading and one line beneath it"
+    if layout == "two-column":
+        if kind in {"body", "subtitle", "scripture", "quotation"}:
+            return " beyond its first two columns"
+        if kind == "citation":
+            return " unless it directly follows the column it attributes"
+        if kind in SHARED_PICTURE_SLOT:
+            return " — two-column slides draw no picture or chart"
+    if kind == "caption":
+        return " without an image or chart to caption"
+    if kind in SHARED_PICTURE_SLOT:
+        return " — a slide draws one picture or chart"
+    return ""
+
+
 def chart_issues(block: dict) -> tuple[list[str], list[str]]:
     """Errors and warnings for a chart block, by path within the block.
 
@@ -763,9 +787,11 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
         # deck authors to read the renderer to find out why a slide was bare.
         if isinstance(blocks, list):
             for index, kind in undrawn_blocks(slide.get("layout", ""), blocks):
+                layout = str(slide.get("layout"))
                 warnings.append(
-                    f"{path}.blocks[{index}]: a {slide.get('layout')} slide does not draw "
-                    f"{kind} content; move it to another slide or change the layout"
+                    f"{path}.blocks[{index}]: A {layout} slide does not draw "
+                    f"{kind} content{ignored_hint(layout, kind)}. "
+                    "Move it to another slide or change the layout."
                 )
 
             # Several passages sharing one attribution read as one passage with
