@@ -62,6 +62,36 @@ public enum LampMCPToolCatalog {
             required: ["keys"]
         ),
         tool(
+            "analyze_strongs",
+            """
+            Analyse how one Strong's key is used across the translations that \
+            tag it: counts, the English renderings translators reached for, \
+            original-language forms and grammar, the spread by book and \
+            section, and the keys it keeps company with. One analysis per \
+            tagged translation.
+
+            Three things to carry into anything you write from this. "More" \
+            and "fewer" for a book mean more or fewer than chance would give, \
+            not a raw rate worth remarking on. Every count depends on how that \
+            translation was tagged, so name the translation when you quote a \
+            number rather than letting it stand for the Bible. And renderings \
+            are the choices translators made, not the range of what the word \
+            means — for that, read a lexicon.
+            """,
+            properties: [
+                "key": string("A Strong's key such as G3056 or H7225."),
+                "translation_ids": arrayOfStrings(
+                    "Optional translation IDs. Omitted, every permitted "
+                        + "translation that tags the key's language is analysed."
+                ),
+                "range": string(
+                    "Optional run of whole books, such as \"NT\", \"Romans\" or "
+                        + "\"Matthew-John\". Omitted, the whole Bible."
+                ),
+            ],
+            required: ["key"]
+        ),
+        tool(
             "list_reading_plans",
             "List permitted Lamp reading plans.",
             properties: [:]

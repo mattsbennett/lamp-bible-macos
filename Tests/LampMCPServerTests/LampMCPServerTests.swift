@@ -16,11 +16,11 @@ struct LampMCPServerTests {
     /// `write_writing_draft` existed.
     @Test func onlyTheWriteToolsSayTheyWrite() {
         let all = LampMCPToolCatalog.tools(workspace: true)
-        #expect(LampMCPToolCatalog.tools.count == 15)
+        #expect(LampMCPToolCatalog.tools.count == 16)
         #expect(LampMCPToolCatalog.deckTools.count == 3)
         #expect(LampMCPToolCatalog.writingTools.count == 2)
         #expect(LampMCPToolCatalog.writeTools.count == 1)
-        #expect(all.count == 22)
+        #expect(all.count == 23)
         #expect(Set(all.map(\.name)).count == all.count)
 
         let writing = Set(LampMCPToolCatalog.writeTools.map(\.name))
@@ -54,6 +54,38 @@ struct LampMCPServerTests {
         let description = try #require(tool.description)
         #expect(description.contains("Allow other apps to change my writings"))
         #expect(description.contains("Settings"))
+    }
+
+    /// Three cautions belong in this description, each naming a way the
+    /// numbers mislead whoever takes them at face value: a book marked "more"
+    /// is above *chance*, not merely above average; a count is only as good as
+    /// one translation's tagging; and a rendering is a translator's choice,
+    /// not the word's meaning.
+    ///
+    /// They are tested because the description is the last place to say so.
+    /// An agent reads it once, writes a talk from the figures, and nothing
+    /// downstream will catch "Mark uses it more" standing in for a
+    /// log-likelihood result.
+    @Test func theStrongsToolWarnsAboutItsOwnNumbers() throws {
+        let tool = try #require(
+            LampMCPToolCatalog.tools.first { $0.name == "analyze_strongs" }
+        )
+        let description = try #require(tool.description)
+        #expect(description.contains("chance"), "\"more\" must be pinned to chance")
+        #expect(
+            description.contains("name the translation"),
+            "a count that does not name its translation reads as a fact about the Bible"
+        )
+        #expect(
+            description.contains("lexicon"),
+            "renderings are translators' choices; the description must point meaning elsewhere"
+        )
+
+        let schema = try #require(tool.inputSchema.objectValue)
+        #expect(schema["required"]?.arrayValue?.compactMap(\.stringValue) == ["key"])
+        let properties = try #require(schema["properties"]?.objectValue)
+        #expect(properties["translation_ids"] != nil)
+        #expect(properties["range"] != nil)
     }
 
     /// Once, a session without a workspace was not offered the writing
@@ -156,6 +188,7 @@ struct LampMCPServerTests {
         ("list_books", [:]),
         ("search_library", ["query": .string("grace")]),
         ("list_quiz_modules", [:]),
+        ("analyze_strongs", ["key": .string("G3056")]),
     ])
     func namesEveryStructuredResultAsAnObject(tool: String, arguments: [String: Value]) async throws {
         let fixture = FileManager.default.temporaryDirectory

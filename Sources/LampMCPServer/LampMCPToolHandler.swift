@@ -111,6 +111,13 @@ public actor LampMCPToolHandler {
                 moduleIDs: stringSet(arguments["module_ids"])
             ))
 
+        case "analyze_strongs":
+            return try result(try await library.analyzeStrongs(
+                key: try requiredString("key", in: arguments),
+                translationIDs: strings(arguments["translation_ids"]),
+                range: arguments["range"]?.stringValue
+            ))
+
         case "list_reading_plans":
             return try result(try await library.listReadingPlans())
 
