@@ -837,6 +837,13 @@ struct LibraryRootView: View {
                     default:
                         break
                     }
+                },
+                openDictionaryEntry: { key, word in
+                    // The Dictionary pane lives in the reader's study column,
+                    // so the lookup is asked for and the reader shown; the
+                    // pane picks the request up when it mounts.
+                    model.requestDictionaryLookup(keys: [key], word: word)
+                    selection = .section(.reader)
                 }
             )
         case .section(.modules):

@@ -35,6 +35,8 @@ struct UnifiedSearchView: View {
     let openReference: (Int, String?) -> Void
     let openBook: (LampModuleSearchResult) -> Void
     let openKind: (LampModuleKind) -> Void
+    /// Looks a lexicon entry up in the Dictionary pane.
+    let openDictionaryEntry: (_ key: String, _ word: String?) -> Void
 
     /// Core's history, reading the Mac's older entries once.
     private var history: LampSearchHistory {
@@ -540,6 +542,12 @@ struct UnifiedSearchView: View {
                                 openReference(reference, translationID(of: result))
                             }
                         }
+                        if result.kind == .dictionary, let key = lexiconKey(of: result) {
+                            Button("Look Up \(key)") {
+                                saveSearch()
+                                openDictionaryEntry(key, result.title)
+                            }
+                        }
                         Button("Copy Result") { copy(result) }
                     }
                 }
@@ -591,6 +599,12 @@ struct UnifiedSearchView: View {
                         Button("Open Book") {
                             saveSearch()
                             openBook(result)
+                        }
+                        .buttonStyle(.bordered)
+                    } else if result.kind == .dictionary, let key = lexiconKey(of: result) {
+                        Button("Look Up", systemImage: "character.book.closed") {
+                            saveSearch()
+                            openDictionaryEntry(key, result.title)
                         }
                         .buttonStyle(.bordered)
                     } else if [.devotional, .plan, .quiz].contains(result.kind) {
@@ -756,6 +770,19 @@ struct UnifiedSearchView: View {
     /// A translation result's module is the translation. Everything else — a
     /// commentary, a note — points at scripture without being scripture, so it
     /// opens in whatever is being read.
+    /// The lexicon key a dictionary result stands for.
+    ///
+    /// Core identifies the entry as `dictionary:<module>:<entry>`, and for a
+    /// Strong's lexicon that entry is the key. Read off the id rather than
+    /// the title, which is the lemma — the Greek or Hebrew word, not
+    /// something the dictionary pane can look up.
+    private func lexiconKey(of result: LampModuleSearchResult) -> String? {
+        let prefix = "dictionary:\(result.moduleID):"
+        guard result.id.hasPrefix(prefix) else { return nil }
+        let key = String(result.id.dropFirst(prefix.count))
+        return key.isEmpty ? nil : key
+    }
+
     /// The translation a result should open in.
     ///
     /// A highlight's module is `personal-highlights:<translation>`, and that
