@@ -403,6 +403,11 @@ struct StrongsAnalysisPane: View {
     private static let columnsHeight: Double = 132
     /// A horizontal bar's thickness.
     private static let barHeight: Double = 18
+    /// The chapter strip that opens under a bar. It was 7 points wide with
+    /// 7-point numbers — the one chart that kept its original size when the
+    /// others grew.
+    private static let chapterBarWidth: Double = 12
+    private static let chapterStripHeight: Double = 56
 
     /// The grouping in force: a grid is of chapters, which only books have.
     private var activeGrouping: LampStrongsGrouping {
@@ -533,15 +538,25 @@ struct StrongsAnalysisPane: View {
                             Button {
                                 if let filter = entries[index].filter { choose(filter) }
                             } label: {
-                                RoundedRectangle(cornerRadius: min(2, width / 2))
-                                    .fill(fill(for: bar.expectation))
-                                    .frame(
-                                        width: width,
-                                        height: bar.share > 0
-                                            ? max(2, Self.columnsHeight * bar.share)
-                                            : 1
-                                    )
-                                    .opacity(bar.share > 0 ? 1 : 0.25)
+                                // The whole column answers the pointer, not
+                                // just the ink. A book with two occurrences
+                                // draws three points tall, which is nothing
+                                // to aim at — and a book with none drew a
+                                // hairline that could not be hovered at all.
+                                VStack(spacing: 0) {
+                                    Spacer(minLength: 0)
+                                    RoundedRectangle(cornerRadius: min(2, width / 2))
+                                        .fill(fill(for: bar.expectation))
+                                        .frame(
+                                            width: width,
+                                            height: bar.share > 0
+                                                ? max(3, Self.columnsHeight * bar.share)
+                                                : 1
+                                        )
+                                        .opacity(bar.share > 0 ? 1 : 0.25)
+                                }
+                                .frame(width: max(width, 6), height: Self.columnsHeight)
+                                .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                             .chartClickable()
@@ -685,23 +700,33 @@ struct StrongsAnalysisPane: View {
             HStack(alignment: .center, spacing: 20) {
                 ZStack {
                     ForEach(Array(slices.enumerated()), id: \.element.id) { index, slice in
-                        DonutSlice(
+                        let wedge = DonutSlice(
                             start: slices.prefix(index).reduce(0) { $0 + $1.fraction },
                             extent: slice.fraction,
                             thickness: shareAsRing ? 0.38 : 1
                         )
-                        .fill(.tint)
-                        .opacity(
-                            hoveredSlice == nil || hoveredSlice?.id == slice.id
-                                ? sliceOpacity(index, of: slices.count, isOther: slice.isOther)
-                                // The others recede rather than vanish, so
-                                // the ring keeps its shape while one slice
-                                // is picked out.
-                                : 0.12
-                        )
-                        .onHover { hoveredSlice = $0 ? slice : nil }
-                        .chartClickable()
-                        .help("\(slice.name): \(slice.value)")
+                        wedge
+                            .fill(.tint)
+                            .opacity(
+                                hoveredSlice == nil || hoveredSlice?.id == slice.id
+                                    ? sliceOpacity(
+                                        index, of: slices.count, isOther: slice.isOther
+                                    )
+                                    // The others recede rather than vanish, so
+                                    // the ring keeps its shape while one slice
+                                    // is picked out.
+                                    : 0.12
+                            )
+                            // The wedge, not the square it is drawn in. A
+                            // filled Shape is a view the size of its whole
+                            // frame, so without this every slice's hover
+                            // covered the entire ring and the last one drawn
+                            // answered for all of them — which is why hovering
+                            // picked out the wrong slice, or none.
+                            .contentShape(wedge)
+                            .onHover { hoveredSlice = $0 ? slice : nil }
+                            .chartClickable()
+                            .help("\(slice.name): \(slice.value)")
                     }
                     // The hole is somewhere to put the total, which is the
                     // one number a share otherwise leaves you to add up.
@@ -818,35 +843,40 @@ struct StrongsAnalysisPane: View {
     private func chapterStrip(_ analysis: LampStrongsAnalysis, book: Int) -> some View {
         let chapters = analysis.books.first { $0.id == book }?.chapters ?? []
         let most = chapters.map(\.occurrenceCount).max() ?? 0
-        return HStack(alignment: .bottom, spacing: 2) {
+        return HStack(alignment: .bottom, spacing: 3) {
             ForEach(chapters) { chapter in
                 Button {
                     choose(.chapter(book: book, number: chapter.number))
                 } label: {
-                    VStack(spacing: 2) {
+                    VStack(spacing: 3) {
                         Capsule()
                             .fill(filter == .chapter(book: book, number: chapter.number)
                                 ? AnyShapeStyle(.tint)
                                 : AnyShapeStyle(.tint.opacity(0.5)))
                             .frame(
-                                width: 7,
+                                width: Self.chapterBarWidth,
                                 height: most > 0
-                                    ? max(2, 34 * Double(chapter.occurrenceCount) / Double(most))
-                                    : 2
+                                    ? max(3, Self.chapterStripHeight
+                                        * Double(chapter.occurrenceCount) / Double(most))
+                                    : 3
                             )
                         Text("\(chapter.number)")
-                            .font(.system(size: 7))
+                            .font(.system(size: Self.chartFinePrintSize))
                             .foregroundStyle(.secondary)
                     }
+                    // So the whole column answers the pointer, not just the
+                    // few points the bar happens to reach.
+                    .frame(height: Self.chapterStripHeight + 18, alignment: .bottom)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .chartClickable()
                 .help("Chapter \(chapter.number): \(chapter.occurrenceCount)")
             }
-            Spacer()
+            Spacer(minLength: 0)
         }
-        .padding(.leading, 104)
-        .padding(.bottom, 4)
+        .padding(.leading, 120)
+        .padding(.bottom, 6)
     }
 
     private func measureLabel(_ bar: LampStrongsSpreadBar) -> String {
