@@ -432,3 +432,109 @@ public enum LampStrongsGrid {
         }
     }
 }
+
+/// A division to chart, with the filter choosing it should apply.
+///
+/// Carried together because they come apart: a bar in a chart of renderings
+/// looks like a bar in a chart of books, but choosing it means "only this
+/// rendering", not "only this book".
+public struct LampStrongsChartDivision: Identifiable, Equatable, Sendable {
+    public let division: LampStrongsAnalysis.Division
+    public let filter: LampStrongsFilter?
+
+    public var id: Int { division.id }
+
+    public init(division: LampStrongsAnalysis.Division, filter: LampStrongsFilter?) {
+        self.division = division
+        self.filter = filter
+    }
+}
+
+/// What a chart's bars stand for.
+public enum LampStrongsGrouping: String, CaseIterable, Identifiable, Sendable {
+    case books
+    case sections
+    case renderings
+    case forms
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .books: "Books"
+        case .sections: "Sections"
+        case .renderings: "Renderings"
+        case .forms: "Forms"
+        }
+    }
+
+    /// Whether "per 1,000 words" means anything.
+    ///
+    /// A book has a word count to measure against. A rendering is a count of
+    /// itself: there is no population of "words that could have been
+    /// rendered this way", so a rate would be a number with no question
+    /// behind it.
+    public var usesMeasure: Bool { self == .books || self == .sections }
+
+    /// Only books carry chapters, so only books can be shaded as a grid.
+    public var hasChapters: Bool { self == .books }
+
+    /// The divisions to chart, each with the filter it stands for.
+    ///
+    /// Renderings and forms are turned into divisions so one set of charts
+    /// can draw all four groupings. They carry no keyness — a rendering is
+    /// not more or less frequent than chance predicts, it is simply a choice
+    /// translators made — so nothing is ever marked "more" or "fewer" here.
+    public func divisions(of analysis: LampStrongsAnalysis) -> [LampStrongsChartDivision] {
+        switch self {
+        case .books:
+            analysis.books.map { .init(division: $0, filter: .book(number: $0.id)) }
+        case .sections:
+            // A section spans several books, and no single filter says
+            // "these books", so choosing one narrows nothing.
+            analysis.sections.map { .init(division: $0, filter: nil) }
+        case .renderings:
+            analysis.renderings.enumerated().map { index, rendering in
+                .init(
+                    division: Self.standIn(
+                        id: index, name: rendering.text.isEmpty
+                            ? "(no English of its own)"
+                            : rendering.text,
+                        count: rendering.count
+                    ),
+                    filter: .rendering(id: rendering.id, text: rendering.text)
+                )
+            }
+        case .forms:
+            analysis.forms.enumerated().map { index, form in
+                .init(
+                    division: Self.standIn(id: index, name: form.text, count: form.count),
+                    filter: .form(form.text)
+                )
+            }
+        }
+    }
+
+    /// A division that only carries a name and a count.
+    ///
+    /// `wordCount` is zero, which makes `ratePerThousandWords` zero — correct
+    /// rather than merely safe, since there is no population to be a rate of,
+    /// and the measure picker is hidden for these groupings anyway.
+    private static func standIn(
+        id: Int,
+        name: String,
+        count: Int
+    ) -> LampStrongsAnalysis.Division {
+        LampStrongsAnalysis.Division(
+            id: id,
+            name: name,
+            bookRange: 0...0,
+            occurrenceCount: count,
+            verseCount: count,
+            wordCount: 0,
+            expectedCount: 0,
+            keyness: 0,
+            chapters: []
+        )
+    }
+}

@@ -589,3 +589,88 @@ struct StrongsChartStyleTests {
         #expect(LampStrongsChartStyle.grid.needsBooks)
     }
 }
+
+/// Charting renderings and forms, not only books and sections.
+struct StrongsGroupingTests {
+    private static func analysis() -> LampStrongsAnalysis {
+        LampStrongsAnalysis(
+            key: "G3056", translationID: "ASVs", translationName: "ASV",
+            translationAbbreviation: "ASV", wordCount: 1_000, taggedVerseCount: 10,
+            occurrences: [], references: [],
+            renderings: [
+                .init(id: "word", text: "word", count: 180, variants: []),
+                .init(id: "bare", text: "", count: 3, variants: []),
+            ],
+            forms: [.init(id: "f1", text: "λόγος", count: 120)],
+            parsings: [], grammar: [],
+            books: [
+                LampStrongsAnalysis.Division(
+                    id: 43, name: "John", bookRange: 43...43, occurrenceCount: 37,
+                    verseCount: 30, wordCount: 1_000, expectedCount: 0, keyness: 0,
+                    chapters: []
+                ),
+            ],
+            sections: [
+                LampStrongsAnalysis.Division(
+                    id: 40, name: "Gospels", bookRange: 40...43, occurrenceCount: 90,
+                    verseCount: 80, wordCount: 5_000, expectedCount: 0, keyness: 0,
+                    chapters: []
+                ),
+            ],
+            companions: []
+        )
+    }
+
+    /// Choosing a bar has to mean what the bar stands for. A rendering bar
+    /// looks like a book bar, and narrowing by book there would show the
+    /// wrong occurrences while appearing to work.
+    @Test func arenderingBarFiltersByItsRendering() throws {
+        let entries = LampStrongsGrouping.renderings.divisions(of: Self.analysis())
+
+        #expect(entries.map(\.division.name) == ["word", "(no English of its own)"])
+        #expect(entries.map(\.division.occurrenceCount) == [180, 3])
+        #expect(entries.first?.filter == .rendering(id: "word", text: "word"))
+        #expect(
+            entries.last?.filter == .rendering(id: "bare", text: ""),
+            "the filter keeps the real text even where the label stands in for it"
+        )
+    }
+
+    @Test func aformBarFiltersByItsForm() throws {
+        let entries = LampStrongsGrouping.forms.divisions(of: Self.analysis())
+        #expect(entries.map(\.division.name) == ["λόγος"])
+        #expect(entries.first?.filter == .form("λόγος"))
+    }
+
+    @Test func abookBarFiltersByItsBookAndASectionByNothing() {
+        #expect(
+            LampStrongsGrouping.books.divisions(of: Self.analysis()).first?.filter
+                == .book(number: 43)
+        )
+        #expect(
+            LampStrongsGrouping.sections.divisions(of: Self.analysis()).first?.filter == nil,
+            "a section spans books, and no filter says \"these books\""
+        )
+    }
+
+    /// A rendering is a choice translators made, not a frequency against
+    /// chance, so nothing here may be marked "more" or "fewer".
+    @Test func renderingsAndFormsAreNeverMarkedAgainstChance() {
+        for grouping in [LampStrongsGrouping.renderings, .forms] {
+            let entries = grouping.divisions(of: Self.analysis())
+            #expect(entries.allSatisfy { $0.division.expectation == .asExpected })
+            #expect(entries.allSatisfy { $0.division.ratePerThousandWords == 0 })
+        }
+    }
+
+    /// There is no population a rendering could be a rate of, so the measure
+    /// picker is hidden rather than offering a number with no question.
+    @Test func onlyBooksAndSectionsHaveARate() {
+        #expect(LampStrongsGrouping.books.usesMeasure)
+        #expect(LampStrongsGrouping.sections.usesMeasure)
+        #expect(!LampStrongsGrouping.renderings.usesMeasure)
+        #expect(!LampStrongsGrouping.forms.usesMeasure)
+        #expect(LampStrongsGrouping.books.hasChapters)
+        #expect(!LampStrongsGrouping.sections.hasChapters)
+    }
+}

@@ -183,7 +183,7 @@ struct StrongsAnalysisPane: View {
     @State private var section: Section = .overview
     @State private var style: LampStrongsChartStyle = .bars
     @State private var measure: LampStrongsSpreadMeasure = .occurrences
-    @State private var bySection = false
+    @State private var grouping: LampStrongsGrouping = .books
     @State private var openBook: Int?
     /// Set once rather than per search, so it is remembered.
     @AppStorage("strongs.shareAsRing") private var shareAsRing = true
@@ -382,9 +382,14 @@ struct StrongsAnalysisPane: View {
     /// book's name beside it.
     private static let gridRowHeight: Double = 13
 
-    /// Books unless sections were asked for — and always books for the grid,
-    /// which is drawn from chapters that only a book has.
-    private var showsBooks: Bool { !bySection || style.needsBooks }
+    /// The grouping in force: a grid is of chapters, which only books have.
+    private var activeGrouping: LampStrongsGrouping {
+        style.needsBooks ? .books : grouping
+    }
+
+    private func divisions(of analysis: LampStrongsAnalysis) -> [LampStrongsChartDivision] {
+        activeGrouping.divisions(of: analysis)
+    }
 
     /// One light row of menus rather than two more bands of segmented
     /// controls.
@@ -393,6 +398,11 @@ struct StrongsAnalysisPane: View {
     /// stacked bars of buttons before any chart appeared, and they read as
     /// more important than the chart they were describing. Menus state the
     /// current choice in a word and recede.
+    /// Occurrences unless a rate is both drawable and meaningful here.
+    private var chartMeasure: LampStrongsSpreadMeasure {
+        activeGrouping.usesMeasure ? measure : .occurrences
+    }
+
     private func spread(_ analysis: LampStrongsAnalysis) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 10) {
@@ -403,16 +413,15 @@ struct StrongsAnalysisPane: View {
                 .fixedSize()
                 .help("How to draw it")
 
-                Picker("By", selection: $bySection) {
-                    Text("Books").tag(false)
-                    Text("Sections").tag(true)
+                Picker("By", selection: $grouping) {
+                    ForEach(LampStrongsGrouping.allCases) { Text($0.title).tag($0) }
                 }
                 .labelsHidden()
                 .fixedSize()
                 .disabled(style.needsBooks)
                 .help(style.needsBooks ? "Chapters belong to books" : "What to group by")
 
-                if style.usesMeasure {
+                if style.usesMeasure && activeGrouping.usesMeasure {
                     Picker("Measure", selection: $measure) {
                         ForEach(LampStrongsSpreadMeasure.allCases) { Text($0.title).tag($0) }
                     }
@@ -453,14 +462,17 @@ struct StrongsAnalysisPane: View {
 
     @ViewBuilder
     private func barsChart(_ analysis: LampStrongsAnalysis) -> some View {
-        let divisions = showsBooks ? analysis.books : analysis.sections
-        let bars = LampStrongsSpread.bars(divisions, measure: measure)
+        let entries = divisions(of: analysis)
+        let bars = LampStrongsSpread.bars(entries.map(\.division), measure: chartMeasure)
         if bars.isEmpty {
             nothingToChart
         }
-        ForEach(bars) { bar in
-            spreadBar(bar, isBook: showsBooks)
-            if showsBooks, openBook == bar.id {
+        // Paired by index rather than zipped: `Array(zip(…))` picks up a
+        // GRDB overload here and fails to compile.
+        ForEach(bars.indices, id: \.self) { index in
+            let bar = bars[index]
+            spreadBar(bar, choosing: entries[index].filter)
+            if activeGrouping == .books, openBook == bar.id {
                 chapterStrip(analysis, book: bar.id)
             }
         }
@@ -480,8 +492,8 @@ struct StrongsAnalysisPane: View {
         // gives the 27 New Testament books and nothing else. Padding it out
         // to the whole canon, as this did, is what put two thirds of empty
         // Old Testament on the chart.
-        let divisions = showsBooks ? analysis.books : analysis.sections
-        let bars = LampStrongsSpread.bars(divisions, measure: measure)
+        let entries = divisions(of: analysis)
+        let bars = LampStrongsSpread.bars(entries.map(\.division), measure: chartMeasure)
         if bars.isEmpty {
             nothingToChart
         } else {
@@ -494,9 +506,10 @@ struct StrongsAnalysisPane: View {
                         (proxy.size.width - gap * Double(bars.count - 1)) / Double(bars.count)
                     )
                     HStack(alignment: .bottom, spacing: gap) {
-                        ForEach(bars) { bar in
+                        ForEach(bars.indices, id: \.self) { index in
+                            let bar = bars[index]
                             Button {
-                                choose(.book(number: bar.id))
+                                if let filter = entries[index].filter { choose(filter) }
                             } label: {
                                 RoundedRectangle(cornerRadius: min(2, width / 2))
                                     .fill(fill(for: bar.expectation))
@@ -634,9 +647,7 @@ struct StrongsAnalysisPane: View {
     /// separate colours.
     @ViewBuilder
     private func shareChart(_ analysis: LampStrongsAnalysis) -> some View {
-        let slices = LampStrongsShare.slices(
-            from: showsBooks ? analysis.books : analysis.sections
-        )
+        let slices = LampStrongsShare.slices(from: divisions(of: analysis).map(\.division))
         if slices.isEmpty {
             nothingToChart
         } else {
@@ -702,12 +713,16 @@ struct StrongsAnalysisPane: View {
             .foregroundStyle(.secondary)
     }
 
-    private func spreadBar(_ bar: LampStrongsSpreadBar, isBook: Bool) -> some View {
+    private func spreadBar(
+        _ bar: LampStrongsSpreadBar,
+        choosing filter: LampStrongsFilter?
+    ) -> some View {
         Button {
-            if isBook {
-                openBook = openBook == bar.id ? nil : bar.id
-                choose(.book(number: bar.id))
+            guard let filter else { return }
+            if case .book(let number) = filter {
+                openBook = openBook == number ? nil : number
             }
+            choose(filter)
         } label: {
             HStack(spacing: 8) {
                 Text(bar.name)
