@@ -508,6 +508,18 @@ final class LibraryModel: ObservableObject {
     }
 
 
+    /// Stops any running search and empties the results.
+    ///
+    /// For a caller that has taken over the list — the Strong's analysis
+    /// shows its own occurrences — so that a search already in flight does
+    /// not land afterwards and replace them.
+    func clearModuleSearch() {
+        moduleSearchTask?.cancel()
+        moduleSearchTask = nil
+        moduleSearchResults = []
+        isModuleSearching = false
+    }
+
     func searchModules(
         _ query: String,
         kind: LampModuleKind? = nil,

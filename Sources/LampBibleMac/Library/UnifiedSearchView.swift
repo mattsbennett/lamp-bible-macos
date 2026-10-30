@@ -425,6 +425,16 @@ struct UnifiedSearchView: View {
             // A rendering or chapter chosen for the last key means nothing
             // for this one.
             strongsFilter = nil
+            // A key is typed a character at a time, and "G", "G2", "G26"
+            // would each start reading whole translations — about a tenth of
+            // a second each, per translation. Waiting for a pause means one
+            // analysis rather than three. Cancellation is the point: a new
+            // keystroke replaces this task before the sleep ends.
+            do {
+                try await Task.sleep(for: .milliseconds(300))
+            } catch {
+                return
+            }
             strongsLoader.load(strongsRequest, library: model.library)
         }
     }
@@ -708,6 +718,14 @@ struct UnifiedSearchView: View {
     }
 
     private func runSearch() {
+        // Nothing to search for while the analysis is driving: the list it
+        // shows comes from the analysis, which already holds every
+        // occurrence. The module search ran anyway — a 250-result query per
+        // keystroke whose results were never displayed.
+        guard !showsStrongsAnalysis else {
+            model.clearModuleSearch()
+            return
+        }
         let criteria = devotionalCriteria
         model.searchModules(
             query, kind: selectedKind, moduleID: selectedModuleID,
@@ -737,7 +755,9 @@ struct UnifiedSearchView: View {
                 highlightColors: hasActiveHighlightColor ? [highlightColor] : nil,
                 devotionalCriteria: devotionalCriteria
             ),
-            resultCount: model.moduleSearchResults.count
+            resultCount: showsStrongsAnalysis
+                ? (strongsLoader.analyses.first?.occurrenceCount ?? 0)
+                : model.moduleSearchResults.count
         )
         if kept { historyData = history.encoded() }
     }
