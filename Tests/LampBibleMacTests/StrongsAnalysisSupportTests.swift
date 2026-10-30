@@ -674,3 +674,45 @@ struct StrongsGroupingTests {
         #expect(!LampStrongsGrouping.sections.hasChapters)
     }
 }
+
+/// Carrying the Mac's search history into core's.
+struct SearchHistoryMigrationTests {
+    @Test func theolderEntriesAreCarriedOverOnce() throws {
+        // Written out as the old Mac wrote it. Nothing encodes this shape
+        // any more, so the fixture cannot borrow a writer for it.
+        let old = Data("""
+        [
+          {"query": "grace", "kind": "translation", "moduleID": "ASVs",
+           "searchedAt": 782012345.0},
+          {"query": "hope", "searchedAt": 782012300.0}
+        ]
+        """.utf8)
+
+        let history = LampSearchHistoryMigration.history(from: old)
+        #expect(history.entries.map(\.query) == ["grace", "hope"])
+        #expect(history.entries.first?.kinds == [.translation])
+        #expect(history.entries.first?.moduleIDs == ["ASVs"])
+        #expect(history.entries.last?.kinds == nil, "an entry with no kind keeps none")
+    }
+
+    /// Core's format wins where it is present. Reading the old shape over a
+    /// real history would replace it with whatever the old decode made of
+    /// the bytes.
+    @Test func acurrentHistoryIsNotReinterpreted() throws {
+        var history = LampSearchHistory()
+        history.record(.init(query: "mercy", kinds: [.translation]), resultCount: 3)
+        let data = history.encoded()
+
+        let read = LampSearchHistoryMigration.history(from: data)
+        #expect(read.entries.map(\.query) == ["mercy"])
+        #expect(read.entries.first?.kinds == [.translation])
+    }
+
+    @Test func nothingSavedGivesAnEmptyHistory() {
+        #expect(LampSearchHistoryMigration.history(from: Data()).entries.isEmpty)
+        #expect(
+            LampSearchHistoryMigration.history(from: Data("not json".utf8)).entries.isEmpty,
+            "unreadable bytes must not throw or invent entries"
+        )
+    }
+}

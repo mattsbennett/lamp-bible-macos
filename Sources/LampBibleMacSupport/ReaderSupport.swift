@@ -1512,52 +1512,6 @@ public enum ReaderTabSessionStore {
 
 public typealias ReaderNavigationHistory = LampNavigationStack<ReaderLocation>
 
-public struct LampSearchHistoryEntry: Codable, Equatable, Identifiable, Sendable {
-    public var id: String { "\(query.lowercased())|\(kind?.rawValue ?? "all")|\(moduleID ?? "all")" }
-
-    public let query: String
-    public let kind: LampModuleKind?
-    public let moduleID: String?
-    public let searchedAt: Date
-
-    public init(
-        query: String,
-        kind: LampModuleKind? = nil,
-        moduleID: String? = nil,
-        searchedAt: Date = Date()
-    ) {
-        self.query = query
-        self.kind = kind
-        self.moduleID = moduleID
-        self.searchedAt = searchedAt
-    }
-}
-
-public enum LampSearchHistoryStore {
-    public static func decode(_ data: Data) -> [LampSearchHistoryEntry] {
-        (try? JSONDecoder().decode([LampSearchHistoryEntry].self, from: data)) ?? []
-    }
-
-    public static func encode(_ entries: [LampSearchHistoryEntry]) -> Data {
-        (try? JSONEncoder().encode(entries)) ?? Data()
-    }
-
-    public static func adding(
-        _ entry: LampSearchHistoryEntry,
-        to entries: [LampSearchHistoryEntry],
-        limit: Int = 20
-    ) -> [LampSearchHistoryEntry] {
-        let normalizedQuery = entry.query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalizedQuery.isEmpty else { return entries }
-        let normalized = LampSearchHistoryEntry(
-            query: normalizedQuery,
-            kind: entry.kind,
-            moduleID: entry.moduleID,
-            searchedAt: entry.searchedAt
-        )
-        return Array(([normalized] + entries.filter { $0.id != normalized.id }).prefix(max(limit, 1)))
-    }
-}
 
 public typealias ExternalBibleApplication = LampExternalBibleApplication
 

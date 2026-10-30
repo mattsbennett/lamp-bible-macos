@@ -30,8 +30,9 @@ struct UnifiedSearchView: View {
     let openBook: (LampModuleSearchResult) -> Void
     let openKind: (LampModuleKind) -> Void
 
-    private var history: [LampSearchHistoryEntry] {
-        LampSearchHistoryStore.decode(historyData)
+    /// Core's history, reading the Mac's older entries once.
+    private var history: LampSearchHistory {
+        LampSearchHistoryMigration.history(from: historyData)
     }
 
     private var hasActiveStrongsFilter: Bool {
@@ -165,6 +166,7 @@ struct UnifiedSearchView: View {
                 // nothing at all, which is exactly when being told the
                 // analysis exists is most use.
                 VStack(spacing: 0) {
+                    referenceOffer
                     strongsAnalysisOffer
                     ContentUnavailableView.search(text: query.isEmpty
                         ? (hasActiveStrongsFilter ? strongsKey : highlightColor) : query)
@@ -230,7 +232,7 @@ struct UnifiedSearchView: View {
 
     private var searchLanding: some View {
         Group {
-            if history.isEmpty {
+            if history.entries.isEmpty {
                 ContentUnavailableView {
                     Label("Search Your Library", systemImage: "text.magnifyingglass")
                 } description: {
@@ -244,11 +246,9 @@ struct UnifiedSearchView: View {
             } else {
                 List {
                     Section("Recent Searches") {
-                        ForEach(history) { entry in
+                        ForEach(history.entries) { entry in
                             Button {
-                                query = entry.query
-                                selectedKind = entry.kind
-                                selectedModuleID = entry.moduleID
+                                restore(entry)
                             } label: {
                                 HStack(spacing: 12) {
                                     Image(systemName: "clock.arrow.circlepath")
@@ -408,6 +408,37 @@ struct UnifiedSearchView: View {
         }
     }
 
+    /// Offers the passage when the search box names one.
+    ///
+    /// Above the results rather than instead of them: "John 3" is a passage
+    /// to open and also a phrase that appears in commentaries, and only the
+    /// reader knows which they meant.
+    @ViewBuilder
+    private var referenceOffer: some View {
+        if let reference = LampSearchQuery(query).reference {
+            Button {
+                saveSearch()
+                openReference(reference.startReference, nil)
+            } label: {
+                HStack(spacing: 9) {
+                    Image(systemName: "book").foregroundStyle(.tint)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Go to \(reference.description)").font(.headline)
+                        Text("Open the passage in the reader.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+                }
+                .padding(10)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Divider()
+        }
+    }
+
     /// Offers the analysis when the search box holds a Strong's key.
     ///
     /// The analysis has its own toolbar field, which only appears once the
@@ -454,6 +485,7 @@ struct UnifiedSearchView: View {
 
     private var resultsList: some View {
         VStack(spacing: 0) {
+            referenceOffer
             strongsAnalysisOffer
             List(selection: $selectedResultID) {
                 ForEach(model.moduleSearchResults) { result in
@@ -486,6 +518,7 @@ struct UnifiedSearchView: View {
                     .contextMenu {
                         if let reference = result.startReference {
                             Button("Open \(result.referenceDescription ?? "Reference")") {
+                                saveSearch()
                                 openReference(reference, translationID(of: result))
                             }
                         }
@@ -622,23 +655,52 @@ struct UnifiedSearchView: View {
         )
     }
 
+    /// Keeps the search, with every filter that shaped it.
+    ///
+    /// Core decides what is worth keeping: a search that found nothing, or
+    /// that says nothing, is not recorded. That is why the result count goes
+    /// in rather than being judged here.
     private func saveSearch() {
-        let entry = LampSearchHistoryEntry(
-            query: query,
-            kind: selectedKind,
-            moduleID: selectedModuleID
+        var history = history
+        let kept = history.record(
+            LampSearchHistory.Entry(
+                query: query,
+                kinds: selectedKind.map { [$0] },
+                moduleIDs: selectedModuleID.map { [$0] },
+                bookRange: bookScope.range,
+                strongsKey: strongsKey.isEmpty ? nil : strongsKey,
+                highlightColors: hasActiveHighlightColor ? [highlightColor] : nil,
+                devotionalCriteria: devotionalCriteria
+            ),
+            resultCount: model.moduleSearchResults.count
         )
-        historyData = LampSearchHistoryStore.encode(
-            LampSearchHistoryStore.adding(entry, to: history)
-        )
+        if kept { historyData = history.encoded() }
     }
 
-    private func historyDescription(_ entry: LampSearchHistoryEntry) -> String {
-        if let moduleID = entry.moduleID,
+    /// Puts back every filter the search ran with, not only its words.
+    private func restore(_ entry: LampSearchHistory.Entry) {
+        selectedKind = entry.kinds?.first
+        selectedModuleID = entry.moduleIDs?.first
+        strongsKey = entry.strongsKey ?? ""
+        highlightColor = entry.highlightColors?.first ?? ""
+        if let range = entry.bookRange,
+           let scope = BookSearchScope.allCases.first(where: { $0.range == range }) {
+            bookScope = scope
+        }
+        devotionalDate = entry.devotionalCriteria?.date
+            ?? entry.devotionalCriteria?.monthDay ?? ""
+        devotionalTag = entry.devotionalCriteria?.tags?.first ?? ""
+        devotionalCategory = entry.devotionalCriteria?.categories?.first ?? ""
+        // Last, because every assignment above runs a search of its own.
+        query = entry.query
+    }
+
+    private func historyDescription(_ entry: LampSearchHistory.Entry) -> String {
+        if let moduleID = entry.moduleIDs?.first,
            let module = availableModules.first(where: { $0.id == moduleID }) {
             return module.name
         }
-        return entry.kind?.displayName ?? "All Content"
+        return entry.kinds?.first?.displayName ?? "All Content"
     }
 
     /// A translation result's module is the translation. Everything else — a

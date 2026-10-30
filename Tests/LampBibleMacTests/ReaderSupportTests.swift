@@ -490,24 +490,6 @@ struct ReaderSupportTests {
         #expect(history.current == branch)
     }
 
-    @Test func searchHistoryDeduplicatesAndRoundTrips() throws {
-        let old = LampSearchHistoryEntry(
-            query: "grace",
-            kind: .translation,
-            searchedAt: Date(timeIntervalSince1970: 1)
-        )
-        let updated = LampSearchHistoryEntry(
-            query: " grace ",
-            kind: .translation,
-            searchedAt: Date(timeIntervalSince1970: 2)
-        )
-        let entries = LampSearchHistoryStore.adding(updated, to: [old])
-
-        #expect(entries.count == 1)
-        #expect(entries.first?.query == "grace")
-        #expect(entries.first?.searchedAt == Date(timeIntervalSince1970: 2))
-        #expect(LampSearchHistoryStore.decode(LampSearchHistoryStore.encode(entries)) == entries)
-    }
 
     @Test func buildsExternalBibleLinks() {
         let start = 43_003_016
