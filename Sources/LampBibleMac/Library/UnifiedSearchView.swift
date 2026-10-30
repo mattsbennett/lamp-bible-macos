@@ -991,6 +991,13 @@ private struct SearchHitPreview: View {
     @State private var isLoading = true
     @State private var errorMessage: String?
 
+    /// Tall enough for the verses asked for, within what a popover should
+    /// take up on screen.
+    private var scrollHeight: Double {
+        let lines = Double(max(1, verses.count))
+        return min(380, max(90, lines * (fontSize * 1.5 + 14)))
+    }
+
     private var hitVerse: Int {
         LampBibleReferenceFormatter.components(of: result.startReference ?? 0).verse
     }
@@ -1031,7 +1038,11 @@ private struct SearchHitPreview: View {
                     }
                     .textSelection(.enabled)
                 }
-                .frame(maxHeight: 260)
+                // A definite height, not a maximum. A ScrollView has no
+                // ideal height of its own, so inside a popover — which sizes
+                // itself to its content — it collapsed to a single clipped
+                // line, which is what made the preview look broken.
+                .frame(height: scrollHeight)
             }
 
             Divider()
