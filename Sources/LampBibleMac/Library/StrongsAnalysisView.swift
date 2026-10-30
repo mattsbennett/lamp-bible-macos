@@ -386,9 +386,23 @@ struct StrongsAnalysisPane: View {
 
     // MARK: - Spread
 
-    /// One row of the chapter grid: the cell height plus room for the
-    /// book's name beside it.
-    private static let gridRowHeight: Double = 13
+    // A chart's own measurements. Deliberately not the reader's text size:
+    // these label a drawing rather than being prose, and at reading size
+    // they crowd the bars they name. They were the system's caption sizes,
+    // which are built for dense UI and were too small to read a chart by.
+    /// Book and section names, and the figures beside them.
+    private static let chartLabelSize: Double = 13
+    /// The finest print a chart has: axis ends, the shade key, the cautions.
+    private static let chartFinePrintSize: Double = 11.5
+    /// One row of the chapter grid: the cell plus room for its book's name.
+    private static let gridRowHeight: Double = 19
+    /// A chapter's cell. Twelve was a speck; these are meant to be aimed at.
+    private static let gridCellHeight: Double = 16
+    private static let gridCellMaxWidth: Double = 18
+    /// How tall the canonical-order columns stand.
+    private static let columnsHeight: Double = 132
+    /// A horizontal bar's thickness.
+    private static let barHeight: Double = 18
 
     /// The grouping in force: a grid is of chapters, which only books have.
     private var activeGrouping: LampStrongsGrouping {
@@ -457,7 +471,7 @@ struct StrongsAnalysisPane: View {
             if style != .share {
                 Text("“More” and “fewer” mean beyond chance, not simply above or "
                     + "below average.")
-                    .font(.caption2)
+                    .font(.system(size: Self.chartFinePrintSize))
                     .foregroundStyle(.secondary)
                     .padding(.top, 2)
             }
@@ -524,12 +538,13 @@ struct StrongsAnalysisPane: View {
                                     .frame(
                                         width: width,
                                         height: bar.share > 0
-                                            ? max(2, 96 * bar.share)
+                                            ? max(2, Self.columnsHeight * bar.share)
                                             : 1
                                     )
                                     .opacity(bar.share > 0 ? 1 : 0.25)
                             }
                             .buttonStyle(.plain)
+                            .chartClickable()
                             .help(helpText(bar))
                             // The one label worth drawing, over the column it
                             // belongs to. Centred in the row instead, it
@@ -539,7 +554,7 @@ struct StrongsAnalysisPane: View {
                                 if bar.id == tallest?.id, bar.occurrenceCount > 0 {
                                     Text("\(LampBibleReferenceFormatter.bookAbbreviation(bar.id)) "
                                         + "\(bar.occurrenceCount)")
-                                        .font(.caption2.weight(.semibold))
+                                        .font(.system(size: Self.chartFinePrintSize, weight: .semibold))
                                         .foregroundStyle(.tint)
                                         .fixedSize()
                                         .offset(y: -13)
@@ -547,9 +562,9 @@ struct StrongsAnalysisPane: View {
                             }
                         }
                     }
-                    .frame(height: 96, alignment: .bottom)
+                    .frame(height: Self.columnsHeight, alignment: .bottom)
                 }
-                .frame(height: 96)
+                .frame(height: Self.columnsHeight)
 
                 // Selective labels: the ends anchor the order, and the tallest
                 // is the one anyone will ask about. A name on all sixty-six
@@ -557,9 +572,11 @@ struct StrongsAnalysisPane: View {
                 // The ends anchor the order; the peak labels itself above its
                 // own column.
                 HStack(spacing: 4) {
-                    Text(bars.first?.name ?? "").font(.caption2)
+                    Text(bars.first?.name ?? "")
+                        .font(.system(size: Self.chartFinePrintSize))
                     Spacer()
-                    Text(bars.last?.name ?? "").font(.caption2)
+                    Text(bars.last?.name ?? "")
+                        .font(.system(size: Self.chartFinePrintSize))
                 }
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -584,14 +601,17 @@ struct StrongsAnalysisPane: View {
             // said nothing about the book — and cell width read as extent.
             VStack(alignment: .leading, spacing: 3) {
                 GeometryReader { proxy in
-                let cell = max(2, min(12, (proxy.size.width - 80) / Double(longest)))
+                let cell = max(
+                    2,
+                    min(Self.gridCellMaxWidth, (proxy.size.width - 96) / Double(longest))
+                )
                 VStack(alignment: .leading, spacing: 3) {
                     ForEach(rows) { row in
                         HStack(spacing: 5) {
                             Text(row.name)
-                                .font(.caption2)
+                                .font(.system(size: Self.chartLabelSize))
                                 .lineLimit(1)
-                                .frame(width: 74, alignment: .trailing)
+                                .frame(width: 90, alignment: .trailing)
                                 .foregroundStyle(.secondary)
                             HStack(spacing: 1) {
                                 ForEach(row.cells) { chapter in
@@ -608,9 +628,10 @@ struct StrongsAnalysisPane: View {
                                                     ? 0.07
                                                     : 0.25 + 0.75 * chapter.intensity
                                             )
-                                            .frame(width: cell - 1, height: 11)
+                                            .frame(width: cell - 1, height: Self.gridCellHeight)
                                     }
                                     .buttonStyle(.plain)
+                                    .chartClickable()
                                     .help("\(row.name) \(chapter.number): "
                                         + "\(chapter.occurrenceCount)")
                                 }
@@ -629,15 +650,17 @@ struct StrongsAnalysisPane: View {
                 // The grid cannot label every cell, so it says what the shade
                 // means and at what value it tops out.
                 HStack(spacing: 5) {
-                    Text("0").font(.caption2).foregroundStyle(.secondary)
+                    Text("0")
+                        .font(.system(size: Self.chartFinePrintSize))
+                        .foregroundStyle(.secondary)
                     ForEach([0.07, 0.4, 0.7, 1.0], id: \.self) { step in
                         RoundedRectangle(cornerRadius: 1)
                             .fill(.tint)
                             .opacity(step)
-                            .frame(width: 11, height: 9)
+                            .frame(width: 15, height: 12)
                     }
                     Text("\(busiest) in a chapter")
-                        .font(.caption2)
+                        .font(.system(size: Self.chartFinePrintSize))
                         .foregroundStyle(.secondary)
                 }
                 .padding(.top, 3)
@@ -677,6 +700,7 @@ struct StrongsAnalysisPane: View {
                                 : 0.12
                         )
                         .onHover { hoveredSlice = $0 ? slice : nil }
+                        .chartClickable()
                         .help("\(slice.name): \(slice.value)")
                     }
                     // The hole is somewhere to put the total, which is the
@@ -764,9 +788,9 @@ struct StrongsAnalysisPane: View {
         } label: {
             HStack(spacing: 8) {
                 Text(bar.name)
-                    .font(.caption)
+                    .font(.system(size: Self.chartLabelSize))
                     .lineLimit(1)
-                    .frame(width: 96, alignment: .trailing)
+                    .frame(width: 112, alignment: .trailing)
                 GeometryReader { proxy in
                     ZStack(alignment: .leading) {
                         Capsule().fill(.quaternary)
@@ -777,16 +801,17 @@ struct StrongsAnalysisPane: View {
                                 : 0)
                     }
                 }
-                .frame(height: 13)
+                .frame(height: Self.barHeight)
                 Text(measureLabel(bar))
-                    .font(.caption.monospacedDigit())
-                    .frame(width: 52, alignment: .trailing)
+                    .font(.system(size: Self.chartLabelSize).monospacedDigit())
+                    .frame(width: 60, alignment: .trailing)
                 standing(bar.expectation)
-                    .frame(width: 16)
+                    .frame(width: 18)
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .chartClickable()
         .help(helpText(bar))
     }
 
@@ -815,6 +840,7 @@ struct StrongsAnalysisPane: View {
                     }
                 }
                 .buttonStyle(.plain)
+                .chartClickable()
                 .help("Chapter \(chapter.number): \(chapter.occurrenceCount)")
             }
             Spacer()
@@ -906,6 +932,7 @@ struct StrongsAnalysisPane: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .chartClickable()
                 .help("Analyse \(companion.key)")
                 Divider()
             }
@@ -1003,12 +1030,24 @@ struct StrongsAnalysisPane: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .chartClickable()
     }
 
     /// Choosing the filter already in force removes it, so the same click both
     /// narrows and widens and nobody has to find the chip to get back.
     private func choose(_ next: LampStrongsFilter) {
         filter = filter == next ? nil : next
+    }
+}
+
+private extension View {
+    /// Marks something in a chart as clickable.
+    ///
+    /// Without it the pointer stays an I-beam over a bar or a cell, which
+    /// says "text to select" — the opposite of the truth, and the reason
+    /// nobody would guess a bar can be clicked at all.
+    func chartClickable() -> some View {
+        pointerStyle(.link)
     }
 }
 
