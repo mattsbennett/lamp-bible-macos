@@ -383,6 +383,13 @@ struct UnifiedSearchView: View {
 
     /// The verse with the tagged word picked out, so a row reads as the
     /// sentence it came from rather than as a word on its own.
+    ///
+    /// Marked as a find match — yellow behind text that keeps its colour —
+    /// because that is what it is: the thing searched for. It was bold accent
+    /// text, which ColorRules.md names as the thing to avoid, since accent
+    /// text reads as a link or a selection. It also disagreed with the search
+    /// rows a few points to the left, which have always drawn matches this
+    /// way.
     private func strongsSnippet(
         of verse: String,
         at occurrence: LampStrongsAnalysis.Occurrence
@@ -394,7 +401,7 @@ struct UnifiedSearchView: View {
         )
         return Text(snippet.isTrimmedAtStart ? "…" : "")
             + Text(snippet.before)
-            + Text(snippet.word).bold().foregroundStyle(.tint)
+            + Text.lampFindMatch(snippet.word)
             + Text(snippet.after)
             + Text(snippet.isTrimmedAtEnd ? "…" : "")
     }
