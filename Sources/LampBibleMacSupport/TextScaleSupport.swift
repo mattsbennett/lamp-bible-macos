@@ -7,6 +7,19 @@ import LampModuleKit
 /// both apps read the same books, and a size set on one should mean the same
 /// thing on the other. The rest are surfaces only this app has.
 public extension LampTextScale {
+    /// Scripture quoted inside a list or a side panel — a search hit, an
+    /// occurrence row, a rendering in the analysis.
+    ///
+    /// Follows the reader's own setting rather than a fixed caption size,
+    /// which was the one place in the app that setting did not reach. A
+    /// little smaller than the reader, because these are glimpses of the text
+    /// among other things rather than the text itself, and a list of them at
+    /// full reading size shows two of them at once. Never below the reader
+    /// scale's own floor.
+    static func studyText(readerSize: Double) -> Double {
+        max(readerText.minimum, readerSize - 4)
+    }
+
     /// Scripture is the one thing on screen a reader stares at for an hour, so it
     /// stretches further in both directions than the study panels beside it.
     static let readerText = LampTextScale(

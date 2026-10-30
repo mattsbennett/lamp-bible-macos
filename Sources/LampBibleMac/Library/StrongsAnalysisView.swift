@@ -179,6 +179,9 @@ struct StrongsAnalysisPane: View {
     /// The books being searched, so the shape can put back the ones the key
     /// never reaches.
     let bookRange: ClosedRange<Int>?
+    /// The reader's text size, carried in so the pane's words move with it
+    /// rather than sitting at a fixed caption size.
+    let fontSize: Double
 
     @State private var section: Section = .overview
     @State private var style: LampStrongsChartStyle = .bars
@@ -245,7 +248,7 @@ struct StrongsAnalysisPane: View {
                 Text(analysis.key)
                     .font(.title3.weight(.semibold))
                 if let lemma = entry?.lemma, !lemma.isEmpty {
-                    Text(lemma).font(.title3)
+                    Text(lemma).font(.system(size: fontSize + 5))
                 }
                 if let transliteration = entry?.transliteration, !transliteration.isEmpty {
                     Text(transliteration).font(.callout).foregroundStyle(.secondary)
@@ -256,7 +259,9 @@ struct StrongsAnalysisPane: View {
                 }
             }
             if let gloss = entry?.gloss, !gloss.isEmpty {
-                Text(gloss).font(.callout).foregroundStyle(.secondary)
+                Text(gloss)
+                    .font(.system(size: fontSize))
+                    .foregroundStyle(.secondary)
             }
             Text(countSummary(analysis))
                 .font(.caption)
@@ -362,7 +367,7 @@ struct StrongsAnalysisPane: View {
                 DisclosureGroup("\(rendering.variants.count) variants") {
                     ForEach(rendering.variants, id: \.text) { variant in
                         HStack {
-                            Text(variant.text).font(.caption)
+                            Text(variant.text).font(.system(size: max(10, fontSize - 2)))
                             Spacer()
                             Text("\(variant.count)")
                                 .font(.caption.monospacedDigit())
@@ -845,9 +850,10 @@ struct StrongsAnalysisPane: View {
                 } label: {
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 6) {
-                            Text(companion.key).font(.callout.weight(.medium))
+                            Text(companion.key)
+                                .font(.system(size: fontSize, weight: .medium))
                             if let lemma = loader.entries[companion.key]?.lemma {
-                                Text(lemma).font(.callout)
+                                Text(lemma).font(.system(size: fontSize))
                             }
                             Spacer()
                             Text(String(format: "%.1f× chance", companion.lift))
@@ -855,7 +861,10 @@ struct StrongsAnalysisPane: View {
                                 .foregroundStyle(.secondary)
                         }
                         if let gloss = loader.entries[companion.key]?.gloss {
-                            Text(gloss).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                            Text(gloss)
+                                .font(.system(size: max(10, fontSize - 2)))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
                         }
                         Text("\(companion.sharedVerseCount) shared verses of \(companion.verseCount)")
                             .font(.caption2)
@@ -892,7 +901,7 @@ struct StrongsAnalysisPane: View {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
                         Text(analysis.translationAbbreviation ?? analysis.translationName)
-                            .font(.callout.weight(.medium))
+                            .font(.system(size: fontSize, weight: .medium))
                         Spacer()
                         Text("\(analysis.occurrenceCount) in \(analysis.verseCount)")
                             .font(.caption.monospacedDigit())
@@ -901,7 +910,7 @@ struct StrongsAnalysisPane: View {
                     Text(analysis.renderings.prefix(3)
                         .map { "\($0.text.isEmpty ? "—" : $0.text) (\($0.count))" }
                         .joined(separator: ", "))
-                        .font(.caption)
+                        .font(.system(size: max(10, fontSize - 2)))
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
@@ -946,7 +955,7 @@ struct StrongsAnalysisPane: View {
     ) -> some View {
         Button(action: choose) {
             HStack(spacing: 6) {
-                Text(title).font(.callout).lineLimit(1)
+                Text(title).font(.system(size: fontSize)).lineLimit(1)
                 Spacer()
                 Text("\(count)")
                     .font(.caption.monospacedDigit())

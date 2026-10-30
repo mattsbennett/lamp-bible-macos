@@ -9,6 +9,12 @@ import SwiftUI
 struct UnifiedSearchView: View {
     @EnvironmentObject private var model: LibraryModel
     @AppStorage("search.history") private var historyData = Data()
+    /// The reader's own text size. A search hit is scripture, and was drawn
+    /// at caption size whatever the reader had chosen — the one place in the
+    /// app where their setting did not reach.
+    @AppStorage("reader.fontSize") private var readerFontSize = LampTextScale.readerText.defaultValue
+    /// Verses either side of a hit in its preview.
+    @AppStorage("search.previewContext") private var previewContext = 2
     // Held by the scene rather than the view. Opening a result moves the
     // window to the reader, which takes this view down and took the search
     // with it — so coming back meant typing the query and setting every
@@ -27,6 +33,8 @@ struct UnifiedSearchView: View {
     @State private var selectedResultID: String?
     @State private var strongsLoader = StrongsAnalysisLoader()
     @State private var strongsFilter: LampStrongsFilter?
+    /// The hit being previewed, if any.
+    @State private var previewedResult: LampModuleSearchResult?
 
     let showImporter: () -> Void
     /// Opens a reference, in the translation it was found in when the result
@@ -344,7 +352,7 @@ struct UnifiedSearchView: View {
                             VStack(alignment: .leading, spacing: 3) {
                                 HStack(spacing: 8) {
                                     Text(strongsReference(occurrence.reference))
-                                        .font(.callout.weight(.medium))
+                                        .font(.system(size: hitFontSize, weight: .medium))
                                     Spacer()
                                     if let form = occurrence.form, !form.isEmpty {
                                         Text(form)
@@ -357,7 +365,7 @@ struct UnifiedSearchView: View {
                                     // that set none, so the tagged word keeps
                                     // the tint it was given.
                                     strongsSnippet(of: verse, at: occurrence)
-                                        .font(.caption)
+                                        .font(.system(size: hitFontSize))
                                         .foregroundStyle(.secondary)
                                         .lineLimit(3)
                                 } else if !occurrence.text.isEmpty {
@@ -425,7 +433,8 @@ struct UnifiedSearchView: View {
                 loader: strongsLoader,
                 filter: $strongsFilter,
                 analyse: { strongsKey = $0 },
-                bookRange: bookScope.range
+                bookRange: bookScope.range,
+                fontSize: hitFontSize
             )
         }
         .task(id: strongsRequest) {
@@ -548,12 +557,16 @@ struct UnifiedSearchView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         snippetText(result.snippet)
+                            .font(.system(size: hitFontSize))
                             .lineLimit(3)
                             .foregroundStyle(.primary)
                     }
                     .padding(.vertical, 6)
                     .tag(Optional(result.id))
                     .contextMenu {
+                        if previewTranslation(of: result) != nil {
+                            Button("Preview in Context") { previewedResult = result }
+                        }
                         if let reference = result.startReference {
                             Button("Open \(result.referenceDescription ?? "Reference")") {
                                 saveSearch()
@@ -573,6 +586,22 @@ struct UnifiedSearchView: View {
             .listStyle(.inset)
         }
         .frame(minWidth: 340, idealWidth: 440)
+        .popover(item: $previewedResult) { result in
+            if let translationID = previewTranslation(of: result) {
+                SearchHitPreview(
+                    result: result,
+                    translationID: translationID,
+                    query: query,
+                    fontSize: hitFontSize,
+                    context: $previewContext,
+                    open: {
+                        previewedResult = nil
+                        saveSearch()
+                        openReference(result.startReference ?? 0, translationID)
+                    }
+                )
+            }
+        }
     }
 
     private func resultDetail(_ result: LampModuleSearchResult) -> some View {
@@ -612,6 +641,12 @@ struct UnifiedSearchView: View {
                             openReference(reference, translationID(of: result))
                         }
                         .buttonStyle(.borderedProminent)
+                    }
+                    if previewTranslation(of: result) != nil {
+                        Button("Preview in Context", systemImage: "text.magnifyingglass") {
+                            previewedResult = result
+                        }
+                        .buttonStyle(.bordered)
                     }
                     if result.kind == .book {
                         Button("Open Book") {
@@ -798,6 +833,13 @@ struct UnifiedSearchView: View {
     /// A translation result's module is the translation. Everything else — a
     /// commentary, a note — points at scripture without being scripture, so it
     /// opens in whatever is being read.
+    /// Whether a result can be shown in its surroundings: it needs a verse
+    /// to be surrounded by, and a translation to read them from.
+    private func previewTranslation(of result: LampModuleSearchResult) -> String? {
+        guard result.startReference != nil else { return nil }
+        return translationID(of: result)
+    }
+
     /// The lexicon key a dictionary result stands for.
     ///
     /// Core identifies the entry as `dictionary:<module>:<entry>`, and for a
@@ -839,6 +881,16 @@ struct UnifiedSearchView: View {
             .joined(separator: "\n")
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    /// The size a hit's own words are drawn at.
+    ///
+    /// The reader's setting, a little smaller: a result is a glimpse of the
+    /// text rather than the text itself, and a list of them at full reading
+    /// size shows two results on a screen. It still moves with the setting,
+    /// which is what was asked for, and never goes below the scale's floor.
+    private var hitFontSize: Double {
+        LampTextScale.studyText(readerSize: readerFontSize)
     }
 
     private func snippetText(_ source: String) -> Text {
@@ -917,5 +969,130 @@ private extension LampModuleKind {
         case .highlights: "Highlights"
         case .quiz: "Quizzes"
         }
+    }
+}
+
+/// A scripture hit in its surroundings, before deciding to go there.
+///
+/// Opening a result moves the whole window to the reader. A glance at the
+/// verses either side answers "is this the one I meant?" without that, and
+/// the Open button is there for when the answer is yes.
+private struct SearchHitPreview: View {
+    @EnvironmentObject private var model: LibraryModel
+    let result: LampModuleSearchResult
+    let translationID: String
+    let query: String
+    let fontSize: Double
+    @Binding var context: Int
+    let open: () -> Void
+
+    @State private var verses: [LampVerse] = []
+    @State private var bookName = ""
+    @State private var isLoading = true
+    @State private var errorMessage: String?
+
+    private var hitVerse: Int {
+        LampBibleReferenceFormatter.components(of: result.startReference ?? 0).verse
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(result.referenceDescription ?? bookName)
+                    .font(.headline)
+                Spacer()
+                Text(result.moduleName)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Divider()
+
+            if isLoading {
+                ProgressView().frame(maxWidth: .infinity)
+            } else if let errorMessage {
+                Text(errorMessage).font(.callout).foregroundStyle(.secondary)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 7) {
+                        ForEach(verses) { verse in
+                            (
+                                Text("\(verse.number) ")
+                                    .font(.system(size: max(9, fontSize - 4)))
+                                    .foregroundStyle(.secondary)
+                                    + markedText(verse.text)
+                            )
+                            .font(.system(size: fontSize, design: .serif))
+                            // The hit itself, so the eye lands on it among
+                            // its neighbours. The words that matched are
+                            // marked within it as find matches.
+                            .fontWeight(verse.number == hitVerse ? .semibold : .regular)
+                        }
+                    }
+                    .textSelection(.enabled)
+                }
+                .frame(maxHeight: 260)
+            }
+
+            Divider()
+
+            HStack {
+                Stepper(
+                    "Context: \(context) verse\(context == 1 ? "" : "s")",
+                    value: $context,
+                    in: 0...10
+                )
+                .font(.caption)
+                Spacer()
+                Button("Open in Reader", systemImage: "book", action: open)
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(14)
+        .frame(width: 420)
+        .task(id: context) { await load() }
+    }
+
+    /// The verse with the searched words marked, as the result list marks
+    /// them — so the preview and the row agree about what was found.
+    private func markedText(_ text: String) -> Text {
+        let marked = LampSearchQuery(query).markedSnippet(text, limit: .max)
+        var remaining = marked[...]
+        var rendered = Text("")
+        while let opening = remaining.range(of: LampSearchSnippet.openingMark),
+              let closing = remaining[opening.upperBound...]
+                  .range(of: LampSearchSnippet.closingMark) {
+            rendered = rendered + Text(String(remaining[..<opening.lowerBound]))
+            rendered = rendered
+                + Text.lampFindMatch(remaining[opening.upperBound..<closing.lowerBound])
+            remaining = remaining[closing.upperBound...]
+        }
+        return rendered + Text(String(remaining))
+    }
+
+    private func load() async {
+        guard let reference = result.startReference else {
+            errorMessage = "This result has no verse to show."
+            isLoading = false
+            return
+        }
+        let parts = LampBibleReferenceFormatter.components(of: reference)
+        do {
+            let chapter = try await model.library.chapter(
+                moduleID: translationID,
+                bookNumber: parts.book,
+                chapterNumber: parts.chapter
+            )
+            bookName = chapter.book.name
+            // Clamped to the chapter: a hit in verse 1 has nothing above it,
+            // and asking for it would simply show fewer verses, not fail.
+            verses = chapter.verses.filter {
+                abs($0.number - parts.verse) <= context
+            }
+            errorMessage = verses.isEmpty ? "That verse is not in this translation." : nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        isLoading = false
     }
 }
