@@ -416,6 +416,21 @@ struct StrongsAnalysisPane: View {
     private static let columnsHeight: Double = 132
     /// A horizontal bar's thickness.
     private static let barHeight: Double = 18
+    /// The ring or pie's side.
+    private static let ringSize: Double = 164
+    /// The ring's share of its radius. A pie fills to the middle.
+    private static let ringThickness: Double = 0.38
+
+    private func sliceIndex(
+        at point: CGPoint, among slices: [LampStrongsShare.Slice]
+    ) -> Int? {
+        LampStrongsShareHit.index(
+            at: point,
+            in: CGSize(width: Self.ringSize, height: Self.ringSize),
+            fractions: slices.map(\.fraction),
+            thickness: shareAsRing ? Self.ringThickness : 1
+        )
+    }
     /// The chapter strip that opens under a bar. It was 7 points wide with
     /// 7-point numbers — the one chart that kept its original size when the
     /// others grew.
@@ -716,7 +731,7 @@ struct StrongsAnalysisPane: View {
                         let wedge = DonutSlice(
                             start: slices.prefix(index).reduce(0) { $0 + $1.fraction },
                             extent: slice.fraction,
-                            thickness: shareAsRing ? 0.38 : 1
+                            thickness: shareAsRing ? Self.ringThickness : 1
                         )
                         wedge
                             .fill(.tint)
@@ -730,15 +745,6 @@ struct StrongsAnalysisPane: View {
                                     // is picked out.
                                     : 0.12
                             )
-                            // The wedge, not the square it is drawn in. A
-                            // filled Shape is a view the size of its whole
-                            // frame, so without this every slice's hover
-                            // covered the entire ring and the last one drawn
-                            // answered for all of them — which is why hovering
-                            // picked out the wrong slice, or none.
-                            .contentShape(wedge)
-                            .onHover { hoveredSlice = $0 ? slice : nil }
-                            .chartClickable()
                             .help("\(slice.name): \(slice.value)")
                     }
                     // The hole is somewhere to put the total, which is the
@@ -765,7 +771,30 @@ struct StrongsAnalysisPane: View {
                         .animation(.easeOut(duration: 0.12), value: hoveredSlice?.id)
                     }
                 }
-                .frame(width: 164, height: 164)
+                .frame(width: Self.ringSize, height: Self.ringSize)
+                .contentShape(Rectangle())
+                // One hover for the whole ring, worked out by angle.
+                // Per-slice hit-testing did not work: `.contentShape(wedge)`
+                // did not narrow what `.onHover` reported, so every slice
+                // answered for the whole square and "Other", drawn last, lit
+                // up wherever the pointer was.
+                .onContinuousHover { phase in
+                    guard case .active(let point) = phase else {
+                        hoveredSlice = nil
+                        return
+                    }
+                    hoveredSlice = sliceIndex(at: point, among: slices).map { slices[$0] }
+                }
+                .onTapGesture { point in
+                    guard let index = sliceIndex(at: point, among: slices) else { return }
+                    let divisions = divisions(of: analysis)
+                    guard !slices[index].isOther, index < divisions.count,
+                          let filter = divisions[index].filter else { return }
+                    choose(filter)
+                }
+                // Only over a wedge, so the pointer does not promise a click
+                // in the hole or the corners.
+                .pointerStyle(hoveredSlice == nil ? nil : .link)
 
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(Array(slices.enumerated()), id: \.element.id) { index, slice in

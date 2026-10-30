@@ -60,6 +60,56 @@ public enum LampStrongsFilter: Hashable, Sendable {
     }
 }
 
+/// Which slice of a ring or pie a point falls in.
+///
+/// SwiftUI hit-testing could not be relied on for this. A filled `Shape` is a
+/// view the size of its whole frame rather than of its path, and
+/// `.contentShape(theShape)` — which should narrow it — did not change what
+/// `.onHover` reported: every slice still answered for the whole square, so
+/// the last one drawn, which is always "Other", lit up wherever the pointer
+/// was. Working the angle out directly is both correct and testable.
+public enum LampStrongsShareHit {
+    /// The index into `fractions`, or nil for the hole, outside the circle,
+    /// or a gap.
+    ///
+    /// The angles match how the wedges are drawn: zero at twelve o'clock,
+    /// growing clockwise. `thickness` is the ring's share of the radius, 1
+    /// for a solid pie.
+    public static func index(
+        at point: CGPoint,
+        in size: CGSize,
+        fractions: [Double],
+        thickness: Double
+    ) -> Int? {
+        guard !fractions.isEmpty else { return nil }
+        let outer = Double(min(size.width, size.height)) / 2
+        guard outer > 0 else { return nil }
+
+        let dx = Double(point.x) - Double(size.width) / 2
+        let dy = Double(point.y) - Double(size.height) / 2
+        let radius = (dx * dx + dy * dy).squareRoot()
+        guard radius <= outer else { return nil }
+
+        let inner = outer * (1 - thickness)
+        // A pie is filled to the middle; a ring's hole is not part of it.
+        if inner > 0.5, radius < inner { return nil }
+
+        // atan2 is zero at three o'clock, so a quarter turn puts zero at
+        // twelve, where the first wedge starts.
+        var turn = (atan2(dy, dx) / (2 * .pi)) + 0.25
+        turn -= turn.rounded(.down)
+
+        var start = 0.0
+        for (index, fraction) in fractions.enumerated() {
+            if turn >= start, turn < start + fraction { return index }
+            start += fraction
+        }
+        // Rounding can leave a point a hair past the last wedge's end rather
+        // than inside it, which would flicker the highlight off at one angle.
+        return abs(turn - start) < 1e-6 ? fractions.count - 1 : nil
+    }
+}
+
 extension LampStrongsFilter {
     /// What is left when this filter is chosen a second time.
     ///

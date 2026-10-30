@@ -562,7 +562,25 @@ struct UnifiedSearchView: View {
                             .foregroundStyle(.primary)
                     }
                     .padding(.vertical, 12)
+                    // The whole row, not just the ink. Without this the row
+                    // is only hit-testable where its text happens to be, so
+                    // a right-click in the space beside a short snippet
+                    // landed on the list rather than the row — which is why
+                    // the context menu did not appear at all.
+                    .contentShape(Rectangle())
                     .tag(Optional(result.id))
+                    // Clicking a verse shows it in its context, which is what
+                    // the preview is for. Selection also moves with the
+                    // click, so the detail pane keeps up; a simultaneous
+                    // gesture leaves the list's own handling alone. Hung off
+                    // the click rather than off selection because the list
+                    // selects the first result by itself whenever the
+                    // results change, and that must not open anything.
+                    .simultaneousGesture(TapGesture().onEnded {
+                        if previewTranslation(of: result) != nil {
+                            previewedResult = result
+                        }
+                    })
                     .popover(isPresented: previewBinding(for: result), arrowEdge: .trailing) {
                         preview(for: result)
                     }

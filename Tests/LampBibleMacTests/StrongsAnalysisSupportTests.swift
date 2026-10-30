@@ -822,3 +822,97 @@ struct StrongsFilterWideningTests {
         #expect(LampStrongsFilter.grammar(feature: .tense, value: "Aorist").widened == nil)
     }
 }
+
+/// Which wedge a point is in.
+struct StrongsShareHitTests {
+    private let size = CGSize(width: 164, height: 164)
+    private let centre = 82.0
+
+    private func point(atClock hours: Double, radius: Double) -> CGPoint {
+        // Twelve o'clock is straight up, and the angle grows clockwise.
+        let turn = hours / 12
+        let radians = turn * 2 * .pi - .pi / 2
+        return CGPoint(x: centre + radius * cos(radians), y: centre + radius * sin(radians))
+    }
+
+    /// The first wedge starts at twelve o'clock and they run clockwise, as
+    /// they are drawn.
+    @Test func quartersAreFoundByTheClock() {
+        let quarters = [0.25, 0.25, 0.25, 0.25]
+        let expected = [(1.5, 0), (4.5, 1), (7.5, 2), (10.5, 3)]
+        for (hours, slice) in expected {
+            #expect(
+                LampStrongsShareHit.index(
+                    at: point(atClock: hours, radius: 70),
+                    in: size, fractions: quarters, thickness: 0.38
+                ) == slice,
+                "\(hours) o'clock should be wedge \(slice)"
+            )
+        }
+    }
+
+    /// The bug the user saw: the last wedge is "Other", and it answered for
+    /// the whole square. Twelve o'clock must be the first wedge, never the
+    /// last, whatever the pointer is nearest to.
+    @Test func thelastWedgeDoesNotAnswerForTheWholeRing() {
+        let uneven = [0.5, 0.3, 0.2]
+        #expect(
+            LampStrongsShareHit.index(
+                at: point(atClock: 1, radius: 70), in: size,
+                fractions: uneven, thickness: 0.38
+            ) == 0
+        )
+        #expect(
+            LampStrongsShareHit.index(
+                at: point(atClock: 7, radius: 70), in: size,
+                fractions: uneven, thickness: 0.38
+            ) == 1
+        )
+        #expect(
+            LampStrongsShareHit.index(
+                at: point(atClock: 11, radius: 70), in: size,
+                fractions: uneven, thickness: 0.38
+            ) == 2,
+            "the last wedge answers only for its own arc"
+        )
+    }
+
+    /// The hole is not part of a ring, and nothing outside the circle is.
+    @Test func theholeAndTheOutsideAreNotWedges() {
+        let halves = [0.5, 0.5]
+        #expect(
+            LampStrongsShareHit.index(
+                at: CGPoint(x: centre, y: centre), in: size,
+                fractions: halves, thickness: 0.38
+            ) == nil,
+            "the middle of a ring holds the total, not a wedge"
+        )
+        #expect(
+            LampStrongsShareHit.index(
+                at: CGPoint(x: 4, y: 4), in: size,
+                fractions: halves, thickness: 0.38
+            ) == nil,
+            "a corner is outside the circle"
+        )
+    }
+
+    /// A pie has no hole, so the middle belongs to a wedge.
+    @Test func apieIsFilledToTheMiddle() {
+        #expect(
+            LampStrongsShareHit.index(
+                at: point(atClock: 1, radius: 8), in: size,
+                fractions: [0.5, 0.5], thickness: 1
+            ) == 0,
+            "close to the middle of a pie is still the wedge it is under"
+        )
+    }
+
+    /// Nothing to point at.
+    @Test func noSlicesIsNoWedge() {
+        #expect(
+            LampStrongsShareHit.index(
+                at: CGPoint(x: 40, y: 40), in: size, fractions: [], thickness: 0.38
+            ) == nil
+        )
+    }
+}
