@@ -794,3 +794,31 @@ struct SearchResultIdentityTests {
         )
     }
 }
+
+/// Choosing the same thing twice.
+struct StrongsFilterWideningTests {
+    /// A chapter falls back to its book, not to nothing: the book's chapter
+    /// strip is still open underneath, so clearing everything leaves the
+    /// reader looking at one book's chapters beside a list of the whole
+    /// Bible.
+    @Test func achapterFallsBackToItsOwnBook() {
+        #expect(
+            LampStrongsFilter.chapter(book: 43, number: 3).widened
+                == .book(number: 43)
+        )
+        #expect(
+            LampStrongsFilter.chapter(book: 62, number: 4).widened
+                == .book(number: 62),
+            "its own book, not the one that happened to be open before"
+        )
+    }
+
+    /// Everything else has nothing wider to fall back to, so choosing it
+    /// again shows all the occurrences.
+    @Test func everythingElseClears() {
+        #expect(LampStrongsFilter.book(number: 43).widened == nil)
+        #expect(LampStrongsFilter.rendering(id: "word", text: "Word").widened == nil)
+        #expect(LampStrongsFilter.form("λόγος").widened == nil)
+        #expect(LampStrongsFilter.grammar(feature: .tense, value: "Aorist").widened == nil)
+    }
+}

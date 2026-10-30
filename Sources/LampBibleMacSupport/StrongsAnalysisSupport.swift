@@ -60,6 +60,21 @@ public enum LampStrongsFilter: Hashable, Sendable {
     }
 }
 
+extension LampStrongsFilter {
+    /// What is left when this filter is chosen a second time.
+    ///
+    /// Choosing the same thing again widens by one step rather than clearing
+    /// everything. A chapter falls back to its own book, because the book's
+    /// chapter strip is still open underneath it: dropping straight to no
+    /// filter left the reader looking at one book's chapters while the list
+    /// beside them showed every occurrence in the Bible. Everything else has
+    /// nothing wider to fall back to.
+    public var widened: LampStrongsFilter? {
+        if case .chapter(let book, _) = self { return .book(number: book) }
+        return nil
+    }
+}
+
 extension LampStrongsAnalysis {
     /// The occurrences one filter leaves, or all of them when nothing is
     /// chosen.

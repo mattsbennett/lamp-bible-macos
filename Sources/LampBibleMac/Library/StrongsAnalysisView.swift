@@ -269,25 +269,38 @@ struct StrongsAnalysisPane: View {
             Text(countSummary(analysis))
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            if let filter {
-                HStack(spacing: 6) {
+            // Always here, empty or not. Appearing and disappearing with the
+            // filter moved the pane and the occurrence list beside it every
+            // time a bar was clicked — the one moment the reader is looking
+            // at something else.
+            HStack(spacing: 6) {
+                if let filter {
                     Button {
                         self.filter = nil
                     } label: {
-                        HStack(spacing: 4) {
+                        HStack(spacing: 5) {
                             Text(filter.label).lineLimit(1)
                             Image(systemName: "xmark.circle.fill")
+                                .imageScale(.small)
                         }
-                        .font(.caption.weight(.medium))
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(.tint.opacity(0.18), in: Capsule())
+                        .font(.callout.weight(.medium))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(.tint.opacity(0.22), in: Capsule())
+                        .contentShape(Capsule())
                     }
                     .buttonStyle(.plain)
+                    .chartClickable()
                     .help("Show every occurrence again")
-                    Spacer()
+                } else {
+                    Text("Choose a bar, a chapter or a rendering to narrow these.")
+                        .font(.callout)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
                 }
+                Spacer(minLength: 0)
             }
+            .frame(height: 28)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
@@ -1066,7 +1079,16 @@ struct StrongsAnalysisPane: View {
     /// Choosing the filter already in force removes it, so the same click both
     /// narrows and widens and nobody has to find the chip to get back.
     private func choose(_ next: LampStrongsFilter) {
-        filter = filter == next ? nil : next
+        guard filter == next else {
+            filter = next
+            return
+        }
+        // Choosing the same thing again widens by one step rather than
+        // clearing everything. A chapter falls back to its own book, whose
+        // strip is still open underneath it — dropping to no filter at all
+        // left the reader looking at a book's chapters while the list showed
+        // every occurrence in the Bible.
+        filter = next.widened
     }
 }
 
