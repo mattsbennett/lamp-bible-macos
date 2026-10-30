@@ -17,6 +17,18 @@ public enum LampMCPToolCatalog {
                 "query": string("Words or phrase to find."),
                 "kinds": arrayOfStrings("Optional module kinds to search."),
                 "module_ids": arrayOfStrings("Optional module IDs to search."),
+                "range": string(
+                    "Optional run of whole books to search within, such as \"NT\", "
+                        + "\"Romans\" or \"Matthew-John\"."
+                ),
+                "strongs_key": string(
+                    "Optional Strong's key, such as G26, to find the verses tagged "
+                        + "with it rather than the words of the query."
+                ),
+                "highlight_colors": arrayOfStrings(
+                    "Optional six-digit hex colours, to find only highlights of those "
+                        + "colours."
+                ),
                 "limit": integer("Maximum results; Lamp applies its configured upper bound."),
             ],
             required: ["query"]

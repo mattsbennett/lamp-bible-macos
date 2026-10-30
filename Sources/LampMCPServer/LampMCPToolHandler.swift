@@ -80,6 +80,9 @@ public actor LampMCPToolHandler {
                 query: try requiredString("query", in: arguments),
                 kinds: try kinds(arguments["kinds"]),
                 moduleIDs: stringSet(arguments["module_ids"]),
+                range: arguments["range"]?.stringValue,
+                strongsKey: arguments["strongs_key"]?.stringValue,
+                highlightColors: stringSet(arguments["highlight_colors"]),
                 limit: arguments["limit"]?.intValue ?? 20
             ))
 

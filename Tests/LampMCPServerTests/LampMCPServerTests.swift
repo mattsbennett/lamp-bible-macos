@@ -515,3 +515,28 @@ struct LampMCPClientCompatibilityTests {
         )
     }
 }
+
+extension LampMCPServerTests {
+    /// Searching the way the apps do: a book range, a Strong's key, a
+    /// highlight colour.
+    ///
+    /// An agent that can only search words has to read whole books back to
+    /// narrow them itself, which is both slower and less accurate than the
+    /// query the apps already run.
+    @Test func thelibrarySearchTakesTheSameNarrowingTheAppsDo() throws {
+        let tool = try #require(
+            LampMCPToolCatalog.tools.first { $0.name == "search_library" }
+        )
+        let properties = try #require(
+            tool.inputSchema.objectValue?["properties"]?.objectValue
+        )
+        for name in ["range", "strongs_key", "highlight_colors"] {
+            #expect(properties[name] != nil, "search_library should take \(name)")
+        }
+        #expect(
+            tool.inputSchema.objectValue?["required"]?.arrayValue?
+                .compactMap(\.stringValue) == ["query"],
+            "the new narrowing is optional; a plain word search still works"
+        )
+    }
+}

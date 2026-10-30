@@ -103,6 +103,9 @@ actor LexiconMappingStore {
 @MainActor
 final class LibraryModel: ObservableObject {
     @Published private(set) var modules: [LampInstalledModule] = []
+    /// The reader's own highlight sets, for the search filters: a custom
+    /// set's module ID is a UUID, which is no use in a menu.
+    @Published private(set) var highlightSets: [LampHighlightSet] = []
     @Published private(set) var books: [LampTranslationBook] = []
     @Published private(set) var chapter: LampChapter?
     @Published private(set) var isRefreshing = false
@@ -125,8 +128,6 @@ final class LibraryModel: ObservableObject {
     /// button started it to show. Installing used to succeed in silence.
     @Published var moduleInstallMessage: String?
     @Published private(set) var isImportingStudyData = false
-    @Published private(set) var isSearching = false
-    @Published private(set) var searchResults: [LampTranslationSearchResult] = []
     @Published private(set) var moduleSearchResults: [LampModuleSearchResult] = []
     @Published private(set) var isModuleSearching = false
     @Published private(set) var selectedVerseReference: Int?
@@ -506,42 +507,6 @@ final class LibraryModel: ObservableObject {
         }
     }
 
-    func search(_ query: String, translationID: String? = nil) {
-        searchTask?.cancel()
-        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedQuery.isEmpty else {
-            searchToken = nil
-            searchResults = []
-            isSearching = false
-            return
-        }
-
-        let token = UUID()
-        searchToken = token
-        isSearching = true
-        searchTask = Task {
-            do {
-                try await Task.sleep(for: .milliseconds(250))
-                let moduleIDs = translationID.map { Set([$0]) } ?? Set(translations.map(\.id))
-                let results = try await library.searchTranslations(
-                    query: trimmedQuery,
-                    moduleIDs: moduleIDs,
-                    limit: 150
-                )
-                guard !Task.isCancelled, searchToken == token else { return }
-                searchResults = results
-            } catch is CancellationError {
-                return
-            } catch {
-                guard searchToken == token else { return }
-                errorMessage = error.localizedDescription
-                searchResults = []
-            }
-            if searchToken == token {
-                isSearching = false
-            }
-        }
-    }
 
     func searchModules(
         _ query: String,
@@ -964,6 +929,7 @@ final class LibraryModel: ObservableObject {
         }
         do {
             modules = try await library.installedModules()
+            highlightSets = (try? await library.highlightSets()) ?? []
             plans = try await library.readingPlans()
             devotionals = try await library.devotionals()
             quizModules = try await library.quizModules()

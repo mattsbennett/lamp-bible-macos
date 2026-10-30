@@ -71,8 +71,12 @@ struct UnifiedSearchView: View {
     }
 
     private var availableModules: [(id: String, name: String)] {
+        // Hidden modules are left out: a module the reader has hidden is not
+        // searched, so offering it as a filter promises results it can never
+        // return.
         var values: [(id: String, name: String)] = model.modules
             .filter { selectedKind == nil || $0.kind == selectedKind }
+            .filter { !model.hiddenModuleIDs.contains($0.id) }
             .map { (id: $0.id, name: $0.name) }
         if selectedKind == nil || selectedKind == .notes {
             values.append(("personal-notes", "My Notes"))
@@ -81,6 +85,10 @@ struct UnifiedSearchView: View {
             values += model.translations.map {
                 ("personal-highlights:\($0.id)", "My \($0.abbreviation ?? $0.name) Highlights")
             }
+            // A set the reader made. Its module ID is a UUID, so without this
+            // it could not be chosen at all — only its translation's default
+            // set could.
+            values += model.highlightSets.map { ($0.id, $0.name) }
         }
         if selectedKind == nil || selectedKind == .devotional {
             values.append(("personal-devotionals", "My Writing"))
