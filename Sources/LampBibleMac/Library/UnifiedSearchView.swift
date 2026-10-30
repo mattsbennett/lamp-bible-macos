@@ -31,6 +31,10 @@ struct UnifiedSearchView: View {
     /// Not kept: which row was selected belongs to a list that no longer
     /// exists, and the search is run again on return anyway.
     @State private var selectedResultID: String?
+    /// The occurrence whose preview is open, by reference. A Strong's search
+    /// shows these rows rather than the module results, which is why fixing
+    /// the other list did nothing for it.
+    @State private var previewedOccurrence: Int?
     @State private var strongsLoader = StrongsAnalysisLoader()
     @State private var strongsFilter: LampStrongsFilter?
     /// The hit being previewed, if any.
@@ -346,10 +350,11 @@ struct UnifiedSearchView: View {
                     // By position, because one verse can carry the key twice
                     // and a reference would not tell those two rows apart.
                     ForEach(Array(occurrences.enumerated()), id: \.offset) { _, occurrence in
+                        let index = occurrences.firstIndex { $0 == occurrence } ?? 0
                         Button {
-                            openReference(occurrence.reference, analysis?.translationID)
+                            previewedOccurrence = occurrence.reference
                         } label: {
-                            VStack(alignment: .leading, spacing: 3) {
+                            VStack(alignment: .leading, spacing: 7) {
                                 HStack(spacing: 8) {
                                     Text(strongsReference(occurrence.reference))
                                         .font(.system(size: hitFontSize, weight: .medium))
@@ -376,11 +381,55 @@ struct UnifiedSearchView: View {
                                         .foregroundStyle(.secondary)
                                 }
                             }
-                            .padding(.vertical, 3)
+                            .padding(.vertical, 10)
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .help("Open \(strongsReference(occurrence.reference))")
+                        .popover(
+                            isPresented: Binding(
+                                get: { previewedOccurrence == occurrence.reference },
+                                set: { if !$0 { previewedOccurrence = nil } }
+                            ),
+                            arrowEdge: .trailing
+                        ) {
+                            if let analysis {
+                                let translationID = analysis.translationID
+                                SearchHitPreview(
+                                    reference: occurrence.reference,
+                                    heading: strongsReference(occurrence.reference),
+                                    moduleName: analysis.translationName,
+                                    translationID: translationID,
+                                    query: occurrence.text,
+                                    fontSize: hitFontSize,
+                                    context: $previewContext,
+                                    open: {
+                                        previewedOccurrence = nil
+                                        saveSearch()
+                                        openReference(occurrence.reference, translationID)
+                                    }
+                                )
+                            }
+                        }
+                        .contextMenu {
+                            Button("Preview in Context") {
+                                previewedOccurrence = occurrence.reference
+                            }
+                            Button("Open \(strongsReference(occurrence.reference))") {
+                                saveSearch()
+                                openReference(occurrence.reference, analysis?.translationID)
+                            }
+                            Button("Copy Verse") {
+                                let verse = analysis?.verseTexts[occurrence.reference] ?? occurrence.text
+                                let pasteboard = NSPasteboard.general
+                                pasteboard.clearContents()
+                                pasteboard.setString(
+                                    "\(strongsReference(occurrence.reference)) \(verse)",
+                                    forType: .string
+                                )
+                            }
+                        }
+                        .help("Show \(strongsReference(occurrence.reference)) in context")
+                        .id(index)
                     }
                 }
                 .listStyle(.inset)
@@ -619,7 +668,9 @@ struct UnifiedSearchView: View {
     private func preview(for result: LampModuleSearchResult) -> some View {
         if let translationID = previewTranslation(of: result) {
             SearchHitPreview(
-                result: result,
+                reference: result.startReference ?? 0,
+                heading: result.referenceDescription,
+                moduleName: result.moduleName,
                 translationID: translationID,
                 query: query,
                 fontSize: hitFontSize,
@@ -1015,7 +1066,9 @@ private extension LampModuleKind {
 /// the Open button is there for when the answer is yes.
 private struct SearchHitPreview: View {
     @EnvironmentObject private var model: LibraryModel
-    let result: LampModuleSearchResult
+    let reference: Int
+    let heading: String?
+    let moduleName: String
     let translationID: String
     let query: String
     let fontSize: Double
@@ -1035,16 +1088,16 @@ private struct SearchHitPreview: View {
     }
 
     private var hitVerse: Int {
-        LampBibleReferenceFormatter.components(of: result.startReference ?? 0).verse
+        LampBibleReferenceFormatter.components(of: reference).verse
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text(result.referenceDescription ?? bookName)
+                Text(heading ?? bookName)
                     .font(.headline)
                 Spacer()
-                Text(result.moduleName)
+                Text(moduleName)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -1118,7 +1171,7 @@ private struct SearchHitPreview: View {
     }
 
     private func load() async {
-        guard let reference = result.startReference else {
+        guard reference > 0 else {
             errorMessage = "This result has no verse to show."
             isLoading = false
             return
