@@ -1213,13 +1213,6 @@ struct QuizzesView: View {
                 QuizOptionsMenu()
             }
 
-            if let description = quiz.description, !description.isEmpty {
-                Text(description)
-                    .foregroundStyle(.secondary)
-            } else if let plan = selectedPlan {
-                Text("Questions for \(plan.name)")
-                    .foregroundStyle(.secondary)
-            }
         }
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1367,6 +1360,13 @@ struct QuizQuestionCard: View {
     let toggleAnswer: () -> Void
     @State private var linkActivationGate = ReaderLinkActivationGate()
     @State private var previewLink: LampScriptureLink?
+    /// Where the pointer is inside this card, and how big the card is, so a
+    /// preview can be put beside the reference it is about.
+    @State private var pointerInCard: CGPoint?
+    @State private var cardSize: CGSize = .zero
+    /// Held still while a preview is open, so moving the mouse afterwards
+    /// does not drag the popover around.
+    @State private var previewAnchor: UnitPoint = .center
 
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
@@ -1377,7 +1377,11 @@ struct QuizQuestionCard: View {
                     Label(question.readingDescription, systemImage: "book")
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.tint)
+                // A verse reference that takes you somewhere, so it is a
+                // link. ColorRules.md keeps the accent for controls and for
+                // what is selected, never for links inside text — and it is
+                // the same blue as the references inside the question below.
+                .foregroundStyle(Color.lampLink)
 
                 Spacer()
 
@@ -1446,7 +1450,14 @@ struct QuizQuestionCard: View {
             activateLink(url)
             return .handled
         })
-        .popover(item: $previewLink) { link in
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { cardSize = $0 }
+        .onContinuousHover { phase in
+            if case .active(let point) = phase { pointerInCard = point }
+        }
+        // Beside the reference, not in the middle of the card. The card can
+        // be the height of several questions, so a popover anchored to its
+        // bounds came up nowhere near the words that were clicked.
+        .popover(item: $previewLink, attachmentAnchor: .point(previewAnchor)) { link in
             ScriptureReferencePopover(
                 link: link,
                 typeface: typeface,
@@ -1504,9 +1515,26 @@ struct QuizQuestionCard: View {
         return attributed
     }
 
+    /// Where the pointer last was, as a fraction of the card.
+    ///
+    /// SwiftUI cannot anchor a popover to a range inside a `Text`, so there is
+    /// no handle on the reference itself. The click is the next best thing and
+    /// in practice the same place: the reader clicked the link, so that is
+    /// where it is.
+    private var pointerUnitPoint: UnitPoint {
+        guard let pointerInCard, cardSize.width > 1, cardSize.height > 1 else {
+            return .center
+        }
+        return UnitPoint(
+            x: min(max(pointerInCard.x / cardSize.width, 0), 1),
+            y: min(max(pointerInCard.y / cardSize.height, 0), 1)
+        )
+    }
+
     private func activateLink(_ url: URL) {
         guard linkActivationGate.shouldActivate(url, at: ProcessInfo.processInfo.systemUptime),
               let link = ScriptureAnnotationLink(url: url) else { return }
+        previewAnchor = pointerUnitPoint
         previewLink = LampScriptureLink(
             startReference: link.startReference,
             endReference: link.endReference
