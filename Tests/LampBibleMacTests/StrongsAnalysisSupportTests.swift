@@ -716,3 +716,30 @@ struct SearchHistoryMigrationTests {
         )
     }
 }
+
+/// What leaves the app as words rather than markup.
+struct SearchSnippetTests {
+    /// Core wraps every matched term, so a copied result would otherwise
+    /// paste tags into someone's notes.
+    @Test func copiedTextCarriesNoMarkup() {
+        let snippet = "In the beginning was the <mark>Word</mark>, and the "
+            + "<mark>Word</mark> was with God."
+        let plain = LampSearchSnippet.plainText(snippet)
+
+        #expect(plain == "In the beginning was the Word, and the Word was with God.")
+        #expect(!plain.contains("<"))
+    }
+
+    @Test func asnippetWithNoMatchesIsUnchanged() {
+        let snippet = "And God said, Let there be light."
+        #expect(LampSearchSnippet.plainText(snippet) == snippet)
+        #expect(LampSearchSnippet.plainText("") == "")
+    }
+
+    /// Scripture a translation renders with its own angle brackets must not
+    /// lose them: only the two mark tags go.
+    @Test func otherAngleBracketsSurvive() {
+        let snippet = "a <note> and a <mark>match</mark>"
+        #expect(LampSearchSnippet.plainText(snippet) == "a <note> and a match")
+    }
+}

@@ -587,3 +587,18 @@ public enum LampSearchHistoryMigration {
         return entries.contains { $0["kind"] != nil || $0["moduleID"] != nil }
     }
 }
+
+/// Core marks each matched term in a search snippet so a list can highlight
+/// it. Anything that is not a list wants the words.
+public enum LampSearchSnippet {
+    public static let openingMark = "<mark>"
+    public static let closingMark = "</mark>"
+
+    /// The snippet as prose: what belongs on the pasteboard, in a file, or
+    /// spoken aloud.
+    public static func plainText(_ snippet: String) -> String {
+        snippet
+            .replacingOccurrences(of: openingMark, with: "")
+            .replacingOccurrences(of: closingMark, with: "")
+    }
+}

@@ -151,12 +151,6 @@ struct UnifiedSearchView: View {
         )
     }
 
-    /// A snippet with core's match markup taken out.
-    private func unmarked(_ snippet: String) -> String {
-        snippet.replacingOccurrences(of: "<mark>", with: "")
-            .replacingOccurrences(of: "</mark>", with: "")
-    }
-
     private func clearDevotionalFilters() {
         devotionalDate = ""
         devotionalTag = ""
@@ -786,7 +780,7 @@ struct UnifiedSearchView: View {
         // Without the marks. Core wraps each matched term in <mark> so the
         // list can highlight it; pasting that markup into someone's notes is
         // not what Copy means.
-        let text = [result.title, result.referenceDescription, unmarked(result.snippet)]
+        let text = [result.title, result.referenceDescription, LampSearchSnippet.plainText(result.snippet)]
             .compactMap { $0 }
             .joined(separator: "\n")
         NSPasteboard.general.clearContents()
@@ -796,8 +790,9 @@ struct UnifiedSearchView: View {
     private func snippetText(_ source: String) -> Text {
         var remaining = source[...]
         var rendered = Text("")
-        while let opening = remaining.range(of: "<mark>"),
-              let closing = remaining[opening.upperBound...].range(of: "</mark>") {
+        while let opening = remaining.range(of: LampSearchSnippet.openingMark),
+              let closing = remaining[opening.upperBound...]
+                  .range(of: LampSearchSnippet.closingMark) {
             rendered = rendered + Text(String(remaining[..<opening.lowerBound]))
             rendered = rendered
                 + Text.lampFindMatch(remaining[opening.upperBound..<closing.lowerBound])
