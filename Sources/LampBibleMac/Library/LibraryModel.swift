@@ -1005,8 +1005,9 @@ final class LibraryModel: ObservableObject {
     /// 0.15–0.2 s over six translations. Started at `hasReadLibrary`, that
     /// job sits in the same turn that triggers the reader's restore and can
     /// land between its `translationBooks` and `chapterContents` calls,
-    /// delaying the first chapter. Measured by lamp-bible-macos-7f against
-    /// clones of this library's databases.
+    /// delaying the first chapter. Timed against clones of a real library's
+    /// databases, not a synthetic one, since the cost is in how much
+    /// annotation the translations actually carry.
     ///
     /// Later refreshes — an install, the launch sync's own refresh — call it
     /// from `refreshLibrary` as before, by which time the reader is up. Core
