@@ -170,8 +170,8 @@ extension ExternalAppSetupTests {
     ///
     /// It said "Read-only access", and has not been only that since
     /// `write_writing_draft`: with the setting on, an outside app can replace
-    /// a writing's draft. lamp-bible-web-28 found it while making the site
-    /// say the same thing.
+    /// a writing's draft — found while making the website describe the same
+    /// feature, where the two descriptions had to agree.
     @Test func thebundleDoesNotPromiseReadOnly() throws {
         let manifest = try json(setup.mcpbManifestJSON)
         let description = try #require(manifest["description"] as? String)
