@@ -18,6 +18,12 @@ import LampCore
 /// the window went.
 @MainActor
 final class ReaderWorkspace: ObservableObject {
+    /// Words typed into the reader's passage field that turned out not to be
+    /// a passage. The root watches this and shows the search; the reader has
+    /// no way to reach the sidebar's selection itself, and this is the object
+    /// they already share.
+    @Published var requestedSearch: String?
+
     @Published private(set) var selectedTranslationID: String?
     @Published private(set) var selectedBookNumber: Int?
     @Published private(set) var selectedChapterNumber = 1

@@ -49,9 +49,13 @@ private extension LampDeepLinkSection {
     }
 }
 
+/// Where the sidebar is pointing.
+///
+/// Translations were listed here too, and choosing one simply switched the
+/// reader's translation — the same thing the reader's own picker does, in a
+/// list whose other rows are places to go rather than things to set.
 private enum LibrarySelection: Hashable {
     case section(LibrarySection)
-    case translation(String)
 }
 
 struct LibraryRootView: View {
@@ -66,6 +70,9 @@ struct LibraryRootView: View {
     @EnvironmentObject private var syncController: LibrarySyncController
     @EnvironmentObject private var scrollLink: ReaderScrollLink
     @State private var selection: LibrarySelection? = .section(.reader)
+    /// The search's own query, so the reader's reference field can hand words
+    /// to it. The same key the search reads, in the same scene.
+    @SceneStorage("search.query") private var searchQuery = ""
     /// A passage waiting for the reader to say which Bible app to open it in,
     /// because they chose "Ask Each Time".
     @State private var externalBibleRequest: ExternalBibleRequest?
@@ -218,26 +225,6 @@ struct LibraryRootView: View {
                     }
                 }
 
-                if !model.translations.isEmpty {
-                    Section("Translations") {
-                        ForEach(model.translations) { translation in
-                            Label {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(translation.abbreviation ?? translation.name)
-                                    if translation.abbreviation != nil {
-                                        Text(translation.name)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                            } icon: {
-                                Image(systemName: "books.vertical")
-                            }
-                            .tag(LibrarySelection.translation(translation.id))
-                        }
-                    }
-                }
-
                 Section("Library") {
                     Label(LibrarySection.modules.rawValue, systemImage: LibrarySection.modules.systemImage)
                         .tag(LibrarySelection.section(.modules))
@@ -298,10 +285,13 @@ struct LibraryRootView: View {
         } message: { _ in
             Text("Choose a default in Settings to stop being asked.")
         }
+        .onChange(of: workspace.requestedSearch) { _, words in
+            guard let words else { return }
+            searchQuery = words
+            selection = .section(.search)
+            workspace.requestedSearch = nil
+        }
         .onChange(of: selection) { _, newValue in
-            if case .translation(let moduleID) = newValue {
-                workspace.selectTranslation(moduleID)
-            }
             if !isReaderSelection(newValue) {
                 if readerSidebar != nil || isReaderSidebarMounted {
                     readerSidebarClosedOutOfSight = true
@@ -387,7 +377,7 @@ struct LibraryRootView: View {
 
     private func isReaderSelection(_ selection: LibrarySelection?) -> Bool {
         switch selection {
-        case .section(.reader), .translation:
+        case .section(.reader):
             true
         default:
             false
@@ -774,7 +764,7 @@ struct LibraryRootView: View {
     @ViewBuilder
     private var sectionDetail: some View {
         switch selection {
-        case .section(.reader), .translation:
+        case .section(.reader):
             EmptyView()
         case .section(.today):
             TodayPlansView(
@@ -1307,7 +1297,6 @@ private struct NewReaderTabView: View {
     private var selectedBook: LampTranslationBook? {
         books.first { $0.id == bookNumber }
     }
-
     private var chapterLoadID: String {
         "\(translationID):\(bookNumber):\(chapterNumber):\(books.count)"
     }
@@ -3028,97 +3017,74 @@ private struct ReaderLocationPickerPopover: View {
     @EnvironmentObject private var model: LibraryModel
     @EnvironmentObject private var workspace: ReaderWorkspace
     @Binding var isPresented: Bool
+    /// Hands words that are not a reference to the search, so one field
+    /// answers both "take me to John 3" and "where does it say that".
+    let openSearch: (String) -> Void
     @State private var translationID = ""
     @State private var books: [LampTranslationBook] = []
     @State private var bookNumber = 0
     @State private var chapterNumber = 1
     @State private var isLoadingBooks = false
     @State private var errorMessage: String?
+    @State private var typed = ""
+    @FocusState private var fieldFocused: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 3) {
-                Label("Choose Passage", systemImage: "books.vertical")
-                    .font(.headline)
-                Text("Changes apply when you press Done.")
-                    .font(.subheadline)
+        VStack(alignment: .leading, spacing: 12) {
+            TextField("Reference, or words to search for", text: $typed)
+                .textFieldStyle(.roundedBorder)
+                .focused($fieldFocused)
+                .onSubmit(commitTyped)
+
+            if let reference = typedReference {
+                offerRow(
+                    icon: "book",
+                    title: "Go to \(reference.description)",
+                    action: { go(to: reference) }
+                )
+            } else if !trimmedTyped.isEmpty, matchingBooks.isEmpty {
+                offerRow(
+                    icon: "magnifyingglass",
+                    title: "Search for “\(trimmedTyped)”",
+                    action: { handOver(trimmedTyped) }
+                )
+            }
+
+            Picker("Translation", selection: $translationID) {
+                ForEach(model.translations) { translation in
+                    Text(translation.name).tag(translation.id)
+                }
+            }
+            .labelsHidden()
+
+            Divider()
+
+            if isLoadingBooks {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Loading books…").font(.caption).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, minHeight: 260)
+            } else if let errorMessage {
+                Label(errorMessage, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
-            }
-
-            Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 12) {
-                GridRow {
-                    Label("Translation", systemImage: "text.book.closed")
-                    Picker("Translation", selection: $translationID) {
-                        ForEach(model.translations) { translation in
-                            Text(translation.name).tag(translation.id)
-                        }
-                    }
-                    .labelsHidden()
-                    .frame(width: 230)
+                    .frame(maxWidth: .infinity, minHeight: 260)
+            } else {
+                HStack(alignment: .top, spacing: 12) {
+                    booksList
+                    Divider()
+                    chapterGrid
                 }
-
-                GridRow {
-                    Label("Book", systemImage: "book.closed")
-                    Picker("Book", selection: $bookNumber) {
-                        if books.isEmpty {
-                            Text(isLoadingBooks ? "Loading Books…" : "Choose a Book")
-                                .tag(0)
-                        }
-                        ForEach(books) { book in
-                            Text(book.name).tag(book.id)
-                        }
-                    }
-                    .labelsHidden()
-                    .frame(width: 230)
-                    .disabled(books.isEmpty || isLoadingBooks)
-                }
-
-                GridRow {
-                    Label("Chapter", systemImage: "number")
-                    Picker("Chapter", selection: $chapterNumber) {
-                        if let book = selectedBook {
-                            ForEach(1...book.chapterCount, id: \.self) { chapter in
-                                Text(chapter.formatted()).tag(chapter)
-                            }
-                        } else {
-                            Text("—").tag(1)
-                        }
-                    }
-                    .labelsHidden()
-                    .frame(width: 230)
-                    .disabled(selectedBook == nil || isLoadingBooks)
-                }
-            }
-
-            HStack {
-                if isLoadingBooks {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text("Loading books…")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else if let errorMessage {
-                    Label(errorMessage, systemImage: "exclamationmark.triangle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-                Spacer()
-                Button("Done") {
-                    workspace.selectPassage(
-                        translationID: translationID,
-                        bookNumber: bookNumber,
-                        chapterNumber: chapterNumber
-                    )
-                    isPresented = false
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(selectedBook == nil || isLoadingBooks)
+                .frame(height: 260)
             }
         }
-        .padding(18)
-        .frame(width: 390)
-        .onAppear { resetSelection() }
+        .padding(14)
+        .frame(width: 430)
+        .onAppear {
+            resetSelection()
+            fieldFocused = true
+        }
         .onChange(of: translationID) { oldValue, newValue in
             guard oldValue != newValue else { return }
             // Keep the draft passage while the new translation's books load.
@@ -3141,6 +3107,148 @@ private struct ReaderLocationPickerPopover: View {
     private var selectedBook: LampTranslationBook? {
         books.first { $0.id == bookNumber }
     }
+
+    private var trimmedTyped: String {
+        typed.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// What the field holds, if it is a passage. The search's own parser, so
+    /// the two fields understand the same things.
+    private var typedReference: LampSearchReference? {
+        trimmedTyped.isEmpty ? nil : LampSearchQuery(trimmedTyped).reference
+    }
+
+    /// The books the typed text narrows to. Anything that parses as a
+    /// reference is handled above, so this is the half-typed case: "jo"
+    /// while you are still deciding between John and Joshua.
+    private var matchingBooks: [LampTranslationBook] {
+        guard !trimmedTyped.isEmpty, typedReference == nil else { return books }
+        return books.filter { $0.name.localizedCaseInsensitiveContains(trimmedTyped) }
+    }
+
+    private var booksList: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 1) {
+                    ForEach(matchingBooks) { book in
+                        Button {
+                            bookNumber = book.id
+                        } label: {
+                            Text(book.name)
+                                .lineLimit(1)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 5)
+                                .background(
+                                    book.id == bookNumber ? AnyShapeStyle(.selection)
+                                        : AnyShapeStyle(.clear),
+                                    in: RoundedRectangle(cornerRadius: 5)
+                                )
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .id(book.id)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            .frame(width: 168)
+            // Open on the book being read, rather than at Genesis with the
+            // reader somewhere in Kings.
+            .onAppear { proxy.scrollTo(bookNumber, anchor: .center) }
+        }
+    }
+
+    private var chapterGrid: some View {
+        ScrollView {
+            if let selectedBook {
+                LazyVGrid(
+                    columns: Array(repeating: GridItem(.fixed(38), spacing: 6), count: 5),
+                    spacing: 6
+                ) {
+                    ForEach(1...selectedBook.chapterCount, id: \.self) { chapter in
+                        Button {
+                            commit(book: selectedBook.id, chapter: chapter)
+                        } label: {
+                            Text(chapter.formatted())
+                                .monospacedDigit()
+                                .frame(width: 38, height: 30)
+                                .background(
+                                    isCurrent(book: selectedBook.id, chapter: chapter)
+                                        ? AnyShapeStyle(.tint.opacity(0.25))
+                                        : AnyShapeStyle(.quaternary),
+                                    in: RoundedRectangle(cornerRadius: 6)
+                                )
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.vertical, 2)
+            } else {
+                Text("Choose a book")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+            }
+        }
+        .frame(width: 236)
+    }
+
+    private func offerRow(icon: String, title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: icon).foregroundStyle(.tint)
+                Text(title).lineLimit(1)
+                Spacer(minLength: 0)
+                Image(systemName: "return").foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func isCurrent(book: Int, chapter: Int) -> Bool {
+        translationID == workspace.selectedTranslationID
+            && book == workspace.selectedBookNumber
+            && chapter == workspace.selectedChapterNumber
+    }
+
+    /// Return in the field: a passage if it is one, a search if it is not,
+    /// and the one book it has narrowed to if it has.
+    private func commitTyped() {
+        if let typedReference {
+            go(to: typedReference)
+        } else if matchingBooks.count == 1, let only = matchingBooks.first {
+            bookNumber = only.id
+            typed = ""
+        } else if !trimmedTyped.isEmpty {
+            handOver(trimmedTyped)
+        }
+    }
+
+    private func go(to reference: LampSearchReference) {
+        let parts = LampBibleReferenceFormatter.components(of: reference.startReference)
+        commit(book: parts.book, chapter: max(1, parts.chapter))
+    }
+
+    private func commit(book: Int, chapter: Int) {
+        workspace.selectPassage(
+            translationID: translationID,
+            bookNumber: book,
+            chapterNumber: chapter
+        )
+        isPresented = false
+    }
+
+    private func handOver(_ words: String) {
+        isPresented = false
+        openSearch(words)
+    }
+
 
     private func resetSelection() {
         translationID = workspace.selectedTranslationID ?? model.translations.first?.id ?? ""
@@ -5515,7 +5623,10 @@ private struct TranslationReaderView: View, Equatable {
                 }
                 .help("Choose translation, book, or chapter")
                 .popover(isPresented: $showingReaderLocationPicker, arrowEdge: .bottom) {
-                    ReaderLocationPickerPopover(isPresented: $showingReaderLocationPicker)
+                    ReaderLocationPickerPopover(
+                        isPresented: $showingReaderLocationPicker,
+                        openSearch: { workspace.requestedSearch = $0 }
+                    )
                         .environmentObject(model)
                 }
 
