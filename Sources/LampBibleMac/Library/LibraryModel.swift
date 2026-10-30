@@ -156,6 +156,9 @@ final class LibraryModel: ObservableObject {
     private let lexiconMappingStore: LexiconMappingStore
     private let defaults: UserDefaults
     @Published private(set) var hiddenModuleIDs: Set<String>
+    /// The background index build, cancelled when the library is read again
+    /// so two refreshes do not index at once.
+    private var strongsIndexTask: Task<Void, Never>?
 
     var translations: [LampInstalledModule] {
         visibleModules(kind: .translation)
@@ -975,6 +978,32 @@ final class LibraryModel: ObservableObject {
         }
         hasReadLibrary = true
         isRefreshing = false
+        buildStrongsIndexes()
+    }
+
+    /// Builds the Strong's index for the installed translations, in the
+    /// background.
+    ///
+    /// The translation being read first, then the rest: the one the reader is
+    /// in is the one they are most likely to search or analyse next, and the
+    /// index is useful per translation rather than only when all of them are
+    /// done. Core works a book at a time and yields between books, and reads
+    /// verses directly until a translation's index is whole, so searches and
+    /// analyses keep working throughout.
+    ///
+    /// Called again after every refresh, which is what installing or updating
+    /// a module triggers. Core rebuilds only what is out of date, so a
+    /// repeated call costs a digest check per translation.
+    private func buildStrongsIndexes() {
+        strongsIndexTask?.cancel()
+        let library = library
+        let reading = selectedTranslationID
+        strongsIndexTask = Task.detached(priority: .utility) {
+            if let reading {
+                try? await library.buildStrongsIndexes(moduleIDs: [reading])
+            }
+            try? await library.buildStrongsIndexes()
+        }
     }
 
     /// Marked by the reader when its first chapter is in, even when that read
