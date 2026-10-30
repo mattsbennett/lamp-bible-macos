@@ -743,3 +743,54 @@ struct SearchSnippetTests {
         #expect(LampSearchSnippet.plainText(snippet) == "a <note> and a match")
     }
 }
+
+/// Reading the item out of a search result's identifier.
+struct SearchResultIdentityTests {
+    @Test func theentryIsWhatFollowsTheKindAndModule() {
+        #expect(
+            LampSearchResultIdentity.entryID(
+                in: "devotional:personal-devotionals:living-hope",
+                kind: "devotional", moduleID: "personal-devotionals"
+            ) == "living-hope"
+        )
+        #expect(
+            LampSearchResultIdentity.entryID(
+                in: "dictionary:strongs-greek:G26",
+                kind: "dictionary", moduleID: "strongs-greek"
+            ) == "G26"
+        )
+    }
+
+    /// An entry id may itself contain colons — a writing named by a path, a
+    /// lexicon key with a suffix — so only the first two segments are the
+    /// prefix and the rest is the entry, whole.
+    @Test func anentryKeepsItsOwnColons() {
+        #expect(
+            LampSearchResultIdentity.entryID(
+                in: "devotional:mod:2026-01-01:morning",
+                kind: "devotional", moduleID: "mod"
+            ) == "2026-01-01:morning"
+        )
+    }
+
+    /// Guessing would send the reader to the wrong writing, so a shape that
+    /// does not match gives nothing.
+    @Test func amismatchedShapeGivesNothing() {
+        #expect(
+            LampSearchResultIdentity.entryID(
+                in: "plan:daily-light", kind: "devotional", moduleID: "mod"
+            ) == nil
+        )
+        #expect(
+            LampSearchResultIdentity.entryID(
+                in: "devotional:other:x", kind: "devotional", moduleID: "mod"
+            ) == nil
+        )
+        #expect(
+            LampSearchResultIdentity.entryID(
+                in: "devotional:mod:", kind: "devotional", moduleID: "mod"
+            ) == nil,
+            "a prefix with nothing after it names no item"
+        )
+    }
+}

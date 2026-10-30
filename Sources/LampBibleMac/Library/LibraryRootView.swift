@@ -79,6 +79,12 @@ struct LibraryRootView: View {
     @State private var lastReaderSidebar = ReaderSidebar.study
     @SceneStorage("reader.chat.windowID") private var readerChatWindowID = UUID().uuidString
     @State private var requestedBookID: String?
+    /// The item a search result asked for, handed to the section that shows
+    /// it. Cleared by that view once taken, so returning later does not jump
+    /// back to it.
+    @State private var requestedDevotionalID: String?
+    @State private var requestedPlanID: String?
+    @State private var requestedQuizModuleID: String?
     @State private var requestedBookSectionID: String?
     @State private var isReaderSidebarMounted = false
     /// How much of the study column is on screen, in points. The single animated
@@ -779,6 +785,7 @@ struct LibraryRootView: View {
             )
         case .section(.plans):
             ReadingPlansView(
+                initialPlanID: $requestedPlanID,
                 showImporter: { showingImporter = true },
                 openReading: openPlanReading,
                 openAllReadings: openAllPlanReadings
@@ -795,6 +802,7 @@ struct LibraryRootView: View {
             )
         case .section(.devotionals):
             DevotionalsView(
+                initialDevotionalID: $requestedDevotionalID,
                 showImporter: { showingImporter = true },
                 openReference: { reference in
                     workspace.openReference(reference)
@@ -803,6 +811,7 @@ struct LibraryRootView: View {
             )
         case .section(.quizzes):
             QuizzesView(
+                initialModuleID: $requestedQuizModuleID,
                 showImporter: { showingImporter = true },
                 openReference: { reference in
                     workspace.openReference(reference)
@@ -824,13 +833,21 @@ struct LibraryRootView: View {
                         : result.id
                     selection = .section(.books)
                 },
-                openKind: { kind in
-                    switch kind {
+                openKind: { result in
+                    // The section *and* the item. Switching section alone
+                    // landed the reader in a list of everything, with the
+                    // result they had just chosen nowhere in particular.
+                    switch result.kind {
                     case .devotional:
+                        requestedDevotionalID = LampSearchResultIdentity.entryID(
+                            in: result.id, kind: "devotional", moduleID: result.moduleID
+                        )
                         selection = .section(.devotionals)
                     case .plan:
+                        requestedPlanID = result.moduleID
                         selection = .section(.plans)
                     case .quiz:
+                        requestedQuizModuleID = result.moduleID
                         selection = .section(.quizzes)
                     case .book:
                         selection = .section(.books)

@@ -602,3 +602,22 @@ public enum LampSearchSnippet {
             .replacingOccurrences(of: closingMark, with: "")
     }
 }
+
+/// Reading the item out of a search result's identifier.
+///
+/// Core builds these as `<kind>:<module>:<entry>`, which is the only place a
+/// result says *which* writing or lexicon entry it is — the module alone
+/// names the collection, not the item. Parsed in one place, and pinned by
+/// tests, because the shape is core's rather than ours.
+public enum LampSearchResultIdentity {
+    public static func entryID(
+        in identifier: String,
+        kind: String,
+        moduleID: String
+    ) -> String? {
+        let prefix = "\(kind):\(moduleID):"
+        guard identifier.hasPrefix(prefix) else { return nil }
+        let entry = String(identifier.dropFirst(prefix.count))
+        return entry.isEmpty ? nil : entry
+    }
+}

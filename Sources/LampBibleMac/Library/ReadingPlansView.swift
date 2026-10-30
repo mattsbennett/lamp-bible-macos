@@ -149,11 +149,30 @@ struct TodayPlansView: View {
 
 struct ReadingPlansView: View {
     @EnvironmentObject private var model: LibraryModel
+    /// A plan a search result asked for. This list has no selection — every
+    /// plan is shown at once — so the request is honoured by scrolling to it
+    /// rather than by selecting it.
+    @Binding var initialPlanID: String?
     let showImporter: () -> Void
     let openReading: (PlanReadingMode) -> Void
     let openAllReadings: (PlanReadingMode) -> Void
 
     private let date = Date()
+
+    /// Brings the plan a search result named into view, and forgets the
+    /// request so returning here later does not scroll away from wherever
+    /// the reader left off.
+    ///
+    /// The list is lazy, so a plan far down it may not be built yet when
+    /// this first runs; the scroll is asked for on the next turn of the
+    /// run loop, by which time the row exists.
+    private func showRequestedPlan(with proxy: ScrollViewProxy) {
+        guard let id = initialPlanID else { return }
+        initialPlanID = nil
+        Task { @MainActor in
+            withAnimation { proxy.scrollTo(id, anchor: .top) }
+        }
+    }
 
     var body: some View {
         Group {
@@ -167,28 +186,33 @@ struct ReadingPlansView: View {
                         .buttonStyle(.borderedProminent)
                 }
             } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 18) {
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text("Reading Plans")
-                                .font(.largeTitle.bold())
-                            Text("Choose which plans appear in Today and preview the current assignments.")
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.bottom, 8)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 18) {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text("Reading Plans")
+                                    .font(.largeTitle.bold())
+                                Text("Choose which plans appear in Today and preview the current assignments.")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.bottom, 8)
 
-                        ForEach(model.plans) { plan in
-                            ReadingPlanCard(
-                                plan: plan,
-                                date: date,
-                                openReading: openReading,
-                                openAllReadings: openAllReadings
-                            )
+                            ForEach(model.plans) { plan in
+                                ReadingPlanCard(
+                                    plan: plan,
+                                    date: date,
+                                    openReading: openReading,
+                                    openAllReadings: openAllReadings
+                                )
+                                .id(plan.id)
+                            }
                         }
+                        .frame(maxWidth: 880, alignment: .leading)
+                        .padding(36)
+                        .frame(maxWidth: .infinity)
                     }
-                    .frame(maxWidth: 880, alignment: .leading)
-                    .padding(36)
-                    .frame(maxWidth: .infinity)
+                    .onAppear { showRequestedPlan(with: proxy) }
+                    .onChange(of: initialPlanID) { _, _ in showRequestedPlan(with: proxy) }
                 }
             }
         }

@@ -143,8 +143,21 @@ struct DevotionalsView: View {
     @State private var presentationDecksByDevotionalID: [String: [LampPresentationDeck]] = [:]
     private let rowSummaries = WritingRowSummaries.shared
 
+    /// A writing a search result asked for. Cleared once taken, so coming
+    /// back to this section later does not jump to it again.
+    @Binding var initialDevotionalID: String?
     let showImporter: () -> Void
     let openReference: (Int) -> Void
+
+    /// Selects the writing a search result named, and forgets the request.
+    ///
+    /// Taken rather than left standing: without clearing it, returning to
+    /// this section days later would jump back to the same writing.
+    private func takeRequestedDevotional() {
+        guard let id = initialDevotionalID else { return }
+        selection = id
+        initialDevotionalID = nil
+    }
 
     private var filteredDevotionals: [LampDevotional] {
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -316,7 +329,11 @@ struct DevotionalsView: View {
             // coming back on the next sync.
             Text("This deletes the writing from your library — from this Mac, and from your other devices the next time they sync. Installed module entries are never modified.")
         }
-        .onAppear { selectFirstIfNeeded() }
+        .onAppear {
+            takeRequestedDevotional()
+            selectFirstIfNeeded()
+        }
+        .onChange(of: initialDevotionalID) { _, _ in takeRequestedDevotional() }
         .onChange(of: model.devotionals) { _, _ in selectFirstIfNeeded() }
         .onChange(of: query) { _, _ in selectFirstIfNeeded() }
         .onChange(of: categoryFilter) { _, _ in selectFirstIfNeeded() }
@@ -1088,8 +1105,17 @@ struct QuizzesView: View {
     @State private var isLoading = false
     @StateObject private var readAloud = QuizReadAloudController()
 
+    /// The quiz module a search result asked for, taken once.
+    @Binding var initialModuleID: String?
     let showImporter: () -> Void
     let openReference: (Int) -> Void
+
+    /// Opens the quiz module a search result named, and forgets the request.
+    private func takeRequestedModule() {
+        guard let id = initialModuleID else { return }
+        selectedModuleID = id
+        initialModuleID = nil
+    }
 
     private var selectedModule: LampQuizModule? {
         model.quizModules.first { $0.id == selectedModuleID } ?? model.quizModules.first
@@ -1140,7 +1166,11 @@ struct QuizzesView: View {
             }
         }
         .navigationTitle("Quizzes")
-        .onAppear { configureSelection() }
+        .onAppear {
+            takeRequestedModule()
+            configureSelection()
+        }
+        .onChange(of: initialModuleID) { _, _ in takeRequestedModule() }
         .onChange(of: model.quizModules) { _, _ in configureSelection() }
         .onChange(of: selectedModuleID) { _, _ in configureAgeGroup() }
         .onChange(of: loadKey) { _, _ in readAloud.stop() }

@@ -34,7 +34,8 @@ struct UnifiedSearchView: View {
     /// not that verse in whatever translation the reader happens to be on.
     let openReference: (Int, String?) -> Void
     let openBook: (LampModuleSearchResult) -> Void
-    let openKind: (LampModuleKind) -> Void
+    /// Opens the section a result belongs to, on that result.
+    let openKind: (LampModuleSearchResult) -> Void
     /// Looks a lexicon entry up in the Dictionary pane.
     let openDictionaryEntry: (_ key: String, _ word: String?) -> Void
 
@@ -610,7 +611,7 @@ struct UnifiedSearchView: View {
                     } else if [.devotional, .plan, .quiz].contains(result.kind) {
                         Button("Open \(result.kind.displayName)") {
                             saveSearch()
-                            openKind(result.kind)
+                            openKind(result)
                         }
                         .buttonStyle(.bordered)
                     }
@@ -777,10 +778,9 @@ struct UnifiedSearchView: View {
     /// the title, which is the lemma — the Greek or Hebrew word, not
     /// something the dictionary pane can look up.
     private func lexiconKey(of result: LampModuleSearchResult) -> String? {
-        let prefix = "dictionary:\(result.moduleID):"
-        guard result.id.hasPrefix(prefix) else { return nil }
-        let key = String(result.id.dropFirst(prefix.count))
-        return key.isEmpty ? nil : key
+        LampSearchResultIdentity.entryID(
+            in: result.id, kind: "dictionary", moduleID: result.moduleID
+        )
     }
 
     /// The translation a result should open in.
