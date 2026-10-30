@@ -536,7 +536,7 @@ struct UnifiedSearchView: View {
             strongsAnalysisOffer
             List(selection: $selectedResultID) {
                 ForEach(model.moduleSearchResults) { result in
-                    VStack(alignment: .leading, spacing: 7) {
+                    VStack(alignment: .leading, spacing: 9) {
                         HStack(spacing: 8) {
                             Image(systemName: icon(for: result.kind))
                                 .foregroundStyle(.tint)
@@ -561,7 +561,7 @@ struct UnifiedSearchView: View {
                             .lineLimit(3)
                             .foregroundStyle(.primary)
                     }
-                    .padding(.vertical, 6)
+                    .padding(.vertical, 10)
                     .tag(Optional(result.id))
                     .contextMenu {
                         if previewTranslation(of: result) != nil {

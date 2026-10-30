@@ -978,7 +978,10 @@ final class LibraryModel: ObservableObject {
         }
         hasReadLibrary = true
         isRefreshing = false
-        buildStrongsIndexes()
+        // Only once the reader is already up. On the launch pass this would
+        // start in the same turn that sets `hasReadLibrary`, which is what
+        // triggers the reader's restore — see `buildStrongsIndexes`.
+        if hasLoadedInitialContent { buildStrongsIndexes() }
     }
 
     /// Builds the Strong's index for the installed translations, in the
@@ -991,9 +994,24 @@ final class LibraryModel: ObservableObject {
     /// verses directly until a translation's index is whole, so searches and
     /// analyses keep working throughout.
     ///
-    /// Called again after every refresh, which is what installing or updating
-    /// a module triggers. Core rebuilds only what is out of date, so a
-    /// repeated call costs a digest check per translation.
+    /// Started once the reader's first chapter is in, not when the library
+    /// has been read.
+    ///
+    /// Even when every index is current, this fingerprints each tagged
+    /// translation: it reads every annotations_json row and hashes it, on the
+    /// `LampLibrary` actor, and the cache is in memory only so every launch
+    /// pays it. Core yields between *books of a build*, so the all-current
+    /// path has no suspension point at all — it is one actor job of roughly
+    /// 0.15–0.2 s over six translations. Started at `hasReadLibrary`, that
+    /// job sits in the same turn that triggers the reader's restore and can
+    /// land between its `translationBooks` and `chapterContents` calls,
+    /// delaying the first chapter. Measured by lamp-bible-macos-7f against
+    /// clones of this library's databases.
+    ///
+    /// Later refreshes — an install, the launch sync's own refresh — call it
+    /// from `refreshLibrary` as before, by which time the reader is up. Core
+    /// rebuilds only what is out of date, so a repeated call costs that
+    /// digest check and nothing more.
     private func buildStrongsIndexes() {
         strongsIndexTask?.cancel()
         let library = library
@@ -1012,6 +1030,9 @@ final class LibraryModel: ObservableObject {
     func markInitialContentLoaded() {
         guard !hasLoadedInitialContent else { return }
         hasLoadedInitialContent = true
+        // The first chapter is in, so the actor is free for the index's
+        // fingerprint pass.
+        buildStrongsIndexes()
     }
 
     /// Reads everything a reader shows for one chapter, and changes nothing.

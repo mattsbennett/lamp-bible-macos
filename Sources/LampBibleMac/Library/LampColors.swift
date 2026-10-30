@@ -57,10 +57,17 @@ extension Color {
 
 extension Text {
     /// Words searched for, marked as Safari marks a find: on a yellow ground,
-    /// in the text's own colour. Not bold accent, which reads as a link.
+    /// in the text's own colour, and bold. Not bold *accent*, which reads as
+    /// a link — the colour is what that rule is about.
     static func lampFindMatch<S: StringProtocol>(_ text: S) -> Text {
         var marked = AttributedString(String(text))
         marked.backgroundColor = .lampFindMatch
+        // Bold as well as yellow, as the iPhone draws it. In small secondary
+        // snippet text the ground alone is easy to skim past, and the weight
+        // is what the eye catches. ios-56 proposed matching on both; this
+        // user agreed. Still the text's own colour — the thing ColorRules.md
+        // rules out is accent *colour*, which reads as a link.
+        marked.inlinePresentationIntent = .stronglyEmphasized
         return Text(marked)
     }
 }

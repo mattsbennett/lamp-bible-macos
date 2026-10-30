@@ -188,6 +188,9 @@ struct StrongsAnalysisPane: View {
     @State private var measure: LampStrongsSpreadMeasure = .occurrences
     @State private var grouping: LampStrongsGrouping = .books
     @State private var openBook: Int?
+    /// The slice the pointer is over, named in the ring's hole. Every slice
+    /// is a shade of one colour, so matching one to its row by eye is hard.
+    @State private var hoveredSlice: LampStrongsShare.Slice?
     /// Set once rather than per search, so it is remembered.
     @AppStorage("strongs.shareAsRing") private var shareAsRing = true
 
@@ -665,17 +668,39 @@ struct StrongsAnalysisPane: View {
                             thickness: shareAsRing ? 0.38 : 1
                         )
                         .fill(.tint)
-                        .opacity(sliceOpacity(index, of: slices.count, isOther: slice.isOther))
+                        .opacity(
+                            hoveredSlice == nil || hoveredSlice?.id == slice.id
+                                ? sliceOpacity(index, of: slices.count, isOther: slice.isOther)
+                                // The others recede rather than vanish, so
+                                // the ring keeps its shape while one slice
+                                // is picked out.
+                                : 0.12
+                        )
+                        .onHover { hoveredSlice = $0 ? slice : nil }
                         .help("\(slice.name): \(slice.value)")
                     }
                     // The hole is somewhere to put the total, which is the
                     // one number a share otherwise leaves you to add up.
                     if shareAsRing {
                         VStack(spacing: 0) {
-                            Text("\(slices.reduce(0) { $0 + $1.value })")
-                                .font(.title3.weight(.semibold).monospacedDigit())
-                            Text("in all").font(.caption).foregroundStyle(.secondary)
+                            if let hoveredSlice {
+                                Text(hoveredSlice.name)
+                                    .font(.caption)
+                                    .multilineTextAlignment(.center)
+                                    .lineLimit(2)
+                                Text("\(hoveredSlice.value)")
+                                    .font(.title3.weight(.semibold).monospacedDigit())
+                                Text("\(Int((hoveredSlice.fraction * 100).rounded()))%")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text("\(slices.reduce(0) { $0 + $1.value })")
+                                    .font(.title3.weight(.semibold).monospacedDigit())
+                                Text("in all").font(.caption).foregroundStyle(.secondary)
+                            }
                         }
+                        .frame(width: 92)
+                        .animation(.easeOut(duration: 0.12), value: hoveredSlice?.id)
                     }
                 }
                 .frame(width: 164, height: 164)
@@ -689,6 +714,12 @@ struct StrongsAnalysisPane: View {
                                     sliceOpacity(index, of: slices.count, isOther: slice.isOther)
                                 )
                                 .frame(width: 10, height: 10)
+                                .overlay {
+                                    if hoveredSlice?.id == slice.id {
+                                        RoundedRectangle(cornerRadius: 2)
+                                            .stroke(.primary, lineWidth: 1.5)
+                                    }
+                                }
                             Text(slice.name).font(.callout).lineLimit(1)
                             Spacer(minLength: 4)
                             Text("\(slice.value)")
@@ -698,6 +729,8 @@ struct StrongsAnalysisPane: View {
                                 .foregroundStyle(.secondary)
                                 .frame(width: 34, alignment: .trailing)
                         }
+                        .contentShape(Rectangle())
+                        .onHover { hoveredSlice = $0 ? slice : nil }
                     }
                 }
             }
