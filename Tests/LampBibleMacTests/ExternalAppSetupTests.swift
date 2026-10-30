@@ -163,3 +163,27 @@ struct ExternalAppSetupTests {
         #expect(script.contains(">&2"), "the message must go to standard error")
     }
 }
+
+extension ExternalAppSetupTests {
+    /// What Claude Desktop shows when someone installs the bundle, which is
+    /// the one place a reader is told what they are agreeing to.
+    ///
+    /// It said "Read-only access", and has not been only that since
+    /// `write_writing_draft`: with the setting on, an outside app can replace
+    /// a writing's draft. lamp-bible-web-28 found it while making the site
+    /// say the same thing.
+    @Test func thebundleDoesNotPromiseReadOnly() throws {
+        let manifest = try json(setup.mcpbManifestJSON)
+        let description = try #require(manifest["description"] as? String)
+
+        #expect(
+            !description.lowercased().hasPrefix("read-only"),
+            "the bundle must not open by calling itself read-only"
+        )
+        #expect(description.contains("writings"))
+        #expect(
+            description.contains("Settings"),
+            "and must say where the writer turns writing on"
+        )
+    }
+}

@@ -561,8 +561,11 @@ struct UnifiedSearchView: View {
                             .lineLimit(3)
                             .foregroundStyle(.primary)
                     }
-                    .padding(.vertical, 10)
+                    .padding(.vertical, 12)
                     .tag(Optional(result.id))
+                    .popover(isPresented: previewBinding(for: result), arrowEdge: .trailing) {
+                        preview(for: result)
+                    }
                     .contextMenu {
                         if previewTranslation(of: result) != nil {
                             Button("Preview in Context") { previewedResult = result }
@@ -586,22 +589,37 @@ struct UnifiedSearchView: View {
             .listStyle(.inset)
         }
         .frame(minWidth: 340, idealWidth: 440)
-        .popover(item: $previewedResult) { result in
-            if let translationID = previewTranslation(of: result) {
-                SearchHitPreview(
-                    result: result,
-                    translationID: translationID,
-                    query: query,
-                    fontSize: hitFontSize,
-                    context: $previewContext,
-                    open: {
-                        previewedResult = nil
-                        saveSearch()
-                        openReference(result.startReference ?? 0, translationID)
-                    }
-                )
-            }
+    }
+
+    /// The preview, anchored on the row it is about.
+    ///
+    /// Attached per row rather than to the list: a popover presented from the
+    /// whole list has no particular place to point at, and presenting one as
+    /// a context menu dismisses is unreliable. Bound by id so the detail
+    /// pane's button opens the same popover, on that result's own row.
+    @ViewBuilder
+    private func preview(for result: LampModuleSearchResult) -> some View {
+        if let translationID = previewTranslation(of: result) {
+            SearchHitPreview(
+                result: result,
+                translationID: translationID,
+                query: query,
+                fontSize: hitFontSize,
+                context: $previewContext,
+                open: {
+                    previewedResult = nil
+                    saveSearch()
+                    openReference(result.startReference ?? 0, translationID)
+                }
+            )
         }
+    }
+
+    private func previewBinding(for result: LampModuleSearchResult) -> Binding<Bool> {
+        Binding(
+            get: { previewedResult?.id == result.id },
+            set: { if !$0 { previewedResult = nil } }
+        )
     }
 
     private func resultDetail(_ result: LampModuleSearchResult) -> some View {
