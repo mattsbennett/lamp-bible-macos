@@ -9,16 +9,22 @@ import SwiftUI
 struct UnifiedSearchView: View {
     @EnvironmentObject private var model: LibraryModel
     @AppStorage("search.history") private var historyData = Data()
-    @State private var query = ""
-    @State private var selectedKind: LampModuleKind?
-    @State private var selectedModuleID: String?
+    // Held by the scene rather than the view. Opening a result moves the
+    // window to the reader, which takes this view down and took the search
+    // with it — so coming back meant typing the query and setting every
+    // filter again, having gone to look at one of its own results.
+    @SceneStorage("search.query") private var query = ""
+    @SceneStorage("search.kind") private var selectedKind: LampModuleKind?
+    @SceneStorage("search.moduleID") private var selectedModuleID: String?
+    @SceneStorage("search.devotionalDate") private var devotionalDate = ""
+    @SceneStorage("search.devotionalTag") private var devotionalTag = ""
+    @SceneStorage("search.devotionalCategory") private var devotionalCategory = ""
+    @SceneStorage("search.bookScope") private var bookScope: BookSearchScope = .all
+    @SceneStorage("search.strongsKey") private var strongsKey = ""
+    @SceneStorage("search.highlightColor") private var highlightColor = ""
+    /// Not kept: which row was selected belongs to a list that no longer
+    /// exists, and the search is run again on return anyway.
     @State private var selectedResultID: String?
-    @State private var devotionalDate = ""
-    @State private var devotionalTag = ""
-    @State private var devotionalCategory = ""
-    @State private var bookScope: BookSearchScope = .all
-    @State private var strongsKey = ""
-    @State private var highlightColor = ""
     @State private var strongsLoader = StrongsAnalysisLoader()
     @State private var strongsFilter: LampStrongsFilter?
 
@@ -227,6 +233,16 @@ struct UnifiedSearchView: View {
             }
         }
         .toolbar { searchToolbar }
+        .task {
+            // The filters come back with the scene, but nothing has changed,
+            // so no observer fires and the results on the model may be from
+            // whatever was searched last. Run the restored search once.
+            if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || hasActiveStrongsFilter || hasActiveHighlightColor
+                || hasActiveDevotionalFilter {
+                runSearch()
+            }
+        }
         .overlay(alignment: .bottomTrailing) {
             if model.isModuleSearching && !model.moduleSearchResults.isEmpty {
                 ProgressView("Updating Results…")
@@ -643,9 +659,41 @@ struct UnifiedSearchView: View {
 
         if selectedKind == .highlights {
             ToolbarItem {
-                TextField("Highlight color", text: $highlightColor)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 140)
+                // The palette for the colours highlights are actually made
+                // in, and the field kept beside it for anything else: a
+                // highlight imported from elsewhere, or made before a palette
+                // colour changed, has a hex nothing in the menu matches.
+                HStack(spacing: 6) {
+                    Menu {
+                        Button("Any Colour") { highlightColor = "" }
+                        Divider()
+                        ForEach(StudyHighlightPalette.colors) { swatch in
+                            Button {
+                                highlightColor = swatch.hex
+                            } label: {
+                                Label {
+                                    Text(swatch.name)
+                                } icon: {
+                                    Image(systemName: "circle.fill")
+                                        .foregroundStyle(swatch.color)
+                                }
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "circle.fill")
+                            .foregroundStyle(
+                                color(for: highlightColor) ?? Color.secondary.opacity(0.4)
+                            )
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .help(highlightName ?? "Filter by highlight colour")
+
+                    TextField("Hex", text: $highlightColor)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 86)
+                        .help("Six hex digits, for a colour not in the palette")
+                }
             }
         }
     }
@@ -756,6 +804,13 @@ struct UnifiedSearchView: View {
             remaining = remaining[closing.upperBound...]
         }
         return rendered + Text(String(remaining))
+    }
+
+    /// The palette's name for the chosen colour, where it has one.
+    private var highlightName: String? {
+        StudyHighlightPalette.colors
+            .first { $0.hex.caseInsensitiveCompare(highlightColor) == .orderedSame }?
+            .name
     }
 
     private func color(for hex: String?) -> Color? {
