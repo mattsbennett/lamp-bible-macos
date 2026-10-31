@@ -3054,6 +3054,17 @@ private struct PassagePickerPopover: View {
                                         : AnyShapeStyle(.clear),
                                     in: RoundedRectangle(cornerRadius: 5)
                                 )
+                                .overlay {
+                                    // The focus ring, on the book the arrows
+                                    // reached. Only while the column has the
+                                    // keyboard: the row stays filled when the
+                                    // keyboard is elsewhere, as the book the
+                                    // chapters belong to.
+                                    if focus == .books, book.id == bookNumber {
+                                        RoundedRectangle(cornerRadius: 5)
+                                            .strokeBorder(Color.accentColor, lineWidth: 2)
+                                    }
+                                }
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
@@ -3066,7 +3077,16 @@ private struct PassagePickerPopover: View {
             .focusable()
             .focused($focus, equals: .books)
             .focusEffectDisabled()
-            .overlay { focusRing(.books, cornerRadius: 8) }
+            // As in the chapter grid: the ring sits on the row itself, since
+            // ringing the whole column says only that the keyboard is
+            // somewhere in it. While what is typed narrows the books to ones
+            // the chosen book is not among there is no row to ring, so the
+            // column says so on its own behalf.
+            .overlay {
+                if !matchingBooks.contains(where: { $0.id == bookNumber }) {
+                    focusRing(.books, cornerRadius: 8)
+                }
+            }
             // Open on the book being read, rather than at Genesis with the
             // reader somewhere in Kings.
             .onAppear { proxy.scrollTo(bookNumber, anchor: .center) }
