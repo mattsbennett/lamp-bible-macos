@@ -1131,11 +1131,15 @@ private struct ReaderTabBar: View {
         .buttonStyle(.plain)
         .onHover { isHoveringNewTab = $0 }
         .help("New reader tab (⌘T)")
+        // The reader's own passage picker, less the two things a tab cannot
+        // do: a tab opens a chapter, so words to search for and Strong's
+        // keys have nowhere to go here.
         .popover(isPresented: $showingNewTab) {
-            NewReaderTabView(
-                currentLocation: currentLocation,
-                duplicate: duplicate,
-                openLocation: openLocation
+            PassagePickerPopover(
+                isPresented: $showingNewTab,
+                open: openLocation,
+                headline: "Open in a new tab",
+                duplicate: currentLocation == nil ? nil : duplicate
             )
         }
     }
@@ -1143,245 +1147,6 @@ private struct ReaderTabBar: View {
     private func tabTitle(_ tab: ReaderTab) -> String {
         guard let location = tab.location else { return "Reader" }
         return "\(LampBibleReferenceFormatter.bookName(location.bookNumber)) \(location.chapterNumber)"
-    }
-}
-
-private struct NewReaderTabView: View {
-    @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var model: LibraryModel
-    @EnvironmentObject private var workspace: ReaderWorkspace
-    let currentLocation: ReaderLocation?
-    let duplicate: () -> Void
-    let openLocation: (ReaderLocation) -> Void
-    @State private var translationID: String
-    @State private var books: [LampTranslationBook] = []
-    @State private var bookNumber: Int
-    @State private var chapterNumber: Int
-    @State private var verses: [LampVerse] = []
-    @State private var verseReference: Int?
-    @State private var isLoadingBooks = false
-    @State private var isLoadingChapter = false
-    @State private var errorMessage: String?
-
-    init(
-        currentLocation: ReaderLocation?,
-        duplicate: @escaping () -> Void,
-        openLocation: @escaping (ReaderLocation) -> Void
-    ) {
-        self.currentLocation = currentLocation
-        self.duplicate = duplicate
-        self.openLocation = openLocation
-        _translationID = State(initialValue: currentLocation?.translationID ?? "")
-        _bookNumber = State(initialValue: currentLocation?.bookNumber ?? 0)
-        _chapterNumber = State(initialValue: currentLocation?.chapterNumber ?? 1)
-        _verseReference = State(initialValue: currentLocation?.verseReference)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("New Reader Tab")
-                    .font(.headline)
-                Text("Duplicate your place or open a different passage.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-
-            if currentLocation != nil {
-                Button {
-                    duplicate()
-                    dismiss()
-                } label: {
-                    Label("Duplicate Current Tab", systemImage: "plus.square.on.square")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-            }
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Choose a passage")
-                    .font(.subheadline.weight(.semibold))
-
-                Picker("Translation", selection: $translationID) {
-                    ForEach(model.translations) { translation in
-                        Text(translation.abbreviation ?? translation.name)
-                            .tag(translation.id)
-                    }
-                }
-
-                Picker("Book", selection: $bookNumber) {
-                    if books.isEmpty {
-                        Text(isLoadingBooks ? "Loading…" : "Choose a translation")
-                            .tag(0)
-                    }
-                    ForEach(books) { book in
-                        Text(book.name).tag(book.id)
-                    }
-                }
-                .disabled(books.isEmpty)
-
-                Picker("Chapter", selection: $chapterNumber) {
-                    if let selectedBook {
-                        ForEach(1...selectedBook.chapterCount, id: \.self) { chapter in
-                            Text(chapter.formatted()).tag(chapter)
-                        }
-                    } else {
-                        Text("—").tag(1)
-                    }
-                }
-                .disabled(selectedBook == nil)
-
-                Picker("Verse", selection: $verseReference) {
-                    Text("Chapter start").tag(Int?.none)
-                    ForEach(verses) { verse in
-                        Text(verse.number.formatted()).tag(Optional(verse.id))
-                    }
-                }
-                .disabled(isLoadingChapter || verses.isEmpty)
-
-                if isLoadingChapter {
-                    ProgressView("Loading passage…")
-                        .controlSize(.small)
-                } else if let errorMessage {
-                    Label(errorMessage, systemImage: "exclamationmark.triangle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
-            HStack {
-                Button("Cancel") { dismiss() }
-                Spacer()
-                Button("Open New Tab", systemImage: "plus") {
-                    guard let location else { return }
-                    openLocation(location)
-                    dismiss()
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(location == nil)
-            }
-        }
-        .padding(18)
-        .frame(width: 390)
-        .onAppear {
-            if translationID.isEmpty {
-                translationID = workspace.selectedTranslationID ?? model.translations.first?.id ?? ""
-            }
-        }
-        .onChange(of: translationID) { oldValue, newValue in
-            guard oldValue != newValue else { return }
-            if newValue != currentLocation?.translationID {
-                bookNumber = 0
-                chapterNumber = 1
-                verseReference = nil
-            }
-            verses = []
-        }
-        .onChange(of: bookNumber) { oldValue, newValue in
-            guard oldValue != newValue else { return }
-            if newValue != currentLocation?.bookNumber {
-                chapterNumber = 1
-                verseReference = nil
-            }
-            clampChapterNumber()
-            verses = []
-        }
-        .onChange(of: chapterNumber) { oldValue, newValue in
-            guard oldValue != newValue else { return }
-            if newValue != currentLocation?.chapterNumber {
-                verseReference = nil
-            }
-            verses = []
-        }
-        .task(id: translationID) {
-            await loadBooks()
-        }
-        .task(id: chapterLoadID) {
-            await loadChapter()
-        }
-    }
-
-    private var selectedBook: LampTranslationBook? {
-        books.first { $0.id == bookNumber }
-    }
-    private var chapterLoadID: String {
-        "\(translationID):\(bookNumber):\(chapterNumber):\(books.count)"
-    }
-
-    private var location: ReaderLocation? {
-        guard !translationID.isEmpty, bookNumber > 0, selectedBook != nil else { return nil }
-        return ReaderLocation(
-            translationID: translationID,
-            bookNumber: bookNumber,
-            chapterNumber: chapterNumber,
-            verseReference: verseReference
-        )
-    }
-
-    @MainActor
-    private func loadBooks() async {
-        guard !translationID.isEmpty else {
-            books = []
-            return
-        }
-        let requestedTranslationID = translationID
-        isLoadingBooks = true
-        errorMessage = nil
-        do {
-            let loaded = try await model.library.translationBooks(moduleID: requestedTranslationID)
-            guard translationID == requestedTranslationID else { return }
-            books = loaded
-            if !loaded.contains(where: { $0.id == bookNumber }) {
-                bookNumber = loaded.first?.id ?? 0
-            }
-            clampChapterNumber()
-        } catch {
-            guard translationID == requestedTranslationID else { return }
-            books = []
-            errorMessage = error.localizedDescription
-        }
-        if translationID == requestedTranslationID { isLoadingBooks = false }
-    }
-
-    @MainActor
-    private func loadChapter() async {
-        guard !translationID.isEmpty, bookNumber > 0, selectedBook != nil else {
-            verses = []
-            return
-        }
-        let requestedLoadID = chapterLoadID
-        isLoadingChapter = true
-        errorMessage = nil
-        do {
-            let loaded = try await model.library.chapter(
-                moduleID: translationID,
-                bookNumber: bookNumber,
-                chapterNumber: chapterNumber
-            )
-            guard chapterLoadID == requestedLoadID else { return }
-            verses = loaded.verses
-            if let verseReference,
-               !loaded.verses.contains(where: { $0.id == verseReference }) {
-                self.verseReference = nil
-            }
-        } catch {
-            guard chapterLoadID == requestedLoadID else { return }
-            verses = []
-            errorMessage = error.localizedDescription
-        }
-        if chapterLoadID == requestedLoadID { isLoadingChapter = false }
-    }
-
-    private func clampChapterNumber() {
-        guard let selectedBook else {
-            chapterNumber = 1
-            return
-        }
-        chapterNumber = min(max(chapterNumber, 1), selectedBook.chapterCount)
     }
 }
 
@@ -3024,15 +2789,41 @@ struct ReaderLexicalHoverObserver: NSViewRepresentable {
     }
 }
 
-private struct ReaderLocationPickerPopover: View {
+/// What the field is offering to do with what has been typed.
+private struct PassagePickerOffer {
+    let icon: String
+    let title: String
+    let action: () -> Void
+}
+
+/// The picker behind the reader's passage button, and behind a new tab's plus.
+///
+/// What the field takes differs between the two. From the reader it also takes
+/// words to search for and Strong's keys, which go to the search and to the
+/// analysis; a tab opens a chapter and nothing else, so there a reference or a
+/// book's name is all it can offer to do.
+///
+/// Everything here can be reached from the keyboard: Tab and ⇧Tab move through
+/// the field, the offer, the translation, the two columns and the duplicate
+/// row, the arrows move within whichever has focus, and Return takes it. See
+/// `LampPassagePickerKeys` for why the ring is kept rather than left to macOS.
+private struct PassagePickerPopover: View {
     @EnvironmentObject private var model: LibraryModel
     @EnvironmentObject private var workspace: ReaderWorkspace
     @Binding var isPresented: Bool
+    /// Where a chosen passage goes: this window's reader, or a new tab.
+    let open: (ReaderLocation) -> Void
+    /// Named above the field when the passage is not for the reader in front
+    /// of you, so a picker that opens a tab says so.
+    var headline: String?
     /// Hands words that are not a reference to the search, so one field
-    /// answers both "take me to John 3" and "where does it say that".
-    let openSearch: (String) -> Void
+    /// answers both "take me to John 3" and "where does it say that". Nil in a
+    /// picker that can only open scripture.
+    var openSearch: ((String) -> Void)?
     /// And a Strong's key to the analysis, which is where that goes.
-    let openAnalysis: (String) -> Void
+    var openAnalysis: ((String) -> Void)?
+    /// Opens a second tab at the passage this one is already at.
+    var duplicate: (() -> Void)?
     @State private var translationID = ""
     @State private var books: [LampTranslationBook] = []
     @State private var bookNumber = 0
@@ -3040,41 +2831,45 @@ private struct ReaderLocationPickerPopover: View {
     @State private var isLoadingBooks = false
     @State private var errorMessage: String?
     @State private var typed = ""
-    @FocusState private var fieldFocused: Bool
+    /// Set when an arrow key moves the selection, so the column scrolls to
+    /// what was reached. A click needs no scrolling — it landed on something
+    /// already in view — so the two are kept apart.
+    @State private var scrollToBook: Int?
+    @State private var scrollToChapter: Int?
+    @FocusState private var focus: LampPassagePickerStop?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            TextField("Reference, or words to search for", text: $typed)
+            if let headline {
+                Text(headline)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+
+            TextField(fieldPrompt, text: $typed)
                 .textFieldStyle(.roundedBorder)
-                .focused($fieldFocused)
+                .focused($focus, equals: .field)
                 .onSubmit(commitTyped)
 
-            if let reference = typedReference {
-                offerRow(
-                    icon: "book",
-                    title: "Go to \(reference.description)",
-                    action: { go(to: reference) }
-                )
-            } else if let key = typedStrongsKey {
-                offerRow(
-                    icon: "chart.bar.xaxis",
-                    title: "Analyse \(key)",
-                    action: { analyse(key) }
-                )
-            } else if !trimmedTyped.isEmpty, matchingBooks.isEmpty {
-                offerRow(
-                    icon: "magnifyingglass",
-                    title: "Search for “\(trimmedTyped)”",
-                    action: { handOver(trimmedTyped) }
-                )
+            if let offer {
+                offerRow(offer, stop: .offer)
             }
 
-            Picker("Translation", selection: $translationID) {
-                ForEach(model.translations) { translation in
-                    Text(translation.name).tag(translation.id)
+            // The picker itself cannot hold keyboard focus without the system
+            // setting that is off by default, so the focus sits on a plain
+            // view around it, where the arrow keys can be heard.
+            HStack(spacing: 0) {
+                Picker("Translation", selection: $translationID) {
+                    ForEach(model.translations) { translation in
+                        Text(translation.name).tag(translation.id)
+                    }
                 }
+                .labelsHidden()
             }
-            .labelsHidden()
+            .focusable()
+            .focused($focus, equals: .translation)
+            .focusEffectDisabled()
+            .overlay { focusRing(.translation, cornerRadius: 7) }
 
             Divider()
 
@@ -3097,6 +2892,17 @@ private struct ReaderLocationPickerPopover: View {
                 }
                 .frame(height: 260)
             }
+
+            if duplicate != nil, workspace.currentLocation != nil {
+                offerRow(
+                    PassagePickerOffer(
+                        icon: "plus.square.on.square",
+                        title: "Duplicate this tab",
+                        action: { duplicate?(); isPresented = false }
+                    ),
+                    stop: .duplicate
+                )
+            }
         }
         // Wide enough for what is inside it. The books column, the divider,
         // the chapter grid and the padding add up to this; a narrower frame
@@ -3107,7 +2913,24 @@ private struct ReaderLocationPickerPopover: View {
         .frame(width: Self.booksColumnWidth + Self.chaptersColumnWidth + 65)
         .onAppear {
             resetSelection()
-            fieldFocused = true
+            focus = .field
+        }
+        .onKeyPress(keys: [.tab, Self.backTab]) { press in
+            let backwards = press.key == Self.backTab || press.modifiers.contains(.shift)
+            focus = LampPassagePickerKeys.stepping(from: focus, by: backwards ? -1 : 1, through: ring)
+            return .handled
+        }
+        .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow]) { press in
+            arrow(press.key)
+        }
+        .onKeyPress(.return) { commitFocused() }
+        // A stop can leave while it has focus: the offer row goes as soon as
+        // what was typed stops being an offer, and the columns go while the
+        // next translation's books load. Focus would otherwise be left on
+        // nothing, with the keys doing nothing until Tab was pressed.
+        .onChange(of: ring) { _, stops in
+            guard let focus, !stops.contains(focus) else { return }
+            self.focus = .field
         }
         .onChange(of: translationID) { oldValue, newValue in
             guard oldValue != newValue else { return }
@@ -3136,6 +2959,13 @@ private struct ReaderLocationPickerPopover: View {
     /// them rather than guessed.
     private static let booksColumnWidth: Double = 168
     private static let chaptersColumnWidth: Double = 236
+    /// ⇧Tab arrives as this, not as Tab with a shift: a Mac keyboard sends
+    /// the back-tab character for it.
+    private static let backTab = KeyEquivalent("\u{19}")
+
+    private var fieldPrompt: String {
+        openSearch == nil ? "Reference, or a book" : "Reference, or words to search for"
+    }
 
     private var trimmedTyped: String {
         typed.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3154,6 +2984,49 @@ private struct ReaderLocationPickerPopover: View {
         LampStrongsKey.typedKey(trimmedTyped)
     }
 
+    /// The one thing Return would do with what has been typed, which the row
+    /// under the field offers to do with a click.
+    private var offer: PassagePickerOffer? {
+        if let reference = typedReference {
+            return PassagePickerOffer(
+                icon: "book",
+                title: "Go to \(reference.description)",
+                action: { go(to: reference) }
+            )
+        }
+        if let key = typedStrongsKey, let openAnalysis {
+            return PassagePickerOffer(
+                icon: "chart.bar.xaxis",
+                title: "Analyse \(key)",
+                action: {
+                    isPresented = false
+                    openAnalysis(key)
+                }
+            )
+        }
+        if !trimmedTyped.isEmpty, matchingBooks.isEmpty, let openSearch {
+            let words = trimmedTyped
+            return PassagePickerOffer(
+                icon: "magnifyingglass",
+                title: "Search for “\(words)”",
+                action: {
+                    isPresented = false
+                    openSearch(words)
+                }
+            )
+        }
+        return nil
+    }
+
+    /// The stops Tab moves through, as this picker stands.
+    private var ring: [LampPassagePickerStop] {
+        LampPassagePickerKeys.ring(
+            offer: offer != nil,
+            passages: !isLoadingBooks && errorMessage == nil,
+            duplicate: duplicate != nil && workspace.currentLocation != nil
+        )
+    }
+
     /// The books the typed text narrows to. Anything that parses as a
     /// reference is handled above, so this is the half-typed case: "jo"
     /// while you are still deciding between John and Joshua.
@@ -3168,6 +3041,7 @@ private struct ReaderLocationPickerPopover: View {
                 LazyVStack(alignment: .leading, spacing: 1) {
                     ForEach(matchingBooks) { book in
                         Button {
+                            focus = .books
                             bookNumber = book.id
                         } label: {
                             Text(book.name)
@@ -3189,53 +3063,85 @@ private struct ReaderLocationPickerPopover: View {
                 .padding(.vertical, 2)
             }
             .frame(width: Self.booksColumnWidth)
+            .focusable()
+            .focused($focus, equals: .books)
+            .focusEffectDisabled()
+            .overlay { focusRing(.books, cornerRadius: 8) }
             // Open on the book being read, rather than at Genesis with the
             // reader somewhere in Kings.
             .onAppear { proxy.scrollTo(bookNumber, anchor: .center) }
+            .onChange(of: scrollToBook) { _, book in
+                guard let book else { return }
+                proxy.scrollTo(book, anchor: .center)
+            }
         }
     }
 
     private var chapterGrid: some View {
-        ScrollView {
-            if let selectedBook {
-                LazyVGrid(
-                    columns: Array(repeating: GridItem(.fixed(38), spacing: 6), count: 5),
-                    spacing: 6
-                ) {
-                    ForEach(1...selectedBook.chapterCount, id: \.self) { chapter in
-                        Button {
-                            commit(book: selectedBook.id, chapter: chapter)
-                        } label: {
-                            Text(chapter.formatted())
-                                .monospacedDigit()
-                                .frame(width: 38, height: 30)
-                                .background(
-                                    isCurrent(book: selectedBook.id, chapter: chapter)
-                                        ? AnyShapeStyle(.tint.opacity(0.25))
-                                        : AnyShapeStyle(.quaternary),
-                                    in: RoundedRectangle(cornerRadius: 6)
-                                )
-                                .contentShape(Rectangle())
+        ScrollViewReader { proxy in
+            ScrollView {
+                if let selectedBook {
+                    LazyVGrid(
+                        columns: Array(
+                            repeating: GridItem(.fixed(38), spacing: 6),
+                            count: LampPassagePickerKeys.chapterColumns
+                        ),
+                        spacing: 6
+                    ) {
+                        ForEach(1...selectedBook.chapterCount, id: \.self) { chapter in
+                            Button {
+                                commit(book: selectedBook.id, chapter: chapter)
+                            } label: {
+                                Text(chapter.formatted())
+                                    .monospacedDigit()
+                                    .frame(width: 38, height: 30)
+                                    .background(
+                                        isCurrent(book: selectedBook.id, chapter: chapter)
+                                            ? AnyShapeStyle(.tint.opacity(0.25))
+                                            : AnyShapeStyle(.quaternary),
+                                        in: RoundedRectangle(cornerRadius: 6)
+                                    )
+                                    .overlay {
+                                        // Which chapter Return would open,
+                                        // shown only while the grid has the
+                                        // keyboard: with a mouse it is the
+                                        // one under the pointer.
+                                        if focus == .chapters, chapter == chapterNumber {
+                                            RoundedRectangle(cornerRadius: 6)
+                                                .strokeBorder(Color.accentColor, lineWidth: 2)
+                                        }
+                                    }
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .id(chapter)
                         }
-                        .buttonStyle(.plain)
                     }
+                    .padding(.vertical, 2)
+                } else {
+                    Text("Choose a book")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
                 }
-                .padding(.vertical, 2)
-            } else {
-                Text("Choose a book")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
+            }
+            .frame(width: Self.chaptersColumnWidth)
+            .focusable()
+            .focused($focus, equals: .chapters)
+            .focusEffectDisabled()
+            .overlay { focusRing(.chapters, cornerRadius: 8) }
+            .onChange(of: scrollToChapter) { _, chapter in
+                guard let chapter else { return }
+                proxy.scrollTo(chapter, anchor: .center)
             }
         }
-        .frame(width: Self.chaptersColumnWidth)
     }
 
-    private func offerRow(icon: String, title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+    private func offerRow(_ offer: PassagePickerOffer, stop: LampPassagePickerStop) -> some View {
+        Button(action: offer.action) {
             HStack(spacing: 8) {
-                Image(systemName: icon).foregroundStyle(.tint)
-                Text(title).lineLimit(1)
+                Image(systemName: offer.icon).foregroundStyle(.tint)
+                Text(offer.title).lineLimit(1)
                 Spacer(minLength: 0)
                 Image(systemName: "return").foregroundStyle(.tertiary)
             }
@@ -3245,6 +3151,18 @@ private struct ReaderLocationPickerPopover: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .focusable()
+        .focused($focus, equals: stop)
+        .focusEffectDisabled()
+        .overlay { focusRing(stop, cornerRadius: 6) }
+    }
+
+    /// What has the keyboard. Drawn here rather than left to the system,
+    /// which rings a text field but leaves a plain focusable view unmarked.
+    private func focusRing(_ stop: LampPassagePickerStop, cornerRadius: Double) -> some View {
+        RoundedRectangle(cornerRadius: cornerRadius)
+            .strokeBorder(Color.accentColor, lineWidth: 2)
+            .opacity(focus == stop ? 1 : 0)
     }
 
     private func isCurrent(book: Int, chapter: Int) -> Bool {
@@ -3253,45 +3171,112 @@ private struct ReaderLocationPickerPopover: View {
             && chapter == workspace.selectedChapterNumber
     }
 
-    /// Return in the field: a passage if it is one, a search if it is not,
-    /// and the one book it has narrowed to if it has.
-    private func commitTyped() {
-        if let typedReference {
-            go(to: typedReference)
-        } else if let key = typedStrongsKey {
-            analyse(key)
-        } else if matchingBooks.count == 1, let only = matchingBooks.first {
-            bookNumber = only.id
-            typed = ""
-        } else if !trimmedTyped.isEmpty {
-            handOver(trimmedTyped)
+    // MARK: - The keyboard
+
+    /// An arrow key, meaning whatever the focused stop says it means.
+    private func arrow(_ key: KeyEquivalent) -> KeyPress.Result {
+        switch focus {
+        // Arrows reach the books from the field too, so a book can be typed
+        // at and then stepped through without leaving what was typed.
+        case .field, .books:
+            guard key == .upArrow || key == .downArrow else { return .ignored }
+            let rows = matchingBooks
+            let current = rows.firstIndex { $0.id == bookNumber }
+            guard let destination = LampPassagePickerKeys.row(
+                from: current,
+                by: key == .upArrow ? -1 : 1,
+                of: rows.count
+            ) else { return .ignored }
+            bookNumber = rows[destination].id
+            scrollToBook = bookNumber
+            return .handled
+
+        case .chapters:
+            guard let selectedBook else { return .ignored }
+            let offset: Int
+            switch key {
+            case .upArrow: offset = -LampPassagePickerKeys.chapterColumns
+            case .downArrow: offset = LampPassagePickerKeys.chapterColumns
+            case .leftArrow: offset = -1
+            default: offset = 1
+            }
+            chapterNumber = LampPassagePickerKeys.chapter(
+                from: chapterNumber,
+                by: offset,
+                of: selectedBook.chapterCount
+            )
+            scrollToChapter = chapterNumber
+            return .handled
+
+        case .translation:
+            guard key == .upArrow || key == .downArrow else { return .ignored }
+            let ids = model.translations.map(\.id)
+            guard let destination = LampPassagePickerKeys.row(
+                from: ids.firstIndex(of: translationID),
+                by: key == .upArrow ? -1 : 1,
+                of: ids.count
+            ) else { return .ignored }
+            translationID = ids[destination]
+            return .handled
+
+        default:
+            return .ignored
         }
     }
 
+    /// Return, meaning whatever the focused stop says it means. The field
+    /// keeps its own: it submits, and `commitTyped` reads what was typed.
+    private func commitFocused() -> KeyPress.Result {
+        switch focus {
+        case .offer:
+            offer?.action()
+            return .handled
+        case .duplicate:
+            duplicate?()
+            isPresented = false
+            return .handled
+        case .translation, .books, .chapters:
+            guard let selectedBook else { return .ignored }
+            commit(book: selectedBook.id, chapter: chapterNumber)
+            return .handled
+        default:
+            return .ignored
+        }
+    }
+
+    /// Return in the field: whatever it is offering, the one book it has
+    /// narrowed to if it has narrowed to one, or the words themselves.
+    private func commitTyped() {
+        if let offer {
+            offer.action()
+        } else if matchingBooks.count == 1, let only = matchingBooks.first {
+            bookNumber = only.id
+            typed = ""
+        } else if !trimmedTyped.isEmpty, let openSearch {
+            isPresented = false
+            openSearch(trimmedTyped)
+        }
+    }
+
+    // MARK: - Going there
+
     private func go(to reference: LampSearchReference) {
-        let parts = LampBibleReferenceFormatter.components(of: reference.startReference)
-        commit(book: parts.book, chapter: max(1, parts.chapter))
+        isPresented = false
+        open(ReaderLocation.typed(
+            reference: reference.startReference,
+            through: reference.endReference,
+            in: translationID
+        ))
     }
 
     private func commit(book: Int, chapter: Int) {
-        workspace.selectPassage(
+        isPresented = false
+        open(ReaderLocation(
             translationID: translationID,
             bookNumber: book,
             chapterNumber: chapter
-        )
-        isPresented = false
+        ))
     }
-
-    private func handOver(_ words: String) {
-        isPresented = false
-        openSearch(words)
-    }
-
-    private func analyse(_ key: String) {
-        isPresented = false
-        openAnalysis(key)
-    }
-
 
     private func resetSelection() {
         translationID = workspace.selectedTranslationID ?? model.translations.first?.id ?? ""
@@ -3812,6 +3797,21 @@ private struct TranslationReaderView: View, Equatable {
         guard let index = activePlanReadingIndex,
               index < mode.readings.index(before: mode.readings.endIndex) else { return }
         openPlanReading(mode.readings[mode.readings.index(after: index)])
+    }
+
+    /// Goes where the passage picker was pointed. A reference that named a
+    /// verse is opened as a reference, so the reader lands on the verse; a
+    /// chapter is a passage, which the history records as one move.
+    private func goToPassage(_ location: ReaderLocation) {
+        if let verse = location.verseReference {
+            workspace.openReference(verse, translationID: location.translationID)
+        } else {
+            workspace.selectPassage(
+                translationID: location.translationID,
+                bookNumber: location.bookNumber,
+                chapterNumber: location.chapterNumber
+            )
+        }
     }
 
     private func navigateBookBackward() {
@@ -5674,8 +5674,9 @@ private struct TranslationReaderView: View, Equatable {
                 .help("Go to a passage, or search (⌘L)")
                 .accessibilityLabel("Go to a passage, or search")
                 .popover(isPresented: $showingReaderLocationPicker, arrowEdge: .bottom) {
-                    ReaderLocationPickerPopover(
+                    PassagePickerPopover(
                         isPresented: $showingReaderLocationPicker,
+                        open: { goToPassage($0) },
                         openSearch: { workspace.requestedSearch = $0 },
                         openAnalysis: { workspace.requestedStrongsKey = $0 }
                     )

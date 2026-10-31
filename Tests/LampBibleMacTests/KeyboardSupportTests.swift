@@ -122,3 +122,115 @@ struct SlideSelectionSteppingTests {
         #expect(LampSlideSelection.stepping(from: "a", by: 1, through: []) == nil)
     }
 }
+
+/// Tab, ⇧Tab and the arrows in the passage picker.
+///
+/// macOS was measured first: a picker built of `.focusable()` views, driven
+/// with synthesised key presses, moved focus once and then stopped, because
+/// tabbing between arbitrary controls waits on a System Settings switch that
+/// is off by default. These rules are what the picker moves focus by instead.
+struct PassagePickerKeysTests {
+    private typealias Stop = LampPassagePickerStop
+    private typealias Keys = LampPassagePickerKeys
+
+    // MARK: - Which stops there are
+
+    /// Nothing typed, so nothing offered: the field, the translation and the
+    /// two columns.
+    @Test func anUntouchedReaderPickerRingsTheFieldTheTranslationAndTheColumns() {
+        #expect(Keys.ring(offer: false, passages: true, duplicate: false)
+            == [.field, .translation, .books, .chapters])
+    }
+
+    /// The offer row sits under the field, and is tabbed to from it.
+    @Test func whatIsTypedAddsItsOfferAfterTheField() {
+        #expect(Keys.ring(offer: true, passages: true, duplicate: false)
+            == [.field, .offer, .translation, .books, .chapters])
+    }
+
+    /// While the books load there are no columns to tab into, and nothing in
+    /// them to arrow through.
+    @Test func loadingBooksLeavesTheColumnsOutOfTheRing() {
+        #expect(Keys.ring(offer: false, passages: false, duplicate: false)
+            == [.field, .translation])
+    }
+
+    /// A new tab's picker ends with the row that opens one where this is.
+    @Test func aNewTabsDuplicateRowIsTheLastStop() {
+        #expect(Keys.ring(offer: true, passages: true, duplicate: true).last == .duplicate)
+    }
+
+    // MARK: - Moving round the ring
+
+    @Test func tabGoesForwardAndShiftTabBack() {
+        let ring = Keys.ring(offer: true, passages: true, duplicate: false)
+        #expect(Keys.stepping(from: .field, by: 1, through: ring) == .offer)
+        #expect(Keys.stepping(from: .books, by: -1, through: ring) == .translation)
+    }
+
+    /// A popover is a closed set of controls: tabbing past the last lands on
+    /// the field, where the next thing typed should go.
+    @Test func theRingWrapsBothWays() {
+        let ring = Keys.ring(offer: false, passages: true, duplicate: false)
+        #expect(Keys.stepping(from: .chapters, by: 1, through: ring) == .field)
+        #expect(Keys.stepping(from: .field, by: -1, through: ring) == .chapters)
+    }
+
+    /// The offer row disappears the moment what was typed stops being an
+    /// offer, and it may have had focus. Tab must still go somewhere.
+    @Test func aStopThatHasLeftTheRingHandsFocusToTheField() {
+        let ring = Keys.ring(offer: false, passages: true, duplicate: false)
+        #expect(Keys.stepping(from: .offer, by: 1, through: ring) == .field)
+        #expect(Keys.stepping(from: nil, by: 1, through: ring) == .field)
+    }
+
+    @Test func aRingOfNothingHasNowhereToGo() {
+        #expect(Keys.stepping(from: .field, by: 1, through: []) == nil)
+    }
+
+    // MARK: - Arrows in the chapter grid
+
+    @Test func upAndDownMoveByAWholeRowAndLeftAndRightByOne() {
+        #expect(Keys.chapter(from: 8, by: Keys.chapterColumns, of: 50) == 13)
+        #expect(Keys.chapter(from: 8, by: -Keys.chapterColumns, of: 50) == 3)
+        #expect(Keys.chapter(from: 8, by: 1, of: 50) == 9)
+        #expect(Keys.chapter(from: 8, by: -1, of: 50) == 7)
+    }
+
+    /// Down from the part-filled last row lands on the last chapter rather
+    /// than on nothing: in Psalms, down from 174 reaches 176.
+    @Test func aStepOffTheEndLandsOnTheLastChapter() {
+        #expect(Keys.chapter(from: 174, by: Keys.chapterColumns, of: 176) == 176)
+        #expect(Keys.chapter(from: 176, by: 1, of: 176) == 176)
+    }
+
+    @Test func theGridDoesNotWrapPastTheFirstChapter() {
+        #expect(Keys.chapter(from: 3, by: -Keys.chapterColumns, of: 50) == 1)
+        #expect(Keys.chapter(from: 1, by: -1, of: 50) == 1)
+    }
+
+    /// A book whose chapters have not arrived yet has one chapter to be on.
+    @Test func aBookWithNoChaptersStaysAtOne() {
+        #expect(Keys.chapter(from: 4, by: 1, of: 0) == 1)
+    }
+
+    // MARK: - Arrows in a list
+
+    @Test func arrowsStepThroughTheRowsAndStopAtTheEnds() {
+        #expect(Keys.row(from: 3, by: 1, of: 10) == 4)
+        #expect(Keys.row(from: 3, by: -1, of: 10) == 2)
+        #expect(Keys.row(from: 9, by: 1, of: 10) == 9)
+        #expect(Keys.row(from: 0, by: -1, of: 10) == 0)
+    }
+
+    /// Typing narrows the books to ones the chosen book is not among, so the
+    /// first arrow has no row to step from: it selects the first match.
+    @Test func withNothingSelectedAnArrowTakesTheFirstRow() {
+        #expect(Keys.row(from: nil, by: 1, of: 10) == 0)
+        #expect(Keys.row(from: 40, by: -1, of: 10) == 0)
+    }
+
+    @Test func anEmptyListHasNoRowToStepTo() {
+        #expect(Keys.row(from: nil, by: 1, of: 0) == nil)
+    }
+}

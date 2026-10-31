@@ -711,3 +711,51 @@ struct ReaderSupportTests {
         #expect(anchors == [VerseAnchor(reference: 1_003_001, endReference: 1_003_002), nil, nil])
     }
 }
+
+/// Where a reference typed into the passage picker opens.
+///
+/// The picker parses what is typed with the search's own parser, which packs
+/// a chapter named without verses as running from verse 1 to verse 999. That
+/// 999 is the only thing telling "John 3" from "John 3:1".
+struct TypedReaderLocationTests {
+    private func location(_ typed: String) -> ReaderLocation? {
+        guard let reference = LampSearchQuery(typed).reference else { return nil }
+        return ReaderLocation.typed(
+            reference: reference.startReference,
+            through: reference.endReference,
+            in: "bsb"
+        )
+    }
+
+    /// A chapter opens at the top: nothing in it is singled out.
+    @Test func aChapterOpensWithNoVerseInMind() {
+        let john3 = location("John 3")
+        #expect(john3?.bookNumber == 43)
+        #expect(john3?.chapterNumber == 3)
+        #expect(john3?.verseReference == nil)
+    }
+
+    /// A verse is carried, so the reader lands on it rather than at the top
+    /// of a chapter the reader has to then look through.
+    @Test func aVerseIsCarriedToTheReader() {
+        #expect(location("John 3:16")?.verseReference == 43_003_016)
+        #expect(location("John 3:16")?.chapterNumber == 3)
+    }
+
+    /// A range lands on where it starts.
+    @Test func aRangeLandsOnItsFirstVerse() {
+        #expect(location("Ps 23:1-4")?.verseReference == 19_023_001)
+    }
+
+    /// A range of whole chapters still has no verse in mind: its end is the
+    /// 999 a chapter is parsed as running to.
+    @Test func aRangeOfChaptersOpensAtTheStartOfTheFirst() {
+        let johnThreeToFour = location("John 3-4")
+        #expect(johnThreeToFour?.chapterNumber == 3)
+        #expect(johnThreeToFour?.verseReference == nil)
+    }
+
+    @Test func theTranslationIsTheOneTheFieldWasSetTo() {
+        #expect(location("John 3")?.translationID == "bsb")
+    }
+}

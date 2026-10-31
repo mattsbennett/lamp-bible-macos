@@ -118,3 +118,92 @@ public enum LampSlideSelection {
         return ids[destination]
     }
 }
+
+/// Where keyboard focus rests in the passage picker.
+///
+/// Tab moves through these in the order written, and ⇧Tab back the other way.
+public enum LampPassagePickerStop: String, CaseIterable, Hashable, Sendable {
+    /// What is typed: a reference, a book's name, words to search for.
+    case field
+    /// The row offering what the typed text turns out to be.
+    case offer
+    /// Which translation the passage is read in.
+    case translation
+    /// The books column.
+    case books
+    /// The chapter grid.
+    case chapters
+    /// A new tab's "open the passage this one is at" row.
+    case duplicate
+}
+
+/// Tab, ⇧Tab and the arrow keys in the passage picker.
+///
+/// macOS only tabs between arbitrary controls when "keyboard navigation" is
+/// turned on in System Settings, and it is off by default. Measured by driving
+/// key events at a picker built of `.focusable()` views: Tab moved focus once,
+/// from the field to the next control, and then stopped there however many
+/// times it was pressed. So the ring is kept here and the picker moves focus
+/// itself, which also means the order is the one written above rather than
+/// whichever views the system is willing to make key.
+public enum LampPassagePickerKeys {
+    /// How many chapters a row of the grid holds. Shared with the grid itself,
+    /// so an arrow key and the layout cannot disagree about what "down" is.
+    public static let chapterColumns = 5
+
+    /// The stops this picker has, in tab order.
+    ///
+    /// Only what is on screen: there is no offer row until something typed
+    /// turns into an offer, no columns while the books are still loading, and
+    /// no duplicate row outside a new tab.
+    public static func ring(
+        offer: Bool,
+        passages: Bool,
+        duplicate: Bool
+    ) -> [LampPassagePickerStop] {
+        var stops: [LampPassagePickerStop] = [.field]
+        if offer { stops.append(.offer) }
+        stops.append(.translation)
+        if passages { stops.append(contentsOf: [.books, .chapters]) }
+        if duplicate { stops.append(.duplicate) }
+        return stops
+    }
+
+    /// Where Tab (`offset` 1) and ⇧Tab (-1) go.
+    ///
+    /// The ends wrap: a popover is a closed set of controls, and the field is
+    /// both where the ring starts and where the next thing typed should land.
+    /// A stop that has since left the ring — the offer row, when what was
+    /// typed stopped being an offer — hands focus back to the field rather
+    /// than nowhere.
+    public static func stepping(
+        from stop: LampPassagePickerStop?,
+        by offset: Int,
+        through ring: [LampPassagePickerStop]
+    ) -> LampPassagePickerStop? {
+        guard !ring.isEmpty else { return nil }
+        guard let stop, let current = ring.firstIndex(of: stop) else { return ring.first }
+        let destination = (current + offset % ring.count + ring.count) % ring.count
+        return ring[destination]
+    }
+
+    /// The chapter an arrow key lands on, `offset` being ±1 for left and right
+    /// and ±`chapterColumns` for up and down.
+    ///
+    /// Movement stops at the ends rather than wrapping, and a step off the end
+    /// of the last, part-filled row lands on the last chapter rather than
+    /// nowhere: pressing down in Psalm 119 should reach 176.
+    public static func chapter(from chapter: Int, by offset: Int, of count: Int) -> Int {
+        guard count > 0 else { return 1 }
+        return min(max(chapter + offset, 1), count)
+    }
+
+    /// The row an arrow key lands on in a list of `count` rows, or nil when
+    /// there is nowhere to go. Nothing selected means the first row, so one
+    /// press selects something rather than nothing.
+    public static func row(from row: Int?, by offset: Int, of count: Int) -> Int? {
+        guard count > 0 else { return nil }
+        guard let row, (0..<count).contains(row) else { return 0 }
+        return min(max(row + offset, 0), count - 1)
+    }
+}

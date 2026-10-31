@@ -1382,6 +1382,28 @@ public struct ReaderLocation: Codable, Equatable, Hashable, Sendable {
         self.chapterNumber = chapterNumber
         self.verseReference = verseReference
     }
+
+    /// Where a typed reference goes.
+    ///
+    /// One that names a verse — "John 3:16", "Ps 23:1-4" — carries it, so the
+    /// reader lands on the verse rather than at the top of the chapter; one
+    /// that names a chapter — "John 3", "1 Cor 13" — opens at the top. The two
+    /// are told apart by the end of the range: a chapter named without verses
+    /// is parsed as running to verse 999, which nobody types.
+    public static func typed(
+        reference startReference: Int,
+        through endReference: Int,
+        in translationID: String
+    ) -> ReaderLocation {
+        let start = LampBibleReferenceFormatter.components(of: startReference)
+        let namesAVerse = LampBibleReferenceFormatter.components(of: endReference).verse != 999
+        return ReaderLocation(
+            translationID: translationID,
+            bookNumber: start.book,
+            chapterNumber: max(1, start.chapter),
+            verseReference: namesAVerse ? startReference : nil
+        )
+    }
 }
 
 public struct ReaderTab: Codable, Identifiable, Equatable, Sendable {
