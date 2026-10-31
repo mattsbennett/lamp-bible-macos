@@ -188,6 +188,33 @@ struct PassagePickerKeysTests {
         #expect(Keys.stepping(from: .field, by: 1, through: []) == nil)
     }
 
+    // MARK: - Tab in the chapter grid
+
+    /// The grid is not one stop: Tab walks its chapters.
+    @Test func tabStepsThroughTheChaptersOneAtATime() {
+        #expect(Keys.chapterTab(from: 8, by: 1, of: 50) == .chapter(9))
+        #expect(Keys.chapterTab(from: 8, by: -1, of: 50) == .chapter(7))
+    }
+
+    /// Tab past the last chapter, or back past the first, leaves the grid for
+    /// the next stop round the ring — the only way out of Psalms by Tab.
+    @Test func tabOffEitherEndOfTheGridLeavesIt() {
+        #expect(Keys.chapterTab(from: 176, by: 1, of: 176) == .leave)
+        #expect(Keys.chapterTab(from: 1, by: -1, of: 176) == .leave)
+    }
+
+    /// A single-chapter book is both ends at once, so Tab passes straight
+    /// through it either way.
+    @Test func aOneChapterBookIsTabbedStraightThrough() {
+        #expect(Keys.chapterTab(from: 1, by: 1, of: 1) == .leave)
+        #expect(Keys.chapterTab(from: 1, by: -1, of: 1) == .leave)
+    }
+
+    /// A book whose chapters have not arrived has nothing to tab through.
+    @Test func aBookWithNoChaptersIsLeftImmediately() {
+        #expect(Keys.chapterTab(from: 1, by: 1, of: 0) == .leave)
+    }
+
     // MARK: - Arrows in the chapter grid
 
     @Test func upAndDownMoveByAWholeRowAndLeftAndRightByOne() {
