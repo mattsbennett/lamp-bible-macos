@@ -187,28 +187,6 @@ public enum LampPassagePickerKeys {
         return ring[destination]
     }
 
-    /// Where Tab goes while the chapter grid has the keyboard: the grid holds
-    /// Tab itself, so the chapters are tabbed through one at a time.
-    ///
-    /// Nothing wraps inside the grid. A step off either end leaves it, which
-    /// is what keeps the way out of a 150-chapter book short in one direction
-    /// or the other.
-    public enum ChapterTab: Equatable, Sendable {
-        /// The chapter Tab lands on.
-        case chapter(Int)
-        /// Tab has run off the end of the grid, so it moves round the ring.
-        case leave
-    }
-
-    /// The chapter Tab (`offset` 1) and ⇧Tab (-1) land on, or `leave` when
-    /// that is past either end of the grid.
-    public static func chapterTab(from chapter: Int, by offset: Int, of count: Int) -> ChapterTab {
-        guard count > 0 else { return .leave }
-        let destination = chapter + offset
-        guard (1...count).contains(destination) else { return .leave }
-        return .chapter(destination)
-    }
-
     /// The chapter an arrow key lands on, `offset` being ±1 for left and right
     /// and ±`chapterColumns` for up and down.
     ///

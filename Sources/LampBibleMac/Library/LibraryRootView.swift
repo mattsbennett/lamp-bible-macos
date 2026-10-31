@@ -2917,7 +2917,8 @@ private struct PassagePickerPopover: View {
         }
         .onKeyPress(keys: [.tab, Self.backTab]) { press in
             let backwards = press.key == Self.backTab || press.modifiers.contains(.shift)
-            return tab(by: backwards ? -1 : 1)
+            focus = LampPassagePickerKeys.stepping(from: focus, by: backwards ? -1 : 1, through: ring)
+            return .handled
         }
         .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow]) { press in
             arrow(press.key)
@@ -3101,9 +3102,9 @@ private struct PassagePickerPopover: View {
                                         in: RoundedRectangle(cornerRadius: 6)
                                     )
                                     .overlay {
-                                        // The focus ring, on the chapter
-                                        // Tab reached and Return would open.
-                                        // Only while the grid has the
+                                        // The focus ring, on the chapter the
+                                        // arrows reached and Return would
+                                        // open. Only while the grid has the
                                         // keyboard: with a mouse it is
                                         // whichever is under the pointer.
                                         if focus == .chapters, chapter == chapterNumber {
@@ -3129,10 +3130,11 @@ private struct PassagePickerPopover: View {
             .focusable()
             .focused($focus, equals: .chapters)
             .focusEffectDisabled()
-            // With a book chosen the ring sits on the chapter itself, below.
-            // Ringing the grid as well read as the whole grid being selected
-            // (user, 2026-10-31). Without a book there is nothing inside to
-            // ring, so the grid says it has the keyboard on its own behalf.
+            // With a book chosen the ring sits on the chapter itself, below,
+            // which is also what says the arrows move within the grid rather
+            // than Tab. Ringing the grid as well read as the whole grid being
+            // selected (user, 2026-10-31). Without a book there is nothing
+            // inside to ring, so the grid says so on its own behalf.
             .overlay {
                 if selectedBook == nil {
                     focusRing(.chapters, cornerRadius: 8)
@@ -3180,29 +3182,6 @@ private struct PassagePickerPopover: View {
     }
 
     // MARK: - The keyboard
-
-    /// Tab and ⇧Tab. In the chapter grid they step through the chapters, one
-    /// at a time, rather than passing over the grid as a single stop; off
-    /// either end of it they move on round the ring, as they do everywhere
-    /// else.
-    private func tab(by offset: Int) -> KeyPress.Result {
-        if focus == .chapters, let selectedBook {
-            switch LampPassagePickerKeys.chapterTab(
-                from: chapterNumber,
-                by: offset,
-                of: selectedBook.chapterCount
-            ) {
-            case .chapter(let chapter):
-                chapterNumber = chapter
-                scrollToChapter = chapter
-                return .handled
-            case .leave:
-                break
-            }
-        }
-        focus = LampPassagePickerKeys.stepping(from: focus, by: offset, through: ring)
-        return .handled
-    }
 
     /// An arrow key, meaning whatever the focused stop says it means.
     private func arrow(_ key: KeyEquivalent) -> KeyPress.Result {
