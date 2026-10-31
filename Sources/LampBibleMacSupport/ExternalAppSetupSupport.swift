@@ -93,10 +93,11 @@ public struct LampExternalAppSetup: Equatable, Sendable {
             "display_name": "Lamp Bible",
             "version": appVersion,
             // Not "read-only": since write_writing_draft an outside app can
-            // replace a writing's draft, once the writer turns that on. This
-            // is what Claude Desktop shows when the bundle is installed, so
-            // it is the one place a reader is told what they are agreeing to.
-            "description": "Your Lamp Bible library in Claude: scripture, commentary, dictionaries, reading plans, books, writings and quizzes. Read-only unless you let it change your writings, in Lamp's Settings under AI & Agents.",
+            // replace a writing's draft, and since add_reading_plan it can ask
+            // for a reading plan, once the writer turns those on. This is what
+            // Claude Desktop shows when the bundle is installed, so it is the
+            // one place a reader is told what they are agreeing to.
+            "description": "Your Lamp Bible library in Claude: scripture, commentary, dictionaries, reading plans, books, writings and quizzes. Read-only unless you let it change your writings or add reading plans, in Lamp's Settings under AI & Agents.",
             "author": ["name": "Lamp Bible"],
             "server": [
                 "type": "binary",

@@ -264,6 +264,8 @@ private struct ReaderSettingsView: View {
     private var agentAllowsExternalApps = false
     @AppStorage(AgentModuleAccessPreferences.allowsExternalWritingKey)
     private var agentAllowsExternalWriting = false
+    @AppStorage(AgentModuleAccessPreferences.allowsExternalReadingPlansKey)
+    private var agentAllowsExternalReadingPlans = false
     @AppStorage("agent.moduleAccess.personal") private var agentPersonalContentEnabled = false
     @State private var agentModuleAccessStatus: String?
     @AppStorage("sync.automatic") private var automaticSync = true
@@ -537,7 +539,12 @@ private struct ReaderSettingsView: View {
                         .disabled(!agentModuleAccessEnabled)
                         HStack {
                             Text(
-                                "Module results are sent to the AI provider you launch. All Lamp tools are read-only."
+                                """
+                                Module results are sent to the AI provider you \
+                                launch. Lamp's tools only read your library, \
+                                apart from the two switches under Use Lamp in \
+                                Other Apps.
+                                """
                             )
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -588,6 +595,23 @@ private struct ReaderSettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
+                        Toggle(
+                            "Allow other apps to add reading plans",
+                            isOn: $agentAllowsExternalReadingPlans
+                        )
+                        .disabled(!agentModuleAccessEnabled || !agentAllowsExternalApps)
+                        Text(
+                            """
+                            An agent in another app can ask for a reading plan \
+                            over the passages you name, which Lamp lays out \
+                            and adds when it next reads its library. It adds \
+                            plans and nothing else: it cannot change or remove \
+                            anything already in your library.
+                            """
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
                         if agentModuleAccessEnabled, agentAllowsExternalApps {
                             externalAppsSetup
                         }
@@ -600,6 +624,7 @@ private struct ReaderSettingsView: View {
                     .onChange(of: agentPersonalContentEnabled) { _, _ in publishAgentAccess() }
                     .onChange(of: agentAllowsExternalApps) { _, _ in publishAgentAccess() }
                     .onChange(of: agentAllowsExternalWriting) { _, _ in publishAgentAccess() }
+                    .onChange(of: agentAllowsExternalReadingPlans) { _, _ in publishAgentAccess() }
                     .task { publishAgentAccess() }
 
                 case .readingPlans:
@@ -1112,7 +1137,8 @@ private struct ReaderSettingsView: View {
             libraryRootURL: model.library.rootURL,
             bundledModulesArchiveURL: bundledModulesArchiveURL,
             allowsExternalApps: agentAllowsExternalApps,
-            allowsExternalWriting: agentAllowsExternalWriting
+            allowsExternalWriting: agentAllowsExternalWriting,
+            allowsExternalReadingPlans: agentAllowsExternalReadingPlans
         )
     }
 

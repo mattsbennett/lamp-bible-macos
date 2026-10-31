@@ -85,6 +85,11 @@ enum AgentModuleAccessPreferences {
     /// own, so reading cannot grant writing.
     static let allowsExternalWritingKey = "agent.externalApps.writing"
 
+    /// The key behind the switch that lets those apps add a reading plan. Its
+    /// own for the same reason, and narrower: it grants adding a plan Lamp
+    /// lays out, not changing or removing anything already in the library.
+    static let allowsExternalReadingPlansKey = "agent.externalApps.readingPlans"
+
     /// Writes the policy, and the descriptor that tells a helper started by
     /// another app where to find it.
     ///
@@ -99,6 +104,7 @@ enum AgentModuleAccessPreferences {
         bundledModulesArchiveURL: URL?,
         allowsExternalApps: Bool,
         allowsExternalWriting: Bool,
+        allowsExternalReadingPlans: Bool,
         applicationSupportURL: URL? = LampAgentDescriptorStore.defaultApplicationSupportURL()
     ) throws -> URL {
         let policyURL = try writePolicy(policy, libraryRootURL: libraryRootURL)
@@ -115,7 +121,8 @@ enum AgentModuleAccessPreferences {
                 policyPath: policyURL.path,
                 bundledModulesArchivePath: bundledModulesArchiveURL?.path,
                 allowsExternalApps: allowsExternalApps,
-                allowsExternalWriting: allowsExternalWriting
+                allowsExternalWriting: allowsExternalWriting,
+                allowsExternalReadingPlans: allowsExternalReadingPlans
             ),
             inApplicationSupport: applicationSupportURL
         )

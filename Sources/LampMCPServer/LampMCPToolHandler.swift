@@ -49,6 +49,15 @@ public actor LampMCPToolHandler {
             .allowsExternalWriting ?? false
     }
 
+    /// Whether outside apps may add a reading plan, read at each call for the
+    /// same reason as the writing switch: it can be turned off while an app is
+    /// connected, and the next call should see that.
+    private var allowsExternalReadingPlans: Bool {
+        guard let applicationSupportURL else { return false }
+        return (try? LampAgentDescriptorStore.read(inApplicationSupport: applicationSupportURL))?
+            .allowsExternalReadingPlans ?? false
+    }
+
     public init(
         library: LampAgentLibrary,
         libraryRootURL: URL? = nil,
@@ -129,6 +138,14 @@ public actor LampMCPToolHandler {
                 moduleID: try requiredString("module_id", in: arguments),
                 day: try requiredInt("day", in: arguments)
             ))
+
+        case "draft_reading_plan":
+            return try result(try await library.draftReadingPlan(
+                try readingPlanRequest(arguments)
+            ))
+
+        case "add_reading_plan":
+            return try await addReadingPlan(arguments)
 
         case "list_books":
             return try result(try await library.listBooks())
@@ -348,6 +365,90 @@ public actor LampMCPToolHandler {
         ))
     }
 
+    /// A plan as it was asked for, from a tool's arguments.
+    ///
+    /// Core turns these words into a plan: the passages as people write them,
+    /// the start date as year-month-day, the rest days by name. Nothing is
+    /// worked out here.
+    private func readingPlanRequest(
+        _ arguments: [String: Value]
+    ) throws -> LampAgentReadingPlanRequest {
+        LampAgentReadingPlanRequest(
+            name: try requiredString("name", in: arguments),
+            description: arguments["description"]?.stringValue,
+            tracks: try readingPlanTracks(arguments),
+            readingDays: arguments["reading_days"]?.intValue,
+            startDate: arguments["start_date"]?.stringValue,
+            restDays: strings(arguments["rest_days"])
+        )
+    }
+
+    private func readingPlanTracks(
+        _ arguments: [String: Value]
+    ) throws -> [LampAgentReadingPlanRequest.Track] {
+        guard let values = arguments["tracks"]?.arrayValue, !values.isEmpty else {
+            throw LampMCPToolError.missingArgument("tracks")
+        }
+        return try values.map { value in
+            guard let track = value.objectValue else {
+                throw LampMCPToolError.invalidArgument(
+                    "tracks", "Each track is an object with a `passages` list."
+                )
+            }
+            guard let passages = strings(track["passages"]), !passages.isEmpty else {
+                throw LampMCPToolError.invalidArgument(
+                    "tracks", "Each track needs at least one passage to read."
+                )
+            }
+            return .init(
+                passages: passages,
+                chaptersPerDay: track["chapters_per_day"]?.intValue
+            )
+        }
+    }
+
+    /// Writes a plan down for Lamp to add, and says that this is what happened.
+    ///
+    /// Laid out here first, so a request Lamp could not lay out is refused now
+    /// — while the caller is still there to be told which passage or length
+    /// was the trouble — rather than left to fail later with nobody to tell.
+    ///
+    /// Lamp does the installing, because Lamp has the library open and this is
+    /// another process. Handing over what was asked for, rather than adding
+    /// the module here, means there is never a moment when two processes are
+    /// writing one library.
+    private func addReadingPlan(_ arguments: [String: Value]) async throws -> CallTool.Result {
+        guard allowsExternalReadingPlans else {
+            throw LampMCPToolError.readingPlansNotAllowed
+        }
+        guard let applicationSupportURL else { throw LampMCPToolError.nowhereToLeaveAPlan }
+        var request = try readingPlanRequest(arguments)
+        // Filled in rather than left to mean "today": Lamp may install this
+        // hours later, and a plan asked for today has to start today. This is
+        // also what makes the preview below the plan that gets installed.
+        if request.startDate == nil {
+            request.startDate = LampReadingPlanForm.dateText(Date())
+        }
+        let plan = try await library.draftReadingPlan(request)
+        let id = "plan-" + UUID().uuidString.lowercased()
+        try LampReadingPlanAdditions.write(
+            .init(id: id, request: request),
+            inApplicationSupport: applicationSupportURL
+        )
+        return try result(ReadingPlanAddition(
+            planID: id,
+            queued: true,
+            plan: plan,
+            message: """
+            Written down for Lamp to add. Lamp lays it out on these dates, \
+            installs it and includes it in Today the next time it reads its \
+            library — on opening a plans view if Lamp is running, otherwise \
+            when it is next opened. It is not in the library yet, so it will \
+            not appear in list_reading_plans until then.
+            """
+        ))
+    }
+
     /// Reading or changing a writing is reading or changing personal content,
     /// so it answers to the same setting as the rest of it.
     private func requirePersonalContent() throws {
@@ -517,6 +618,18 @@ struct WritingWriteOutcome: Codable, Sendable {
     var message: String
 }
 
+/// What `add_reading_plan` did, as the calling app is told it.
+///
+/// There is no field saying the plan is installed, because nothing here can
+/// know that: the install happens in Lamp, later. `queued` is as far as this
+/// process's knowledge goes, and the message says the rest.
+struct ReadingPlanAddition: Codable, Sendable {
+    var planID: String
+    var queued: Bool
+    var plan: LampAgentReadingPlanDraft
+    var message: String
+}
+
 /// A writing's draft and the context Lamp wrote beside it.
 struct WritingDraft: Codable, Sendable {
     var writingID: String
@@ -566,6 +679,8 @@ public enum LampMCPToolError: Error, LocalizedError, Equatable, Sendable {
     case noLibraryRoot
     case noWritingWorkspace(String)
     case writingNotAllowed
+    case readingPlansNotAllowed
+    case nowhereToLeaveAPlan
 
     public var errorDescription: String? {
         switch self {
@@ -600,6 +715,20 @@ public enum LampMCPToolError: Error, LocalizedError, Equatable, Sendable {
             other apps to change my writings" in Lamp's Settings, under AI & \
             Agents. It is separate from reading, and off until the writer \
             turns it on.
+            """
+        case .readingPlansNotAllowed:
+            """
+            Lamp is not letting other apps add reading plans. Turn on "Allow \
+            other apps to add reading plans" in Lamp's Settings, under AI & \
+            Agents. It is separate from reading, and off until the reader \
+            turns it on. draft_reading_plan works either way, so the plan can \
+            still be laid out and shown.
+            """
+        case .nowhereToLeaveAPlan:
+            """
+            This Mac has no Application Support directory, which is where Lamp \
+            and this helper agree to leave a plan, so there is nowhere to put \
+            one.
             """
         case .noWritingWorkspace(let id):
             """

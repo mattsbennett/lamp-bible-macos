@@ -16,15 +16,15 @@ struct LampMCPServerTests {
     /// `write_writing_draft` existed.
     @Test func onlyTheWriteToolsSayTheyWrite() {
         let all = LampMCPToolCatalog.tools(workspace: true)
-        #expect(LampMCPToolCatalog.tools.count == 16)
+        #expect(LampMCPToolCatalog.tools.count == 17)
         #expect(LampMCPToolCatalog.deckTools.count == 3)
         #expect(LampMCPToolCatalog.writingTools.count == 2)
-        #expect(LampMCPToolCatalog.writeTools.count == 1)
-        #expect(all.count == 23)
+        #expect(LampMCPToolCatalog.writeTools.count == 2)
+        #expect(all.count == 25)
         #expect(Set(all.map(\.name)).count == all.count)
 
         let writing = Set(LampMCPToolCatalog.writeTools.map(\.name))
-        #expect(writing == ["write_writing_draft"])
+        #expect(writing == ["write_writing_draft", "add_reading_plan"])
         for tool in all {
             if writing.contains(tool.name) {
                 #expect(
@@ -54,6 +54,31 @@ struct LampMCPServerTests {
         let description = try #require(tool.description)
         #expect(description.contains("Allow other apps to change my writings"))
         #expect(description.contains("Settings"))
+    }
+
+    /// The same for the plan tool, and the drafting tool beside it must stay
+    /// read-only: showing someone the days before anything is added is the
+    /// whole shape of this feature, and it cannot need a setting to do it.
+    @Test func theplanToolsSayWhichOneChangesSomething() throws {
+        let tools = LampMCPToolCatalog.tools(workspace: false)
+
+        let adding = try #require(tools.first { $0.name == "add_reading_plan" })
+        let description = try #require(adding.description)
+        #expect(description.contains("Allow other apps to add reading plans"))
+        #expect(description.contains("Settings"))
+        #expect(adding.annotations.readOnlyHint == false)
+        // A plan is a module that was not there before: nothing of the user's
+        // is replaced or removed.
+        #expect(adding.annotations.destructiveHint == false)
+
+        let drafting = try #require(tools.first { $0.name == "draft_reading_plan" })
+        #expect(drafting.annotations.readOnlyHint == true)
+        // Both take the same arguments, or a plan previewed by one is not the
+        // plan the other adds.
+        #expect(
+            drafting.inputSchema.objectValue?["properties"]
+                == adding.inputSchema.objectValue?["properties"]
+        )
     }
 
     /// Charts are worked out through the *agent* library, so a key is only
@@ -232,6 +257,16 @@ struct LampMCPServerTests {
         ("search_library", ["query": .string("grace")]),
         ("list_quiz_modules", [:]),
         ("analyze_strongs", ["key": .string("G3056")]),
+        // Answers with one object rather than a list of days, and does it
+        // from no library at all: the layout is arithmetic, not a read.
+        (
+            "draft_reading_plan",
+            [
+                "name": .string("A Week in John"),
+                "tracks": .array([.object(["passages": .array([.string("John")])])]),
+                "reading_days": .int(7),
+            ]
+        ),
     ])
     func namesEveryStructuredResultAsAnObject(tool: String, arguments: [String: Value]) async throws {
         let fixture = FileManager.default.temporaryDirectory
@@ -329,7 +364,10 @@ struct LampMCPClientCompatibilityTests {
     /// A real library with a real writing, because the write tool's second
     /// check reads the writing as Lamp holds it, and no test could reach that
     /// path until the descriptor's location became injectable.
-    private func writingFixture(allowsWriting: Bool) async throws -> WritingFixture {
+    private func writingFixture(
+        allowsWriting: Bool,
+        allowsReadingPlans: Bool = false
+    ) async throws -> WritingFixture {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("lamp-write-mcp-\(UUID().uuidString)", isDirectory: true)
         let libraryRoot = root.appendingPathComponent("Library", isDirectory: true)
@@ -361,7 +399,8 @@ struct LampMCPClientCompatibilityTests {
                 libraryRootPath: libraryRoot.path,
                 policyPath: libraryRoot.appendingPathComponent("p.json").path,
                 allowsExternalApps: true,
-                allowsExternalWriting: allowsWriting
+                allowsExternalWriting: allowsWriting,
+                allowsExternalReadingPlans: allowsReadingPlans
             ),
             inApplicationSupport: support
         )
@@ -538,5 +577,167 @@ extension LampMCPServerTests {
                 .compactMap(\.stringValue) == ["query"],
             "the new narrowing is optional; a plain word search still works"
         )
+    }
+}
+
+extension LampMCPClientCompatibilityTests {
+    /// Drafting a plan changes nothing, so it answers to no switch of its own.
+    /// This is what lets an app show someone the days before asking to add
+    /// them.
+    @Test func aplanCanBeLaidOutAndShownWithTheAddingSwitchOff() async throws {
+        let fixture = try await writingFixture(allowsWriting: false)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let response = try await handler(fixture).call(
+            name: "draft_reading_plan",
+            arguments: [
+                "name": .string("The Gospels in a Month"),
+                "tracks": .array([
+                    .object(["passages": .array([.string("Matthew-John")])]),
+                ]),
+                "reading_days": .int(30),
+                "start_date": .string("2026-11-01"),
+            ]
+        )
+
+        #expect(response.isError == false)
+        let draft = try #require(response.structuredContent?.objectValue)
+        #expect(draft["readingDays"]?.intValue == 30)
+        #expect(draft["days"]?.arrayValue?.count == 30)
+        #expect(draft["days"]?.arrayValue?.first?.objectValue?["date"]?.stringValue == "2026-11-01")
+        #expect(
+            LampReadingPlanAdditions
+                .pending(inApplicationSupport: fixture.support).isEmpty,
+            "drafting asks Lamp for nothing"
+        )
+    }
+
+    @Test func addingAPlanIsRefusedWhileTheSettingIsOffAndSaysWhichSetting() async throws {
+        let fixture = try await writingFixture(allowsWriting: true)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        await #expect(throws: LampMCPToolError.readingPlansNotAllowed) {
+            try await handler(fixture).call(name: "add_reading_plan", arguments: [
+                "name": .string("The Gospels in a Month"),
+                "tracks": .array([.object(["passages": .array([.string("Matthew-John")])])]),
+                "reading_days": .int(30),
+            ])
+        }
+        #expect(
+            LampReadingPlanAdditions.pending(inApplicationSupport: fixture.support).isEmpty
+        )
+        let message = LampMCPToolError.readingPlansNotAllowed.localizedDescription
+        #expect(message.contains("Allow other apps to add reading plans"))
+        #expect(message.contains("Settings"))
+    }
+
+    /// Letting apps change a writing must not also let them add a plan. Two
+    /// switches, two answers.
+    @Test func thewritingSwitchDoesNotGrantAddingPlans() async throws {
+        let fixture = try await writingFixture(allowsWriting: true, allowsReadingPlans: false)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        await #expect(throws: LampMCPToolError.readingPlansNotAllowed) {
+            try await handler(fixture).call(name: "add_reading_plan", arguments: [
+                "name": .string("The Gospels in a Month"),
+                "tracks": .array([.object(["passages": .array([.string("Matthew-John")])])]),
+                "reading_days": .int(30),
+            ])
+        }
+    }
+
+    /// With the switch on, the plan is written down for Lamp and *not*
+    /// installed here: the helper is its own process, and the library is open
+    /// in Lamp.
+    @Test func anaddedPlanIsLeftForLampRatherThanInstalledHere() async throws {
+        let fixture = try await writingFixture(allowsWriting: false, allowsReadingPlans: true)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let response = try await handler(fixture).call(
+            name: "add_reading_plan",
+            arguments: [
+                "name": .string("The Gospels in a Month"),
+                "description": .string("Matthew to John over November."),
+                "tracks": .array([.object(["passages": .array([.string("Matthew-John")])])]),
+                "reading_days": .int(30),
+                "start_date": .string("2026-11-01"),
+                "rest_days": .array([.string("weekends")]),
+            ]
+        )
+
+        #expect(response.isError == false)
+        let answer = try #require(response.structuredContent?.objectValue)
+        #expect(answer["queued"]?.boolValue == true)
+        let id = try #require(answer["planID"]?.stringValue)
+        #expect(answer["plan"]?.objectValue?["days"]?.arrayValue?.count == 30)
+        let said = try #require(answer["message"]?.stringValue)
+        #expect(said.contains("not in the library yet"))
+
+        let waiting = LampReadingPlanAdditions.pending(inApplicationSupport: fixture.support)
+        #expect(waiting.count == 1)
+        #expect(waiting.first?.id == id)
+        #expect(waiting.first?.request.restDays == ["weekends"])
+        #expect(try await fixture.library.readingPlans().isEmpty, "nothing was installed")
+    }
+
+    /// A plan asked for with no start date is written down with today's, not
+    /// with nothing: Lamp may install it hours later, and "today" has to mean
+    /// the day it was asked for or the preview was a different plan.
+    @Test func thedayItWasAskedForIsTheDayItStarts() async throws {
+        let fixture = try await writingFixture(allowsWriting: false, allowsReadingPlans: true)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        _ = try await handler(fixture).call(name: "add_reading_plan", arguments: [
+            "name": .string("John a Chapter a Day"),
+            "tracks": .array([.object([
+                "passages": .array([.string("John")]),
+                "chapters_per_day": .int(1),
+            ])]),
+        ])
+
+        let waiting = try #require(
+            LampReadingPlanAdditions.pending(inApplicationSupport: fixture.support).first
+        )
+        #expect(waiting.request.startDate == LampReadingPlanForm.dateText(Date()))
+        #expect(waiting.request.readingDays == nil, "its pace is its length")
+    }
+
+    /// A request core cannot lay out is refused while the caller is still
+    /// there to be told why, rather than written down to fail unseen in Lamp.
+    @Test func arequestThatCannotBeLaidOutIsRefusedAtOnce() async throws {
+        let fixture = try await writingFixture(allowsWriting: false, allowsReadingPlans: true)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        await #expect(throws: LampReadingPlanError.unknownPassage("The Gospel of Thomas")) {
+            try await handler(fixture).call(name: "add_reading_plan", arguments: [
+                "name": .string("Thomas in a Week"),
+                "tracks": .array([
+                    .object(["passages": .array([.string("The Gospel of Thomas")])]),
+                ]),
+                "reading_days": .int(7),
+            ])
+        }
+        #expect(
+            LampReadingPlanAdditions.pending(inApplicationSupport: fixture.support).isEmpty,
+            "nothing is left for Lamp to fail at later"
+        )
+    }
+
+    @Test func atrackWithNothingToReadIsSaidSoRatherThanIgnored() async throws {
+        let fixture = try await writingFixture(allowsWriting: false, allowsReadingPlans: true)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        await #expect(throws: LampMCPToolError.missingArgument("tracks")) {
+            try await handler(fixture).call(name: "add_reading_plan", arguments: [
+                "name": .string("Nothing"),
+                "tracks": .array([]),
+            ])
+        }
+        await #expect(throws: LampMCPToolError.self) {
+            try await handler(fixture).call(name: "draft_reading_plan", arguments: [
+                "name": .string("Nothing"),
+                "tracks": .array([.object(["passages": .array([])])]),
+            ])
+        }
     }
 }

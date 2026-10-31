@@ -31,6 +31,11 @@ public struct LampAgentDescriptor: Codable, Equatable, Sendable {
     /// rewriting someone's prose are not the same risk, and turning on the
     /// first must not quietly grant the second.
     public var allowsExternalWriting: Bool
+    /// Whether those apps may add a reading plan. Its own switch for the same
+    /// reason, and a narrow one: a plan is a module Lamp makes from a
+    /// description, so this grants adding something new and nothing else —
+    /// never changing or removing what is already in the library.
+    public var allowsExternalReadingPlans: Bool
 
     public init(
         version: Int = currentVersion,
@@ -38,7 +43,8 @@ public struct LampAgentDescriptor: Codable, Equatable, Sendable {
         policyPath: String,
         bundledModulesArchivePath: String? = nil,
         allowsExternalApps: Bool = false,
-        allowsExternalWriting: Bool = false
+        allowsExternalWriting: Bool = false,
+        allowsExternalReadingPlans: Bool = false
     ) {
         self.version = version
         self.libraryRootPath = libraryRootPath
@@ -46,6 +52,7 @@ public struct LampAgentDescriptor: Codable, Equatable, Sendable {
         self.bundledModulesArchivePath = bundledModulesArchivePath
         self.allowsExternalApps = allowsExternalApps
         self.allowsExternalWriting = allowsExternalWriting
+        self.allowsExternalReadingPlans = allowsExternalReadingPlans
     }
 
     public init(from decoder: Decoder) throws {
@@ -63,6 +70,9 @@ public struct LampAgentDescriptor: Codable, Equatable, Sendable {
         ) ?? false
         allowsExternalWriting = try container.decodeIfPresent(
             Bool.self, forKey: .allowsExternalWriting
+        ) ?? false
+        allowsExternalReadingPlans = try container.decodeIfPresent(
+            Bool.self, forKey: .allowsExternalReadingPlans
         ) ?? false
     }
 

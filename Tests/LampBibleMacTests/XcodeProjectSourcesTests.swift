@@ -156,6 +156,9 @@ struct XcodeProjectSourcesTests {
             "AgentRevisionSupport.swift",
             "UnifiedDiffSupport.swift",
             "WritingChangesSupport.swift",
+            // `add_reading_plan` writes a plan down for Lamp to install, and
+            // the form's rules are what tell it the shape to write.
+            "ReadingPlanRequestSupport.swift",
         ] {
             #expect(
                 phase.contains(name),

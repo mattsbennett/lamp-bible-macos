@@ -118,6 +118,22 @@ public enum LampMCPToolCatalog {
             required: ["module_id", "day"]
         ),
         tool(
+            "draft_reading_plan",
+            """
+            Lay out a reading plan from what to read and how fast, and return \
+            its days with their dates and readings. Nothing is added: this is \
+            the plan as `add_reading_plan` would add it, for showing to \
+            whoever asked for it first.
+
+            Lamp does the arithmetic, so say only what to read, how long for \
+            and when to start. Plans are numbered by day of the year and come \
+            round again each year, which is why a plan can run for a year at \
+            most.
+            """,
+            properties: readingPlanProperties,
+            required: ["name", "tracks"]
+        ),
+        tool(
             "list_books",
             "List permitted long-form book modules and their publication metadata.",
             properties: [:]
@@ -321,10 +337,10 @@ public enum LampMCPToolCatalog {
         tools + deckTools + writingTools + writeTools + workspaceTools
     }
 
-    /// The one tool that changes something of the user's.
+    /// The tools that change something of the user's.
     ///
-    /// Listed whether or not the switch is on, and refusing with the setting's
-    /// name when it is off. Hiding it would be tidier but would not work: the
+    /// Listed whether or not their switches are on, and refusing with the
+    /// setting's name when one is off. Hiding it would be tidier but would not work: the
     /// server declares `listChanged: false`, so a client caches what it was
     /// given, and a tool missing at connection time would stay missing for the
     /// whole session however the setting moved. An app also cannot tell a user
@@ -362,6 +378,85 @@ public enum LampMCPToolCatalog {
                 idempotentHint: false,
                 openWorldHint: false
             )
+        ),
+        Tool(
+            name: "add_reading_plan",
+            description: """
+            Add a reading plan to the user's library. Needs "Allow other apps \
+            to add reading plans" in Lamp's Settings, under AI & Agents, which \
+            is off until the reader turns it on. Takes what \
+            `draft_reading_plan` takes, so draft it, show the days to whoever \
+            asked, and add it once they have agreed to it. Lamp installs the \
+            plan and includes it in Today; the plan is not in the library at \
+            the moment this returns, and the reply says so. Adding twice makes \
+            two plans.
+            """,
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object(readingPlanProperties),
+                "additionalProperties": .bool(false),
+                "required": .array([.string("name"), .string("tracks")]),
+            ]),
+            annotations: .init(
+                readOnlyHint: false,
+                // Nothing of the user's is replaced or removed: a plan is a
+                // module that was not there before.
+                destructiveHint: false,
+                idempotentHint: false,
+                openWorldHint: false
+            )
+        ),
+    ]
+
+    /// What both reading-plan tools take: the same things Lamp's own New
+    /// Reading Plan sheet asks for, in the same words.
+    ///
+    /// One shape for the two, because a plan previewed by `draft_reading_plan`
+    /// and then added by `add_reading_plan` must be the same plan — and it
+    /// will not be if the two tools take their arguments differently.
+    static let readingPlanProperties: [String: Value] = [
+        "name": string("A short name for the plan, such as The Gospels in a Month."),
+        "description": string(
+            "Optional sentence saying what the plan reads and how often."
+        ),
+        "tracks": .object([
+            "type": .string("array"),
+            "description": .string(
+                "The things read side by side; most plans have one. Every "
+                    + "reading day has a portion of each track."
+            ),
+            "items": .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "passages": arrayOfStrings(
+                        "What this track reads, in order, as people write "
+                            + "passages: \"Matthew-John\", \"NT\", \"Psalms 1-41\", "
+                            + "\"Romans 8\"."
+                    ),
+                    "chapters_per_day": integer(
+                        "Whole chapters a day, starting over once the passages "
+                            + "are read, for a short track read beside a long one "
+                            + "such as Proverbs beside the New Testament. "
+                            + "Omitted, the passages are spread evenly over the "
+                            + "plan's days."
+                    ),
+                ]),
+                "additionalProperties": .bool(false),
+                "required": .array([.string("passages")]),
+            ]),
+        ]),
+        "reading_days": integer(
+            "How many days have a reading: 30 for a month, 365 for a year. "
+                + "Omitted, the plan is as long as its paced tracks take to be "
+                + "read once through, so one of them must then set a pace."
+        ),
+        "start_date": string(
+            "The first reading day, as year-month-day: 2026-11-01. Omitted, today."
+        ),
+        "rest_days": arrayOfStrings(
+            "Days of the week with no reading: [\"saturday\", \"sunday\"], or "
+                + "[\"weekends\"] for both. The plan runs on past them, so it "
+                + "still has its full number of reading days."
         ),
     ]
 

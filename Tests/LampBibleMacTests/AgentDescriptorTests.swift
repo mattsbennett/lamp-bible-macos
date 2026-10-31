@@ -118,16 +118,21 @@ struct AgentDescriptorTests {
 
         let read = try LampAgentDescriptorStore.read(inApplicationSupport: root)
         #expect(read.allowsExternalApps == false)
+        #expect(read.allowsExternalWriting == false)
+        #expect(read.allowsExternalReadingPlans == false)
         #expect(throws: LampAgentDescriptorStore.StoreError.externalAppsNotAllowed) {
             try LampAgentDescriptorStore.readForExternalUse(inApplicationSupport: root)
         }
     }
 
     @Test func thedefaultIsOff() {
-        #expect(
-            LampAgentDescriptor(libraryRootPath: "/l", policyPath: "/p")
-                .allowsExternalApps == false
-        )
+        let descriptor = LampAgentDescriptor(libraryRootPath: "/l", policyPath: "/p")
+
+        #expect(descriptor.allowsExternalApps == false)
+        // Each switch is its own: reading cannot grant writing, and neither
+        // grants adding a reading plan.
+        #expect(descriptor.allowsExternalWriting == false)
+        #expect(descriptor.allowsExternalReadingPlans == false)
     }
 
     /// Switched off is a different answer from missing, and says a different

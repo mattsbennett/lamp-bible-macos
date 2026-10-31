@@ -29,6 +29,7 @@ struct TodayPlansView: View {
     @State private var date = Date()
     @State private var daysByPlanID: [String: LampReadingPlanDay] = [:]
     @State private var isLoading = false
+    @State private var isMakingPlan = false
 
     let showImporter: () -> Void
     let showPlans: () -> Void
@@ -61,10 +62,11 @@ struct TodayPlansView: View {
                 ContentUnavailableView {
                     Label("No Reading Plans Installed", systemImage: "calendar.badge.plus")
                 } description: {
-                    Text("Install a plan .lamp module, or build one in Module Studio.")
+                    Text("Make a plan from the passages you want to read, or install a plan .lamp module.")
                 } actions: {
-                    Button("Install Module…", action: showImporter)
+                    Button("New Plan…") { isMakingPlan = true }
                         .buttonStyle(.borderedProminent)
+                    Button("Install Module…", action: showImporter)
                 }
             } else if selectedPlans.isEmpty {
                 ContentUnavailableView {
@@ -87,6 +89,8 @@ struct TodayPlansView: View {
                                 .font(.title3)
                                 .foregroundStyle(.secondary)
                         }
+
+                        AddedPlanNotice()
 
                         ForEach(selectedPlans) { plan in
                             if let day = daysByPlanID[plan.id] {
@@ -121,6 +125,10 @@ struct TodayPlansView: View {
                 CalendarDateField(title: "Reading Date", selection: $date)
             }
         }
+        .sheet(isPresented: $isMakingPlan) { NewReadingPlanSheet() }
+        // A plan asked for in another app is installed by Lamp, not by the
+        // helper that was asked; here is where someone will look for it.
+        .task { await model.takeInRequestedReadingPlans() }
         .task(id: request) {
             await loadDays()
         }
@@ -157,6 +165,7 @@ struct ReadingPlansView: View {
     let openReading: (PlanReadingMode) -> Void
     let openAllReadings: (PlanReadingMode) -> Void
 
+    @State private var isMakingPlan = false
     private let date = Date()
 
     /// Brings the plan a search result named into view, and forgets the
@@ -180,10 +189,11 @@ struct ReadingPlansView: View {
                 ContentUnavailableView {
                     Label("No Reading Plans Installed", systemImage: "calendar.badge.plus")
                 } description: {
-                    Text("Plan JSON can be compiled in Module Studio and installed as a portable .lamp module.")
+                    Text("Make a plan from the passages you want to read, or install one as a portable .lamp module.")
                 } actions: {
-                    Button("Install Module…", action: showImporter)
+                    Button("New Plan…") { isMakingPlan = true }
                         .buttonStyle(.borderedProminent)
+                    Button("Install Module…", action: showImporter)
                 }
             } else {
                 ScrollViewReader { proxy in
@@ -196,6 +206,8 @@ struct ReadingPlansView: View {
                                     .foregroundStyle(.secondary)
                             }
                             .padding(.bottom, 8)
+
+                            AddedPlanNotice()
 
                             ForEach(model.plans) { plan in
                                 ReadingPlanCard(
@@ -217,8 +229,41 @@ struct ReadingPlansView: View {
             }
         }
         .navigationTitle("Reading Plans")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button("New Plan", systemImage: "calendar.badge.plus") { isMakingPlan = true }
+                    .help("Make a reading plan from the passages you want to read")
+            }
+        }
+        .sheet(isPresented: $isMakingPlan) { NewReadingPlanSheet() }
         .task {
             await model.loadPlanProgress(year: LampPlanCalendar.year(for: date))
+            await model.takeInRequestedReadingPlans()
+        }
+    }
+}
+
+/// What another app asked Lamp to add, said where the plan turns up.
+///
+/// The asking happened in another app; this is the only place the reader finds
+/// out that their library has a plan in it that they did not install here.
+private struct AddedPlanNotice: View {
+    @EnvironmentObject private var model: LibraryModel
+
+    var body: some View {
+        if let message = model.addedPlanMessage {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Label(message, systemImage: "calendar.badge.plus")
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                Button("Dismiss", systemImage: "xmark") { model.addedPlanMessage = nil }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.borderless)
+            }
+            .font(.callout)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
         }
     }
 }

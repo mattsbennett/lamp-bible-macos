@@ -38,6 +38,10 @@ let package = Package(
                 .product(name: "LampCore", package: "lamp-bible-core"),
                 .product(name: "LampModuleKit", package: "lamp-bible-core"),
                 .product(name: "LampPresentationUI", package: "lamp-bible-core"),
+                // Apple Intelligence, for making a reading plan from a
+                // description. Weak-linked in core, so the app still launches
+                // on a Mac with no FoundationModels to load.
+                .product(name: "LampIntelligence", package: "lamp-bible-core"),
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
                 .product(name: "SwiftyChat", package: "SwiftyChat"),
                 .product(name: "Sparkle", package: "Sparkle"),

@@ -9,6 +9,10 @@
 /* Begin PBXBuildFile section */
 		A10000000000000000000051 /* WritingChangesSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000004E /* WritingChangesSupport.swift */; };
 		A1000000000000000000022B /* WritingWriteSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000021D /* WritingWriteSupport.swift */; };
+		A1000000000000000000022F /* NewReadingPlanSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000220 /* NewReadingPlanSheet.swift */; };
+		A10000000000000000000230 /* ReadingPlanRequestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000221 /* ReadingPlanRequestSupport.swift */; };
+		A10000000000000000000231 /* ReadingPlanRequestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000221 /* ReadingPlanRequestSupport.swift */; };
+		A10000000000000000000232 /* LampIntelligence in Frameworks */ = {isa = PBXBuildFile; productRef = G100000000000000000000F4 /* LampIntelligence */; };
 		A1000000000000000000022D /* StrongsAnalysisSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000021E /* StrongsAnalysisSupport.swift */; };
 		A10000000000000000000229 /* WritingWorkspaceSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000021C /* WritingWorkspaceSupport.swift */; };
 		A10000000000000000000227 /* LampMCPPromptCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000021B /* LampMCPPromptCatalog.swift */; };
@@ -233,6 +237,8 @@
 		B10000000000000000000111 /* TranslationImportSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/TranslationImportSheet.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000004E /* WritingChangesSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/WritingChangesSupport.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000021D /* WritingWriteSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/WritingWriteSupport.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000220 /* NewReadingPlanSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/NewReadingPlanSheet.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000221 /* ReadingPlanRequestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/ReadingPlanRequestSupport.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000021E /* StrongsAnalysisSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/StrongsAnalysisSupport.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000021C /* WritingWorkspaceSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/WritingWorkspaceSupport.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000021B /* LampMCPPromptCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampMCPServer/LampMCPPromptCatalog.swift; sourceTree = SOURCE_ROOT; };
@@ -289,6 +295,7 @@
 				A1000000000000000000000B /* LampCore in Frameworks */,
 				A1000000000000000000000C /* LampModuleKit in Frameworks */,
 				A1000000000000000000004A /* LampPresentationUI in Frameworks */,
+				A10000000000000000000232 /* LampIntelligence in Frameworks */,
 				A10000000000000000000026 /* SwiftTerm in Frameworks */,
 				A1000000000000000000003D /* SwiftyChat in Frameworks */,
 				A10000000000000000000043 /* Sparkle in Frameworks */,
@@ -350,6 +357,8 @@
 				B1000000000000000000000E /* UnifiedSearchView.swift */,
 				B1000000000000000000021F /* StrongsAnalysisView.swift */,
 				B10000000000000000000005 /* ReadingPlansView.swift */,
+				B10000000000000000000220 /* NewReadingPlanSheet.swift */,
+				B10000000000000000000221 /* ReadingPlanRequestSupport.swift */,
 				B10000000000000000000006 /* StudyHighlightPalette.swift */,
 				B10000000000000000000007 /* StudyInspectorView.swift */,
 				B10000000000000000000216 /* ReaderWorkspace.swift */,
@@ -480,6 +489,7 @@
 				G10000000000000000000002 /* LampCore */,
 				G10000000000000000000003 /* LampModuleKit */,
 				G1000000000000000000000D /* LampPresentationUI */,
+				G100000000000000000000F4 /* LampIntelligence */,
 				G10000000000000000000005 /* SwiftTerm */,
 				G1000000000000000000000A /* SwiftyChat */,
 				G1000000000000000000000C /* Sparkle */,
@@ -617,6 +627,8 @@
 				A1000000000000000000020F /* LampColors.swift in Sources */,
 				A1000000000000000000003A /* WrappingRow.swift in Sources */,
 				A10000000000000000000005 /* ReadingPlansView.swift in Sources */,
+				A1000000000000000000022F /* NewReadingPlanSheet.swift in Sources */,
+				A10000000000000000000230 /* ReadingPlanRequestSupport.swift in Sources */,
 				A10000000000000000000006 /* StudyHighlightPalette.swift in Sources */,
 				A10000000000000000000007 /* StudyInspectorView.swift in Sources */,
 				A10000000000000000000220 /* ReaderWorkspace.swift in Sources */,
@@ -702,6 +714,7 @@
 			files = (
 				A10000000000000000000051 /* WritingChangesSupport.swift in Sources */,
 				A1000000000000000000022B /* WritingWriteSupport.swift in Sources */,
+				A10000000000000000000231 /* ReadingPlanRequestSupport.swift in Sources */,
 				A1000000000000000000022D /* StrongsAnalysisSupport.swift in Sources */,
 				A10000000000000000000229 /* WritingWorkspaceSupport.swift in Sources */,
 				A10000000000000000000227 /* LampMCPPromptCatalog.swift in Sources */,
@@ -982,6 +995,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = G10000000000000000000001 /* XCLocalSwiftPackageReference "lamp-bible-core" */;
 			productName = LampPresentationUI;
+		};
+		G100000000000000000000F4 /* LampIntelligence */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = G10000000000000000000001 /* XCLocalSwiftPackageReference "lamp-bible-core" */;
+			productName = LampIntelligence;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

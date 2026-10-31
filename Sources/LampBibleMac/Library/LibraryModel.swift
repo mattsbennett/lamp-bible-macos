@@ -142,6 +142,9 @@ final class LibraryModel: ObservableObject {
     @Published private(set) var selectedPlanIDs: Set<String> = []
     @Published private(set) var completedReadingIDs: Set<String> = []
     @Published private(set) var planProgressYear = LampPlanCalendar.year(for: Date())
+    /// What the last take-in of plans asked for in other apps did, for the
+    /// plans views to show. Nil when there is nothing to say.
+    @Published var addedPlanMessage: String?
     @Published var errorMessage: String?
     @Published var studyImportMessage: String?
 
@@ -241,7 +244,10 @@ final class LibraryModel: ObservableObject {
     /// a chapter again: each window reads its own once this is done.
     func start() {
         guard modules.isEmpty, !isRefreshing else { return }
-        Task { await refreshLibrary(reloadingReader: false) }
+        Task {
+            await refreshLibrary(reloadingReader: false)
+            await takeInRequestedReadingPlans()
+        }
     }
 
     func refresh() {
@@ -790,6 +796,66 @@ final class LibraryModel: ObservableObject {
 
     func openReading(_ reading: LampPlanReading) {
         openReference(reading.startReference, translationID: nil)
+    }
+
+    /// Adds a plan made in Lamp, includes it in Today, and reads the library
+    /// again so it appears in the list.
+    ///
+    /// Core installs a made plan as an ordinary plan module — it syncs, and is
+    /// ticked off, like any other — and does not select it. Selecting is this
+    /// app's decision: someone who has just made a plan means to read it.
+    @discardableResult
+    func addReadingPlan(_ draft: LampReadingPlanDraft) async throws -> String {
+        let module = try await library.installReadingPlan(draft)
+        try await library.setPlanSelected(moduleID: module.id, selected: true)
+        await refreshLibrary()
+        return module.id
+    }
+
+    /// Adds the reading plans other apps have asked for.
+    ///
+    /// `add_reading_plan` runs in the MCP helper, a process of its own that
+    /// must not install into the library Lamp has open, so it writes down what
+    /// was asked for and this installs it. Called when the library is first
+    /// read and whenever a plans view appears, which is where someone who
+    /// asked for a plan will go looking for it.
+    ///
+    /// A request core refuses is forgotten rather than kept: words that could
+    /// not be laid out today will not lay out tomorrow, and a plan nobody can
+    /// use should not greet every launch with the same complaint. Any other
+    /// failure — the install itself — is left to be tried again.
+    func takeInRequestedReadingPlans(
+        applicationSupportURL: URL? = LampAgentDescriptorStore.defaultApplicationSupportURL()
+    ) async {
+        guard let applicationSupportURL else { return }
+        let waiting = LampReadingPlanAdditions.pending(
+            inApplicationSupport: applicationSupportURL
+        )
+        guard !waiting.isEmpty else { return }
+        var added: [String] = []
+        var refused: [String] = []
+        for addition in waiting {
+            do {
+                let draft = try addition.request.request().draft(id: addition.id)
+                try await library.installReadingPlan(draft)
+                try await library.setPlanSelected(moduleID: addition.id, selected: true)
+                LampReadingPlanAdditions.forget(
+                    id: addition.id, inApplicationSupport: applicationSupportURL
+                )
+                added.append(draft.plan.name)
+            } catch let error as LampReadingPlanError {
+                LampReadingPlanAdditions.forget(
+                    id: addition.id, inApplicationSupport: applicationSupportURL
+                )
+                refused.append(error.localizedDescription)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+        if !added.isEmpty { await refreshLibrary() }
+        if let message = LampReadingPlanAdditions.summary(added: added, refused: refused) {
+            addedPlanMessage = message
+        }
     }
 
     func setPlanSelected(_ planID: String, selected: Bool) {
