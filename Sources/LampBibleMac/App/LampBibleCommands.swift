@@ -19,6 +19,13 @@ struct NewReaderTabActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
+/// Opens the reader's passage field, which takes a reference, a Strong's key
+/// or words to search for. A menu item because the toolbar button cannot say
+/// all that, and the menu is where someone looks for it.
+struct GoToPassageActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
 extension FocusedValues {
     var installModuleAction: (() -> Void)? {
         get { self[InstallModuleActionKey.self] }
@@ -36,6 +43,11 @@ extension FocusedValues {
         set { self[NewReaderTabActionKey.self] = newValue }
     }
 
+    var goToPassageAction: (() -> Void)? {
+        get { self[GoToPassageActionKey.self] }
+        set { self[GoToPassageActionKey.self] = newValue }
+    }
+
     var writingFind: WritingFindController? {
         get { self[WritingFindKey.self] }
         set { self[WritingFindKey.self] = newValue }
@@ -47,6 +59,7 @@ struct LampBibleCommands: Commands {
     @FocusedValue(\.installModuleAction) private var installModule
     @FocusedValue(\.importStudyDataAction) private var importStudyData
     @FocusedValue(\.newReaderTabAction) private var newReaderTab
+    @FocusedValue(\.goToPassageAction) private var goToPassage
     @FocusedValue(\.writingFind) private var writingFind
     @FocusedObject private var scrollLink: ReaderScrollLink?
 
@@ -121,6 +134,11 @@ struct LampBibleCommands: Commands {
         }
 
         CommandGroup(after: .sidebar) {
+            Button("Go to Passage or Search…") { goToPassage?() }
+                .keyboardShortcut("l", modifiers: .command)
+                .disabled(goToPassage == nil)
+            Divider()
+
             Toggle("Link Study Tool Scrolling", isOn: Binding(
                 get: { scrollLink?.isLinked ?? false },
                 set: { newValue in scrollLink?.isLinked = newValue }

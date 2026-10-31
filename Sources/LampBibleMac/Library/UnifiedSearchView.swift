@@ -234,7 +234,15 @@ struct UnifiedSearchView: View {
         .onChange(of: devotionalTag) { _, _ in runSearch() }
         .onChange(of: devotionalCategory) { _, _ in runSearch() }
         .onChange(of: bookScope) { _, _ in runSearch() }
-        .onChange(of: strongsKey) { _, _ in runSearch() }
+        .onChange(of: strongsKey) { _, key in
+            // A key is a key on scripture. Set only when nothing is chosen,
+            // so someone looking one up in a lexicon keeps that choice.
+            if selectedKind == nil,
+               !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                selectedKind = .translation
+            }
+            runSearch()
+        }
         .onChange(of: highlightColor) { _, _ in runSearch() }
         .onChange(of: model.moduleSearchResults) { _, results in
             if !results.contains(where: { $0.id == selectedResultID }) {

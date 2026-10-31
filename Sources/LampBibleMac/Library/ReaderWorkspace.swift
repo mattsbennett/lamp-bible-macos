@@ -23,6 +23,9 @@ final class ReaderWorkspace: ObservableObject {
     /// no way to reach the sidebar's selection itself, and this is the object
     /// they already share.
     @Published var requestedSearch: String?
+    /// A Strong's key typed into the same field, which belongs to the
+    /// analysis rather than to a text search.
+    @Published var requestedStrongsKey: String?
 
     @Published private(set) var selectedTranslationID: String?
     @Published private(set) var selectedBookNumber: Int?

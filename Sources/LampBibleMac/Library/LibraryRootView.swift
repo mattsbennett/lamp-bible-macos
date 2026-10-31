@@ -73,6 +73,7 @@ struct LibraryRootView: View {
     /// The search's own query, so the reader's reference field can hand words
     /// to it. The same key the search reads, in the same scene.
     @SceneStorage("search.query") private var searchQuery = ""
+    @SceneStorage("search.strongsKey") private var searchStrongsKey = ""
     /// A passage waiting for the reader to say which Bible app to open it in,
     /// because they chose "Ask Each Time".
     @State private var externalBibleRequest: ExternalBibleRequest?
@@ -290,6 +291,16 @@ struct LibraryRootView: View {
             searchQuery = words
             selection = .section(.search)
             workspace.requestedSearch = nil
+        }
+        .onChange(of: workspace.requestedStrongsKey) { _, key in
+            guard let key else { return }
+            // The key and the box; the search sets its own content filter
+            // from the key, since it owns that setting and two writers of
+            // one scene key do not agree.
+            searchQuery = key
+            searchStrongsKey = key
+            selection = .section(.search)
+            workspace.requestedStrongsKey = nil
         }
         .onChange(of: selection) { _, newValue in
             if !isReaderSelection(newValue) {
@@ -3020,6 +3031,8 @@ private struct ReaderLocationPickerPopover: View {
     /// Hands words that are not a reference to the search, so one field
     /// answers both "take me to John 3" and "where does it say that".
     let openSearch: (String) -> Void
+    /// And a Strong's key to the analysis, which is where that goes.
+    let openAnalysis: (String) -> Void
     @State private var translationID = ""
     @State private var books: [LampTranslationBook] = []
     @State private var bookNumber = 0
@@ -3041,6 +3054,12 @@ private struct ReaderLocationPickerPopover: View {
                     icon: "book",
                     title: "Go to \(reference.description)",
                     action: { go(to: reference) }
+                )
+            } else if let key = typedStrongsKey {
+                offerRow(
+                    icon: "chart.bar.xaxis",
+                    title: "Analyse \(key)",
+                    action: { analyse(key) }
                 )
             } else if !trimmedTyped.isEmpty, matchingBooks.isEmpty {
                 offerRow(
@@ -3079,8 +3098,13 @@ private struct ReaderLocationPickerPopover: View {
                 .frame(height: 260)
             }
         }
-        .padding(14)
-        .frame(width: 430)
+        // Wide enough for what is inside it. The books column, the divider,
+        // the chapter grid and the padding add up to this; a narrower frame
+        // squeezed the padding away on one side, so the field's focus ring
+        // sat against the popover's edge while the other side kept its
+        // margin.
+        .padding(20)
+        .frame(width: Self.booksColumnWidth + Self.chaptersColumnWidth + 65)
         .onAppear {
             resetSelection()
             fieldFocused = true
@@ -3108,6 +3132,11 @@ private struct ReaderLocationPickerPopover: View {
         books.first { $0.id == bookNumber }
     }
 
+    /// The two columns, named so the popover's width can be worked out from
+    /// them rather than guessed.
+    private static let booksColumnWidth: Double = 168
+    private static let chaptersColumnWidth: Double = 236
+
     private var trimmedTyped: String {
         typed.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -3116,6 +3145,13 @@ private struct ReaderLocationPickerPopover: View {
     /// the two fields understand the same things.
     private var typedReference: LampSearchReference? {
         trimmedTyped.isEmpty ? nil : LampSearchQuery(trimmedTyped).reference
+    }
+
+    /// A Strong's key, which is neither a passage nor words to search for.
+    /// The same reading the search box uses, so typing H7225 here means what
+    /// it means there.
+    private var typedStrongsKey: String? {
+        LampStrongsKey.typedKey(trimmedTyped)
     }
 
     /// The books the typed text narrows to. Anything that parses as a
@@ -3152,7 +3188,7 @@ private struct ReaderLocationPickerPopover: View {
                 }
                 .padding(.vertical, 2)
             }
-            .frame(width: 168)
+            .frame(width: Self.booksColumnWidth)
             // Open on the book being read, rather than at Genesis with the
             // reader somewhere in Kings.
             .onAppear { proxy.scrollTo(bookNumber, anchor: .center) }
@@ -3192,7 +3228,7 @@ private struct ReaderLocationPickerPopover: View {
                     .frame(maxWidth: .infinity, alignment: .center)
             }
         }
-        .frame(width: 236)
+        .frame(width: Self.chaptersColumnWidth)
     }
 
     private func offerRow(icon: String, title: String, action: @escaping () -> Void) -> some View {
@@ -3222,6 +3258,8 @@ private struct ReaderLocationPickerPopover: View {
     private func commitTyped() {
         if let typedReference {
             go(to: typedReference)
+        } else if let key = typedStrongsKey {
+            analyse(key)
         } else if matchingBooks.count == 1, let only = matchingBooks.first {
             bookNumber = only.id
             typed = ""
@@ -3247,6 +3285,11 @@ private struct ReaderLocationPickerPopover: View {
     private func handOver(_ words: String) {
         isPresented = false
         openSearch(words)
+    }
+
+    private func analyse(_ key: String) {
+        isPresented = false
+        openAnalysis(key)
     }
 
 
@@ -3472,6 +3515,10 @@ private struct TranslationReaderView: View, Equatable {
         }
         // The window's toolbar and menus belong to whichever section is shown.
         .toolbar { if isShown { readerToolbar } }
+        // On the view, not on the toolbar button: a toolbar item is not in
+        // the focus chain, so a focused value published from one never
+        // reaches the menu and the command stays greyed out.
+        .focusedSceneValue(\.goToPassageAction, isShown ? { showingReaderLocationPicker = true } : nil)
         .toolbar(removing: isShown ? .title : nil)
         .focusedObject(isShown ? scrollLink : nil)
         .onChange(of: isShown) { _, isShown in
@@ -5621,11 +5668,16 @@ private struct TranslationReaderView: View, Equatable {
                     }
                     .fixedSize()
                 }
-                .help("Choose translation, book, or chapter")
+                // Says what the field behind it takes, since the button
+                // itself cannot show that it now accepts a reference, a
+                // Strong's key or words to search for.
+                .help("Go to a passage, or search (⌘L)")
+                .accessibilityLabel("Go to a passage, or search")
                 .popover(isPresented: $showingReaderLocationPicker, arrowEdge: .bottom) {
                     ReaderLocationPickerPopover(
                         isPresented: $showingReaderLocationPicker,
-                        openSearch: { workspace.requestedSearch = $0 }
+                        openSearch: { workspace.requestedSearch = $0 },
+                        openAnalysis: { workspace.requestedStrongsKey = $0 }
                     )
                         .environmentObject(model)
                 }
