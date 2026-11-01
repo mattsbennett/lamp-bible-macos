@@ -409,7 +409,7 @@ private struct ReadingPlanCard: View {
                 }
 
                 HStack(spacing: 18) {
-                    Label("\(plan.duration) days", systemImage: "calendar")
+                    Label(plan.lengthDescription, systemImage: "calendar")
                     if let readingsPerDay = plan.readingsPerDay {
                         Label("\(readingsPerDay) readings per day", systemImage: "book.pages")
                     }

@@ -138,32 +138,27 @@ struct PassagePickerKeysTests {
     /// Nothing typed, so nothing offered: the field, the translation and the
     /// two columns.
     @Test func anUntouchedReaderPickerRingsTheFieldTheTranslationAndTheColumns() {
-        #expect(Keys.ring(offer: false, passages: true, duplicate: false)
+        #expect(Keys.ring(offer: false, passages: true)
             == [.field, .translation, .books, .chapters])
     }
 
     /// The offer row sits under the field, and is tabbed to from it.
     @Test func whatIsTypedAddsItsOfferAfterTheField() {
-        #expect(Keys.ring(offer: true, passages: true, duplicate: false)
+        #expect(Keys.ring(offer: true, passages: true)
             == [.field, .offer, .translation, .books, .chapters])
     }
 
     /// While the books load there are no columns to tab into, and nothing in
     /// them to arrow through.
     @Test func loadingBooksLeavesTheColumnsOutOfTheRing() {
-        #expect(Keys.ring(offer: false, passages: false, duplicate: false)
+        #expect(Keys.ring(offer: false, passages: false)
             == [.field, .translation])
-    }
-
-    /// A new tab's picker ends with the row that opens one where this is.
-    @Test func aNewTabsDuplicateRowIsTheLastStop() {
-        #expect(Keys.ring(offer: true, passages: true, duplicate: true).last == .duplicate)
     }
 
     // MARK: - Moving round the ring
 
     @Test func tabGoesForwardAndShiftTabBack() {
-        let ring = Keys.ring(offer: true, passages: true, duplicate: false)
+        let ring = Keys.ring(offer: true, passages: true)
         #expect(Keys.stepping(from: .field, by: 1, through: ring) == .offer)
         #expect(Keys.stepping(from: .books, by: -1, through: ring) == .translation)
     }
@@ -171,7 +166,7 @@ struct PassagePickerKeysTests {
     /// A popover is a closed set of controls: tabbing past the last lands on
     /// the field, where the next thing typed should go.
     @Test func theRingWrapsBothWays() {
-        let ring = Keys.ring(offer: false, passages: true, duplicate: false)
+        let ring = Keys.ring(offer: false, passages: true)
         #expect(Keys.stepping(from: .chapters, by: 1, through: ring) == .field)
         #expect(Keys.stepping(from: .field, by: -1, through: ring) == .chapters)
     }
@@ -179,7 +174,7 @@ struct PassagePickerKeysTests {
     /// The offer row disappears the moment what was typed stops being an
     /// offer, and it may have had focus. Tab must still go somewhere.
     @Test func aStopThatHasLeftTheRingHandsFocusToTheField() {
-        let ring = Keys.ring(offer: false, passages: true, duplicate: false)
+        let ring = Keys.ring(offer: false, passages: true)
         #expect(Keys.stepping(from: .offer, by: 1, through: ring) == .field)
         #expect(Keys.stepping(from: nil, by: 1, through: ring) == .field)
     }

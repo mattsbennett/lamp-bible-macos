@@ -133,8 +133,6 @@ public enum LampPassagePickerStop: String, CaseIterable, Hashable, Sendable {
     case books
     /// The chapter grid.
     case chapters
-    /// A new tab's "open the passage this one is at" row.
-    case duplicate
 }
 
 /// Tab, ⇧Tab and the arrow keys in the passage picker.
@@ -154,18 +152,12 @@ public enum LampPassagePickerKeys {
     /// The stops this picker has, in tab order.
     ///
     /// Only what is on screen: there is no offer row until something typed
-    /// turns into an offer, no columns while the books are still loading, and
-    /// no duplicate row outside a new tab.
-    public static func ring(
-        offer: Bool,
-        passages: Bool,
-        duplicate: Bool
-    ) -> [LampPassagePickerStop] {
+    /// turns into an offer, and no columns while the books are still loading.
+    public static func ring(offer: Bool, passages: Bool) -> [LampPassagePickerStop] {
         var stops: [LampPassagePickerStop] = [.field]
         if offer { stops.append(.offer) }
         stops.append(.translation)
         if passages { stops.append(contentsOf: [.books, .chapters]) }
-        if duplicate { stops.append(.duplicate) }
         return stops
     }
 

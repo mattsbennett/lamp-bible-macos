@@ -483,9 +483,21 @@ struct LibraryRootView: View {
         showingNewReaderTab = true
     }
 
-    private func duplicateCurrentReaderTab() {
-        guard let location = workspace.currentLocation else { return }
-        openReaderTab(at: location)
+    /// Copies the tab that was asked for, which is not always the open one.
+    ///
+    /// The open tab's place lives in the workspace until it is written back,
+    /// so it is written back first; otherwise duplicating the tab you are
+    /// reading copies where it was when you left it rather than where you
+    /// are.
+    private func duplicateReaderTab(_ id: UUID) {
+        readerTabs.updateSelected(location: workspace.currentLocation)
+        guard let location = readerTabs.duplicate(id) else { return }
+        workspace.openTab(at: location)
+        selection = .section(.reader)
+    }
+
+    private func renameReaderTab(_ id: UUID, to name: String?) {
+        readerTabs.rename(id, to: name)
     }
 
     private func openReaderTab(at location: ReaderLocation) {
@@ -602,11 +614,11 @@ struct LibraryRootView: View {
                 ReaderTabBar(
                     tabs: readerTabs.tabs,
                     selectedID: readerTabs.selectedID,
-                    currentLocation: workspace.currentLocation,
                     showingNewTab: $showingNewReaderTab,
                     select: selectReaderTab,
                     close: closeReaderTab,
-                    duplicate: duplicateCurrentReaderTab,
+                    duplicate: duplicateReaderTab,
+                    rename: renameReaderTab,
                     openLocation: { openReaderTab(at: $0) }
                 )
                 Divider()
@@ -1014,15 +1026,18 @@ private struct StudyInspectorColumn<Content: View>: View {
 private struct ReaderTabBar: View {
     let tabs: [ReaderTab]
     let selectedID: UUID
-    let currentLocation: ReaderLocation?
     @Binding var showingNewTab: Bool
     let select: (UUID) -> Void
     let close: (UUID) -> Void
-    let duplicate: () -> Void
+    let duplicate: (UUID) -> Void
+    let rename: (UUID, String?) -> Void
     let openLocation: (ReaderLocation) -> Void
 
     @State private var hoveredTabID: UUID?
     @State private var isHoveringNewTab = false
+    /// The tab being renamed, and what is being typed for it.
+    @State private var renamingTabID: UUID?
+    @State private var draftName = ""
 
     private static let height: CGFloat = 30
 
@@ -1045,6 +1060,22 @@ private struct ReaderTabBar: View {
         .scrollIndicators(.hidden)
         .frame(height: Self.height)
         .background(.bar)
+        .alert(
+            "Rename Tab",
+            isPresented: Binding(
+                get: { renamingTabID != nil },
+                set: { if !$0 { renamingTabID = nil } }
+            )
+        ) {
+            TextField("Name", text: $draftName)
+            Button("Rename") {
+                if let id = renamingTabID { rename(id, draftName) }
+                renamingTabID = nil
+            }
+            Button("Cancel", role: .cancel) { renamingTabID = nil }
+        } message: {
+            Text("Leave it empty to name the tab after whatever it is showing.")
+        }
     }
 
     private var separator: some View {
@@ -1104,6 +1135,23 @@ private struct ReaderTabBar: View {
             hoveredTabID = isHovering ? tab.id : (hoveredTabID == tab.id ? nil : hoveredTabID)
         }
         .help(tabTitle(tab))
+        .contextMenu {
+            Button("Rename Tab…") {
+                draftName = tab.name ?? ""
+                renamingTabID = tab.id
+            }
+            if tab.name != nil {
+                Button("Use the Chapter's Name") { rename(tab.id, nil) }
+            }
+            // Here rather than in the new-tab popover, where it was an odd
+            // thing to meet: that popover is for choosing a passage, and
+            // "duplicate" is about a tab you can see and point at.
+            Button("Duplicate Tab") { duplicate(tab.id) }
+            if tabs.count > 1 {
+                Divider()
+                Button("Close Tab") { close(tab.id) }
+            }
+        }
     }
 
     private func cellBackground(isSelected: Bool, isHovered: Bool) -> some ShapeStyle {
@@ -1138,13 +1186,13 @@ private struct ReaderTabBar: View {
             PassagePickerPopover(
                 isPresented: $showingNewTab,
                 open: openLocation,
-                headline: "Open in a new tab",
-                duplicate: currentLocation == nil ? nil : duplicate
+                headline: "Open in a new tab"
             )
         }
     }
 
     private func tabTitle(_ tab: ReaderTab) -> String {
+        if let name = tab.name { return name }
         guard let location = tab.location else { return "Reader" }
         return "\(LampBibleReferenceFormatter.bookName(location.bookNumber)) \(location.chapterNumber)"
     }
@@ -1223,7 +1271,7 @@ private struct PlanReadingModeBar: View {
                 }
                 .buttonStyle(.bordered)
 
-                Button("Exit Reading Mode", systemImage: "xmark.circle") {
+                Button("Exit Plan Mode", systemImage: "xmark.circle") {
                     self.mode = nil
                 }
                 .buttonStyle(.borderless)
@@ -2804,8 +2852,8 @@ private struct PassagePickerOffer {
 /// book's name is all it can offer to do.
 ///
 /// Everything here can be reached from the keyboard: Tab and ⇧Tab move through
-/// the field, the offer, the translation, the two columns and the duplicate
-/// row, the arrows move within whichever has focus, and Return takes it. See
+/// the field, the offer, the translation and the two columns, the arrows move
+/// within whichever has focus, and Return takes it. See
 /// `LampPassagePickerKeys` for why the ring is kept rather than left to macOS.
 private struct PassagePickerPopover: View {
     @EnvironmentObject private var model: LibraryModel
@@ -2822,8 +2870,6 @@ private struct PassagePickerPopover: View {
     var openSearch: ((String) -> Void)?
     /// And a Strong's key to the analysis, which is where that goes.
     var openAnalysis: ((String) -> Void)?
-    /// Opens a second tab at the passage this one is already at.
-    var duplicate: (() -> Void)?
     @State private var translationID = ""
     @State private var books: [LampTranslationBook] = []
     @State private var bookNumber = 0
@@ -2891,17 +2937,6 @@ private struct PassagePickerPopover: View {
                     chapterGrid
                 }
                 .frame(height: 260)
-            }
-
-            if duplicate != nil, workspace.currentLocation != nil {
-                offerRow(
-                    PassagePickerOffer(
-                        icon: "plus.square.on.square",
-                        title: "Duplicate this tab",
-                        action: { duplicate?(); isPresented = false }
-                    ),
-                    stop: .duplicate
-                )
             }
         }
         // Wide enough for what is inside it. The books column, the divider,
@@ -3022,8 +3057,7 @@ private struct PassagePickerPopover: View {
     private var ring: [LampPassagePickerStop] {
         LampPassagePickerKeys.ring(
             offer: offer != nil,
-            passages: !isLoadingBooks && errorMessage == nil,
-            duplicate: duplicate != nil && workspace.currentLocation != nil
+            passages: !isLoadingBooks && errorMessage == nil
         )
     }
 
@@ -3260,10 +3294,6 @@ private struct PassagePickerPopover: View {
         switch focus {
         case .offer:
             offer?.action()
-            return .handled
-        case .duplicate:
-            duplicate?()
-            isPresented = false
             return .handled
         case .translation, .books, .chapters:
             guard let selectedBook else { return .ignored }

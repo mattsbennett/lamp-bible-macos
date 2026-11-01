@@ -313,6 +313,73 @@ struct ReaderSupportTests {
         #expect(tabs.tabs.count == 1)
     }
 
+    /// A tab is named for where it is until someone names it themselves, and
+    /// then it keeps that name wherever it is read on to — which is the point
+    /// of naming one.
+    @Test func anamedTabKeepsItsNameAsItIsReadOn() {
+        let genesis = ReaderLocation(translationID: "WEB", bookNumber: 1, chapterNumber: 1)
+        var tabs = ReaderTabCollection(initialLocation: genesis)
+        let id = tabs.selectedID
+
+        tabs.rename(id, to: "Sunday Class")
+        #expect(tabs.selectedTab?.name == "Sunday Class")
+
+        tabs.updateSelected(location: ReaderLocation(
+            translationID: "WEB", bookNumber: 43, chapterNumber: 3
+        ))
+        #expect(tabs.selectedTab?.name == "Sunday Class", "reading on does not rename it")
+    }
+
+    /// Blank is not a name: a tab given one by accident goes back to being
+    /// named after its chapter, which is also how the menu clears a name.
+    @Test func ablankNameTakesTheNameAway() {
+        var tabs = ReaderTabCollection(
+            initialLocation: ReaderLocation(translationID: "WEB", bookNumber: 1, chapterNumber: 1)
+        )
+        let id = tabs.selectedID
+        tabs.rename(id, to: "  Sunday Class  ")
+        #expect(tabs.selectedTab?.name == "Sunday Class", "and the spaces around it are not part of it")
+
+        tabs.rename(id, to: "   ")
+        #expect(tabs.selectedTab?.name == nil)
+        tabs.rename(id, to: "Named again")
+        tabs.rename(id, to: nil)
+        #expect(tabs.selectedTab?.name == nil)
+    }
+
+    /// The copy goes beside the tab it came from, not at the end: "duplicate
+    /// this one" means the one pointed at, and a copy that turns up elsewhere
+    /// has to be found again.
+    @Test func aduplicatedTabOpensBesideItsOriginal() throws {
+        let genesis = ReaderLocation(translationID: "WEB", bookNumber: 1, chapterNumber: 1)
+        let john = ReaderLocation(translationID: "WEB", bookNumber: 43, chapterNumber: 3)
+        var tabs = ReaderTabCollection(initialLocation: genesis)
+        let genesisID = tabs.selectedID
+        let johnID = tabs.add(location: john)
+        tabs.rename(genesisID, to: "Sunday Class")
+
+        let copied = tabs.duplicate(genesisID)
+
+        #expect(copied == genesis)
+        #expect(tabs.tabs.count == 3)
+        #expect(tabs.tabs.map(\.id).firstIndex(of: johnID) == 2, "the copy went in between")
+        let copy = try #require(tabs.tabs.first { $0.id != genesisID && $0.id != johnID })
+        #expect(tabs.tabs[1].id == copy.id)
+        #expect(copy.location == genesis)
+        #expect(copy.name == "Sunday Class", "a copy of a named tab is named too")
+        #expect(tabs.selectedID == copy.id, "and it is the one you are now in")
+    }
+
+    @Test func duplicatingATabThatIsNotThereChangesNothing() {
+        var tabs = ReaderTabCollection(
+            initialLocation: ReaderLocation(translationID: "WEB", bookNumber: 1, chapterNumber: 1)
+        )
+        let before = tabs
+
+        #expect(tabs.duplicate(UUID()) == nil)
+        #expect(tabs == before)
+    }
+
     @Test func readerTabsRoundTripOrderSelectionAndVerseLocations() throws {
         let genesis = ReaderLocation(translationID: "WEB", bookNumber: 1, chapterNumber: 2, verseReference: 1_002_003)
         let john = ReaderLocation(translationID: "KJV", bookNumber: 43, chapterNumber: 3, verseReference: 43_003_016)
@@ -325,6 +392,36 @@ struct ReaderSupportTests {
         #expect(restored == tabs)
         #expect(restored.tabs.map(\.location) == [genesis, john])
         #expect(restored.selectedID == firstID)
+    }
+
+    /// A name is part of the tab, so it comes back with it.
+    @Test func anameSurvivesBeingWrittenDownAndReadBack() throws {
+        let genesis = ReaderLocation(translationID: "WEB", bookNumber: 1, chapterNumber: 2)
+        var tabs = ReaderTabCollection(initialLocation: genesis)
+        tabs.rename(tabs.selectedID, to: "Sunday Class")
+        tabs.add(location: ReaderLocation(translationID: "WEB", bookNumber: 43, chapterNumber: 3))
+
+        let restored = try JSONDecoder().decode(
+            ReaderTabCollection.self, from: JSONEncoder().encode(tabs)
+        )
+
+        #expect(restored.tabs.map(\.name) == ["Sunday Class", nil])
+    }
+
+    /// Tabs written by a Lamp that had no names decode as tabs with none,
+    /// rather than failing and taking the whole session with them.
+    @Test func tabsWrittenBeforeNamesExistedStillOpen() throws {
+        let json = Data(#"""
+            {"tabs":[{"id":"6B1E4B2E-0A5E-4F3E-9E62-9B1B2C3D4E5F",
+            "location":{"translationID":"WEB","bookNumber":1,"chapterNumber":1}}],
+            "selectedID":"6B1E4B2E-0A5E-4F3E-9E62-9B1B2C3D4E5F"}
+            """#.utf8)
+
+        let restored = try JSONDecoder().decode(ReaderTabCollection.self, from: json)
+
+        #expect(restored.tabs.count == 1)
+        #expect(restored.tabs[0].name == nil)
+        #expect(restored.tabs[0].location?.bookNumber == 1)
     }
 
     @Test func readerTabSessionSurvivesRelaunchAndSavesClosedTabs() throws {

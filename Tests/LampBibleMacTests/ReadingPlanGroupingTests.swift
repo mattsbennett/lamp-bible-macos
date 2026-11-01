@@ -126,3 +126,35 @@ struct ReadingPlanGroupingTests {
         #expect(LampSyncLocalDeletion.target(of: path).isAllowed)
     }
 }
+
+/// How long a plan is, as the card says it.
+///
+/// The built-in plans are all 366 days — year-round plans keeping a slot for
+/// 29 February whether or not the year has one. True, and not what anyone
+/// means by it: people call a year 365 days, and three plans all reading
+/// "366 days" looked like a bug rather than a fact.
+struct ReadingPlanLengthTests {
+    private func plan(days: Int) -> LampReadingPlan {
+        LampReadingPlan(id: "p", name: "A Plan", duration: days)
+    }
+
+    @Test(arguments: [365, 366])
+    func ayearRoundPlanSaysAYear(days: Int) {
+        #expect(plan(days: days).lengthDescription == "A year")
+    }
+
+    @Test func ashorterPlanCountsItsDays() {
+        #expect(plan(days: 22).lengthDescription == "22 days")
+        #expect(plan(days: 90).lengthDescription == "90 days")
+    }
+
+    @Test func onedayIsNotOneDays() {
+        #expect(plan(days: 1).lengthDescription == "1 day")
+    }
+
+    /// A plan just short of the year is still counted: "A year" is for the
+    /// ones that fill it, not for anything near it.
+    @Test func aplanJustShortOfAYearIsStillCounted() {
+        #expect(plan(days: 364).lengthDescription == "364 days")
+    }
+}

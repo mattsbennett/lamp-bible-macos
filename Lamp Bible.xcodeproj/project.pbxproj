@@ -13,6 +13,7 @@
 		A10000000000000000000230 /* ReadingPlanRequestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000221 /* ReadingPlanRequestSupport.swift */; };
 		A10000000000000000000231 /* ReadingPlanRequestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000221 /* ReadingPlanRequestSupport.swift */; };
 		A10000000000000000000233 /* ReadingPlanGrouping.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000222 /* ReadingPlanGrouping.swift */; };
+		A10000000000000000000235 /* ReadingPlanLength.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000223 /* ReadingPlanLength.swift */; };
 		A10000000000000000000232 /* LampIntelligence in Frameworks */ = {isa = PBXBuildFile; productRef = G100000000000000000000F4 /* LampIntelligence */; };
 		A1000000000000000000022D /* StrongsAnalysisSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000021E /* StrongsAnalysisSupport.swift */; };
 		A10000000000000000000229 /* WritingWorkspaceSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000021C /* WritingWorkspaceSupport.swift */; };
@@ -241,6 +242,7 @@
 		B10000000000000000000220 /* NewReadingPlanSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/NewReadingPlanSheet.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000221 /* ReadingPlanRequestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/ReadingPlanRequestSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000222 /* ReadingPlanGrouping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/ReadingPlanGrouping.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000223 /* ReadingPlanLength.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/ReadingPlanLength.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000021E /* StrongsAnalysisSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/StrongsAnalysisSupport.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000021C /* WritingWorkspaceSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/WritingWorkspaceSupport.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000021B /* LampMCPPromptCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampMCPServer/LampMCPPromptCatalog.swift; sourceTree = SOURCE_ROOT; };
@@ -362,6 +364,7 @@
 				B10000000000000000000220 /* NewReadingPlanSheet.swift */,
 				B10000000000000000000221 /* ReadingPlanRequestSupport.swift */,
 				B10000000000000000000222 /* ReadingPlanGrouping.swift */,
+				B10000000000000000000223 /* ReadingPlanLength.swift */,
 				B10000000000000000000006 /* StudyHighlightPalette.swift */,
 				B10000000000000000000007 /* StudyInspectorView.swift */,
 				B10000000000000000000216 /* ReaderWorkspace.swift */,
@@ -633,6 +636,7 @@
 				A1000000000000000000022F /* NewReadingPlanSheet.swift in Sources */,
 				A10000000000000000000230 /* ReadingPlanRequestSupport.swift in Sources */,
 				A10000000000000000000233 /* ReadingPlanGrouping.swift in Sources */,
+				A10000000000000000000235 /* ReadingPlanLength.swift in Sources */,
 				A10000000000000000000006 /* StudyHighlightPalette.swift in Sources */,
 				A10000000000000000000007 /* StudyInspectorView.swift in Sources */,
 				A10000000000000000000220 /* ReaderWorkspace.swift in Sources */,

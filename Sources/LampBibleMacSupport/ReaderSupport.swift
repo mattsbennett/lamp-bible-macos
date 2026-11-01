@@ -1409,10 +1409,23 @@ public struct ReaderLocation: Codable, Equatable, Hashable, Sendable {
 public struct ReaderTab: Codable, Identifiable, Equatable, Sendable {
     public let id: UUID
     public var location: ReaderLocation?
+    /// What the reader called this tab, or nil to be named after wherever it
+    /// is. A named tab keeps its name as it is read on through the book,
+    /// which is the point of naming one: it is the place you are keeping,
+    /// not the chapter you are at.
+    public var name: String?
 
-    public init(id: UUID = UUID(), location: ReaderLocation? = nil) {
+    public init(id: UUID = UUID(), location: ReaderLocation? = nil, name: String? = nil) {
         self.id = id
         self.location = location
+        self.name = name
+    }
+
+    /// A name worth keeping, or nil. Blank is not a name, and a tab given one
+    /// by accident goes back to being named after its chapter.
+    public static func trimmedName(_ name: String?) -> String? {
+        let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 
@@ -1480,6 +1493,27 @@ public struct ReaderTabCollection: Codable, Equatable, Sendable {
         }
         selectedID = tab.id
         return tab.location
+    }
+
+    /// Names a tab, or takes its name away when `name` is blank.
+    public mutating func rename(_ id: UUID, to name: String?) {
+        guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        tabs[index].name = ReaderTab.trimmedName(name)
+    }
+
+    /// Opens a copy of `id` beside it, at the same place and under the same
+    /// name, and selects it.
+    ///
+    /// The copy goes next to the tab it came from rather than at the end,
+    /// since "duplicate this one" means the one you right-clicked, and a copy
+    /// that appears somewhere else has to be found again.
+    @discardableResult
+    public mutating func duplicate(_ id: UUID) -> ReaderLocation? {
+        guard let index = tabs.firstIndex(where: { $0.id == id }) else { return nil }
+        let copy = ReaderTab(location: tabs[index].location, name: tabs[index].name)
+        tabs.insert(copy, at: index + 1)
+        selectedID = copy.id
+        return copy.location
     }
 
     /// A reader always keeps one tab. Closing the selected tab chooses the tab to

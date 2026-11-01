@@ -305,7 +305,20 @@ private struct ReaderSettingsView: View {
                 }
             }
             .navigationTitle("Settings")
-            .navigationSplitViewColumnWidth(min: 180, ideal: 205, max: 235)
+            // A fixed width, and the sidebar toggle gone: this list is the
+            // whole of the Settings window's navigation, and a Settings
+            // window whose sections are hidden is one nobody can find their
+            // way back out of.
+            //
+            // The frame is not belt and braces. Removing the toggle costs
+            // the column its stated width — measured at 144pt against the
+            // 205 it took before, which truncated "Study Sidebar" and
+            // "Devotionals & Quizzes" — and neither
+            // `navigationSplitViewColumnWidth`, in either form, nor a
+            // constant `columnVisibility` wins it back. A frame does.
+            .frame(width: 205)
+            .navigationSplitViewColumnWidth(205)
+            .toolbar(removing: .sidebarToggle)
         } detail: {
             Form {
                 switch selectedSettingsSection {
