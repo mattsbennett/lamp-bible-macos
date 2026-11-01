@@ -26,6 +26,7 @@ struct NewReadingPlanSheet: View {
     @State private var words = ""
     @State private var isAsking = false
     @State private var assistantProblem: String?
+    @State private var isExplaining = false
     @State private var isAdding = false
 
     var body: some View {
@@ -74,17 +75,39 @@ struct NewReadingPlanSheet: View {
 
     // MARK: - The form
 
+    /// The section's own title, and the note saying what reads a description.
+    /// The note is here whether or not Apple Intelligence can be asked:
+    /// where it cannot, what else could make the plan is exactly what
+    /// someone wants to know.
+    private var describeHeader: some View {
+        HStack(spacing: 4) {
+            Text("Describe Your Plan")
+            Button { isExplaining = true } label: {
+                Image(systemName: "info.circle")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.tint)
+            .accessibilityLabel("About describing a plan")
+            .help("What reads a description, and what else can make a plan")
+            .popover(isPresented: $isExplaining, arrowEdge: .bottom) {
+                DescribingAPlanNote()
+            }
+        }
+    }
+
     private var fields: some View {
         Form {
             if let assistantUnavailableReason {
-                Section("Describe Your Plan") {
+                Section {
                     Label(assistantUnavailableReason, systemImage: "sparkles")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                } header: {
+                    describeHeader
                 }
             } else {
-                Section("Describe Your Plan") {
+                Section {
                     TextField(
                         "Description",
                         text: $words,
@@ -112,6 +135,8 @@ struct NewReadingPlanSheet: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                } header: {
+                    describeHeader
                 }
             }
 
@@ -357,5 +382,54 @@ struct NewReadingPlanSheet: View {
                 isAdding = false
             }
         }
+    }
+}
+
+/// What reads a description, and what to do about wanting a better model
+/// than the one on the Mac.
+///
+/// The question this answers is a fair one and has an awkward answer: a
+/// Claude or ChatGPT subscription cannot be spent from inside Lamp, because
+/// those accounts are for their makers' own apps. What Lamp can do is be
+/// the tool such an app uses, which is already built — so the note sends
+/// people there rather than leaving them to think the feature is missing.
+private struct DescribingAPlanNote: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Describing a Plan")
+                .font(.headline)
+            VStack(alignment: .leading, spacing: 8) {
+                Text(
+                    """
+                    Apple Intelligence reads the description, here on this \
+                    Mac. Nothing you type leaves the computer, and there is \
+                    nothing to sign in to or pay for. When it isn't \
+                    available, the form below still makes any plan.
+                    """
+                )
+                Text(
+                    """
+                    A Claude or ChatGPT subscription can't be spent from \
+                    here. Those accounts sign you in to their makers' own \
+                    apps; they don't let another app generate on your behalf.
+                    """
+                )
+                Text(
+                    """
+                    To have a more capable model make the plan, ask one \
+                    that can already use Lamp. Turn on “Allow other apps to \
+                    read my library” in Settings, under AI & Agents, then \
+                    ask in that app: it works the plan out through Lamp and \
+                    shows you the days, on whatever you pay for there. Allow \
+                    reading plans as well, and it can add the plan for you.
+                    """
+                )
+            }
+            .foregroundStyle(.secondary)
+        }
+        .font(.callout)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: 330, alignment: .leading)
+        .padding(16)
     }
 }
