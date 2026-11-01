@@ -1119,6 +1119,17 @@ extension LibrarySyncController {
             parts.append(outcome.failures.prefix(2).joined(separator: "; "))
         }
         statusMessage = parts.joined(separator: " — ")
+        // Said in the log rather than the status line: it is a fault in the
+        // app, not something the reader did or can mend, and it means this
+        // pass fetched a file it had fetched before. The phone did it to
+        // every reading plan for months without a word anywhere.
+        // (`LampSyncUnclaimedInstalls`.)
+        if !outcome.fetchedAgain.isEmpty {
+            print(
+                "[Sync] fetched again, so something here holds these without saying so: "
+                    + outcome.fetchedAgain.sorted().joined(separator: ", ")
+            )
+        }
     }
 }
 
