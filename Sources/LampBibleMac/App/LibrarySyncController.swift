@@ -190,7 +190,7 @@ final class LibrarySyncController: ObservableObject {
     /// over.
     @discardableResult
     func sync(library: LampLibrary) async -> Bool {
-        lastSyncedChangeStamp = try? await library.personalChangeStamp()
+        lastPublishedWork = await localWork(library: library)
         let finished = await runSyncPass(library: library)
         // Both forgotten on purpose: the next probe takes a fresh mark to
         // measure from, once the server has had time to settle.
@@ -199,9 +199,52 @@ final class LibrarySyncController: ObservableObject {
         return finished
     }
 
-    /// The library's change stamp as of the last pass, so a later one can be
-    /// told from the state that pass already published.
-    private var lastSyncedChangeStamp: Int64?
+    /// Everything this Mac has to publish, as one thing that can be compared
+    /// with the same answer taken later.
+    ///
+    /// Three parts, because the answer comes from three places and no one of
+    /// them covers the others. Compared as a whole, and only for difference:
+    /// see `LampSyncLocalWork` for why none of these numbers may be ordered
+    /// against another.
+    private struct LocalWork: Equatable {
+        /// Notes, writings, highlights, plans followed, readings ticked — the
+        /// ledgers answer for all of them at once.
+        let personal: Int64
+        /// Modules installed and removed, decks, workspaces, skills: files,
+        /// which no ledger records.
+        let files: [String: Int64]
+        /// The preferences that travel, as they stand here now.
+        let settings: NSDictionary
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.personal == rhs.personal
+                && lhs.files == rhs.files
+                && lhs.settings.isEqual(rhs.settings)
+        }
+    }
+
+    /// What this Mac had to publish when the last pass started, so work done
+    /// since can be told from what that pass already carried.
+    private var lastPublishedWork: LocalWork?
+
+    /// Asked every few seconds, so each part is cheap: two indexed aggregates
+    /// and a small blob for the ledgers, a handful of stats and a walk of the
+    /// decks and workspaces for the files, and a read of thirty-odd defaults
+    /// for the preferences. Nothing is opened, read or hashed.
+    private func localWork(library: LampLibrary) async -> LocalWork? {
+        guard let personal = try? await library.personalChangeStamp() else { return nil }
+        let libraryRoot = library.rootURL
+        let fileManager = self.fileManager
+        // Off the main thread, which this controller otherwise holds.
+        let files = await Task.detached {
+            LampSyncLocalWork.marks(inLibraryAt: libraryRoot, fileManager: fileManager)
+        }.value
+        var settings: [String: Any] = [:]
+        for key in LampPortableSettingsCodec.syncedKeys {
+            if let value = defaults.object(forKey: key) { settings[key] = value }
+        }
+        return LocalWork(personal: personal, files: files, settings: settings as NSDictionary)
+    }
 
     /// Publishes this Mac's work when it has any, without being asked.
     ///
@@ -210,22 +253,36 @@ final class LibrarySyncController: ObservableObject {
     /// looking for that button, while the phone had published the same kind of
     /// change within seconds.
     ///
-    /// Asked often and does nothing nearly every time: the question is two
-    /// aggregates and a small blob, and a pass follows only when the answer
-    /// has moved. That keeps the status line still, and keeps a pass from
-    /// running while a burst of edits is still arriving.
+    /// Everything this Mac publishes is asked about, not only the study
+    /// content the ledgers record: a plan deleted, a module installed, a deck
+    /// saved, a workspace document written and a setting changed are all work
+    /// somebody else should see, and each of them used to wait for the
+    /// button. `LocalWork` is the whole question.
+    ///
+    /// Asked often and does nothing nearly every time: the question is a few
+    /// aggregates, a few stats and a read of some defaults, and a pass
+    /// follows only when the answer has moved. That keeps the status line
+    /// still, and keeps a pass from running while a burst of edits is still
+    /// arriving.
+    ///
+    /// A pass that takes another device's work in moves this answer too, so
+    /// one quiet pass follows it and finds nothing to send. That was already
+    /// so of an arriving note, and the cost of recording the answer *before*
+    /// a pass rather than after: an edit made while the pass ran would
+    /// otherwise be taken as something that pass had already carried, and
+    /// wait for the next change to be noticed at all.
     func syncLocalWorkIfAppeared(library: LampLibrary) async {
         guard !isSyncing,
               defaults.bool(forKey: "sync.automatic"),
               provider != .off,
-              let stamp = try? await library.personalChangeStamp()
+              let work = await localWork(library: library)
         else { return }
-        // No stamp means no pass has run in this session, which is the case
-        // when sync was switched on after launch. Publishing then is right:
-        // the launch pass, which would otherwise have covered what is already
-        // here, never happened. A pass that did run records the stamp before
-        // it starts, so this is not the ordinary path.
-        guard let last = lastSyncedChangeStamp, stamp <= last else {
+        // Nothing recorded means no pass has run in this session, which is
+        // the case when sync was switched on after launch. Publishing then is
+        // right: the launch pass, which would otherwise have covered what is
+        // already here, never happened. A pass that did run records this
+        // before it starts, so this is not the ordinary path.
+        guard let last = lastPublishedWork, work == last else {
             _ = await sync(library: library)
             return
         }

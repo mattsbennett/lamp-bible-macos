@@ -23,6 +23,19 @@ public enum LampWorkspaceSync {
     ]
     private static let bundledSkillNames: Set<String> = ["build-lamp-deck"]
 
+    /// The writing workspaces this Mac keeps, each a directory of its own.
+    ///
+    /// Here rather than at the caller so the path to them is written down
+    /// once: `LampSyncLocalWork` reads the same workspaces this exports.
+    static func workspaces(
+        in libraryRoot: URL,
+        fileManager: FileManager = .default
+    ) throws -> [URL] {
+        try childDirectoriesIfPresent(
+            of: appending(agentWorkspacesPath, to: libraryRoot), fileManager: fileManager
+        )
+    }
+
     /// Run legacy workspace migration during the local pull transaction so
     /// exporting the prepared library does not change the live workspace.
     public static func prepareLibraryForSync(
