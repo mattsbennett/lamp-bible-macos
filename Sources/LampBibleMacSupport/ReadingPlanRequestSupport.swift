@@ -95,6 +95,55 @@ public struct LampReadingPlanForm: Equatable, Sendable {
             && tracks.allSatisfy { $0.passageList.isEmpty }
     }
 
+    /// The weekdays read on, as the preview says them, so a plan laid on the
+    /// wrong days shows before it is added.
+    ///
+    /// The days are named in `LampWeekday.allCases` order — Sunday first —
+    /// and worded as the phone words them, so the same plan reads the same on
+    /// both. See `NewPlanView.swift` in lamp-bible-ios.
+    public var readingWeek: String {
+        let reading = LampWeekday.allCases.filter { !restDays.contains($0) }
+        switch Set(reading) {
+        case Set(LampWeekday.allCases): return "every day"
+        case [.monday, .tuesday, .wednesday, .thursday, .friday]: return "on weekdays"
+        case [.saturday, .sunday]: return "on weekends"
+        default:
+            return "on " + ListFormatter.localizedString(
+                byJoining: reading.map { $0.rawValue.capitalized + "s" }
+            )
+        }
+    }
+
+    /// What each track reads and how fast, as the preview says it. A track
+    /// with nothing to read says nothing rather than saying it reads nothing.
+    public var trackSummaries: [String] {
+        tracks.compactMap { track in
+            let passages = track.passages.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !passages.isEmpty else { return nil }
+            switch track.chaptersPerDay {
+            case 0: return "\(passages), spread over the plan"
+            case 1: return "\(passages), a chapter a day"
+            default: return "\(passages), \(track.chaptersPerDay) chapters a day"
+            }
+        }
+    }
+
+    /// What the plan reads, how fast, on which days and between which dates.
+    ///
+    /// The line a misread request shows up in: the model answering "weekdays
+    /// only" with Saturdays, or a month with five days, is a sentence anyone
+    /// can check before pressing Add. Empty when the draft has no days for
+    /// the dates to come from.
+    public func summary(of draft: LampReadingPlanDraft) -> String {
+        guard let first = draft.days.first?.date, let last = draft.days.last?.date else { return "" }
+        let range = """
+            \(first.formatted(date: .abbreviated, time: .omitted)) to \
+            \(last.formatted(date: .abbreviated, time: .omitted))
+            """
+        let length = "\(draft.days.count) days of reading, \(readingWeek), \(range)"
+        return (trackSummaries + [length]).map { $0 + "." }.joined(separator: "\n")
+    }
+
     /// Passages as typed, read as a list.
     ///
     /// New lines, commas and semicolons all separate, because people type all

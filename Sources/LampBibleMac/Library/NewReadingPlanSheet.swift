@@ -257,9 +257,13 @@ struct NewReadingPlanSheet: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(draft.plan.name)
                         .font(.headline)
-                    Text(lengthDescription(draft))
+                    // What it reads, how fast, on which days and between
+                    // which dates — the sentence a misread description shows
+                    // up in, before Add is pressed.
+                    Text(form.summary(of: draft))
                         .font(.callout)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(16)
                 Divider()
@@ -293,12 +297,6 @@ struct NewReadingPlanSheet: View {
             .padding(28)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-    }
-
-    private func lengthDescription(_ draft: LampReadingPlanDraft) -> String {
-        let days = "\(draft.plan.duration) reading day\(draft.plan.duration == 1 ? "" : "s")"
-        guard let perDay = draft.plan.readingsPerDay, perDay > 1 else { return days }
-        return "\(days) · \(perDay) readings a day"
     }
 
     private func dayTitle(_ day: LampReadingPlanDraft.Day) -> String {

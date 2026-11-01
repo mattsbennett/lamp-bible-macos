@@ -183,6 +183,30 @@ struct ReadingPlansView: View {
         }
     }
 
+    /// Lamp's own plans and the reader's own, told apart by the module record
+    /// each was installed from.
+    private var groups: LampReadingPlanGrouping.Groups {
+        LampReadingPlanGrouping.split(model.plans, installed: model.modules)
+    }
+
+    private func groupHeading(_ title: String) -> some View {
+        Text(title)
+            .font(.title3.weight(.semibold))
+            .padding(.top, 6)
+    }
+
+    private func cards(_ plans: [LampReadingPlan]) -> some View {
+        ForEach(plans) { plan in
+            ReadingPlanCard(
+                plan: plan,
+                date: date,
+                openReading: openReading,
+                openAllReadings: openAllReadings
+            )
+            .id(plan.id)
+        }
+    }
+
     var body: some View {
         Group {
             if model.plans.isEmpty {
@@ -209,14 +233,16 @@ struct ReadingPlansView: View {
 
                             AddedPlanNotice()
 
-                            ForEach(model.plans) { plan in
-                                ReadingPlanCard(
-                                    plan: plan,
-                                    date: date,
-                                    openReading: openReading,
-                                    openAllReadings: openAllReadings
-                                )
-                                .id(plan.id)
+                            // Kept at the top level of the lazy stack rather
+                            // than wrapped in a group, so the cards are still
+                            // built as they are scrolled to.
+                            if groups.isSplit {
+                                groupHeading("Included")
+                                cards(groups.included)
+                                groupHeading("Your Plans")
+                                cards(groups.yours)
+                            } else {
+                                cards(model.plans)
                             }
                         }
                         .frame(maxWidth: 880, alignment: .leading)
@@ -271,6 +297,7 @@ private struct AddedPlanNotice: View {
 private struct ReadingPlanCard: View {
     @EnvironmentObject private var model: LibraryModel
     @State private var day: LampReadingPlanDay?
+    @State private var isConfirmingDelete = false
     let plan: LampReadingPlan
     let date: Date
     let openReading: (PlanReadingMode) -> Void
@@ -278,6 +305,23 @@ private struct ReadingPlanCard: View {
 
     private var dayNumber: Int { LampPlanCalendar.dayNumber(for: date) }
     private var year: Int { LampPlanCalendar.year(for: date) }
+
+    /// The module this plan is removed through, or nil for one that came
+    /// with Lamp — those stay.
+    private var removableModule: LampInstalledModule? {
+        LampReadingPlanGrouping.removableModule(for: plan, installed: model.modules)
+    }
+
+    /// In the card's menu and in its context menu both: the menu is the one
+    /// that can be found, and the context menu is where a right-click looks.
+    @ViewBuilder
+    private var deletePlanButton: some View {
+        if removableModule != nil {
+            Button("Delete Plan…", systemImage: "trash", role: .destructive) {
+                isConfirmingDelete = true
+            }
+        }
+    }
 
     var body: some View {
         GroupBox {
@@ -298,6 +342,16 @@ private struct ReadingPlanCard: View {
                         )
                     )
                     .toggleStyle(.switch)
+
+                    if removableModule != nil {
+                        Menu("More", systemImage: "ellipsis.circle") {
+                            deletePlanButton
+                        }
+                        .labelStyle(.iconOnly)
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                        .help("More actions for this plan")
+                    }
                 }
 
                 if let description = plan.description, !description.isEmpty {
@@ -333,6 +387,23 @@ private struct ReadingPlanCard: View {
                 }
             }
             .padding(8)
+        }
+        .contextMenu { deletePlanButton }
+        .confirmationDialog(
+            "Delete “\(plan.name)”?",
+            isPresented: $isConfirmingDelete,
+            titleVisibility: .visible
+        ) {
+            if let module = removableModule {
+                // `LibraryModel.remove(_:)` records the removal through
+                // LampSyncRemovedModules before it goes, which is what carries
+                // the deletion to the other devices; core's own remove drops
+                // the plan from the followed list and takes its completed
+                // readings with it.
+                Button("Delete Plan", role: .destructive) { model.remove(module) }
+            }
+        } message: {
+            Text("The plan is deleted here and on any device you sync with.")
         }
         .task(id: dayNumber) {
             do {

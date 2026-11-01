@@ -375,3 +375,129 @@ struct ReadingPlanAdditionTests {
         #expect(LampReadingPlanAdditions.summary(added: [], refused: []) == nil)
     }
 }
+
+/// The sentence the preview puts under a plan's name: what it reads, how
+/// fast, on which days, between which dates.
+///
+/// Pinned word for word because the phone shows the same sentence from its
+/// own copy of the rules (lamp-bible-ios `d005406`,
+/// `NewPlanForm.readingWeek` / `trackSummaries`). The wording is the whole
+/// point of it: the phone's model answered "the gospels in a month, weekdays
+/// only" with a chapter a day on Saturdays, and no screen said so until the
+/// plan had been added. Two apps wording it differently would make the next
+/// such report hard to place.
+struct ReadingPlanSummaryTests {
+    private let calendar = LampPlanCalendar.calendar
+
+    private func form(restDays: Set<LampWeekday>) -> LampReadingPlanForm {
+        LampReadingPlanForm(restDays: restDays)
+    }
+
+    // MARK: - The days of the week
+
+    @Test func noDaysOffReadsAsEveryDay() {
+        #expect(form(restDays: []).readingWeek == "every day")
+    }
+
+    @Test func mondayToFridayReadsAsWeekdays() {
+        #expect(form(restDays: [.saturday, .sunday]).readingWeek == "on weekdays")
+    }
+
+    @Test func saturdayAndSundayReadAsWeekends() {
+        #expect(
+            form(restDays: [.monday, .tuesday, .wednesday, .thursday, .friday]).readingWeek
+                == "on weekends"
+        )
+    }
+
+    /// The case the phone's bug produced. "Only" is not said, on either app.
+    @Test func asingleReadingDayIsNamedOnItsOwn() {
+        #expect(
+            form(restDays: [.sunday, .monday, .tuesday, .wednesday, .thursday, .friday])
+                .readingWeek == "on Saturdays"
+        )
+    }
+
+    /// Sunday first, in `LampWeekday.allCases` order, not the order the rest
+    /// days happen to be in.
+    @Test func severalDaysAreListedSundayFirst() {
+        #expect(
+            form(restDays: [.sunday]).readingWeek
+                == "on Mondays, Tuesdays, Wednesdays, Thursdays, Fridays, and Saturdays"
+        )
+    }
+
+    // MARK: - What each track reads
+
+    @Test func anunpacedTrackIsSpreadOverThePlan() {
+        let form = LampReadingPlanForm(tracks: [.init(passages: "Matthew–John")])
+        #expect(form.trackSummaries == ["Matthew–John, spread over the plan"])
+    }
+
+    @Test func apaceOfOneIsAChapterADay() {
+        let form = LampReadingPlanForm(tracks: [.init(passages: "Proverbs", chaptersPerDay: 1)])
+        #expect(form.trackSummaries == ["Proverbs, a chapter a day"])
+    }
+
+    @Test func afasterPaceCountsItsChapters() {
+        let form = LampReadingPlanForm(tracks: [.init(passages: "Psalms", chaptersPerDay: 3)])
+        #expect(form.trackSummaries == ["Psalms, 3 chapters a day"])
+    }
+
+    /// Every track is named, in the order they were typed.
+    @Test func atrackWithNothingToReadSaysNothing() {
+        let form = LampReadingPlanForm(
+            tracks: [
+                .init(passages: "Matthew–John"),
+                .init(passages: "   "),
+                .init(passages: "Proverbs", chaptersPerDay: 1),
+            ]
+        )
+        #expect(
+            form.trackSummaries == [
+                "Matthew–John, spread over the plan",
+                "Proverbs, a chapter a day",
+            ]
+        )
+    }
+
+    // MARK: - The whole sentence
+
+    @Test func thesummaryNamesTheTracksThenTheLengthAndDates() throws {
+        var form = LampReadingPlanForm(tracks: [.init(passages: "Matthew–John")])
+        form.name = "The Gospels"
+        form.readingDays = 20
+        form.start = calendar.date(from: DateComponents(year: 2026, month: 11, day: 2))!
+        form.restDays = [.saturday, .sunday]
+
+        let draft = try form.draft()
+        let first = draft.days.first!.date.formatted(date: .abbreviated, time: .omitted)
+        let last = draft.days.last!.date.formatted(date: .abbreviated, time: .omitted)
+
+        #expect(
+            form.summary(of: draft) == """
+                Matthew–John, spread over the plan.
+                20 days of reading, on weekdays, \(first) to \(last).
+                """
+        )
+    }
+
+    /// Both tracks, each on its own line, before the length line.
+    @Test func everyTrackGetsALineOfItsOwn() throws {
+        var form = LampReadingPlanForm(
+            tracks: [
+                .init(passages: "Matthew–John"),
+                .init(passages: "Proverbs", chaptersPerDay: 1),
+            ]
+        )
+        form.name = "Two Tracks"
+        form.readingDays = 7
+
+        let lines = form.summary(of: try form.draft()).split(separator: "\n")
+
+        #expect(lines.count == 3)
+        #expect(lines[0] == "Matthew–John, spread over the plan.")
+        #expect(lines[1] == "Proverbs, a chapter a day.")
+        #expect(lines[2].hasPrefix("7 days of reading, every day, "))
+    }
+}
