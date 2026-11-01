@@ -28,7 +28,6 @@ struct ReadingPlanGroupingTests {
 
         #expect(groups.included.map(\.id) == ["mcheyne"])
         #expect(groups.yours.map(\.id) == ["plan-abc"])
-        #expect(groups.isSplit)
     }
 
     /// A plan file someone installed is theirs too: they put it there, and
@@ -42,15 +41,15 @@ struct ReadingPlanGroupingTests {
         #expect(groups.yours.map(\.id) == ["someones-plan"])
     }
 
-    /// With nothing of the reader's own there is nothing to tell apart, and
-    /// heading the list "Included" would name a distinction that isn't there.
-    @Test func thelistIsNotSplitUntilThereIsAPlanOfTheReadersOwn() {
+    /// Both groups are always headed, so an empty one is a real answer: it
+    /// says the reader has made none yet, and it is where New Plan lives.
+    @Test func thereadersGroupIsEmptyRatherThanAbsent() {
         let groups = LampReadingPlanGrouping.split(
             [plan("mcheyne", "M'Cheyne")],
             installed: [module("mcheyne", bundled: true)]
         )
 
-        #expect(!groups.isSplit)
+        #expect(groups.included.map(\.id) == ["mcheyne"])
         #expect(groups.yours.isEmpty)
     }
 

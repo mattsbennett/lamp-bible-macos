@@ -23,11 +23,6 @@ public enum LampReadingPlanGrouping {
             self.included = included
             self.yours = yours
         }
-
-        /// Whether to head the two lists at all. Until there is a plan of the
-        /// reader's own, naming the other group "Included" says nothing: the
-        /// list is the same list it has always been.
-        public var isSplit: Bool { !included.isEmpty && !yours.isEmpty }
     }
 
     public static func split(

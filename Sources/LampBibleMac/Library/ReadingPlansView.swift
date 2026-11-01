@@ -189,10 +189,51 @@ struct ReadingPlansView: View {
         LampReadingPlanGrouping.split(model.plans, installed: model.modules)
     }
 
-    private func groupHeading(_ title: String) -> some View {
-        Text(title)
-            .font(.title3.weight(.semibold))
-            .padding(.top, 6)
+    /// Both headings are always shown, and each says what its group is.
+    ///
+    /// They were drawn only beside one another, which left the usual library
+    /// — Lamp's three plans and nothing else — with no heading at all, and
+    /// so nothing to say which of the plans on screen were the reader's own.
+    /// That was the complaint. A heading that outranks the plan names it
+    /// gathers, with a line saying what it gathers, is what tells them apart;
+    /// the group being empty is itself worth seeing, since New Plan sits in
+    /// it.
+    private func groupHeading(_ title: String, _ caption: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.title.bold())
+            Text(caption)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.top, 14)
+    }
+
+    /// The last thing under "Your Plans", so that making one reads as the way
+    /// that group comes to have anything in it. The toolbar keeps its own New
+    /// Plan button: on a Mac that is where a new-thing button belongs, and it
+    /// is reachable from the Included half of the list too.
+    private var newPlanRow: some View {
+        Button { isMakingPlan = true } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "plus.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(.tint)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("New Plan")
+                        .font(.headline)
+                    Text("Say what to read and how long for. Lamp works out the days.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
     }
 
     private func cards(_ plans: [LampReadingPlan]) -> some View {
@@ -236,14 +277,11 @@ struct ReadingPlansView: View {
                             // Kept at the top level of the lazy stack rather
                             // than wrapped in a group, so the cards are still
                             // built as they are scrolled to.
-                            if groups.isSplit {
-                                groupHeading("Included")
-                                cards(groups.included)
-                                groupHeading("Your Plans")
-                                cards(groups.yours)
-                            } else {
-                                cards(model.plans)
-                            }
+                            groupHeading("Included", "Plans that come with Lamp.")
+                            cards(groups.included)
+                            groupHeading("Your Plans", "Plans you've made or added.")
+                            cards(groups.yours)
+                            newPlanRow
                         }
                         .frame(maxWidth: 880, alignment: .leading)
                         .padding(36)
