@@ -191,6 +191,10 @@ struct ReadingPlansView: View {
 
     /// Both headings are always shown, and each says what its group is.
     ///
+    /// "Built In" rather than "Included" because that is what the Modules
+    /// list calls a module that came with Lamp — same thing, so the same
+    /// word, and `shippingbox` is the mark it wears there.
+    ///
     /// They were drawn only beside one another, which left the usual library
     /// — Lamp's three plans and nothing else — with no heading at all, and
     /// so nothing to say which of the plans on screen were the reader's own.
@@ -198,9 +202,13 @@ struct ReadingPlansView: View {
     /// gathers, with a line saying what it gathers, is what tells them apart;
     /// the group being empty is itself worth seeing, since New Plan sits in
     /// it.
-    private func groupHeading(_ title: String, _ caption: String) -> some View {
+    private func groupHeading(
+        _ title: String,
+        _ systemImage: String,
+        _ caption: String
+    ) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(title)
+            Label(title, systemImage: systemImage)
                 .font(.title.bold())
             Text(caption)
                 .font(.callout)
@@ -277,9 +285,13 @@ struct ReadingPlansView: View {
                             // Kept at the top level of the lazy stack rather
                             // than wrapped in a group, so the cards are still
                             // built as they are scrolled to.
-                            groupHeading("Included", "Plans that come with Lamp.")
+                            groupHeading(
+                                "Built In", "shippingbox", "Plans that come with Lamp."
+                            )
                             cards(groups.included)
-                            groupHeading("Your Plans", "Plans you've made or added.")
+                            groupHeading(
+                                "Your Plans", "person.circle", "Plans you've made or added."
+                            )
                             cards(groups.yours)
                             newPlanRow
                         }
