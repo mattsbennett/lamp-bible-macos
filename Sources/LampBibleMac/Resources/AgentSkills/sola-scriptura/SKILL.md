@@ -113,6 +113,12 @@ Three rules about the sources themselves:
    inference, so there is nothing to flag? Is the word you called inherited one
    scripture itself uses? A finding that does not survive this pass does not go in
    the report. Findings dropped here are worth one line at the end.
+
+   Run this step evenly, because it is where the audit most easily goes soft. A
+   claim the writing takes for granted feels defended when it is only familiar, and
+   this is the one step that lets you talk a finding out of existence. A finding
+   survives or falls on whether a text carries the claim, and on nothing about how
+   settled the claim sounds or whose position it is.
 7. **Report** to the contract below. [references/worked-example.md](references/worked-example.md)
    shows one finding and two non-findings in the register to use.
 
