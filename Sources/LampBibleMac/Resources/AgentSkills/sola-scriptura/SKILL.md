@@ -1,6 +1,6 @@
 ---
 name: sola-scriptura
-description: Audit writing for conclusions, claims and teachings that cannot be established from scripture alone. Use when asked to check an exhortation, study, talk, devotional, article or doctrinal prose for proof-text drift, inherited framing, smuggled background, or inference presented as statement — or whether one particular claim is actually in the text.
+description: Audit writing for conclusions, claims and teachings that cannot be established from scripture alone. Use when asked to check an exhortation, sermon, study, talk, devotional, article or doctrinal prose for proof-text drift, inherited framing, smuggled background, or inference presented as statement — or whether one particular claim is actually in the text.
 ---
 
 # Sola scriptura audit

@@ -37,8 +37,8 @@ context folder is at most a request to cite it in the text.
 find, and re-flagging it teaches them that hedging buys nothing.
 
 **Named external sources.** *Bruce argues*, *this is sometimes called a juridical
-parable*, *the BASF puts it this way*. Naming is the remedy, so a named source is
-already remedied. The finding is unacknowledged dependence, or a named source
+parable*, *our statement of faith puts it this way*. Naming is the remedy, so a named
+source is already remedied. The finding is unacknowledged dependence, or a named source
 promoted to *scripture teaches*.
 
 **A labelled reconstruction.** "Putting the two accounts together." Harmonisation
