@@ -6,11 +6,10 @@ a writer who gets forty findings reads none of them.
 
 ## Not claims at all
 
-**Scripture's own words.** Never an import, however much a system has been built on
-them. *Bore our sins in his body*, *a curse for us*, *ransom*, *bought with a
-price*, *propitiation* where a translation has it — these are the text. A writer
-quoting them is quoting. The finding would be a *gloss* that adds a mechanism the
-words do not state, not the words.
+**Scripture's own words.** Never an import, however much has been built on them.
+*Bore our sins in his body*, *a curse for us*, *ransom*, *bought with a price* — these
+are the text. A writer quoting them is quoting. The finding would be a *gloss* that
+adds a mechanism the words do not state, never the words themselves.
 
 **Pastoral application in the writer's own voice.** "And that's a diagnostic I can
 use on myself." "What I need is a Nathan." The writer is not claiming the text says

@@ -4,14 +4,14 @@ Words that carry a system. The finding is never that a word is unusual — it is
 the word is doing work the text has not done, in language the text does not use,
 while sounding like the text.
 
-## The three tests
+## Three tests the library can answer
 
 **Does scripture use this word, in this sense?** `search_library` with
 `kinds: ["translation"]`, over whichever translations the reader has.
 
 A phrase that returns nothing is not thereby wrong — scripture has no word for
-*trinity* or for *representative sacrifice* either. It means the phrase is a summary,
-and a summary must be defended from texts rather than used as one.
+*canon* or for *monotheism* either. It means the phrase is a summary, and a summary
+must be defended from texts rather than used as one.
 
 **Does the claim survive a change of translation?** Pass every translation in the
 library to `read_passage` at once. Lamp always has `KJVs`, `BSBs`, `ASVs`, `WEBs` and
@@ -29,39 +29,56 @@ whatever books the reader has — `list_modules` says which, and many readers wi
 none, in which case this test is simply unavailable and the finding stays at
 *imported* without a named source.
 
-Search a distinctive phrase, not a common one: the index matches on words, so *sin in
-the flesh* returns anything with *sin* and *flesh* in it. Three or four uncommon words
-together are what finds a source. When a phrase turns up almost verbatim in one of the
+Search a distinctive phrase, not a common one: the index matches on words rather than
+on the phrase, so a term built from ordinary words returns everything containing any of
+them. Three or four uncommon words together are what finds a source. When a phrase turns up almost verbatim in one of the
 reader's books, name it — that converts an opinion into a citation, and it is the most
 useful thing this file enables. It does not make the book an authority; see the
 one-authority rule in `SKILL.md`, which the reader's own books get no exception from.
 
-## Framings to watch for
+## Recognising one
 
-Examples of the mechanism, not a list to match against. **Assume nothing about the
-writer's tradition** — read what the writing does, and apply the tests to whatever
-tradition it comes out of. The items that matter most are always the writer's own,
-because those are the words they cannot see as words, and every item below is
-somebody's own.
+There is no list here, for two reasons. A list invites matching, and matching against
+a vocabulary is the one thing this test is not: the same word can be a quotation in
+one sentence and a smuggled conclusion in the next. And any such list is a list of
+somebody's doctrine, which a skill that audits against scripture alone has no business
+shipping.
 
-Grouped by what is being claimed, so the competing shorthands sit side by side. Two
-writers reaching for opposite summaries of one doctrine is the clearest evidence that
-both are summaries.
+**Assume nothing about the writer's tradition.** Read what the writing does. The terms
+that matter in any pass are the writer's own, because those are the words they cannot
+see as words.
 
-| The question | Framings that carry an answer to it |
-|---|---|
-| What Christ's death did | substitution or exchange; bearing wrath, punishment or penalty in another's place; justice satisfied; a debt paid; *representative sacrifice*; *God condemned sin in the flesh* as a finished formula |
-| What a human being is | the immortal soul; the soul as a separable part; *mortal nature* and *sin in the flesh* as technical terms rather than as phrases in their places; *clean flesh* and its opposite |
-| What happens at death | going to heaven as the believer's hope; soul sleep; conscious eternal torment; annihilation |
-| Who the adversary is | the devil as a supernatural person; the devil as a figure for sin in the flesh; *diabolos means slanderer, therefore…* as a lexical argument |
-| Who Christ is | trinitarian vocabulary (*God the Son*, *co-eternal*, *second person*); pre-existence as assumed or as denied; *merely human* |
-| What the kingdom is | *the church age*; the kingdom as the church; the kingdom as a literal future reign, where the writing treats either as the text's own term |
-| How one is saved | *accepting Jesus into your heart*; *the Truth* as a proper noun for a body of doctrine; *sound doctrine* standing for a particular list; inherited guilt as distinct from inherited mortality |
+Recognise a framing by its shape:
 
-Alongside these, one pattern belongs to no tradition in particular: a creed,
-confession or statement of faith quoted where a text was asked for. Naming it is the
-remedy — *our statement of faith puts it this way* is honest, and *scripture teaches*
-of the same sentence is not.
+- **It names a mechanism where the text states an event.** Scripture says a thing
+  happened, and what it accomplished; the framing says *how* it worked, in a word the
+  text never uses. The tell is that the word answers a question the passage did not
+  ask.
+- **It bundles several claims into one noun phrase.** Unpack it into the claims it
+  contains and ask for a text for each. A compound term usually holds one claim with
+  support and one without, and the supported one is carrying the other.
+- **It is capitalised, or used as a proper noun, for a body of teaching.** A term that
+  names a position rather than describing a thing is a summary by construction.
+- **It rests on an etymology or a gloss.** *The word means X, therefore…* is an
+  argument about a word standing in for an argument about a text. Read a lexicon for
+  range, cite the lexicon, and then make the argument from the passage.
+- **It works in one translation and not the others.** See the translation test above.
+- **A creed, confession or statement of faith is quoted where a text was asked for.**
+  Naming it is the remedy: *our statement of faith puts it this way* is honest, and
+  *scripture teaches* of the same sentence is not.
+- **The writer defines it once and then uses it as evidence.** A term defined from
+  texts is fine. A term defined and thereafter treated as a premise the texts no
+  longer need is the framing doing the work.
+
+## The test that settles it
+
+**Rewrite the sentence in scripture's own vocabulary, using the words of the passages
+it cites.**
+
+If the rewrite keeps the claim, the term was shorthand and there is nothing to report.
+If the rewrite loses the claim, the claim was living in the term rather than in the
+text, and the writing needs one of two things: the passages that establish it, or a
+mark saying it is a summary.
 
 Shorthand is not false because it is shorthand. A community needs compressed terms and
 a writer may use them. The finding is a shorthand carrying a conclusion while presented

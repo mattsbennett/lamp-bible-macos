@@ -25,10 +25,11 @@ discounts everything else.
 
 ## 3. Inherited framing
 
-A word or structure imports a doctrinal system the text does not use. Both
-directions count: the framings of wider Christendom and the shorthand of the
-writer's own community. See `inherited-vocabulary.md`, which also shows how to
-prove where a framing came from.
+A word or structure imports a doctrinal system the text does not use. Whatever
+tradition the writing comes from counts, the writer's own included — that one most of
+all, since its terms are the ones they cannot see as terms.
+`inherited-vocabulary.md` has the shape to recognise and how to prove where a
+framing came from.
 
 **Test:** could this sentence be written in scripture's own vocabulary? If the
 rewrite loses the claim, the claim was in the framing, not in the text.
