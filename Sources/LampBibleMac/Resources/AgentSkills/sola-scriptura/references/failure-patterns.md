@@ -107,3 +107,17 @@ writer knows a careful reader might land elsewhere. The remedy is a phrase.
 "Forty years of preaching", "twenty-three years", "three days", a genealogy's span,
 a crowd's size. These accrete in retelling, and they are the easiest findings to
 verify and the most embarrassing to leave in. Look up every number.
+
+## 13. A named source, misrepresented
+
+The writing attributes something to a source, and the source does not say it. Three
+forms, commonest first: the summary is sharper than the original, with the author's
+hedge dropped; the quotation is accurate and the author goes on to qualify or abandon
+it; the view belongs to someone who held a different one.
+
+Checkable only when the reader has that module — `list_modules` says — and worth the
+reading only when the claim is load-bearing. Where it is, this is among the cheapest
+findings to verify and the most costly to leave in, because a reader who checks one
+attribution and finds it wrong discounts every other one.
+
+Related: pattern 2 is the same mistake made about a book of scripture.

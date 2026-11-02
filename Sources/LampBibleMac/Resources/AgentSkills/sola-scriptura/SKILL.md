@@ -82,15 +82,44 @@ that is all you did.
 | `analyze_strongs` | How one key is used across the translations that tag it. |
 | `read_study_material` | The notes, footnotes and highlights on a verse. |
 
-Three rules about the sources themselves:
+Four rules about the sources themselves:
 
 - **A cross-reference index is human work.** `tske` and `crossrefs` find candidate
   texts; they establish nothing. Read every text they name before citing it.
-- **Commentaries and books are external sources**, including the ones the writer's
-  community wrote. They can show where a framing came from. They can never carry a
-  claim.
-- **Translators' renderings are not a word's range.** `analyze_strongs` reports the
-  choices translators made. For range read a lexicon, and then cite the lexicon.
+- **A lexicon is evidence about a word, never about a claim.** It can settle what a
+  word's range is. It cannot settle what a passage asserts, and a range is not a
+  meaning in place.
+- **Translators' renderings are not a word's range either.** `analyze_strongs` reports
+  the choices translators made, which is a fact about translators.
+- **A commentary or a book can never carry a claim**, including the ones the writer's
+  own community wrote. There are two reasons to open one, below, and neither is to
+  find out what a passage means.
+
+### When an extrabiblical module is worth opening
+
+Since no commentary can establish anything, there is nothing to learn from one about
+whether a claim stands — and a real cost in consulting it: having read a commentator's
+reading first, you will be inclined to measure the writer against it and call a
+different reading unsupported. That is not this audit, and it is how a commentator's
+framing gets into the report under the audit's own name. Read the text, adjudicate,
+and leave the commentaries shut.
+
+Two things make one worth opening, and both are reactions to the writing rather than
+inquiries of your own:
+
+1. **The writing uses it** — quotes it, names it, or leans on it, and the reader has
+   it installed. Then read it, because two findings are invisible otherwise: the
+   writing's summary is not what the source says, or the source carried a
+   qualification the writing dropped, a commentator's *perhaps* arriving in the
+   writing as a fact. A claim resting on a source rests on whatever the source rested
+   on, so say what that was.
+2. **A framing has no attribution.** Searching the reader's books can name where it
+   came from, which turns *imported* from a judgement into a citation. See
+   [references/inherited-vocabulary.md](references/inherited-vocabulary.md).
+
+Neither use makes the source an authority. Something read for either reason is still
+reported as a source, not as support: *the argument here is Bruce's, and he offers it
+as a suggestion*.
 
 ## Procedure
 
@@ -103,6 +132,9 @@ Three rules about the sources themselves:
 3. **Verify every citation in the piece.** Look up each reference verbatim. Then ask
    the only question that matters: *does this text carry the weight the claim puts on
    it?* Proof-text drift is the most common finding by a wide margin.
+
+   A citation to a source rather than to scripture gets the same question, when the
+   claim is load-bearing and the reader has that module installed.
 4. **For each uncited load-bearing claim, find the text it would need.** Cross-
    reference the passage under discussion, and search for the phrase. Look up what
    you find. If nothing carries it, that is the finding.
