@@ -21,7 +21,7 @@ public enum LampWorkspaceSync {
     private static let generatedDocumentNames: Set<String> = [
         "agents.md", "claude.md", "devotional_context.md", "draft.md",
     ]
-    private static let bundledSkillNames: Set<String> = ["build-lamp-deck"]
+    private static var bundledSkillNames: Set<String> { WorkspaceSkillStore.bundledSkillNames }
 
     /// The writing workspaces this Mac keeps, each a directory of its own.
     ///

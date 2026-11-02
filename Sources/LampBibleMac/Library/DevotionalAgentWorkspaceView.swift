@@ -340,7 +340,7 @@ private enum DevotionalAgentWorkspaceStore {
     static let contextFilename = "DEVOTIONAL_CONTEXT.md"
     static let devotionalIdentifierFilename = "DEVOTIONAL_ID"
     static let presentationFilename = "presentation.lampdeck"
-    private static let builtInSkillNames: Set<String> = ["build-lamp-deck"]
+    private static var builtInSkillNames: Set<String> { WorkspaceSkillStore.bundledSkillNames }
 
     static func workspaceURL(libraryRootURL: URL, devotionalID: String) -> URL {
         // One derivation, shared with the helper, which resolves a workspace
@@ -638,32 +638,39 @@ private enum DevotionalAgentWorkspaceStore {
         }
     }
 
-    /// Brings a workspace's copy of the built-in skill up to the one this build
+    /// Brings a workspace's copy of each built-in skill up to the one this build
     /// ships, replacing what is there when it differs.
     ///
     /// This used to install only when the skill was absent, so a workspace kept
     /// whatever it was given on the day it was created — a deck author reading
     /// it months later was reading instructions for an older renderer, with no
-    /// way to tell. The skill is Lamp's to own (`builtInSkillNames` keeps it out
-    /// of every editing path), so replacing it loses nothing of the user's.
+    /// way to tell. These skills are Lamp's to own (`builtInSkillNames` keeps
+    /// them out of every editing path), so replacing one loses nothing of the
+    /// user's.
+    ///
+    /// Every bundled skill is installed, not a named one, so shipping a new
+    /// skill is a matter of adding its folder and its name to
+    /// `WorkspaceSkillStore.bundledSkillNames` and nothing else.
     private static func installBundledSkillsIfNeeded(in workspace: URL) throws {
         #if SWIFT_PACKAGE
         let resourceRoot = Bundle.module.resourceURL
         #else
         let resourceRoot = Bundle.main.resourceURL
         #endif
-        guard let source = resourceRoot?
-            .appendingPathComponent("AgentSkills", isDirectory: true)
-            .appendingPathComponent("build-lamp-deck", isDirectory: true),
-              FileManager.default.fileExists(atPath: source.path) else { return }
-        let destination = codexSkillsDirectory(in: workspace)
-            .appendingPathComponent("build-lamp-deck", isDirectory: true)
-        if FileManager.default.fileExists(atPath: destination.path) {
-            guard try treeDigest(of: source) != treeDigest(of: destination) else { return }
-            try FileManager.default.removeItem(at: destination)
+        guard let catalog = resourceRoot?
+            .appendingPathComponent("AgentSkills", isDirectory: true) else { return }
+        for name in WorkspaceSkillStore.bundledSkillNames.sorted() {
+            let source = catalog.appendingPathComponent(name, isDirectory: true)
+            guard FileManager.default.fileExists(atPath: source.path) else { continue }
+            let destination = codexSkillsDirectory(in: workspace)
+                .appendingPathComponent(name, isDirectory: true)
+            if FileManager.default.fileExists(atPath: destination.path) {
+                guard try treeDigest(of: source) != treeDigest(of: destination) else { continue }
+                try FileManager.default.removeItem(at: destination)
+            }
+            try createDirectory(destination.deletingLastPathComponent())
+            try FileManager.default.copyItem(at: source, to: destination)
         }
-        try createDirectory(destination.deletingLastPathComponent())
-        try FileManager.default.copyItem(at: source, to: destination)
     }
 
     /// Identifies a skill folder by its relative paths and their contents, so a

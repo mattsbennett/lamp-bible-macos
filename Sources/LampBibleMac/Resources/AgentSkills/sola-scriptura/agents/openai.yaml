@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sola Scriptura Audit"
+  short_description: "Flag claims not established from scripture alone"
+  default_prompt: "Use $sola-scriptura to audit this writing for claims that cannot be established from scripture alone."

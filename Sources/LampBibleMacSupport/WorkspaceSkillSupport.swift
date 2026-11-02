@@ -32,7 +32,18 @@ public enum WorkspaceSkillStore {
     public static let selectionFilename = "enabled-skills.json"
 
     private static let catalogDirectoryName = "AgentSkills"
-    private static let builtInSkillNames: Set<String> = ["build-lamp-deck"]
+
+    /// The skills that ship with Lamp, by the folder name each has under
+    /// `Resources/AgentSkills`.
+    ///
+    /// Written down once because three different rules read it — a built-in is
+    /// kept out of the custom catalog, refused by every editing path, and left
+    /// out of the sync export — and a skill added to the resources but not to
+    /// this list becomes editable and syncable, which is how a reader's copy
+    /// silently diverges from the one their build ships.
+    public static let bundledSkillNames: Set<String> = ["build-lamp-deck", "sola-scriptura"]
+
+    private static var builtInSkillNames: Set<String> { bundledSkillNames }
 
     public static func catalogDirectory(in libraryRootURL: URL) -> URL {
         libraryRootURL.standardizedFileURL
