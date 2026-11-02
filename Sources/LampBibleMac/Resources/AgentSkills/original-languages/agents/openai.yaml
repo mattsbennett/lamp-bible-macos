@@ -1,0 +1,4 @@
+interface:
+  display_name: "Original Languages"
+  short_description: "Read the Hebrew or Greek, and see translators' choices"
+  default_prompt: "Use $original-languages to read the Hebrew or Greek behind this passage and show where the English reflects a translator's decision."

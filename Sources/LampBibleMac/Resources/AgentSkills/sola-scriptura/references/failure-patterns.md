@@ -63,6 +63,10 @@ John 21, where John uses the pair interchangeably elsewhere.
 `analyze_strongs` reports how translators rendered a word. That is their choice,
 not the word's range. For range, read a lexicon, and then cite the lexicon.
 
+Where a claim about the original needs doing properly rather than only flagging, the
+`original-languages` skill reads the Hebrew or Greek and measures what the translators
+did with it.
+
 ## 7. Typology asserted rather than shown
 
 A type the New Testament never draws, presented as though it does. Scripture draws

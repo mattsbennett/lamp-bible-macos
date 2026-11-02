@@ -41,7 +41,9 @@ public enum WorkspaceSkillStore {
     /// out of the sync export — and a skill added to the resources but not to
     /// this list becomes editable and syncable, which is how a reader's copy
     /// silently diverges from the one their build ships.
-    public static let bundledSkillNames: Set<String> = ["build-lamp-deck", "sola-scriptura"]
+    public static let bundledSkillNames: Set<String> = [
+        "build-lamp-deck", "original-languages", "sola-scriptura",
+    ]
 
     private static var builtInSkillNames: Set<String> { bundledSkillNames }
 

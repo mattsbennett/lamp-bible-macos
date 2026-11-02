@@ -63,6 +63,29 @@ public enum LampMCPPromptCatalog {
                 ),
             ]
         ),
+        Prompt(
+            name: "original-languages",
+            title: "Read the Hebrew or Greek",
+            description: """
+            Read the Hebrew or Greek behind an English verse, word by word, and \
+            show where a translation reflects a translator's decision rather than \
+            the text. Use when asked what a word means in the original, what a \
+            verb's tense or stem is, why translations differ at a verse, whether \
+            a rendering is fair, or for a word study.
+            """,
+            arguments: [
+                Prompt.Argument(
+                    name: "passage",
+                    description: "The reference to read, such as Romans 8:3.",
+                    required: false
+                ),
+                Prompt.Argument(
+                    name: "question",
+                    description: "What is being asked of the passage or the word.",
+                    required: false
+                ),
+            ]
+        ),
     ]
 
     public static func prompt(named name: String) -> Prompt? {
@@ -77,8 +100,20 @@ public enum LampMCPPromptCatalog {
         switch name {
         case "build-lamp-deck": return deckMessages(arguments: arguments)
         case "sola-scriptura": return auditMessages(arguments: arguments)
+        case "original-languages": return languageMessages(arguments: arguments)
         default: return nil
         }
+    }
+
+    private static func languageMessages(arguments: [String: String]?) -> [Prompt.Message] {
+        var text = originalLanguagesInstructions
+        if let passage = arguments?["passage"], !passage.isEmpty {
+            text += "\n\n## The passage\n\n\(passage)"
+        }
+        if let question = arguments?["question"], !question.isEmpty {
+            text += "\n\n## What is being asked\n\n\(question)"
+        }
+        return [.user(.text(text: text))]
     }
 
     private static func auditMessages(arguments: [String: String]?) -> [Prompt.Message] {
@@ -118,6 +153,107 @@ public enum LampMCPPromptCatalog {
         }
         return [.user(.text(text: text))]
     }
+
+    /// Mirrors `Resources/AgentSkills/original-languages/SKILL.md`, condensed.
+    ///
+    /// What it keeps is the part a client cannot work without: which modules
+    /// exist, the two calls that do the work, the order to do them in, and the
+    /// limits. What it leaves out is the catalogue of word-study fallacies and
+    /// the worked example — which make an answer better and are not what makes
+    /// one possible.
+    static let originalLanguagesInstructions = """
+    # Reading the original
+
+    Two jobs, and the honest answer to a great many questions is the second.
+
+    **Read the text**: what the Hebrew or Greek says at a passage, word by word, \
+    each with its dictionary form and its parsing. **Show where the English is a \
+    decision**: where the translations differ, what each chose, and whether the \
+    difference is a translator's judgement or a difference in the text.
+
+    What this does not do is say what a passage means. It reports the form of the \
+    words and the range of their senses; a sense in place is chosen by the \
+    sentence, not by a lexicon. Where a question needs that judgement, give the \
+    evidence and say whose judgement the rest is.
+
+    ## What is there
+
+    Call `list_modules` first. Only these come with Lamp: `TAHOT`, the Hebrew Old \
+    Testament in the Leningrad text; `TAGNT`, the Greek New Testament in the \
+    Nestlé-Aland text; the Strong's-tagged English translations `KJVs`, `BSBs`, \
+    `ASVs`, `WEBs` and `YLT`; and the lexicons `bdb`, `strongs_hebrew`, \
+    `strongs_greek` and `dodson_greek`. Anything else listed is the reader's own, \
+    and a reader may have none of it. Name what answered.
+
+    ## The two calls that do the work
+
+    `read_passage` with `translation_ids: ["TAGNT"]` or `["TAHOT"]` and \
+    `include_annotations: true` returns the original text and, per word, its \
+    Strong's key, dictionary form, morphology code and that code read out — \
+    `σαρκός G4561 σάρξ Noun · Genitive · Singular · Feminine`. Name more \
+    translations in the same call to see the renderings beside the original.
+
+    `analyze_strongs` with a `key` reports, for every translation that tags the \
+    word, how its translators rendered it and how often. That turns "this \
+    translation is interpretive here" into a count: σάρξ is "flesh" in 136 of \
+    ASV's 136 occurrences and in 84 of the Berean's 127. `TAGNT`'s own row lists \
+    Greek forms rather than renderings, there being nothing to render, so it is \
+    the control for how often the word occurs at all.
+
+    Also: `lookup_dictionary_keys` for a word's range, quoted and named; \
+    `search_library` with `strongs_key` for every verse tagged with a key; \
+    `read_study_material` for a translation's own notes on a verse.
+
+    ## The order to work in
+
+    1. Read the passage in the original before any lexicon. The sentence decides \
+       a sense, and a word study begun at the lexicon tends to end there.
+    2. Read it in every translation the library has. Where they agree there is \
+       usually nothing to explain.
+    3. For a word that matters, take its parsing from the passage and its range \
+       from a lexicon, named.
+    4. Where the translations differ, measure it, and ask whether this \
+       translation is doing here what it does everywhere.
+    5. Report the evidence — the text, the modules, the counts — and then say \
+       plainly which part is a reading rather than a datum.
+
+    ## Four kinds of difference
+
+    A **different text** (rule this out first: a word absent from `TAGNT` is \
+    absent because the critical text omits it). A **different sense within the \
+    range**, which is the commonest and the least worth dramatising. A \
+    **different reading of the grammar**, which the parsing cannot settle. An \
+    **interpretive rendering**, often admitted in the translation's own notes.
+
+    ## What a parsing settles
+
+    The form: whether a verb is perfect or participle, whether a noun is plural. \
+    Not the meaning. A tense is not a timeline, a Hebrew stem is not a \
+    definition, a construct chain or a genitive is a grammatical bond and not a \
+    claim, and a grammatical gender is not about people.
+
+    Hebrew verbs carry a **stem** — Qal, Niphal, Piel, Hiphil and the rest — \
+    which shapes the action as simple, passive, intensive or causative and is \
+    worth reporting when it is the point. Nouns carry a **state**, of which \
+    construct is the one to watch. A word of several morphemes is written with \
+    `/`, and the parsing given is the content morpheme's, because that is the \
+    word the key belongs to.
+
+    ## What is not here, and must not be implied
+
+    No running text but those two, so variants, Qere readings and \
+    Textus-Receptus-only words are not available. No textual apparatus: you \
+    cannot say which manuscripts read what. No syntax beyond the word — nothing \
+    marks clauses or dependencies, and word order may be described but a claim \
+    about what it does is a reading. No Hebrew morphology in `KJVs`, which tags \
+    with CrossWire's numeric codes that Lamp does not read. Renderings are \
+    translators' choices and not a word's range. And Strong's glosses are an \
+    index of how the KJV rendered words, not a lexicon: read `bdb` or \
+    `dodson_greek` for range.
+
+    Where a question needs something on that list, say so. A plausible answer \
+    assembled without the evidence is the one thing this is meant to prevent.
+    """
 
     /// Mirrors `Resources/AgentSkills/sola-scriptura/SKILL.md`, condensed.
     ///
