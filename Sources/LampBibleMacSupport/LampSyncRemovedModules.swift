@@ -72,13 +72,14 @@ public struct LampSyncRemovedModules: Codable, Equatable, Sendable {
     /// removed here leaves no other trace — so rewriting it with the bytes it
     /// already held tells this Mac it has work to publish. The next check
     /// starts a pass, which rewrites it again: a pass every six seconds for
-    /// as long as the app is open.
+    /// as long as the app is open, which is what this Mac was doing.
     ///
-    /// Which is not hypothetical, and not rare either. A pass is handed every
-    /// path it tombstoned, and the decks and highlight sets it tombstones
-    /// come from ledgers that keep their records for ever — so a pass has
-    /// something to forget on every pass once anything has ever been deleted,
-    /// and almost never anything that is still in this file.
+    /// Core now hands over only the deletions the manifest actually took
+    /// (`LampSyncLibraryManifest.recordsAdeletion`), so there is usually
+    /// nothing here to forget and this usually writes nothing. That is the
+    /// first line and this is the second: a file the local-work reading
+    /// watches is written when its content moved, and never because something
+    /// asked.
     @discardableResult
     public static func forget(
         _ paths: some Sequence<String>,

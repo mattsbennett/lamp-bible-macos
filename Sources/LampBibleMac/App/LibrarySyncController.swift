@@ -839,14 +839,15 @@ extension LibrarySyncController {
             records.setHighlightModuleID(moduleID, forSet: setID, in: source)
         }
         try records.save(toLibraryAt: library.rootURL, fileManager: fileManager)
-        // The manifest carries these now, so this Mac need not. Written only
-        // where that moved the record: a pass is handed every path it
-        // tombstoned, and the decks and highlight sets come from ledgers that
-        // keep their records for ever, so there is nearly always something to
-        // forget and nearly never anything in this file to forget it from.
-        // Rewriting it regardless dated a file `LampSyncLocalWork` reads, so
-        // this Mac saw work to publish every time it published, and synced
-        // every six seconds for as long as it was open.
+        // The manifest carries these now, so this Mac need not. `tombstoned`
+        // is what the manifest took, not what the plan asked for, which
+        // matters here more than anywhere: this Mac's deletions come from the
+        // deck ledger and the personal ledger, which keep their records for
+        // ever, so it asks for the same tombstones on every pass. Keyed on
+        // the ask, and writing regardless, this dated a file
+        // `LampSyncLocalWork` reads — so the Mac saw work to publish every
+        // time it published, and synced every six seconds for as long as it
+        // was open. `forget` writes only where the record moved as well.
         try LampSyncRemovedModules.forget(
             outcome.tombstoned, inLibraryAt: library.rootURL, fileManager: fileManager
         )
