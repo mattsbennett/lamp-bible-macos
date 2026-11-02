@@ -157,17 +157,41 @@ struct LampSyncLocalWorkTests {
         #expect(marks(library) != before)
     }
 
-    /// The record of which decks were deleted travels in the settings bundle
-    /// rather than as a file, and writing it is still this Mac having
-    /// something to say.
-    @Test func recordingADeckDeletionIsWorkToPublish() throws {
+    /// Deleting a deck, as `deleteSelectedDeck` does it: the deletion is
+    /// recorded for the other devices, and the deck's own file goes. The file
+    /// going is what is read here — see `therecordOfDeletedDecksIsNotWork`
+    /// for why the record itself cannot be.
+    @Test func deletingADeckThroughItsOwnPathIsWorkToPublish() throws {
         let library = try makeLibrary()
         defer { try? fileManager.removeItem(at: library) }
         let before = marks(library)
 
         try LampPresentationDeckSync.recordDeletion(of: "sunday", in: library)
+        try fileManager.removeItem(at: library.appendingPathComponent("Presentations/sunday.lampdeck"))
 
         #expect(marks(library) != before)
+    }
+
+    /// The ledger of deleted decks is not read, because a pass writes it:
+    /// applying another device's copy saves it here. Counting it would leave
+    /// work behind for the next pass to find, and this Mac would sync every
+    /// six seconds for as long as it was open — and one deck deleted on any
+    /// device was all it would have taken.
+    @Test func therecordOfDeletedDecksIsNotWork() throws {
+        let library = try makeLibrary()
+        defer { try? fileManager.removeItem(at: library) }
+        try LampPresentationDeckSync.recordDeletion(of: "sunday", in: library)
+        let before = marks(library)
+
+        // As a pass would: the same record written again, a moment later.
+        try LampPresentationDeckSync.recordDeletion(of: "sunday", in: library)
+        let ledger = library
+            .appendingPathComponent("Presentations")
+            .appendingPathComponent(LampPresentationDeckSync.deletionsFilename)
+        try fileManager.setAttributes([.modificationDate: newer], ofItemAtPath: ledger.path)
+
+        #expect(marks(library) == before)
+        #expect(marks(library).keys.contains { $0.hasSuffix(LampPresentationDeckSync.deletionsFilename) } == false)
     }
 
     // MARK: - Workspaces and skills

@@ -62,14 +62,25 @@ public enum LampSyncLocalWork {
             marks[LampSyncRemovedModules.filename] = time
         }
 
-        // The decks and the record of the ones deleted: both edited in place,
-        // so both are read file by file. Listed rather than walked, because
-        // the images a deck shows are in a folder of their own and are
-        // immutable at a path — an image is written where it is absent and
-        // never again, so a changed one is nothing this Mac could publish,
-        // and the folder's own date is all that could matter about it.
+        // The decks themselves, listed rather than walked: a deck is edited
+        // in place, while the images it shows are in a folder of their own
+        // and are immutable at a path — an image is written where it is
+        // absent and never again, so a changed one is nothing this Mac could
+        // publish, and the folder's own date is all that could matter.
+        //
+        // Not the record of the decks deleted. It is a ledger: it travels in
+        // the settings bundle, and a pass applying another device's copy
+        // writes it here. Counted, every pass would leave work behind for the
+        // next one to find, and this Mac would sync every six seconds for as
+        // long as it was open — the same trap as a workspace's bookkeeping,
+        // and this one needed only one deck deleted anywhere to spring. There
+        // is nothing to lose by leaving it out: deleting a deck here removes
+        // the deck's own file, which is read.
         let decks = LampPresentationDeckStore(rootURL: root).decksDirectoryURL
-        marks.merge(list(decks, from: root, fileManager: fileManager)) { first, _ in first }
+        for (path, time) in list(decks, from: root, fileManager: fileManager)
+        where !path.hasSuffix(LampPresentationDeckSync.deletionsFilename) {
+            marks[path] = time
+        }
         if let time = modified(decks.appendingPathComponent(
             LampPresentationDeckStore.assetsDirectoryName, isDirectory: true
         )) {

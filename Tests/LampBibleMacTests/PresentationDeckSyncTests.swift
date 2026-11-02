@@ -186,6 +186,48 @@ struct PresentationDeckSyncTests {
 
         #expect(try titles(in: macB).isEmpty)
     }
+    /// A pass applies the other device's record of deleted decks every time
+    /// it runs, and an unchanged one is not written back.
+    ///
+    /// The write itself was harmless; its date was not. Anything that reads
+    /// the library to see whether this Mac has work to publish would find
+    /// this file newly written after every pass, and publish again
+    /// (`LampSyncLocalWork`).
+    @Test func applyingAnUnchangedRecordOfDeletedDecksWritesNothing() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = try library("mac", in: root)
+        try LampPresentationDeckSync.recordDeletion(of: "easter", in: library, at: base)
+        let ledger = library
+            .appendingPathComponent(LampPresentationDeckStore.directoryName, isDirectory: true)
+            .appendingPathComponent(LampPresentationDeckSync.deletionsFilename)
+        try FileManager.default.setAttributes(
+            [.modificationDate: base], ofItemAtPath: ledger.path
+        )
+
+        let incoming = try LampPresentationDeckSync.deletions(in: library)
+        _ = try LampPresentationDeckSync.applyDeletions(incoming, in: library)
+
+        let written = try FileManager.default.attributesOfItem(atPath: ledger.path)[.modificationDate] as? Date
+        #expect(written == base, "an unchanged ledger was rewritten")
+        // And the record itself is intact, which is what the write was for.
+        #expect(try LampPresentationDeckSync.deletions(in: library).deletedAt.keys.sorted() == ["easter"])
+    }
+
+    /// One that has moved is written, because from then on this is what every
+    /// device reads.
+    @Test func applyingAnewDeckDeletionIsWrittenDown() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = try library("mac", in: root)
+
+        var incoming = LampPresentationDeckDeletionLedger()
+        incoming.record("christmas", at: base)
+        _ = try LampPresentationDeckSync.applyDeletions(incoming, in: library)
+
+        #expect(try LampPresentationDeckSync.deletions(in: library).deletedAt.keys.sorted() == ["christmas"])
+    }
+
 }
 
 struct PresentationAssetSyncTests {
@@ -354,4 +396,5 @@ struct PresentationAssetSyncTests {
 
         #expect(assetContents("shared.jpg", in: library) == "keep")
     }
+
 }

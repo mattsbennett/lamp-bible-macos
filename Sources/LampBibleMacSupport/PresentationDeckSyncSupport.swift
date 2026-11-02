@@ -63,7 +63,8 @@ public enum LampPresentationDeckSync {
         fileManager: FileManager = .default
     ) throws -> [String] {
         let directory = decksDirectory(in: libraryRoot)
-        var deletions = try loadDeletions(in: directory, fileManager: fileManager)
+        let before = try loadDeletions(in: directory, fileManager: fileManager)
+        var deletions = before
         deletions.merge(incoming)
 
         var localFiles: [String: URL] = [:]
@@ -85,7 +86,11 @@ public enum LampPresentationDeckSync {
             try fileManager.removeItem(at: url)
             removed.append(id)
         }
-        if !deletions.isEmpty {
+        // Only when the join moved it. Rewriting an unchanged ledger on
+        // every pass is a write for nothing, and it dates a file that other
+        // things read: it is how this library came to look as though it had
+        // work to publish each time it published (`LampSyncLocalWork`).
+        if deletions != before {
             try saveDeletions(deletions, in: directory, fileManager: fileManager)
         }
         return removed.sorted()
