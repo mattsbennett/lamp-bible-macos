@@ -1130,6 +1130,16 @@ extension LibrarySyncController {
                     + outcome.fetchedAgain.sorted().joined(separator: ", ")
             )
         }
+        // The same fault from the other end, and the end somebody notices:
+        // a thing deleted on another device that this one will not delete,
+        // because as far as the plan can tell it has nothing to delete.
+        if !outcome.deletionsNotCarriedOut.isEmpty {
+            print(
+                "[Sync] deleted elsewhere but not here, so something here holds these "
+                    + "without saying so: "
+                    + outcome.deletionsNotCarriedOut.sorted().joined(separator: ", ")
+            )
+        }
     }
 }
 

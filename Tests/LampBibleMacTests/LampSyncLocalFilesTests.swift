@@ -318,4 +318,83 @@ struct LampSyncLocalFilesTests {
         #expect(found.candidates.isEmpty)
         #expect(found.unplaceable.isEmpty)
     }
+
+    // MARK: - Every kind of content
+
+    /// Which gatherer produces each kind of file, and the proof that it does.
+    ///
+    /// Exhaustive on purpose, so a kind added to `LampSyncFileKind` or
+    /// `LampSyncContentKind` stops this compiling until somebody says what
+    /// gathers it. The cost of not saying is the whole of the bug this
+    /// session chased: a client that does not claim a path it holds fetches
+    /// the file again on every pass, for ever, and never carries out a
+    /// deletion made on another device
+    /// (`LampSyncUnclaimedInstalls`). A kind with no gatherer here is that,
+    /// for every file of that kind at once.
+    ///
+    /// `LibrarySyncController.gather()` is where these are called, and the
+    /// one thing this cannot check is that it still calls them all. What it
+    /// does check is that nothing in the layout is without a home.
+    @Test func everyKindOfSyncedFileIsGatheredFromSomewhere() throws {
+        let library = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: library) }
+
+        // One module of every kind, each with its file where the library
+        // keeps it, and the pictures and attachments of two of them.
+        var modules: [LampInstalledModuleFile] = []
+        for kind in LampModuleKind.allCases {
+            let url = library.appendingPathComponent("Modules/\(kind.rawValue).lamp")
+            try write("a \(kind.rawValue)", at: "Modules/\(kind.rawValue).lamp", in: library)
+            modules.append(module(id: kind.rawValue, kind: kind, at: url))
+        }
+        try write("a picture", at: "Media/Books/atonement/plates/one.jpg", in: library)
+        try write("an attachment", as: "sunrise.jpg", for: "w1", in: library)
+
+        let store = LampPresentationDeckStore(rootURL: library)
+        try FileManager.default.createDirectory(
+            at: store.assetsDirectoryURL, withIntermediateDirectories: true
+        )
+        try Data("a deck".utf8).write(
+            to: store.decksDirectoryURL.appendingPathComponent("sunday.lampdeck")
+        )
+        try Data("an image".utf8).write(
+            to: store.assetsDirectoryURL.appendingPathComponent("a1b2c3.jpg")
+        )
+        try write(
+            "Notes on Isaiah.",
+            at: "AgentWorkspaces/Devotionals/advent/context/isaiah.md",
+            in: library
+        )
+
+        let staging = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: staging) }
+        let gathered =
+            LampSyncLocalFiles.installedModules(modules).candidates
+            + LampSyncLocalFiles.devotionalMedia(
+                for: [writing(id: "w1", attachment: "sunrise.jpg")],
+                remoteModuleID: "devotionals",
+                inLibraryAt: library
+            ).candidates
+            + LampSyncLocalFiles.bookMedia(
+                forBookModuleIDs: ["atonement"], inLibraryAt: library
+            ).candidates
+            + LampSyncLocalFiles.decks(inLibraryAt: library).candidates
+            + (try LampSyncLocalFiles.workspaceFiles(inLibraryAt: library, stagingIn: staging))
+
+        let found = Set(gathered.map(\.kind))
+        let kinds: [LampSyncFileKind] =
+            LampSyncContentKind.allCases.map { .module($0) }
+                + [.devotionalMedia, .bookMedia, .deck, .deckAsset, .workspaceFile]
+        for kind in kinds {
+            #expect(found.contains(kind), "nothing here gathers \(kind)")
+        }
+        // And every path produced is one the layout places, which is what
+        // keeps a gatherer from inventing a path no other client reads.
+        for candidate in gathered {
+            #expect(
+                LampSyncFolderLayout.kind(of: candidate.path) == candidate.kind,
+                "\(candidate.path) is not where a \(candidate.kind) goes"
+            )
+        }
+    }
 }
