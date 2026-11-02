@@ -38,6 +38,31 @@ public enum LampMCPPromptCatalog {
                 ),
             ]
         ),
+        Prompt(
+            name: "sola-scriptura",
+            title: "Audit writing against scripture alone",
+            description: """
+            Audit writing for conclusions, claims and teachings that cannot be \
+            established from scripture alone. Use when asked to check an \
+            exhortation, sermon, study, talk, devotional, article or doctrinal \
+            prose for proof-text drift, inherited framing, smuggled background, \
+            or inference presented as statement — or whether one particular claim \
+            is actually in the text.
+            """,
+            arguments: [
+                Prompt.Argument(
+                    name: "writing",
+                    description: "The piece to audit. Paste the prose itself.",
+                    required: false
+                ),
+                Prompt.Argument(
+                    name: "claim",
+                    description:
+                        "One sentence or claim to adjudicate, instead of auditing a whole piece.",
+                    required: false
+                ),
+            ]
+        ),
     ]
 
     public static func prompt(named name: String) -> Prompt? {
@@ -49,7 +74,33 @@ public enum LampMCPPromptCatalog {
         for name: String,
         arguments: [String: String]?
     ) -> [Prompt.Message]? {
-        guard name == "build-lamp-deck" else { return nil }
+        switch name {
+        case "build-lamp-deck": return deckMessages(arguments: arguments)
+        case "sola-scriptura": return auditMessages(arguments: arguments)
+        default: return nil
+        }
+    }
+
+    private static func auditMessages(arguments: [String: String]?) -> [Prompt.Message] {
+        var text = solaScripturaInstructions
+        if let claim = arguments?["claim"], !claim.isEmpty {
+            text += """
+
+            ## The claim to adjudicate
+
+            Do not inventory a whole piece. Work this one claim, and answer in a \
+            paragraph with the text quoted.
+
+            \(claim)
+            """
+        }
+        if let writing = arguments?["writing"], !writing.isEmpty {
+            text += "\n\n## The writing to audit\n\n\(writing)"
+        }
+        return [.user(.text(text: text))]
+    }
+
+    private static func deckMessages(arguments: [String: String]?) -> [Prompt.Message] {
         var text = buildDeckInstructions
         if let source = arguments?["source"], !source.isEmpty {
             text += "\n\n## The writing this deck is built from\n\n\(source)"
@@ -67,6 +118,160 @@ public enum LampMCPPromptCatalog {
         }
         return [.user(.text(text: text))]
     }
+
+    /// Mirrors `Resources/AgentSkills/sola-scriptura/SKILL.md`, condensed.
+    ///
+    /// The skill is a folder: a procedure and five reference files an agent
+    /// opens as it needs them. A client calling a prompt gets one message and
+    /// no folder, so this carries the parts an audit cannot be run without —
+    /// the one authority, the verdicts, the load axis, the report contract, and
+    /// the rules that stop it flagging figures of speech. What it leaves out is
+    /// the catalogue of failure patterns and the worked example, which make an
+    /// audit better and are not what makes it possible.
+    ///
+    /// `SolaScripturaPromptTests` holds the two to the same verdicts and loads,
+    /// so neither can be renamed without the other.
+    static let solaScripturaInstructions = """
+    # Sola scriptura audit
+
+    Check whether the writing's claims stand on scripture, with the text in \
+    front of you. You are not the writer's doctrinal opponent and not their \
+    editor. Every finding is about evidence: *this is not established by the \
+    text you cite*. Never *this is wrong*.
+
+    ## The one authority
+
+    Measure claims against the text of scripture and nothing else. Not against \
+    a creed, a confession or a statement of faith; not against any commentary, \
+    lexicon or book in the library, including the ones the writer's own \
+    community wrote; not against what the writer has held before; not against \
+    scholarly consensus.
+
+    A claim that agrees with the writer's tradition is not thereby established. \
+    A claim that cuts against it is not thereby refuted. The whole value of \
+    this audit is that it will tell the writer when something they believe is \
+    not in the text they cite, and nothing else they have will do that. So flag \
+    the comfortable claims too — those are the findings worth having.
+
+    Where a community has a rule about *wording* — which terms its writing uses \
+    for a doctrine — that is a separate gate. Note an intersection in a clause \
+    and keep the two apart.
+
+    ## Nothing is answered from memory
+
+    Verse wording, who said what, what a word covers, whether a phrase occurs \
+    anywhere: look all of it up, every time, including the verses you are sure \
+    of. Your recall of scripture is good enough to be dangerous and not good \
+    enough to audit with.
+
+    Call `list_modules` first, because what you can check depends on what this \
+    reader has. Only these come with Lamp: translations `KJVs`, `BSBs`, `ASVs`, \
+    `WEBs` and `YLT`, all carrying Strong's numbers; the cross-reference \
+    indexes `tske` and `crossrefs`; and the lexicons `bdb`, `strongs_hebrew`, \
+    `strongs_greek` and `dodson_greek`. Everything else listed is the reader's \
+    own. Read passages with `read_passage`, naming **every** translation you \
+    mean to compare, since it returns three by default and that is how a claim \
+    resting on one wording stays hidden.
+
+    A cross-reference index is human work: it finds candidate texts and \
+    establishes nothing. A lexicon is evidence about a word, never about a \
+    claim. A commentary or book can never carry a claim, so do not open one to \
+    find out what a passage means — having read a commentator first, you will \
+    measure the writer against that reading and call a different one \
+    unsupported. Open one only when the writing uses it, to check that the \
+    source says what the writing says it does, or to trace where an \
+    unattributed framing came from.
+
+    ## Verdict and load
+
+    Each claim gets both. The verdict says what it rests on:
+
+    - **Stated** — scripture asserts it and the quoted text carries it. Report \
+      only when the writing cites it to the wrong place.
+    - **Entailed** — follows from stated texts by an argument writable in a line \
+      or two, adding no premise from outside scripture.
+    - **Inferred** — the text permits it, and permits something else. Report \
+      when the writing gives no sign a reading was chosen. The remedy is almost \
+      always to mark it, not to drop it.
+    - **Imported** — a premise comes from outside scripture: a creed, a \
+      commentator, a lexicon, received practice, consensus, background, or an \
+      idea so common it feels scriptural. Always report.
+    - **Unsupported** — no text establishes it and none is offered.
+    - **Contrary** — the cited or governing text tells against it. Report first, \
+      quote the text, and do not argue the doctrine.
+
+    To tell entailed from inferred, write the argument out as premises and look \
+    for the premise you added. If every premise is a text you can quote it is \
+    entailed; if one is something you know rather than read, that premise is \
+    the finding, and naming it is the most useful sentence you will write.
+
+    The load says how much falls over without it: **load-bearing** (the \
+    conclusion, or a step it needs), **supporting** (strengthens a point that \
+    survives without it), **decorative** (colour, illustration, an aside). \
+    Judge it from the chain of claims, not from how emphatic the sentence is — \
+    writers state load-bearing premises quietly and decorations with force.
+
+    ## What not to flag
+
+    Scripture's own words, however much has been built on them — the finding \
+    would be a gloss adding a mechanism the words do not state, never the \
+    words. Pastoral application in the writer's own voice. Figures of speech \
+    and rhetorical questions. Hedged inference, which the writer has already \
+    marked. A named source, whose naming remedies the dependence — though not \
+    whether the source says that. Literary observation that is checkable in the \
+    text. Quoting one translation, as against a claim that depends on one. A \
+    community's wording rule. Prose quality. Whether the doctrine is true.
+
+    One finding per problem: if the same drift appears eight times, write it \
+    once and list the rest in a line. And if every remedy you reach for is a \
+    hedge, the audit is a bad one — writing that hedges everything asserts \
+    nothing.
+
+    ## How to work
+
+    1. Read the whole piece once. Write its thesis in a sentence, then the \
+       chain of claims carrying it. You cannot judge what a claim holds up \
+       until you can see the chain.
+    2. Inventory the claims doing doctrinal or factual work — not every \
+       sentence.
+    3. Verify every citation. Look each reference up verbatim, then ask the \
+       only question that matters: does this text carry the weight the claim \
+       puts on it? Proof-text drift is the commonest finding by a wide margin.
+    4. For each uncited load-bearing claim, find the text it would need. \
+       Cross-reference the passage, search for the phrase, and look up what you \
+       find. If nothing carries it, that is the finding.
+    5. Adjudicate each as verdict × load.
+    6. Try to defeat each finding before reporting it. Is there another text \
+       that carries the claim — did you check it? Did the writer already mark \
+       it as an inference? Run this evenly: it is where an audit goes soft, \
+       because a claim the writing takes for granted feels defended when it is \
+       only familiar. A finding survives on whether a text carries it, and on \
+       nothing about how settled it sounds or whose position it is.
+    7. Report.
+
+    ## Reporting
+
+    Rank by load, not by how wrong something is. Every load-bearing finding \
+    gets an entry; supporting ones when they change what a reader would \
+    conclude; decorative ones a single closing list, one line each.
+
+    **No finding without a quotation.** If you cannot show the text that fails \
+    to carry the claim, you have a suspicion rather than a finding, and it \
+    stays out.
+
+    Each entry carries four things and stops: the sentence from the writing, \
+    quoted; the text consulted, quoted verbatim and named with its module; the \
+    gap in a sentence, being what the claim needs that the text does not give; \
+    and the smallest remedy that makes it honest — cite the text that does \
+    carry it, mark it as inference, or drop the load.
+
+    Open with how many claims were inventoried and which modules answered, and \
+    a sentence on the piece's thesis. Close with what the pass did not do: what \
+    you could not check, which claims rest on a text no available module \
+    carried, and what a second pass should look at. That section is part of the \
+    finding, not a disclaimer — an audit that hides its own gaps is the thing \
+    this one was written to catch.
+    """
 
     /// Mirrors `Resources/AgentSkills/build-lamp-deck/SKILL.md`, with its shell
     /// steps replaced by the tools that do the same work.

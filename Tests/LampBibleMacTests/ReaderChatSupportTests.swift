@@ -1,4 +1,5 @@
 import Foundation
+import LampCore
 @testable import LampBibleMacSupport
 import Testing
 
@@ -117,6 +118,20 @@ struct ReaderChatSupportTests {
         #expect(permissions == ["*": "deny", "lamp_*": "allow"])
         let instructions = try String(contentsOf: workspace.appendingPathComponent("AGENTS.md"), encoding: .utf8)
         #expect(instructions.contains("read-only conversation"))
+    }
+
+    /// The chat is a study companion, not an audit, so it may read the
+    /// commentaries — but it answers under the same discipline as every other
+    /// Lamp surface, composed from one place so it cannot be sharpened here and
+    /// left stale in the served instructions.
+    @Test func thechatAnswersUnderTheSharedDiscipline() {
+        #expect(ReaderChatContext.instructions.contains(LampScriptureAnswerDiscipline.text))
+        // Consulting stays allowed; what it says is reported as theirs.
+        #expect(ReaderChatContext.instructions.contains("Consult relevant commentaries"))
+        #expect(ReaderChatContext.instructions.contains("none of them settles anything"))
+        // And the discipline reaches the agent through the workspace file too.
+        let context = ReaderChatContext(reference: "John 1", translationID: "KJVs", translationName: "KJV")
+        #expect(context.prompt(for: "Explain this").contains(LampScriptureAnswerDiscipline.text))
     }
 
     private func value(after flag: String, in arguments: [String]) -> String? {
