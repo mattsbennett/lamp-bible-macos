@@ -84,6 +84,81 @@ struct LampSyncRemovedModulesTests {
         )
         #expect(LampSyncRemovedModules.load(fromLibraryAt: library).removedAt.isEmpty)
     }
+
+    // MARK: - Forgetting what the manifest now carries
+
+    /// The loop this Mac was actually in, measured on 2 November 2026: a pass
+    /// completed every fourteen to sixteen seconds, for as long as the app
+    /// was open, with nobody touching anything.
+    ///
+    /// A pass is handed every path it tombstoned, and the decks and highlight
+    /// sets it tombstones come from ledgers that keep their records for ever
+    /// — so there is something to forget on every pass once anything has ever
+    /// been deleted, and nearly never anything in this file to forget it
+    /// from. Written regardless, that dated a file `LampSyncLocalWork` reads,
+    /// which told this Mac it had work to publish, which started a pass,
+    /// which wrote it again.
+    ///
+    /// This file cannot be left out of that reading the way the record of
+    /// deleted decks was: a module removed here leaves no other trace. So the
+    /// write is what has to be conditional.
+    @Test func forgettingPathsItDoesNotHoldWritesNothing() throws {
+        let root = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try LampSyncRemovedModules.record(
+            LampInstalledModule(id: "mcheyne", kind: .plan, name: "M'Cheyne"), inLibraryAt: root
+        )
+        let url = LampSyncRemovedModules.url(inLibraryAt: root)
+        let base = Date(timeIntervalSince1970: 1_600_000_000)
+        try FileManager.default.setAttributes([.modificationDate: base], ofItemAtPath: url.path)
+
+        // What a pass hands it: a deck and a highlight module it tombstoned,
+        // neither of which this file ever held.
+        let wrote = try LampSyncRemovedModules.forget(
+            ["Workspaces/Presentations/sunday.lampdeck", "Highlights/set-1.lamp"],
+            inLibraryAt: root
+        )
+
+        #expect(wrote == false)
+        let modified = try FileManager.default
+            .attributesOfItem(atPath: url.path)[.modificationDate] as? Date
+        #expect(modified == base, "the record was rewritten with the bytes it already held")
+        // And the removal it does hold is untouched, which is what the file
+        // is for: forget it and the plan comes back on the next pass.
+        #expect(
+            LampSyncRemovedModules.load(fromLibraryAt: root).removedAt.keys.sorted()
+                == ["Plans/mcheyne.lamp"]
+        )
+    }
+
+    /// And the write still happens when there is something to forget, or the
+    /// removal would be tombstoned again on every pass for ever.
+    @Test func forgettingApathItHoldsIsWritten() throws {
+        let root = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try LampSyncRemovedModules.record(
+            LampInstalledModule(id: "mcheyne", kind: .plan, name: "M'Cheyne"), inLibraryAt: root
+        )
+
+        let wrote = try LampSyncRemovedModules.forget(["Plans/mcheyne.lamp"], inLibraryAt: root)
+
+        #expect(wrote)
+        #expect(LampSyncRemovedModules.load(fromLibraryAt: root).removedAt.isEmpty)
+    }
+
+    /// Nothing at all to forget is the ordinary case between removals.
+    @Test func forgettingNothingWritesNothing() throws {
+        let root = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        #expect(try LampSyncRemovedModules.forget([], inLibraryAt: root) == false)
+        #expect(
+            FileManager.default.fileExists(
+                atPath: LampSyncRemovedModules.url(inLibraryAt: root).path
+            ) == false,
+            "a library that has removed nothing has no record at all"
+        )
+    }
 }
 
 /// The collision that could cost somebody every note they have written.

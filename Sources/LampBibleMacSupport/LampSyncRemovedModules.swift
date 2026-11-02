@@ -64,6 +64,35 @@ public struct LampSyncRemovedModules: Codable, Equatable, Sendable {
         for path in paths { removedAt[path] = nil }
     }
 
+    /// Forgets `paths` in the library's record, writing only if that moved
+    /// it. Says whether it wrote.
+    ///
+    /// The write has to be conditional, and the reason is not tidiness.
+    /// `LampSyncLocalWork` reads this file's date — it has to, since a module
+    /// removed here leaves no other trace — so rewriting it with the bytes it
+    /// already held tells this Mac it has work to publish. The next check
+    /// starts a pass, which rewrites it again: a pass every six seconds for
+    /// as long as the app is open.
+    ///
+    /// Which is not hypothetical, and not rare either. A pass is handed every
+    /// path it tombstoned, and the decks and highlight sets it tombstones
+    /// come from ledgers that keep their records for ever — so a pass has
+    /// something to forget on every pass once anything has ever been deleted,
+    /// and almost never anything that is still in this file.
+    @discardableResult
+    public static func forget(
+        _ paths: some Sequence<String>,
+        inLibraryAt libraryRoot: URL,
+        fileManager: FileManager = .default
+    ) throws -> Bool {
+        let before = load(fromLibraryAt: libraryRoot, fileManager: fileManager)
+        var records = before
+        records.forget(paths)
+        guard records != before else { return false }
+        try records.save(toLibraryAt: libraryRoot, fileManager: fileManager)
+        return true
+    }
+
     /// Records a module's removal, at the path it is published under.
     @discardableResult
     public static func record(
