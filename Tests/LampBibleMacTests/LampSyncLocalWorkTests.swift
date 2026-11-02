@@ -463,6 +463,54 @@ struct LampSyncLocalWorkTests {
         #expect(after.files != before.files, "the deck going is work this Mac has to publish")
     }
 
+    /// The other half of a pass: not what it applies, but what it writes
+    /// down afterwards.
+    ///
+    /// `apassThatTakesNothingInLeavesNoWorkBehind` covers the applying, and
+    /// it did not cover this — which is where the loop that was actually
+    /// running lived. The record of removed modules was rewritten after every
+    /// pass with the bytes it already held, and its date is a mark, so the Mac
+    /// saw work to publish every time it published. Suggested by the macos-7f
+    /// session, on the grounds that two files have now had the same bug and
+    /// each was found only once it fired.
+    ///
+    /// The paths handed to `forget` here are the *asks* — every path the plan
+    /// tombstoned, including ones carried long ago — not the shorter list
+    /// core now hands over. That is deliberate: the property has to hold
+    /// however generous the caller is, since the generous caller is what this
+    /// was.
+    @Test func thebookkeepingAfterApassLeavesNoWorkBehind() throws {
+        let root = try makeLibrary()
+        defer { try? fileManager.removeItem(at: root) }
+        // A library that has deleted a deck and removed a module, with the
+        // removal already carried by an earlier pass — which is the ordinary
+        // state of things, and the one the loop ran in.
+        try LampPresentationDeckSync.recordDeletion(of: "sunday", in: root)
+        try LampSyncRemovedModules.record(
+            LampInstalledModule(id: "mcheyne", kind: .plan, name: "M'Cheyne"), inLibraryAt: root
+        )
+        try LampSyncRemovedModules.forget(["Plans/mcheyne.lamp"], inLibraryAt: root)
+        try stamp(root, to: old)
+        let before = marks(root)
+
+        // What a settled pass writes into the library when it carried
+        // nothing: its per-path records, and the removals the manifest now
+        // holds.
+        var records = LampSyncFileRecords()
+        records.recordInstall("Plans/mcheyne.lamp", in: "s", revision: "\"r1\"")
+        try records.save(toLibraryAt: root)
+        try LampSyncRemovedModules.forget(
+            [
+                "Workspaces/Presentations/sunday.lampdeck",
+                "Highlights/set-1.lamp",
+                "Plans/mcheyne.lamp",
+            ],
+            inLibraryAt: root
+        )
+
+        #expect(marks(root) == before, "a pass's own bookkeeping left work behind")
+    }
+
     /// The two halves of the answer a pass can move, read the way
     /// `LibrarySyncController` reads them.
     private func work(
