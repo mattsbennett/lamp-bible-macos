@@ -34,9 +34,12 @@ it, which is how Hebrew says *the ark of the covenant*.
 
 A word can be several morphemes, written with `/`: `Hc/Vqw3ms` is a conjunction joined
 to a verb, `HNcmsc/Sp3ms` a construct noun with a pronominal suffix. The parsing you
-are given is the content morpheme's — the noun or the verb — because that is the word
-the Strong's key belongs to. When the prefix or suffix is the point, the raw code is
-there to read.
+are given is for the one morpheme the Strong's key names, which is usually the noun or
+the verb but need not be: `HC/To` is אֵת with a conjunction on it, and parses as the
+object marker, not as a conjunction. Where the word is nothing but grammar the key can
+even name a suffix. When a prefix or a suffix is itself the point, the raw code is
+there to read, and it is the only place the prefix appears at all — so a claim resting
+on the presence of a waw or an article is read off the code, not off the parsing.
 
 ## What a parsing settles, and what it does not
 
