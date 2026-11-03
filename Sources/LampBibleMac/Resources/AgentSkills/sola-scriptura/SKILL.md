@@ -1,20 +1,14 @@
 ---
 name: sola-scriptura
-description: Audit writing for conclusions, claims and teachings that cannot be established from scripture alone. Use when asked to check an exhortation, sermon, study, talk, devotional, article or doctrinal prose for proof-text drift, inherited framing, smuggled background, or inference presented as statement — or whether one particular claim is actually in the text.
+description: Tell what scripture establishes from what is inferred from it or brought to it. Use when asked whether a claim, reading or teaching is actually in the text, what a passage does and does not establish, or whether something can be held from scripture alone — and when asked to go through a whole exhortation, sermon, study, talk, devotional or article for proof-text drift, inherited framing, smuggled background, or inference presented as statement.
 ---
 
-# Sola scriptura audit
+# Sola scriptura
 
-Check whether the writing's claims stand on scripture, with the text in front of
-you. You are not the writer's doctrinal opponent and not their editor. Every
-finding is about evidence: *this is not established by the text you cite*. Never
-*this is wrong*.
-
-Audit the complete `draft.md` in the current workspace unless the user names
-something else to audit. Read `DEVOTIONAL_CONTEXT.md` and the files under
-`context/` when they are there — a claim the writer has sourced in their own
-context files is sourced, and `false-positives.md` says why that matters. Do not
-modify `draft.md`: this skill reports, and applies nothing unless asked.
+Check whether a claim stands on scripture, with the text in front of you. You are
+not anyone's doctrinal opponent and not their editor. Everything you report is
+about evidence: *this is not established by the text you cite*. Never *this is
+wrong*.
 
 ## The one authority
 
@@ -34,14 +28,27 @@ Where a community has a rule about *wording* — which terms its writing uses fo
 doctrine — that is a separate gate from this one. Note an intersection in a clause
 and keep the two apart.
 
-## Two jobs
+## Two jobs, and what you are given decides which
 
-**Audit (default).** Work the procedure below and report. Do not rewrite the piece.
-Offer the remedies; apply none unless asked.
+Neither is the default. The same rules serve both — the one authority, the verdicts,
+the evidence rule, the false positives — and what differs is only how much there is
+to work and what the answer looks like.
 
-**Adjudicate.** The user asks about one claim or sentence — "is that actually in the
-text?" Skip the inventory, do steps 0, 3, 4, 5 and 6 on that claim alone, and answer
-in a paragraph with the text quoted.
+**Adjudicate**, when the question is about a claim, a sentence or a passage. Someone
+asks whether a reading is actually in the text, or what a verse does and does not
+establish. Do step 0, then steps 3 to 6 on that claim alone, and answer in a
+paragraph or two with the text quoted. No tables, no report frame, no inventory of
+something nobody gave you. This is the shape most questions take, and in a reader
+chat it is the only shape there is.
+
+**Audit**, when you are given a piece of writing to go through. An exhortation, a
+study, a draft. Work the whole procedure and report to the contract below. Do not
+rewrite the piece; offer the remedies and apply none unless asked.
+
+In a writing workspace the piece is `draft.md` unless the user names another, and
+`DEVOTIONAL_CONTEXT.md` and the files under `context/` are worth reading first — a
+claim the writer has sourced there is sourced, and `false-positives.md` says why that
+matters. Never modify `draft.md`.
 
 ## Step 0 — find out what the library holds
 
@@ -104,8 +111,13 @@ different reading unsupported. That is not this audit, and it is how a commentat
 framing gets into the report under the audit's own name. Read the text, adjudicate,
 and leave the commentaries shut.
 
-Two things make one worth opening, and both are reactions to the writing rather than
-inquiries of your own:
+Three things make one worth opening. The first is the reader's own question; the other
+two are reactions to the writing rather than inquiries of your own:
+
+0. **The question is about the source.** Someone asks what a commentary says, or what
+   their tradition holds. Then reading it is the answer, and reporting it as that
+   source's view — not as what the passage establishes — is the whole of the care
+   needed.
 
 1. **The writing uses it** — quotes it, names it, or leans on it, and the reader has
    it installed. Then read it, because two findings are invisible otherwise: the
@@ -154,7 +166,23 @@ as a suggestion*.
 7. **Report** to the contract below. [references/worked-example.md](references/worked-example.md)
    shows one finding and two non-findings in the register to use.
 
-## Reporting
+## Answering one question
+
+For an adjudication, the report contract below is the wrong shape: it is built for a
+pass over many claims. What carries over is everything that makes the answer worth
+having.
+
+Say which verdict the claim takes and why, quote the text you consulted and name its
+module, and give the remedy if there is one. Where the answer is that scripture
+permits the reading and permits another, say that — it is a real answer, and often the
+most useful one, because it tells the reader the question is not settled by the text.
+Where the claim is established, say so plainly and point at what establishes it: a
+reader who only ever hears what fails will not trust the answer when something does.
+
+Keep the evidence rule. An adjudication with no text quoted is an opinion, whatever
+its verdict.
+
+## Reporting an audit
 
 Rank by load, not by how wrong something is. A load-bearing inference is a worse
 problem than a decorative import, and a forty-item nitpick list is worse than
@@ -177,7 +205,7 @@ Each entry carries four things and stops:
    carry it**, **mark it as inference**, or **drop the load** (keep the sentence,
    stop the argument resting on it).
 
-Then the report's frame:
+Then the audit's frame:
 
 ```
 # <piece> — sola scriptura audit
@@ -203,6 +231,8 @@ could not check, which claims rest on a text no available module carried, and wh
 second pass should look at. An audit that hides its own gaps is the thing it was
 written to catch.
 
-Write the report where the user asked for it. In a workspace, a Markdown file beside
-`draft.md` becomes a live editor tab, which is usually what they want; say where you
-put it.
+Write an audit's report where the user asked for it. In a writing workspace, a
+Markdown file beside `draft.md` becomes a live editor tab, which is usually what they
+want; say where you put it. In a chat, answer in the chat — a read-only workspace can
+write nothing, and an answer promised in a file that never appears is worse than no
+answer.

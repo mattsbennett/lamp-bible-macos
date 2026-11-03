@@ -178,7 +178,12 @@ struct ReaderChatSidebarView: View {
                 policyURL: policyURL
             )
             try writeAccessPolicy()
-            try ReaderChatWorkspaceStore.prepare(workspace: workspace, configuration: configuration)
+            try ReaderChatWorkspaceStore.prepare(
+                workspace: workspace,
+                configuration: configuration,
+                bundledSkillsCatalog: Bundle.main.resourceURL?
+                    .appendingPathComponent("AgentSkills", isDirectory: true)
+            )
             self.configuration = configuration
             preparationError = nil
         } catch {

@@ -34,18 +34,92 @@ public enum WorkspaceSkillStore {
     private static let catalogDirectoryName = "AgentSkills"
 
     /// The skills that ship with Lamp, by the folder name each has under
-    /// `Resources/AgentSkills`.
+    /// `Resources/AgentSkills`, and whether doing what each says involves
+    /// writing a file.
     ///
-    /// Written down once because three different rules read it — a built-in is
-    /// kept out of the custom catalog, refused by every editing path, and left
-    /// out of the sync export — and a skill added to the resources but not to
-    /// this list becomes editable and syncable, which is how a reader's copy
-    /// silently diverges from the one their build ships.
-    public static let bundledSkillNames: Set<String> = [
-        "build-lamp-deck", "original-languages", "sola-scriptura",
+    /// Written down once because four different rules read it — a built-in is
+    /// kept out of the custom catalog, refused by every editing path, left out
+    /// of the sync export, and installed into a workspace — and a skill added
+    /// to the resources but not here becomes editable and syncable, which is
+    /// how a reader's copy silently diverges from the one their build ships.
+    ///
+    /// `writesFiles` decides which surfaces get it. A reader chat is read-only,
+    /// and a skill whose steps end in a file it cannot write is worse there than
+    /// no skill at all: the agent follows it and fails at the last step, having
+    /// spent the reader's time.
+    public static let bundledSkills: [(name: String, writesFiles: Bool)] = [
+        ("build-lamp-deck", true),
+        ("original-languages", false),
+        ("sola-scriptura", false),
     ]
 
+    public static var bundledSkillNames: Set<String> { Set(bundledSkills.map(\.name)) }
+
+    /// The bundled skills a read-only surface can carry out in full.
+    public static var readOnlyBundledSkillNames: Set<String> {
+        Set(bundledSkills.lazy.filter { !$0.writesFiles }.map(\.name))
+    }
+
     private static var builtInSkillNames: Set<String> { bundledSkillNames }
+
+    /// Brings a workspace's copy of each named bundled skill up to the one this
+    /// build ships, into every provider directory, and returns what it wrote.
+    ///
+    /// Replacing rather than only installing when absent: a workspace used to
+    /// keep whatever it was given on the day it was created, so an agent months
+    /// later was reading instructions for an older renderer with no way to tell.
+    /// These skills are Lamp's to own, so replacing one loses nothing of the
+    /// reader's. A skill already identical is left alone, since copying it
+    /// would change its modification date for nothing.
+    @discardableResult
+    public static func installBundledSkills(
+        named names: Set<String>,
+        from catalog: URL?,
+        intoSkillDirectoriesOf workspace: URL,
+        fileManager: FileManager = .default
+    ) throws -> [String] {
+        guard let catalog else { return [] }
+        var installed: [String] = []
+        for name in names.sorted() {
+            let source = catalog.appendingPathComponent(name, isDirectory: true)
+            guard fileManager.fileExists(atPath: source.path) else { continue }
+            var wrote = false
+            for root in [codexSkillsDirectory(in: workspace), claudeSkillsDirectory(in: workspace)] {
+                let destination = root.appendingPathComponent(name, isDirectory: true)
+                if fileManager.fileExists(atPath: destination.path) {
+                    guard try treeDigest(of: source, fileManager: fileManager)
+                        != treeDigest(of: destination, fileManager: fileManager) else { continue }
+                    try fileManager.removeItem(at: destination)
+                }
+                try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+                try fileManager.copyItem(at: source, to: destination)
+                wrote = true
+            }
+            if wrote { installed.append(name) }
+        }
+        return installed
+    }
+
+    /// Identifies a skill folder by its relative paths and their contents, so a
+    /// changed reference file counts as a change even though `SKILL.md` did not
+    /// move. Modification dates are no use here: copying sets its own.
+    static func treeDigest(of directory: URL, fileManager: FileManager = .default) throws -> String {
+        let root = directory.standardizedFileURL.path
+        var entries: [String] = []
+        let files = fileManager.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        )
+        while let url = files?.nextObject() as? URL {
+            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
+            else { continue }
+            let path = url.standardizedFileURL.path
+            let relative = path.hasPrefix(root) ? String(path.dropFirst(root.count)) : path
+            entries.append("\(relative):\(try Data(contentsOf: url).count)")
+        }
+        return entries.sorted().joined(separator: "\n")
+    }
 
     public static func catalogDirectory(in libraryRootURL: URL) -> URL {
         libraryRootURL.standardizedFileURL
@@ -684,13 +758,15 @@ public enum WorkspaceSkillStore {
             .standardizedFileURL
     }
 
-    private static func codexSkillsDirectory(in workspace: URL) -> URL {
+    /// Where each provider looks for a workspace's skills. The copy Codex
+    /// reads is the canonical one; Claude's is a mirror of it.
+    public static func codexSkillsDirectory(in workspace: URL) -> URL {
         workspace
             .appendingPathComponent(".agents", isDirectory: true)
             .appendingPathComponent("skills", isDirectory: true)
     }
 
-    private static func claudeSkillsDirectory(in workspace: URL) -> URL {
+    public static func claudeSkillsDirectory(in workspace: URL) -> URL {
         workspace
             .appendingPathComponent(".claude", isDirectory: true)
             .appendingPathComponent("skills", isDirectory: true)

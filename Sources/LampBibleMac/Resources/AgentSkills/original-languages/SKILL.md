@@ -15,6 +15,13 @@ chose, and whether the difference is a translator's judgement or a difference in
 text. This is usually what someone is really asking, and it can be measured rather
 than asserted.
 
+Both are answers to a question about a passage, and both end the same way — the
+evidence, then what of it is a reading. There is no second output shape to choose
+between, so unlike `sola-scriptura` this skill has no audit mode and needs none.
+
+What it does have is a third thing to do when you are handed a piece of writing
+rather than a question: see **Going through a piece of writing** below.
+
 What this skill will not do is tell anyone what a passage means. It reports the form
 of the words and the range of their senses, and a sense in place is chosen by the
 sentence and the argument around it, not by a lexicon. Where a question needs that
@@ -100,6 +107,24 @@ The method, and the four questions to ask of a divergence, are in
 
 [references/worked-example.md](references/worked-example.md) works Romans 8:3 through,
 with the measurements.
+
+## Going through a piece of writing
+
+Someone may give you an exhortation or a study and ask whether its claims about the
+original hold up. That is not a different method, only longer: find the claims
+that rest on the Hebrew or Greek — a word's meaning, a tense, a stem, an etymology, a
+distinction between two English words, an appeal to what a translation "really" says —
+and work each one the way you would work it as a question.
+
+Two things to carry over rather than invent. Report per claim, quoting the writing's
+sentence and then the evidence, which is `sola-scriptura`'s contract and worth
+following here so a writer gets one shape of answer rather than two. And rank by what
+the piece rests on: a decorative etymology that carries nothing is worth a line, and a
+conclusion standing on a tense is worth the whole treatment.
+
+Where a claim fails for a reason that is not about language — a verse cited for
+something it does not say — that is the other skill's work, and saying so is better
+than half-doing it.
 
 ## What is not here, and must not be implied
 

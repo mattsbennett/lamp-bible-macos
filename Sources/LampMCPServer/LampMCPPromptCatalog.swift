@@ -42,12 +42,13 @@ public enum LampMCPPromptCatalog {
             name: "sola-scriptura",
             title: "Audit writing against scripture alone",
             description: """
-            Audit writing for conclusions, claims and teachings that cannot be \
-            established from scripture alone. Use when asked to check an \
-            exhortation, sermon, study, talk, devotional, article or doctrinal \
-            prose for proof-text drift, inherited framing, smuggled background, \
-            or inference presented as statement — or whether one particular claim \
-            is actually in the text.
+            Tell what scripture establishes from what is inferred from it or \
+            brought to it. Use when asked whether a claim, reading or teaching is \
+            actually in the text, what a passage does and does not establish, or \
+            whether something can be held from scripture alone — and when asked \
+            to go through a whole exhortation, sermon, study, talk, devotional or \
+            article for proof-text drift, inherited framing, smuggled background, \
+            or inference presented as statement.
             """,
             arguments: [
                 Prompt.Argument(
@@ -171,6 +172,14 @@ public enum LampMCPPromptCatalog {
     decision**: where the translations differ, what each chose, and whether the \
     difference is a translator's judgement or a difference in the text.
 
+    Both are answers to a question about a passage and both end the same way — \
+    the evidence, then what of it is a reading — so there is no second output \
+    shape to choose between and no audit mode to pick. Given a whole piece of \
+    writing instead of a question, the method is the same and only longer: find \
+    the claims that rest on the Hebrew or Greek, work each as a question, report \
+    per claim quoting the writing's sentence and then the evidence, and rank by \
+    what the piece rests on.
+
     What this does not do is say what a passage means. It reports the form of the \
     words and the range of their senses; a sense in place is chosen by the \
     sentence, not by a lexicon. Where a question needs that judgement, give the \
@@ -268,12 +277,20 @@ public enum LampMCPPromptCatalog {
     /// `SolaScripturaPromptTests` holds the two to the same verdicts and loads,
     /// so neither can be renamed without the other.
     static let solaScripturaInstructions = """
-    # Sola scriptura audit
+    # Sola scriptura
 
-    Check whether the writing's claims stand on scripture, with the text in \
-    front of you. You are not the writer's doctrinal opponent and not their \
-    editor. Every finding is about evidence: *this is not established by the \
-    text you cite*. Never *this is wrong*.
+    Check whether a claim stands on scripture, with the text in front of you. \
+    You are not anyone's doctrinal opponent and not their editor. Everything you \
+    report is about evidence: *this is not established by the text you cite*. \
+    Never *this is wrong*.
+
+    Two jobs, and what you are given decides which; neither is the default. \
+    **Adjudicate** when the question is about a claim, a sentence or a passage: \
+    work that claim alone and answer in a paragraph or two with the text quoted, \
+    with no tables and no inventory of something nobody gave you. Most questions \
+    take this shape. **Audit** when you are given a piece of writing to go \
+    through: work the whole of what follows and report to the contract at the \
+    end. The rules below serve both.
 
     ## The one authority
 
@@ -385,7 +402,20 @@ public enum LampMCPPromptCatalog {
        nothing about how settled it sounds or whose position it is.
     7. Report.
 
-    ## Reporting
+    ## Answering one question
+
+    For an adjudication the report contract is the wrong shape, being built for \
+    a pass over many claims. Say which verdict the claim takes and why, quote \
+    the text you consulted and name its module, and give the remedy if there is \
+    one. Where scripture permits the reading and permits another, say so: it is \
+    a real answer and often the most useful, because it tells the reader the \
+    question is not settled by the text. Where the claim is established, say so \
+    plainly and point at what establishes it — a reader who only ever hears what \
+    fails will not trust the answer when something holds. The evidence rule \
+    stands: an adjudication with no text quoted is an opinion, whatever its \
+    verdict.
+
+    ## Reporting an audit
 
     Rank by load, not by how wrong something is. Every load-bearing finding \
     gets an entry; supporting ones when they change what a reader would \

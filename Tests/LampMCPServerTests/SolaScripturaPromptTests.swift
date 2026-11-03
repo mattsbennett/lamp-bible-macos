@@ -68,6 +68,9 @@ struct SolaScripturaPromptTests {
         "no finding without a quotation",
         "proof-text drift",
         "what the pass did not do",
+        "neither is the default",  // the two modes, and that the input picks
+        "with no tables",          // what an adjudication must not turn into
+        "permits another",         // that an undecided answer is a real one
     ])
     func thepromptCarriesTheRulesItCannotLeaveBehind(rule: String) {
         #expect(
@@ -107,7 +110,7 @@ struct SolaScripturaPromptTests {
         let bare = try #require(LampMCPPromptCatalog.messages(for: "sola-scriptura", arguments: nil))
         let empty = try #require(auditText(bare))
         #expect(!empty.contains("The writing to audit"))
-        #expect(empty.contains("Sola scriptura audit"))
+        #expect(empty.contains("Sola scriptura"))
     }
 
     @Test func anunknownPromptIsStillRefused() {
