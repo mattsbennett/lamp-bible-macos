@@ -63,8 +63,9 @@ struct OriginalLanguagesPromptTests {
         "read_passage", "analyze_strongs", "lookup_dictionary_keys", "search_library",
         "leningrad", "nestlé-aland", "stem", "state", "construct",
         "renderings are translators",
-        // That it needs no audit mode, and what to do with a whole piece anyway.
-        "no audit mode", "only longer",
+        // The third job, and the verdicts that are this skill's own.
+        "audit a writing", "carried", "permitted", "overreach",
+        "translation-dependent", "unverifiable here",
     ])
     func bothCarryTheMethodsOwnTerms(term: String) throws {
         #expect(

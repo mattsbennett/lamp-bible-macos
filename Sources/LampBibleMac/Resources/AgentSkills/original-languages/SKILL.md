@@ -1,6 +1,6 @@
 ---
 name: original-languages
-description: Read the Hebrew or Greek behind an English verse, word by word, and show where a translation reflects a translator's decision rather than the text. Use when asked what a word means in the original, what a verb's tense or stem is, why translations differ at a verse, whether a rendering is fair, or for a word study.
+description: Read the Hebrew or Greek behind an English verse, show where a translation reflects a translator's decision rather than the text, and audit a writing's claims about the original. Use when asked what a word means in the original, what a verb's tense or stem is, why translations differ at a verse, whether a rendering is fair, for a word study, or to check whether an exhortation, study or article's appeals to the Greek or Hebrew hold up.
 ---
 
 # Reading the original
@@ -15,12 +15,11 @@ chose, and whether the difference is a translator's judgement or a difference in
 text. This is usually what someone is really asking, and it can be measured rather
 than asserted.
 
-Both are answers to a question about a passage, and both end the same way — the
-evidence, then what of it is a reading. There is no second output shape to choose
-between, so unlike `sola-scriptura` this skill has no audit mode and needs none.
+**Audit a writing's claims about the original.** The third job, and in a writing
+workspace usually the one being asked for. See **Auditing a writing** below.
 
-What it does have is a third thing to do when you are handed a piece of writing
-rather than a question: see **Going through a piece of writing** below.
+What you are given decides which: a passage, a word, or a piece of writing. The
+evidence and the care are the same in all three.
 
 What this skill will not do is tell anyone what a passage means. It reports the form
 of the words and the range of their senses, and a sense in place is chosen by the
@@ -108,23 +107,57 @@ The method, and the four questions to ask of a divergence, are in
 [references/worked-example.md](references/worked-example.md) works Romans 8:3 through,
 with the measurements.
 
-## Going through a piece of writing
+## Auditing a writing
 
-Someone may give you an exhortation or a study and ask whether its claims about the
-original hold up. That is not a different method, only longer: find the claims
-that rest on the Hebrew or Greek — a word's meaning, a tense, a stem, an etymology, a
-distinction between two English words, an appeal to what a translation "really" says —
-and work each one the way you would work it as a question.
+Someone hands you an exhortation, a study or a draft and asks whether its claims about
+the original hold up. This is worth doing well, because these are the claims a writer
+cannot check for themselves and a hearer takes on trust: *the Greek here really means*
+is load-bearing and unverifiable from the pew.
 
-Two things to carry over rather than invent. Report per claim, quoting the writing's
-sentence and then the evidence, which is `sola-scriptura`'s contract and worth
-following here so a writer gets one shape of answer rather than two. And rank by what
-the piece rests on: a decorative etymology that carries nothing is worth a line, and a
-conclusion standing on a tense is worth the whole treatment.
+In a writing workspace the piece is `draft.md` unless another is named, and the report
+goes in a Markdown file beside it, which becomes a live editor tab. Never modify
+`draft.md`.
+
+**Inventory the claims that rest on the Hebrew or Greek.** Not every mention of a word
+— the ones doing work:
+
+- a word's meaning, or what it "really" means
+- a tense, aspect, stem, voice or mood, and what is drawn from it
+- an etymology, or a meaning taken from a word's parts
+- a distinction between two English words said to be in the original, or a connection
+  said to be there because the English matches
+- an appeal to what a translation says, or to a translator's bias
+- a count: how often a word appears, where, or with what
+- a claim about word order, syntax or construction
+
+**Work each one as you would work it as a question**, then give it a verdict. These are
+the verdicts for a language claim, and they are not `sola-scriptura`'s — that skill
+asks whether scripture establishes a claim, this one asks whether the language data
+carries it:
+
+- **Carried** — the parsing, the lexicon or the counts show it. Say which.
+- **Permitted** — the data allows it and allows otherwise. A reading, and the writing
+  should mark it as one.
+- **Not carried** — the data does not show it. Either it needs support the language
+  cannot give, or it needs dropping.
+- **Overreach** — a fact about form presented as a fact about sense, or one of the
+  named fallacies. `references/fallacies.md` has them; name the one.
+- **Translation-dependent** — true of one translation's rendering and presented as true
+  of the word. Give the counts.
+- **Unverifiable here** — it needs an apparatus, a syntax analysis or a module that is
+  not installed. Say so plainly rather than reaching for an answer; see the limits
+  below.
+
+**Report per claim**, quoting the writing's sentence and then the evidence, which is
+`sola-scriptura`'s contract and worth following so a writer gets one shape of answer
+rather than two. Quote no verdict without the data behind it. Rank by what the piece
+rests on: a decorative etymology that carries nothing is worth a line, a conclusion
+standing on a tense is worth the whole treatment. Close with what you could not check.
 
 Where a claim fails for a reason that is not about language — a verse cited for
-something it does not say — that is the other skill's work, and saying so is better
-than half-doing it.
+something it does not say — that is `sola-scriptura`'s work, and saying so is better
+than half-doing it here. The two audits pair: it flags a claim about the original and
+hands it over, and this is where it lands.
 
 ## What is not here, and must not be implied
 

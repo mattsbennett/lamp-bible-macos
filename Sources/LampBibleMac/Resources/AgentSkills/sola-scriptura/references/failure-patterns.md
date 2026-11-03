@@ -63,9 +63,10 @@ John 21, where John uses the pair interchangeably elsewhere.
 `analyze_strongs` reports how translators rendered a word. That is their choice,
 not the word's range. For range, read a lexicon, and then cite the lexicon.
 
-Where a claim about the original needs doing properly rather than only flagging, the
-`original-languages` skill reads the Hebrew or Greek and measures what the translators
-did with it.
+Flagging one of these is as far as this audit goes. The `original-languages` skill
+audits them, with verdicts of its own for whether the language data carries a claim, so
+hand a load-bearing one over rather than half-settling it here — and say that is what
+you have done, so the writer knows the question is open and where it went.
 
 ## 7. Typology asserted rather than shown
 

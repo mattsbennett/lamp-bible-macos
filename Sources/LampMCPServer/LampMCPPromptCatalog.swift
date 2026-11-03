@@ -68,11 +68,13 @@ public enum LampMCPPromptCatalog {
             name: "original-languages",
             title: "Read the Hebrew or Greek",
             description: """
-            Read the Hebrew or Greek behind an English verse, word by word, and \
-            show where a translation reflects a translator's decision rather than \
-            the text. Use when asked what a word means in the original, what a \
-            verb's tense or stem is, why translations differ at a verse, whether \
-            a rendering is fair, or for a word study.
+            Read the Hebrew or Greek behind an English verse, show where a \
+            translation reflects a translator's decision rather than the text, \
+            and audit a writing's claims about the original. Use when asked what \
+            a word means in the original, what a verb's tense or stem is, why \
+            translations differ at a verse, whether a rendering is fair, for a \
+            word study, or to check whether a piece's appeals to the Greek or \
+            Hebrew hold up.
             """,
             arguments: [
                 Prompt.Argument(
@@ -172,13 +174,25 @@ public enum LampMCPPromptCatalog {
     decision**: where the translations differ, what each chose, and whether the \
     difference is a translator's judgement or a difference in the text.
 
-    Both are answers to a question about a passage and both end the same way — \
-    the evidence, then what of it is a reading — so there is no second output \
-    shape to choose between and no audit mode to pick. Given a whole piece of \
-    writing instead of a question, the method is the same and only longer: find \
-    the claims that rest on the Hebrew or Greek, work each as a question, report \
-    per claim quoting the writing's sentence and then the evidence, and rank by \
-    what the piece rests on.
+    And a third: **audit a writing's claims about the original**, which is \
+    worth doing well, because these are the claims a writer cannot check for \
+    themselves and a hearer takes on trust. Inventory the claims that rest on \
+    the Hebrew or Greek — a word's meaning, a tense or stem and what is drawn \
+    from it, an etymology, a distinction said to be in the original, an appeal \
+    to a translation or a translator's bias, a count, a claim about word order — \
+    and give each a verdict: **carried** (the parsing, lexicon or counts show \
+    it, and say which), **permitted** (the data allows it and allows otherwise, \
+    so the writing should mark it a reading), **not carried**, **overreach** (a \
+    fact about form presented as a fact about sense; name the fallacy), \
+    **translation-dependent** (true of one rendering, presented as true of the \
+    word; give the counts), or **unverifiable here** (it needs an apparatus, a \
+    syntax analysis or a module that is not installed — say so rather than \
+    reaching). Report per claim, quoting the writing's sentence and then the \
+    evidence, no verdict without the data behind it, ranked by what the piece \
+    rests on, and close with what you could not check.
+
+    What you are given decides which job: a passage, a word, or a piece of \
+    writing. The evidence and the care are the same in all three.
 
     What this does not do is say what a passage means. It reports the form of the \
     words and the range of their senses; a sense in place is chosen by the \
