@@ -143,6 +143,46 @@ struct BundledSkillInstallTests {
         #expect(copied == "a longer reference than before")
     }
 
+    /// The same again where the edit did not change the file's length. The
+    /// digest was keyed on each file's byte count, so a corrected word, a
+    /// reworded sentence or a fixed typo of the same length counted as no
+    /// change at all: the workspace kept the copy it had, the install reported
+    /// nothing, and an agent went on reading the old instructions. Lengths
+    /// match far too often for that to stay a theoretical hole, and the one
+    /// test that covered replacement edited a file to a deliberately longer
+    /// string, which is the shape of edit that was already working.
+    @Test func areferenceEditedToTheSameLengthIsStillAchange() throws {
+        let catalog = try catalog(["sola-scriptura"])
+        let workspace = workspace()
+        defer {
+            try? FileManager.default.removeItem(at: catalog)
+            try? FileManager.default.removeItem(at: workspace)
+        }
+        try WorkspaceSkillStore.installBundledSkills(
+            named: ["sola-scriptura"], from: catalog, intoSkillDirectoriesOf: workspace
+        )
+        let edited = "a different"  // the same byte count as "a reference"
+        try Data(edited.utf8).write(
+            to: catalog.appendingPathComponent("sola-scriptura/references/one.md")
+        )
+
+        let again = try WorkspaceSkillStore.installBundledSkills(
+            named: ["sola-scriptura"], from: catalog, intoSkillDirectoriesOf: workspace
+        )
+
+        #expect(again == ["sola-scriptura"])
+        for provider in [
+            WorkspaceSkillStore.codexSkillsDirectory, WorkspaceSkillStore.claudeSkillsDirectory,
+        ] {
+            let copied = try String(
+                contentsOf: provider(workspace)
+                    .appendingPathComponent("sola-scriptura/references/one.md"),
+                encoding: .utf8
+            )
+            #expect(copied == edited)
+        }
+    }
+
     /// A build with no resources, and a name with no folder behind it, install
     /// nothing rather than failing the workspace's preparation.
     @Test func amissingCatalogOrSkillInstallsNothing() throws {

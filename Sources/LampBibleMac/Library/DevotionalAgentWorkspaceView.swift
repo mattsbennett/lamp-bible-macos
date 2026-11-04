@@ -1,5 +1,4 @@
 import AppKit
-import CryptoKit
 #if canImport(LampBibleMacSupport)
 import LampBibleMacSupport
 #endif
@@ -649,31 +648,6 @@ private enum DevotionalAgentWorkspaceStore {
             from: resourceRoot?.appendingPathComponent("AgentSkills", isDirectory: true),
             intoSkillDirectoriesOf: workspace
         )
-    }
-
-    /// Identifies a skill folder by its relative paths and their contents, so a
-    /// changed reference file counts as a change even though `SKILL.md` did not
-    /// move. Modification dates are no use here: copying sets its own.
-    private static func treeDigest(of directory: URL) throws -> String {
-        let root = directory.standardizedFileURL.path
-        var entries: [String] = []
-        let files = FileManager.default.enumerator(
-            at: directory,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        )
-        while let url = files?.nextObject() as? URL {
-            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
-            else { continue }
-            let path = url.standardizedFileURL.path
-            let relative = path.hasPrefix(root) ? String(path.dropFirst(root.count)) : path
-            let contents = try Data(contentsOf: url)
-            entries.append("\(relative):\(SHA256.hash(data: contents).map { String(format: "%02x", $0) }.joined())")
-        }
-        let combined = entries.sorted().joined(separator: "\n")
-        return SHA256.hash(data: Data(combined.utf8))
-            .map { String(format: "%02x", $0) }
-            .joined()
     }
 
     private static func parseSkill(

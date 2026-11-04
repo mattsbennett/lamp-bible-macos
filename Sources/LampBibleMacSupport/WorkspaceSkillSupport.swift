@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 public struct WorkspaceSkillDefinition: Equatable, Identifiable, Sendable {
@@ -100,9 +101,16 @@ public enum WorkspaceSkillStore {
         return installed
     }
 
-    /// Identifies a skill folder by its relative paths and their contents, so a
-    /// changed reference file counts as a change even though `SKILL.md` did not
-    /// move. Modification dates are no use here: copying sets its own.
+    /// Identifies a skill folder by its relative paths and the contents of each
+    /// file, so a changed reference file counts as a change even though
+    /// `SKILL.md` did not move. Modification dates are no use here: copying
+    /// sets its own.
+    ///
+    /// Each file is hashed rather than measured. Keyed on byte counts, as this
+    /// was until 2026-11-04, an edit that happened to preserve a file's length
+    /// — a corrected word, a reworded line, a typo — was no change at all, and
+    /// the workspace went on serving an agent the copy it already had while the
+    /// install reported that nothing needed doing.
     static func treeDigest(of directory: URL, fileManager: FileManager = .default) throws -> String {
         let root = directory.standardizedFileURL.path
         var entries: [String] = []
@@ -116,9 +124,13 @@ public enum WorkspaceSkillStore {
             else { continue }
             let path = url.standardizedFileURL.path
             let relative = path.hasPrefix(root) ? String(path.dropFirst(root.count)) : path
-            entries.append("\(relative):\(try Data(contentsOf: url).count)")
+            entries.append("\(relative):\(hexDigest(of: try Data(contentsOf: url)))")
         }
-        return entries.sorted().joined(separator: "\n")
+        return hexDigest(of: Data(entries.sorted().joined(separator: "\n").utf8))
+    }
+
+    private static func hexDigest(of data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     public static func catalogDirectory(in libraryRootURL: URL) -> URL {
