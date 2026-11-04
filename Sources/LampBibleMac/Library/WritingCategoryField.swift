@@ -27,7 +27,9 @@ struct WritingCategoryField: View {
     var body: some View {
         LabeledContent(title) {
             HStack(spacing: 6) {
-                TextField(title, text: $storedValue)
+                // A writing may have no kind, and an empty row should say so
+                // rather than look like a field that failed to load.
+                TextField(title, text: $storedValue, prompt: Text("None"))
                     .labelsHidden()
                 Menu {
                     ForEach(offered, id: \.self) { kind in
@@ -39,6 +41,9 @@ struct WritingCategoryField: View {
                     Image(systemName: "chevron.up.chevron.down")
                 }
                 .menuStyle(.borderlessButton)
+                // The menu draws its own chevron on top of that one otherwise,
+                // and a row with two of them reads as a mistake.
+                .menuIndicator(.hidden)
                 .fixedSize()
                 .help("The kinds Lamp suggests, and the ones you have used")
                 .accessibilityLabel("Choose a category")
