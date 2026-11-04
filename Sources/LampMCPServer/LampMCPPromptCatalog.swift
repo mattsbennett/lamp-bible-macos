@@ -220,10 +220,13 @@ public enum LampMCPPromptCatalog {
     Hebrew, in the Greek rendering, or in the writer's own adjustment of it. \
     `read_study_material` gives Brenton's footnotes, which give the literal \
     Greek where he rendered freely. Neither is numbered as the English is and \
-    nothing converts it: the Psalms run one lower from Psalm 10 to 147 with a \
-    psalm's title as verse 1, so English Psalm 22:1 is `LXX` 21:2, there are \
-    151 psalms, and there is no Nehemiah, which the Septuagint numbers inside \
-    Ezra as chapters 11-23. `read_passage` labels what it returns with the \
+    nothing converts it. The Psalms run one lower through most of the book, but \
+    not by a constant offset: English 9 and 10 are their single 9, English 114 \
+    and 115 their single 113, their 114 and 115 are both English 116, English \
+    147 is their 146 and 147, and 148 to 150 agree again. A psalm's title is \
+    their verse 1, so the verses shift too: English Psalm 22:1 is `LXX` 21:2. \
+    There are 151 psalms, and there is no Nehemiah, which the Septuagint \
+    numbers inside Ezra as chapters 11-23. `read_passage` labels what it returns with the \
     reference you asked for, so pass the Septuagint's own number and check the \
     opening words against an English translation before citing it.
 
@@ -371,10 +374,13 @@ public enum LampMCPPromptCatalog {
     which wording a writer had. `Brenton` marks the words he supplied, which \
     `include_annotations: true` returns as `{kind: "added"}`: a claim resting \
     on a word he added rests on his English. Neither is numbered as the English \
-    is and nothing converts it: the Psalms run one lower from Psalm 10 to 147 \
-    with a psalm's title as verse 1, so English Psalm 22:1 is `LXX` 21:2, and \
-    there is no Nehemiah, which the Septuagint numbers inside Ezra as chapters \
-    11-23. `read_passage` labels what it returns with the reference you asked \
+    is and nothing converts it. The Psalms run one lower through most of the \
+    book, but not by a constant offset: English 9 and 10 are their single 9, \
+    English 114 and 115 their single 113, their 114 and 115 are both English \
+    116, English 147 is their 146 and 147, and 148 to 150 agree again. A \
+    psalm's title is their verse 1, so the verses shift too: English Psalm 22:1 \
+    is `LXX` 21:2. And there is no Nehemiah, which the Septuagint numbers \
+    inside Ezra as chapters 11-23. `read_passage` labels what it returns with the reference you asked \
     for, so pass the Septuagint's own number and check the opening words \
     against an English translation before citing it.
 

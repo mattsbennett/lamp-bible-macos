@@ -132,9 +132,13 @@ a different question from the Hebrew.
 
 Then the numbering, which is where a citation goes wrong without saying so:
 
-- **The Psalms run one lower** from English Psalm 10 to 147, and a psalm's title is
-  verse 1 rather than unnumbered, so English Psalm 22:1 is `LXX` 21:2. There are 151
-  psalms.
+- **The Psalms are numbered differently, and not by a constant offset.** They run one
+  lower through most of the book, because the two join and split psalms in different
+  places: English 9 and 10 are their single 9, English 114 and 115 their single 113,
+  their 114 and 115 are both English 116, and English 147 is their 146 and 147.
+  English 148 to 150 agree again, and they have a 151st psalm. A psalm's title is
+  their verse 1 rather than unnumbered, so the verses shift too: English Psalm 22:1 is
+  `LXX` 21:2.
 - **There is no Nehemiah.** The Septuagint numbers it inside Ezra, as chapters 11–23,
   so Nehemiah 1:1 is Ezra 11:1. Asking either module for Nehemiah is refused rather
   than converted, with a message that names the module and says it has no Nehemiah.
