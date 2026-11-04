@@ -140,11 +140,164 @@ public enum AgentChatSetupRequirement {
     }
 }
 
+/// What a run is doing while it runs, for a pane that would otherwise show
+/// nothing but a spinner.
+///
+/// Live only: none of it is kept, because what a reply did on the way is not
+/// part of what it said. The thinking *text* is deliberately absent — a
+/// `claude -p` stream carries each thinking block with its text empty and only
+/// a signature, so a pane can say that a run is thinking, and roughly how
+/// much, but never what it thought.
+public enum AgentChatActivity: Equatable, Sendable {
+    /// A thinking block, with the provider's own estimate of its size where it
+    /// gives one.
+    case thinking(estimatedTokens: Int?)
+    /// A tool call has begun. Its input has not arrived yet, and for a call
+    /// with a large input it is a moment before it does.
+    case toolStarted(name: String)
+    /// A tool call with its input, summarised to one line.
+    case tool(name: String, summary: String?)
+    /// A tool call came back and the next step has not begun.
+    case toolFinished
+    /// The reply itself is being written.
+    case writing
+
+    /// The step to show when `next` arrives while this one is showing.
+    ///
+    /// A thinking delta carries an estimate only sometimes, and one without
+    /// says no more than that the run is still thinking — so taking it at face
+    /// value would drop a count the run has already given and read as the
+    /// thinking having started again. Everything else replaces what was there.
+    public func succeeded(by next: AgentChatActivity) -> AgentChatActivity {
+        if case .thinking(let known) = self, known != nil, case .thinking(nil) = next {
+            return self
+        }
+        return next
+    }
+}
+
+/// A tool call as one line a person can read.
+public enum AgentChatToolDescription {
+    /// The tool's name as the pane shows it. An MCP tool arrives as
+    /// `mcp__lamp__read_passage`, which names a server nobody needs to see.
+    public static func label(for name: String) -> String {
+        guard name.hasPrefix("mcp__") else { return name }
+        let last = name.components(separatedBy: "__").last ?? ""
+        return last.isEmpty ? name : last
+    }
+
+    /// Which argument to show, in the order a reader would want it.
+    ///
+    /// Nothing outside this list is shown. A tool's input can carry a whole
+    /// file or a draft, and a progress line is not the place for it — so the
+    /// line is built from the arguments that say *where* a call is looking,
+    /// never from the ones that carry content.
+    private static let placeKeys = [
+        "reference", "query", "strongs_key", "key", "keys", "file_path", "path",
+        "pattern", "command", "section_id", "devotional_id", "day", "module_id",
+    ]
+    /// Shown after the argument above, since which modules were asked is half
+    /// of what a lookup means.
+    private static let moduleKeys = ["translation_ids", "module_ids"]
+    /// Cut from the front rather than the back; see `shortenedPath`.
+    private static let pathKeys: Set<String> = ["file_path", "path"]
+
+    public static func summary(of input: [String: Any]?) -> String? {
+        guard let input else { return nil }
+        let place = placeKeys.lazy.compactMap { key -> String? in
+            guard let value = input[key] else { return nil }
+            guard pathKeys.contains(key), let path = value as? String else {
+                return describe(value)
+            }
+            return shortenedPath(path)
+        }.first
+        let modules = moduleKeys.lazy.compactMap { describe(input[$0]) }.first
+        let parts = [place, modules].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private static func describe(_ value: Any?) -> String? {
+        switch value {
+        case let text as String:
+            return shortened(text)
+        case let list as [Any]:
+            let items = list.compactMap { $0 as? String }.filter { !$0.isEmpty }
+            guard !items.isEmpty else { return nil }
+            return items.count > 4
+                ? items.prefix(4).joined(separator: ", ") + ", …"
+                : items.joined(separator: ", ")
+        case let number as Int:
+            return String(number)
+        default:
+            return nil
+        }
+    }
+
+    /// A path is cut from the front, because the file's own name is the part
+    /// worth reading and a scratch directory's first sixty characters are not.
+    /// A workspace path is long enough for this to matter: cutting the end off
+    /// one leaves a line that says a reply is reading `/private/tmp/claude…`
+    /// and never which file.
+    private static func shortenedPath(_ path: String) -> String? {
+        let line = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !line.isEmpty else { return nil }
+        guard line.count > 72 else { return line }
+        let shown = "…/" + line.split(separator: "/").suffix(2).joined(separator: "/")
+        return shown.count > 72 ? "…" + String(shown.suffix(71)) : shown
+    }
+
+    /// One line's worth, with the line breaks taken out: a `query` may be a
+    /// paragraph, and a progress line has one line to say it in.
+    private static func shortened(_ text: String) -> String? {
+        let line = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        guard !line.isEmpty else { return nil }
+        guard line.count > 72 else { return line }
+        return String(line.prefix(71)) + "…"
+    }
+}
+
+/// Splits the bytes of a provider's output into the whole lines it carries.
+///
+/// A JSON line arrives in however many pieces the pipe gives it, and a
+/// multi-byte character can be split across two reads — so decoding a chunk on
+/// its own would cut a line in half and mangle a Greek word. What is left over
+/// stays here until the rest of it comes.
+public struct AgentChatLineReader: Sendable {
+    private var pending = Data()
+
+    public init() {}
+
+    public mutating func lines(from chunk: Data) -> [String] {
+        pending += chunk
+        var lines: [String] = []
+        while let newline = pending.firstIndex(of: UInt8(ascii: "\n")) {
+            let line = Data(pending[pending.startIndex..<newline])
+            pending = Data(pending[pending.index(after: newline)...])
+            let text = String(decoding: line, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty { lines.append(text) }
+        }
+        return lines
+    }
+
+    /// Whatever is left when the stream ends: a provider that does not end its
+    /// last line still said something on it.
+    public mutating func flush() -> String? {
+        guard !pending.isEmpty else { return nil }
+        let text = String(decoding: pending, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        pending = Data()
+        return text.isEmpty ? nil : text
+    }
+}
+
 public enum AgentChatWireEvent: Equatable, Sendable {
     case sessionStarted(String)
     case textFragment(String)
     case finalText(String)
     case failure(String)
+    /// Progress, while the run is still running. Not part of the reply.
+    case activity(AgentChatActivity)
 }
 
 public enum AgentChatWireParser {
@@ -191,12 +344,64 @@ public enum AgentChatWireParser {
 
         switch object.string("type") {
         case "stream_event":
-            guard let event = object.dictionary("event"),
-                  let delta = event.dictionary("delta"),
-                  delta.string("type") == "text_delta",
-                  let text = delta.string("text"), !text.isEmpty
-            else { return events }
-            events.append(.textFragment(text))
+            // Read by what the event carries rather than by its own `type`:
+            // a block starting and a block growing are told apart by which of
+            // the two is there, and that holds for a trimmed event as well as
+            // a whole one.
+            guard let event = object.dictionary("event") else { return events }
+            if let block = event.dictionary("content_block") {
+                switch block.string("type") {
+                case "thinking":
+                    events.append(.activity(.thinking(estimatedTokens: nil)))
+                case "tool_use":
+                    if let name = block.string("name"), !name.isEmpty {
+                        events.append(.activity(.toolStarted(name: name)))
+                    }
+                case "text":
+                    events.append(.activity(.writing))
+                default:
+                    break
+                }
+            }
+            if let delta = event.dictionary("delta") {
+                switch delta.string("type") {
+                case "text_delta":
+                    if let text = delta.string("text"), !text.isEmpty {
+                        events.append(.textFragment(text))
+                    }
+                case "thinking_delta":
+                    // The `thinking` field is empty by design; the estimate is
+                    // all a run says about what it is thinking.
+                    events.append(.activity(.thinking(
+                        estimatedTokens: delta.int("estimated_tokens")
+                    )))
+                default:
+                    break
+                }
+            }
+        case "system":
+            if object.string("subtype") == "thinking_tokens" {
+                events.append(.activity(.thinking(
+                    estimatedTokens: object.int("estimated_tokens")
+                )))
+            }
+        case "assistant":
+            // A finished assistant message, which is where a tool call's input
+            // arrives whole rather than as fragments of JSON, and in time: the
+            // call runs after it.
+            for block in object.contentBlocks() where block.string("type") == "tool_use" {
+                guard let name = block.string("name"), !name.isEmpty else { continue }
+                events.append(.activity(.tool(
+                    name: name,
+                    summary: AgentChatToolDescription.summary(of: block.dictionary("input"))
+                )))
+            }
+        case "user":
+            // A tool's result comes back as a user message, which is the only
+            // sign that a call has finished.
+            if object.contentBlocks().contains(where: { $0.string("type") == "tool_result" }) {
+                events.append(.activity(.toolFinished))
+            }
         case "result":
             if object.bool("is_error") == true {
                 if let message = object.string("result"), !message.isEmpty {
@@ -252,7 +457,12 @@ public enum AgentChatWireParser {
 private extension Dictionary where Key == String, Value == Any {
     func string(_ key: String) -> String? { self[key] as? String }
     func bool(_ key: String) -> Bool? { self[key] as? Bool }
+    func int(_ key: String) -> Int? { self[key] as? Int }
     func dictionary(_ key: String) -> [String: Any]? { self[key] as? [String: Any] }
+    /// The content blocks of a whole message event.
+    func contentBlocks() -> [[String: Any]] {
+        dictionary("message")?["content"] as? [[String: Any]] ?? []
+    }
 }
 
 /// What a finished provider run amounts to, and so what the chat pane should

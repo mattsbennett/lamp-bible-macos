@@ -57,17 +57,23 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
     private let lock = NSLock()
     private var activeProcess: Process?
 
+    /// Runs the provider, handing `onLine` each line of its output as it
+    /// arrives. `onLine` is called off the main thread, in the order the lines
+    /// came, and the whole output is still returned at the end: what a run is
+    /// judged by has not changed, only when a pane can see it.
     func run(
         executableName: String,
         arguments: [String],
-        workingDirectory: URL
+        workingDirectory: URL,
+        onLine: (@Sendable (String) -> Void)? = nil
     ) async -> AgentCLIProcessResult {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async { [self] in
                 continuation.resume(returning: runSynchronously(
                     executableName: executableName,
                     arguments: arguments,
-                    workingDirectory: workingDirectory
+                    workingDirectory: workingDirectory,
+                    onLine: onLine
                 ))
             }
         }
@@ -83,7 +89,8 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
     private func runSynchronously(
         executableName: String,
         arguments: [String],
-        workingDirectory: URL
+        workingDirectory: URL,
+        onLine: (@Sendable (String) -> Void)? = nil
     ) -> AgentCLIProcessResult {
         do {
             let executableURL = try resolveExecutable(named: executableName)
@@ -115,11 +122,25 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             }
 
             try process.run()
-            let data = output.fileHandleForReading.readDataToEndOfFile()
+            // Read the pipe as it fills rather than at the end. Reading to the
+            // end of the file first is what left a chat with nothing to show
+            // but its spinner: every event had already happened by the time
+            // anything was parsed.
+            let handle = output.fileHandleForReading
+            var collected = Data()
+            var reader = AgentChatLineReader()
+            while true {
+                let chunk = handle.availableData
+                if chunk.isEmpty { break }
+                collected += chunk
+                guard let onLine else { continue }
+                for line in reader.lines(from: chunk) { onLine(line) }
+            }
+            if let onLine, let last = reader.flush() { onLine(last) }
             process.waitUntilExit()
             return AgentCLIProcessResult(
                 exitCode: process.terminationStatus,
-                output: String(decoding: data, as: UTF8.self),
+                output: String(decoding: collected, as: UTF8.self),
                 launchError: nil
             )
         } catch {
@@ -193,6 +214,77 @@ private struct NativeAgentChatMessage: ChatMessage {
             (payload as? AgentMessageContent)?.markdown ?? (payload as? PersonMessageContent)?.text
         default:
             nil
+        }
+    }
+}
+
+/// What the running reply is doing, in a line under the header.
+///
+/// The steps are the provider's own, read from its event stream: a tool call
+/// with the passage or query it was given, a thinking block, the reply being
+/// written. A chat that shows only a spinner leaves a reader wondering whether
+/// a long audit is working or hung, and these are the same steps the CLI's own
+/// interface shows.
+private struct AgentActivityLine: View {
+    let activity: AgentChatActivity
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ProgressView()
+                .controlSize(.small)
+                .scaleEffect(0.7)
+                .frame(width: 16, height: 14)
+            Image(systemName: symbol)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(summary)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                // The summary is already cut to a line's worth, and cut from
+                // the end a path is read from, so what is left is read
+                // left to right.
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityLabel(summary)
+    }
+
+    private var symbol: String {
+        switch activity {
+        case .thinking: "bubble.left.and.text.bubble.right"
+        case .toolStarted, .tool: "wrench.and.screwdriver"
+        case .toolFinished: "ellipsis"
+        case .writing: "text.append"
+        }
+    }
+
+    /// The thinking blocks arrive with their text empty, so a thinking step
+    /// can only be reported as one. Saying how big it is, where the provider
+    /// estimates that, at least distinguishes a long think from a stall.
+    private var summary: String {
+        switch activity {
+        case .thinking(let estimatedTokens):
+            if let estimatedTokens {
+                "Thinking… (about \(estimatedTokens) tokens)"
+            } else {
+                "Thinking…"
+            }
+        case .toolStarted(let name):
+            "\(AgentChatToolDescription.label(for: name))…"
+        case .tool(let name, let summary):
+            if let summary {
+                "\(AgentChatToolDescription.label(for: name)) — \(summary)"
+            } else {
+                AgentChatToolDescription.label(for: name)
+            }
+        case .toolFinished:
+            "Working…"
+        case .writing:
+            "Writing the reply…"
         }
     }
 }
@@ -433,6 +525,11 @@ private final class NativeAgentChatModel: ObservableObject {
     /// Tool calls the running reply is waiting on the person for, oldest
     /// first. Only a Claude writing chat asks; see `ClaudePermissionHook`.
     @Published private(set) var pendingApprovals: [AgentToolApprovalRequest] = []
+    /// What the running reply is doing — thinking, a tool call, writing — for
+    /// the pane to show while it does it. Cleared when the run ends. Claude
+    /// only: the other providers' streams don't say, and `AgentChatWireParser`
+    /// invents nothing for them.
+    @Published private(set) var activity: AgentChatActivity?
 
     let provider: AIProviderCLI
     private let workspace: URL
@@ -452,6 +549,13 @@ private final class NativeAgentChatModel: ObservableObject {
     private var cancelRequested = false
     private var loadingMessageID: UUID?
     private var approvalChannel: AgentToolApprovalChannel?
+    /// The reply as it arrives, and as much of it as the pane has been shown.
+    /// Shown on a timer rather than per fragment: a reply arrives as hundreds
+    /// of small deltas, and redrawing the transcript for each one would put
+    /// that work on every one of them.
+    private var streamedReply = ""
+    private var shownStreamedReply = ""
+    private var streamTask: Task<Void, Never>?
 
     private let person = NativeAgentChatUser(
         id: "lamp-user",
@@ -544,6 +648,9 @@ private final class NativeAgentChatModel: ObservableObject {
         ))
         persistTranscript()
 
+        streamTask?.cancel()
+        streamTask = showReplyAsItArrives()
+
         let firstPrompt = sessionID == nil
             ? AgentChatContinuation.prompt(continuing: earlier, with: contextualPrompt)
             : contextualPrompt
@@ -606,6 +713,11 @@ private final class NativeAgentChatModel: ObservableObject {
     }
 
     private func run(prompt: String, resuming resumedSessionID: String?) async -> RunOutcome {
+        // Each attempt shows its own progress: a run retried after a session
+        // could not be resumed starts from nothing, as it does.
+        streamedReply = ""
+        shownStreamedReply = ""
+        activity = nil
         let proposedSessionID = provider == .claude && resumedSessionID == nil
             ? UUID().uuidString.lowercased() : nil
         // Without a channel the run goes ahead as before: a call its
@@ -620,18 +732,39 @@ private final class NativeAgentChatModel: ObservableObject {
             approvalChannel = nil
             pendingApprovals = []
         }
+        let wire = provider.wireProvider
+        // Through a stream rather than a task per line: separate tasks are not
+        // ordered, and a reply whose fragments arrive out of order is a reply
+        // with its words shuffled. Each line is parsed on the thread that read
+        // it, so the main actor only applies what came of it.
+        let (events, lines) = AsyncStream.makeStream(of: [AgentChatWireEvent].self)
+        let absorbing = Task { @MainActor [weak self] in
+            for await batch in events {
+                guard let self else { return }
+                self.absorb(batch)
+            }
+        }
         let result = await runner.run(
             executableName: provider.executable,
             arguments: AgentChatLaunchArguments.make(
-                provider: provider.wireProvider,
+                provider: wire,
                 prompt: prompt,
                 sessionID: resumedSessionID,
                 proposedSessionID: proposedSessionID,
                 mode: mode,
                 permissionHookSettings: channel.map { ClaudePermissionHook.settingsJSON(for: $0) }
             ),
-            workingDirectory: workspace
+            workingDirectory: workspace,
+            onLine: { line in
+                let parsed = AgentChatWireParser.parse(line, provider: wire)
+                guard !parsed.isEmpty else { return }
+                lines.yield(parsed)
+            }
         )
+        // Everything the run said is taken in before the run is read for what
+        // it amounts to, so nothing arrives after the reply has replaced it.
+        lines.finish()
+        await absorbing.value
         return RunOutcome(
             result: result,
             proposedSessionID: proposedSessionID,
@@ -652,6 +785,55 @@ private final class NativeAgentChatModel: ObservableObject {
         }
     }
 
+    /// Live events from the running provider.
+    ///
+    /// Nothing here decides anything: the reply, the session and the failure
+    /// are all read from the whole output when the run ends, which is also how
+    /// a stopped or failed run is read. This is what the person sees meanwhile.
+    private func absorb(_ events: [AgentChatWireEvent]) {
+        for event in events {
+            switch event {
+            case .activity(let value):
+                activity = activity?.succeeded(by: value) ?? value
+            case .textFragment(let text):
+                streamedReply += text
+            case .sessionStarted, .finalText, .failure:
+                break
+            }
+        }
+    }
+
+    /// Puts what has arrived of the reply into the message the loader
+    /// occupies, about ten times a second, so a reply reads as it is written
+    /// instead of appearing whole at the end.
+    private func showReplyAsItArrives() -> Task<Void, Never> {
+        Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(100))
+                guard let self, !Task.isCancelled else { return }
+                self.showStreamedReply()
+            }
+        }
+    }
+
+    private func showStreamedReply() {
+        guard let loadingMessageID, streamedReply != shownStreamedReply else { return }
+        shownStreamedReply = streamedReply
+        let markdown = streamedReply.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !markdown.isEmpty,
+              let index = messages.firstIndex(where: { $0.id == loadingMessageID })
+        else { return }
+        // The same message, so the transcript neither grows nor scrolls: the
+        // loader becomes the reply it was standing in for.
+        messages[index] = NativeAgentChatMessage(
+            id: loadingMessageID,
+            user: agentUser,
+            messageKind: .custom(AgentMessageContent(markdown: markdown)),
+            isSender: false,
+            date: messages[index].date
+        )
+    }
+
     /// Gives the waiting hook the person's answer.
     func answer(_ request: AgentToolApprovalRequest, with answer: AgentToolApprovalAnswer) {
         guard let approvalChannel else { return }
@@ -668,6 +850,13 @@ private final class NativeAgentChatModel: ObservableObject {
     private func finish(_ outcome: RunOutcome) {
         let result = outcome.result
         isRunning = false
+        streamTask?.cancel()
+        streamTask = nil
+        activity = nil
+        streamedReply = ""
+        shownStreamedReply = ""
+        // Whatever the loader became — a partial reply, or the loader still —
+        // goes, and the run's own reading of its output takes its place.
         if let loadingMessageID {
             messages.removeAll { $0.id == loadingMessageID }
         }
@@ -865,6 +1054,9 @@ struct NativeAgentChatView: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
                     .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if model.isRunning, let activity = model.activity {
+                AgentActivityLine(activity: activity)
             }
             // Under the header, beside Stop, rather than in the chat's input
             // slot: SwiftyChat lays that out at the input's own height.
