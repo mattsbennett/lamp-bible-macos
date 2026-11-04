@@ -208,6 +208,25 @@ public enum LampMCPPromptCatalog {
     `strongs_greek` and `dodson_greek`. Anything else listed is the reader's own, \
     and a reader may have none of it. Name what answered.
 
+    Two Septuagint modules ship as well: `LXX`, Brenton's Greek Old Testament, \
+    and `Brenton`, his English of it — 38 books, untagged, so `analyze_strongs` \
+    and a `strongs_key` search reach neither, and `include_annotations` on \
+    `Brenton` returns only the words he supplied, as `{kind: "added"}`. `LXX` is \
+    the oldest rendering of the Hebrew there is, so reading it beside `TAHOT` \
+    measures a translator's choice the way reading the Berean beside the ASV \
+    does; and where the New Testament quotes the Old, the Greek quoted often \
+    follows the Septuagint's wording rather than the Hebrew, so reading \
+    `TAGNT`, `LXX` and `TAHOT` at that verse says whether a point is in the \
+    Hebrew, in the Greek rendering, or in the writer's own adjustment of it. \
+    `read_study_material` gives Brenton's footnotes, which give the literal \
+    Greek where he rendered freely. Neither is numbered as the English is and \
+    nothing converts it: the Psalms run one lower from Psalm 10 to 147 with a \
+    psalm's title as verse 1, so English Psalm 22:1 is `LXX` 21:2, there are \
+    151 psalms, and there is no Nehemiah, which the Septuagint numbers inside \
+    Ezra as chapters 11-23. `read_passage` labels what it returns with the \
+    reference you asked for, so pass the Septuagint's own number and check the \
+    opening words against an English translation before citing it.
+
     ## The two calls that do the work
 
     `read_passage` with `translation_ids: ["TAGNT"]` or `["TAHOT"]` and \
@@ -264,8 +283,9 @@ public enum LampMCPPromptCatalog {
 
     ## What is not here, and must not be implied
 
-    No running text but those two, so variants, Qere readings and \
-    Textus-Receptus-only words are not available. No textual apparatus: you \
+    No tagged running text but those two, so variants, Qere readings and \
+    Textus-Receptus-only words are not available, and `LXX` carries no tagging \
+    at all. No textual apparatus: you \
     cannot say which manuscripts read what. No syntax beyond the word — nothing \
     marks clauses or dependencies, and word order may be described but a claim \
     about what it does is a reading. No Hebrew morphology in `KJVs`, which tags \
@@ -339,6 +359,24 @@ public enum LampMCPPromptCatalog {
     own. Read passages with `read_passage`, naming **every** translation you \
     mean to compare, since it returns three by default and that is how a claim \
     resting on one wording stays hidden.
+
+    Two Septuagint modules come with Lamp as well: `LXX`, Brenton's Greek Old \
+    Testament, and `Brenton`, his English of that Greek, 38 books and no \
+    Strong's numbers in either. Both are translations, so they are evidence of \
+    how the Hebrew was read and not of what it says, and a verse's Hebrew and \
+    its Greek are one text in two languages rather than two witnesses. A claim \
+    that needs the Septuagint's rendering rather than the Hebrew rests on a \
+    translator, and saying which is the finding. Where the New Testament quotes \
+    the Old, the Greek quoted often follows the Septuagint, so `LXX` can show \
+    which wording a writer had. `Brenton` marks the words he supplied, which \
+    `include_annotations: true` returns as `{kind: "added"}`: a claim resting \
+    on a word he added rests on his English. Neither is numbered as the English \
+    is and nothing converts it: the Psalms run one lower from Psalm 10 to 147 \
+    with a psalm's title as verse 1, so English Psalm 22:1 is `LXX` 21:2, and \
+    there is no Nehemiah, which the Septuagint numbers inside Ezra as chapters \
+    11-23. `read_passage` labels what it returns with the reference you asked \
+    for, so pass the Septuagint's own number and check the opening words \
+    against an English translation before citing it.
 
     A cross-reference index is human work: it finds candidate texts and \
     establishes nothing. A lexicon is evidence about a word, never about a \

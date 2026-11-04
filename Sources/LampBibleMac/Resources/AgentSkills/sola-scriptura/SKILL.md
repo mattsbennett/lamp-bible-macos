@@ -62,6 +62,10 @@ has. **Only these come with Lamp and can be relied on:**
 
 - **Translations** — `KJVs`, `BSBs`, `ASVs`, `WEBs`, `YLT`. All five carry Strong's
   numbers.
+- **The Septuagint** — `LXX`, Brenton's Greek Old Testament, and `Brenton`, his
+  English of that Greek. 38 books, and no Strong's numbers in either. Read "Reading
+  the Septuagint" below before citing from them: they are translations, and they are
+  numbered the Septuagint's way, which nothing converts for you.
 - **Cross-reference indexes** — `tske`, the Treasury of Scripture Knowledge
   (Enhanced), whose references are grouped under the catchword each one attaches to,
   so it shows *which phrase* in a verse an index thought needed support; and
@@ -101,6 +105,44 @@ Four rules about the sources themselves:
 - **A commentary or a book can never carry a claim**, including the ones the writer's
   own community wrote. There are two reasons to open one, below, and neither is to
   find out what a passage means.
+
+### Reading the Septuagint
+
+`LXX` is a translation and `Brenton` is a translation of a translation, so they answer
+a different question from the Hebrew.
+
+- **They are evidence of how the Hebrew was read, not of what it says.** What a Hebrew
+  word covers is settled from `bdb` and the Strong's lexicons. That the Greek
+  translators chose one Greek word for it is a fact about those translators — early
+  readers, which is worth something, and still their reading.
+- **A verse's Hebrew and its Greek are one text in two languages, not two witnesses.**
+  Counting them as two is the breadth rule in `references/verdicts.md` misused.
+- **A claim that needs the Septuagint's rendering rather than the Hebrew rests on a
+  translator.** Say so, and say which. It is the Romans 8:3 finding in another
+  language: the unnamed dependence on one rendering is the finding, whichever
+  conclusion it serves.
+- **Where the New Testament quotes the Old, the Greek quoted often follows the
+  Septuagint** rather than the Hebrew, so `LXX` can show which wording a writer had in
+  front of him. That is evidence about the New Testament text, not extra support for
+  the Old.
+- **`Brenton` marks the words he supplied.** `include_annotations: true` returns them
+  as `{kind: "added"}`, and `read_study_material` gives his own footnotes, which say
+  what the Greek has where he rendered it freely. A claim resting on a word he added
+  rests on his English.
+
+Then the numbering, which is where a citation goes wrong without saying so:
+
+- **The Psalms run one lower** from English Psalm 10 to 147, and a psalm's title is
+  verse 1 rather than unnumbered, so English Psalm 22:1 is `LXX` 21:2. There are 151
+  psalms.
+- **There is no Nehemiah.** The Septuagint numbers it inside Ezra, as chapters 11–23,
+  so Nehemiah 1:1 is Ezra 11:1. Asking either module for Nehemiah is refused rather
+  than converted, with a message that names the module and says it has no Nehemiah.
+- **`read_passage` converts none of this.** Ask these two for Psalm 22:1 and you get
+  their own Psalm 22:1 — a different psalm — labelled with the reference you asked
+  for, beside the English verse, with nothing to say they are not the same verse. So
+  pass the Septuagint's own number, and check the opening words against an English
+  translation before citing it.
 
 ### When an extrabiblical module is worth opening
 

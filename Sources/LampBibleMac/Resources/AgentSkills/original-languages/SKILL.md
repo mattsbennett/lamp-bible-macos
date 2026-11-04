@@ -33,6 +33,11 @@ these come with Lamp:
 
 - **`TAHOT`** — the Hebrew Old Testament, Leningrad text, 23,259 verses.
 - **`TAGNT`** — the Greek New Testament, Nestlé-Aland text, 7,918 verses.
+- **`LXX`** — Brenton's Greek Septuagint, the Greek Old Testament, 38 books, and
+  **`Brenton`**, his English of it. Untagged: no Strong's keys and no morphology, so
+  `analyze_strongs` and a `strongs_key` search reach neither, and
+  `include_annotations` returns only the words Brenton supplied. See "The Septuagint"
+  below.
 - **Five English translations with Strong's numbers** — `KJVs`, `BSBs`, `ASVs`,
   `WEBs`, `YLT`.
 - **Lexicons** — `bdb` (Brown-Driver-Briggs), `strongs_hebrew`, `strongs_greek`,
@@ -79,6 +84,32 @@ since there is nothing to render.
 
 The method, and the four questions to ask of a divergence, are in
 [references/translator-choices.md](references/translator-choices.md).
+
+## The Septuagint, and what it can show
+
+`LXX` is the oldest rendering of the Hebrew there is. Reading it beside `TAHOT` is the
+same measurement as reading the Berean beside the ASV — a translator's choice, made
+before Christ rather than this century. Three uses, and one trap.
+
+- **The Greek word the translators chose shows how they read the Hebrew.** It is
+  evidence about them, not about the Hebrew word's range, which comes from a lexicon.
+  Untagged, so this comparison is by hand: read the verse in both, and say which word
+  stands where.
+- **An Old Testament quotation in the New often follows the Septuagint's wording.**
+  Where a writing leans on the wording of a quotation, reading `TAGNT`, `LXX` and
+  `TAHOT` at that verse is what says whether the point is in the Hebrew, in the Greek
+  rendering, or in the writer's own adjustment of it.
+- **`Brenton` marks what he supplied and says what he left behind.**
+  `include_annotations: true` returns the words he added as `{kind: "added"}`, and
+  `read_study_material` gives his footnotes, which give the literal Greek where he
+  rendered freely. That is a translator explaining himself, which is the evidence this
+  skill is made of.
+- **Neither is numbered as the English is, and nothing converts it.** The Psalms run
+  one lower from English Psalm 10 to 147, with a psalm's title counted as verse 1, so
+  English Psalm 22:1 is `LXX` 21:2; there are 151 psalms; and there is no Nehemiah,
+  which the Septuagint numbers inside Ezra as chapters 11–23. `read_passage` labels
+  what it returns with the reference you asked for, so pass the Septuagint's own
+  number and check the opening words against an English translation before citing it.
 
 ## The other tools
 
@@ -161,10 +192,12 @@ hands it over, and this is where it lands.
 
 ## What is not here, and must not be implied
 
-- **No running text but these two.** `TAHOT` is Leningrad and `TAGNT` is
+- **No tagged text but these two.** `TAHOT` is Leningrad and `TAGNT` is
   Nestlé-Aland. Variants, Qere readings and Textus-Receptus-only words are in the
   upstream datasets, not in these modules, so a verse absent from `TAGNT` is absent
-  because the critical text omits it, which is itself worth saying.
+  because the critical text omits it, which is itself worth saying. `LXX` is a third
+  running text, with no tagging at all: no key, no parsing, and no lexicon for the
+  words the Septuagint has and the New Testament does not.
 - **No textual apparatus.** You cannot say which manuscripts read what.
 - **No syntax beyond the word.** Every word carries its own parsing; nothing marks
   clauses, phrases or dependencies. Word order is visible in the text and may be

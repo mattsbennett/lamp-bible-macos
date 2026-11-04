@@ -15,7 +15,9 @@ must be defended from texts rather than used as one.
 
 **Does the claim survive a change of translation?** Pass every translation in the
 library to `read_passage` at once. Lamp always has `KJVs`, `BSBs`, `ASVs`, `WEBs` and
-`YLT`; the reader may have more.
+`YLT`; the reader may have more. `Brenton` is always there too, but it renders the
+Greek Old Testament rather than the Hebrew and numbers its verses the Septuagint's
+way, so it is not one more English witness to the same verse — see SKILL.md.
 
 A claim that holds in one translation and dissolves in the rest rests on a
 translator, not on the text. Romans 8:3 is the standing example: four of the five

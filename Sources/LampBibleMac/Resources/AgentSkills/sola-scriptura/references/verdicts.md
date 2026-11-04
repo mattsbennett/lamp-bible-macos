@@ -130,3 +130,7 @@ Four things this does not license:
 One caution about testaments. Support spanning both is wider than support inside
 one, but a New Testament writer's use of an Old Testament text is one witness to
 that use, not two: the breadth is in the writers, not in the citation.
+
+The same holds for a verse in two languages. The Hebrew of a text and the
+Septuagint's Greek of it are one text in two languages, and the Greek is a witness
+to how the Hebrew was read, never a second witness to what it says.

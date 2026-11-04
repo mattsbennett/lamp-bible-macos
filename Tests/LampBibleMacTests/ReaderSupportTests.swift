@@ -738,6 +738,95 @@ struct ReaderSupportTests {
         #expect(rows[8].companion?.number == 8)
     }
 
+    /// The bundled Septuagint, read beside an English translation. `LXX` and
+    /// `Brenton` declare the `lxx` scheme, which numbers the Psalms one lower
+    /// from Psalm 10 to 147 and counts a psalm's title as verse 1: the English
+    /// Psalm 22:1 is their 21:2. The verses below are those modules' own text at
+    /// those numbers, so this holds the scheme, the conversion and the pairing
+    /// to the data that ships.
+    @Test func pairsAnEnglishPsalmWithTheSeptuagintsOwnNumbering() {
+        let rows = ReaderParallelRows.rows(
+            main: [
+                psalmVerse(22, 1, "My God, my God, why hast thou forsaken me?"),
+                psalmVerse(22, 2, "O my God, I cry in the daytime, but thou hearest not;"),
+            ],
+            companion: [
+                psalmVerse(21, 1, "For the end, concerning the morning aid, a Psalm of David."),
+                psalmVerse(21, 2, "O God, my God, attend to me: why hast thou forsaken me?"),
+                psalmVerse(21, 3, "O my God, I will cry to thee by day, but thou wilt not hear:"),
+            ],
+            mainToCompanion: { englishToSeptuagint($0) },
+            companionToMain: { septuagintToEnglish($0) }
+        )
+
+        #expect(rows.map(\.number) == [0, 1, 2])
+        // The title the Septuagint numbers has no English verse beside it.
+        #expect(rows[0].main == nil)
+        #expect(rows[0].companion?.text.hasPrefix("For the end") == true)
+        #expect(rows[1].main?.text.hasPrefix("My God, my God") == true)
+        #expect(rows[1].companion?.text.hasPrefix("O God, my God") == true)
+        #expect(rows[2].companion?.number == 3)
+    }
+
+    /// Neither Septuagint module has a Nehemiah: the Septuagint numbers it
+    /// inside Ezra, as chapters 11-23, and the `lxx` scheme maps those chapters
+    /// back to Nehemiah. So the English Nehemiah 1 pairs with their Ezra 11,
+    /// which is also the chapter the study column must fetch for it.
+    @Test func pairsNehemiahWithTheSeptuagintsEzra() {
+        func verse(_ book: Int, _ chapter: Int, _ number: Int, _ text: String) -> LampVerse {
+            LampVerse(
+                id: book * 1_000_000 + chapter * 1_000 + number,
+                number: number,
+                text: text,
+                beginsParagraph: false
+            )
+        }
+        let rows = ReaderParallelRows.rows(
+            main: [
+                verse(16, 1, 1, "The words of Nehemiah the son of Hachaliah."),
+                verse(16, 1, 2, "That Hanani, one of my brethren, came, he and certain men of Judah;"),
+            ],
+            companion: [
+                verse(15, 11, 1, "The words of Neemias the son of Chelcia."),
+                verse(15, 11, 2, "And Anani, one of my brethren, came, he and some men of Juda;"),
+            ],
+            mainToCompanion: { englishToSeptuagint($0) },
+            companionToMain: { septuagintToEnglish($0) }
+        )
+
+        #expect(rows.map(\.number) == [1, 2])
+        #expect(rows[0].companion?.text.hasPrefix("The words of Neemias") == true)
+        #expect(rows.allSatisfy { $0.main != nil && $0.companion != nil })
+
+        let chapters = ReaderLinkedTranslation.chapters(
+            holding: [16_001_001, 16_001_002],
+            convert: { englishToSeptuagint($0) }
+        )
+        #expect(chapters.all == [15_011])
+        #expect(chapters.main == 15_011)
+    }
+
+    private func psalmVerse(_ chapter: Int, _ number: Int, _ text: String) -> LampVerse {
+        LampVerse(
+            id: 19_000_000 + chapter * 1_000 + number,
+            number: number,
+            text: text,
+            beginsParagraph: false
+        )
+    }
+
+    private func englishToSeptuagint(_ reference: Int) -> Int? {
+        LampVersification.standard(.english).convert(
+            reference, to: LampVersification.standard(.septuagint)
+        )
+    }
+
+    private func septuagintToEnglish(_ reference: Int) -> Int? {
+        LampVersification.standard(.septuagint).convert(
+            reference, to: LampVersification.standard(.english)
+        )
+    }
+
     /// Three translations beside the one being read: each column pairs on its
     /// own, and a verse the reading leaves out that two of them have shares
     /// one row.

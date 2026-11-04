@@ -34,7 +34,10 @@ struct SolaScripturaPromptTests {
             where file.pathExtension == "md" {
                 text += try String(contentsOf: file, encoding: .utf8)
             }
-            return text
+            // Wrapped markdown against an unwrapped Swift string: collapsing the
+            // line breaks means a pinned phrase that straddles a wrap fails for
+            // a rule having been dropped rather than for a reflow.
+            return text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         }
     }
 
@@ -105,11 +108,34 @@ struct SolaScripturaPromptTests {
         #expect(try skillText.lowercased().contains(rule), "the skill dropped: \(rule)")
     }
 
+    /// What the Septuagint is evidence of, and the numbering that makes a
+    /// citation from it wrong without saying so. `read_passage` labels what it
+    /// returns with the reference it was asked for, so a surface that names
+    /// `LXX` without these lines invites a comparison of two different psalms.
+    @Test(arguments: [
+        "how the hebrew was read",
+        "one text in two languages",
+        "rests on a translator",
+        "english psalm 22:1 is `lxx` 21:2",
+        "there is no nehemiah",
+        "check the opening words against an english translation",
+    ])
+    func bothSayWhatTheSeptuagintIsEvidenceOf(rule: String) throws {
+        #expect(
+            LampMCPPromptCatalog.solaScripturaInstructions.lowercased().contains(rule),
+            "the prompt dropped: \(rule)"
+        )
+        #expect(try skillText.lowercased().contains(rule), "the skill dropped: \(rule)")
+    }
+
     /// Only the modules that ship may be named as present, since the prompt is
     /// read by a client whose user may have installed nothing of their own.
     @Test func thepromptNamesOnlyBundledModules() {
         let text = LampMCPPromptCatalog.solaScripturaInstructions
-        for bundled in ["KJVs", "BSBs", "ASVs", "WEBs", "YLT", "tske", "crossrefs", "bdb"] {
+        for bundled in [
+            "KJVs", "BSBs", "ASVs", "WEBs", "YLT", "LXX", "Brenton",
+            "tske", "crossrefs", "bdb",
+        ] {
             #expect(text.contains(bundled), "the prompt does not name \(bundled)")
         }
         for installed in ["ESVs", "NASB", "NETs", "NIV", "NKJV", "NIC"] {

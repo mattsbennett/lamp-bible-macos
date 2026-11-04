@@ -30,7 +30,10 @@ struct OriginalLanguagesPromptTests {
             ) where file.pathExtension == "md" {
                 text += try String(contentsOf: file, encoding: .utf8)
             }
-            return text
+            // Wrapped markdown against an unwrapped Swift string: collapsing the
+            // line breaks means a pinned phrase that straddles a wrap fails for
+            // a rule having been dropped rather than for a reflow.
+            return text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         }
     }
 
@@ -44,7 +47,7 @@ struct OriginalLanguagesPromptTests {
     /// Only the modules that ship may be named as present: the user on the other
     /// end of a prompt may have installed nothing of their own.
     @Test(arguments: [
-        "TAHOT", "TAGNT", "KJVs", "BSBs", "ASVs", "WEBs", "YLT",
+        "TAHOT", "TAGNT", "LXX", "Brenton", "KJVs", "BSBs", "ASVs", "WEBs", "YLT",
         "bdb", "strongs_hebrew", "strongs_greek", "dodson_greek",
     ])
     func bothNameTheBundledModule(module: String) throws {
@@ -66,6 +69,9 @@ struct OriginalLanguagesPromptTests {
         // The third job, and the verdicts that are this skill's own.
         "audit a writing", "carried", "permitted", "overreach",
         "translation-dependent", "unverifiable here",
+        // The Septuagint: what it measures, and the numbering nothing converts.
+        "oldest rendering of the hebrew", "english psalm 22:1 is `lxx` 21:2",
+        "there is no nehemiah", "no tagging at all",
     ])
     func bothCarryTheMethodsOwnTerms(term: String) throws {
         #expect(
