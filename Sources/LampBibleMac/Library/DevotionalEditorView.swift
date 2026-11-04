@@ -385,7 +385,7 @@ struct DevotionalEditorView: View {
     @State private var author = ""
     @State private var date = ""
     @State private var tags = ""
-    @State private var category = "devotional"
+    @State private var category = DevotionalEditorView.firstKindOffered
     @State private var seriesName = ""
     @State private var seriesOrder = 0
     @State private var summary = ""
@@ -1186,9 +1186,11 @@ struct DevotionalEditorView: View {
                 TextField("Author", text: $author)
                 StoredCalendarDateField(title: "Date", storedValue: $date)
                 TextField("Tags (comma separated)", text: $tags)
-                Picker("Category", selection: $category) {
-                    ForEach(Self.categories, id: \.self) { Text($0.capitalized).tag($0) }
-                }
+                WritingCategoryField(
+                    title: "Category",
+                    storedValue: $category,
+                    held: model.devotionals.map(\.category)
+                )
             }
 
             Section("Series") {
@@ -1409,7 +1411,7 @@ struct DevotionalEditorView: View {
         - Subtitle: \(subtitle.isEmpty ? "None" : subtitle)
         - Author: \(author.isEmpty ? "Unknown" : author)
         - Date: \(date)
-        - Category: \(category)
+        - Category: \(LampWritingCategory.displayName(category) ?? "None")
         - Tags: \(tagList)
         - Series: \(seriesName.isEmpty ? "None" : "\(seriesName), item \(seriesOrder)")
 
@@ -2267,9 +2269,8 @@ struct DevotionalEditorView: View {
         author = devotional.author ?? ""
         date = devotional.date ?? Self.today
         tags = devotional.tags.joined(separator: ", ")
-        category = devotional.category == "sermon"
-            ? "exhortation"
-            : devotional.category ?? "devotional"
+        category = LampWritingCategory.canonical(devotional.category)
+            ?? DevotionalEditorView.firstKindOffered
         seriesName = devotional.seriesName ?? ""
         seriesOrder = devotional.seriesOrder ?? 0
         summary = devotional.summary ?? ""
@@ -2345,7 +2346,7 @@ struct DevotionalEditorView: View {
                 tags: tags.split(separator: ",").map {
                     String($0).trimmingCharacters(in: .whitespacesAndNewlines)
                 }.filter { !$0.isEmpty },
-                category: category,
+                category: LampWritingCategory.canonical(category),
                 seriesName: seriesName,
                 seriesOrder: seriesName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     ? nil : seriesOrder,
@@ -2561,9 +2562,12 @@ struct DevotionalEditorView: View {
         LampCalendarDate.today()
     }
 
-    private static let categories = [
-        "devotional", "exhortation", "reflection", "study", "prayer", "testimony", "other",
-    ]
+    /// What a new writing starts as. Not a kind named here: the vocabulary is
+    /// core's, and a writing of no kind at all is a fair reading of an empty
+    /// one, so this cannot be a crash either.
+    private static var firstKindOffered: String {
+        LampWritingCategory.suggestions.first ?? ""
+    }
 
     private static let saveIcon: NSImage = {
         let image = NSImage(size: NSSize(width: 16, height: 16), flipped: false) { rect in

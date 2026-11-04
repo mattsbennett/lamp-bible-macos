@@ -162,7 +162,9 @@ struct DevotionalsView: View {
     private var filteredDevotionals: [LampDevotional] {
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         return model.devotionals.filter { devotional in
-            guard categoryFilter == nil || normalizedCategory(devotional.category) == categoryFilter,
+            guard categoryFilter == nil
+                    || LampWritingCategory.foldedKey(devotional.category)
+                        == LampWritingCategory.foldedKey(categoryFilter),
                   moduleFilter == nil || devotional.moduleID == moduleFilter else { return false }
             guard !trimmedQuery.isEmpty else { return true }
             return [
@@ -275,7 +277,8 @@ struct DevotionalsView: View {
                 Picker("Category", selection: $categoryFilter) {
                     Text("All Categories").tag(String?.none)
                     ForEach(devotionalCategories, id: \.self) { category in
-                        Text(category.capitalized).tag(Optional(category))
+                        Text(LampWritingCategory.displayName(category) ?? category)
+                            .tag(Optional(category))
                     }
                 }
                 .accessibilityLabel("Filter writing by category")
@@ -880,7 +883,7 @@ struct DevotionalsView: View {
         case .none:
             return "Writing"
         case .category:
-            return normalizedCategory(devotional.category)?.capitalized ?? "Uncategorized"
+            return LampWritingCategory.displayName(devotional.category) ?? "Uncategorized"
         case .collection:
             return collectionName(for: devotional)
         case .series:
@@ -933,11 +936,7 @@ struct DevotionalsView: View {
     }
 
     private var devotionalCategories: [String] {
-        Array(Set(model.devotionals.compactMap { normalizedCategory($0.category) })).sorted()
-    }
-
-    private func normalizedCategory(_ category: String?) -> String? {
-        category == "sermon" ? "exhortation" : category
+        LampWritingCategory.kindsHeld(model.devotionals.map(\.category))
     }
 
     private var devotionalCollections: [(id: String, name: String)] {

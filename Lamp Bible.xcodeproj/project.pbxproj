@@ -69,6 +69,7 @@
 		A1000000000000000000001F /* TipTapEditor in Resources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001E /* TipTapEditor */; };
 		A10000000000000000000020 /* CalendarDateSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001F /* CalendarDateSupport.swift */; };
 		A10000000000000000000021 /* CalendarDateField.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000020 /* CalendarDateField.swift */; };
+		A10000000000000000000243 /* WritingCategoryField.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000242 /* WritingCategoryField.swift */; };
 		A10000000000000000000022 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000021 /* Assets.xcassets */; };
 		A10000000000000000000023 /* TextScaleSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000022 /* TextScaleSupport.swift */; };
 		A10000000000000000000024 /* TextSizeMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000023 /* TextSizeMenu.swift */; };
@@ -188,6 +189,7 @@
 		B1000000000000000000001E /* TipTapEditor */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Sources/LampBibleMac/Resources/TipTapEditor; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000001F /* CalendarDateSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/CalendarDateSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000020 /* CalendarDateField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/CalendarDateField.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000242 /* WritingCategoryField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/WritingCategoryField.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000021 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Resources/Assets.xcassets; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000022 /* TextScaleSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/TextScaleSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000023 /* TextSizeMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/TextSizeMenu.swift; sourceTree = SOURCE_ROOT; };
@@ -385,6 +387,7 @@
 				B1000000000000000000001D /* TipTapEditorView.swift */,
 				B1000000000000000000001F /* CalendarDateSupport.swift */,
 				B10000000000000000000020 /* CalendarDateField.swift */,
+				B10000000000000000000242 /* WritingCategoryField.swift */,
 				B10000000000000000000022 /* TextScaleSupport.swift */,
 				B10000000000000000000023 /* TextSizeMenu.swift */,
 				B10000000000000000000024 /* DevotionalAgentWorkspaceView.swift */,
@@ -661,6 +664,7 @@
 				A1000000000000000000001E /* TipTapEditorView.swift in Sources */,
 				A10000000000000000000020 /* CalendarDateSupport.swift in Sources */,
 				A10000000000000000000021 /* CalendarDateField.swift in Sources */,
+				A10000000000000000000243 /* WritingCategoryField.swift in Sources */,
 				A10000000000000000000023 /* TextScaleSupport.swift in Sources */,
 				A10000000000000000000024 /* TextSizeMenu.swift in Sources */,
 				A10000000000000000000025 /* DevotionalAgentWorkspaceView.swift in Sources */,
