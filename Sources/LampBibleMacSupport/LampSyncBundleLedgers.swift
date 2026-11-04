@@ -82,7 +82,7 @@ extension LampSyncBundleLedgers {
         // and is recorded as gone in the same pass. The phone never publishes
         // decks, so this is the only place that can act on its deletion.
         applied.decksRemoved += try LampPresentationDeckSync.removeDecksOfDeletedWritings(
-            heldWritingIDs: Set(try await library.personalDevotionals().map(\.id)),
+            heldWritingIDs: try await library.personalDevotionalIDs(),
             deletedWritings: try await library.personalDeletionLedger(),
             in: library.rootURL,
             fileManager: fileManager

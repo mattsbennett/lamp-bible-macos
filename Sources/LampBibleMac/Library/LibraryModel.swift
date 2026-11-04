@@ -936,7 +936,7 @@ final class LibraryModel: ObservableObject {
         // sweep, but until it ran they would sit in Slide Studio pointing at
         // a writing that is gone.
         try? LampPresentationDeckSync.removeDecksOfDeletedWritings(
-            heldWritingIDs: Set(try await library.personalDevotionals().map(\.id)),
+            heldWritingIDs: try await library.personalDevotionalIDs(),
             deletedWritings: try await library.personalDeletionLedger(),
             in: library.rootURL
         )
