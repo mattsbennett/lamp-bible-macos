@@ -64,11 +64,12 @@ public enum LampMCPToolCatalog {
         ),
         tool(
             "read_commentary",
-            "Read commentary units that overlap a scripture reference or range.",
+            "Read commentary units that overlap a scripture reference or range. Each unit is text with the headings it sits under, as `sections`, and the footnotes its text cites. A call returns what fits in one result; when the range holds more, `nextOffset` is where the next call starts.",
             properties: [
                 "reference": string("Human Bible reference."),
                 "module_ids": arrayOfStrings("Optional commentary module IDs."),
                 "limit": integer("Maximum commentary units."),
+                "offset": integer("Where to start: the `nextOffset` of the previous call. Defaults to 0."),
             ],
             required: ["reference"]
         ),

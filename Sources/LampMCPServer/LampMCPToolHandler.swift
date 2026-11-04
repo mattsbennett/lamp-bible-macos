@@ -118,7 +118,8 @@ public actor LampMCPToolHandler {
             return try result(try await library.readCommentary(
                 reference: try requiredString("reference", in: arguments),
                 moduleIDs: stringSet(arguments["module_ids"]),
-                limit: arguments["limit"]?.intValue ?? 30
+                limit: arguments["limit"]?.intValue ?? 30,
+                offset: arguments["offset"]?.intValue ?? 0
             ))
 
         case "search_dictionary":
