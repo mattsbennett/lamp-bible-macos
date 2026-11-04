@@ -192,6 +192,24 @@ struct AgentMessageContent {
     let markdown: String
 }
 
+/// A reply while it is still arriving, held by reference.
+///
+/// Replacing the message in the array for each new fragment leaves the chat
+/// unscrollable: SwiftyChat measures a row when it first draws it and keeps
+/// that height when the same message is replaced, so a reply that grew from
+/// one line to a page was drawn at its full height inside a scroll view that
+/// still thought it was one line tall. Nothing could reach the rest of it
+/// until something else rebuilt the list. Watching one object instead leaves
+/// `messages` untouched while the reply arrives, and the row measures itself
+/// as it grows.
+final class StreamingAgentMessage: ObservableObject {
+    @Published var markdown: String
+
+    init(markdown: String = "") {
+        self.markdown = markdown
+    }
+}
+
 /// What the person typed. Lamp draws it rather than SwiftyChat, whose text cell
 /// can't be selected.
 struct PersonMessageContent {
@@ -211,6 +229,9 @@ private struct NativeAgentChatMessage: ChatMessage {
         case .text(let value):
             value
         case .custom(let payload):
+            // A reply still arriving has no text here on purpose: the
+            // transcript is written from what a finished run said, and a
+            // half-written reply must never be mistaken for one.
             (payload as? AgentMessageContent)?.markdown ?? (payload as? PersonMessageContent)?.text
         default:
             nil
@@ -286,6 +307,51 @@ private struct AgentActivityLine: View {
         case .writing:
             "Writing the reply…"
         }
+    }
+}
+
+/// A reply in its bubble.
+///
+/// Shared by the finished reply and the one still arriving, so the words do
+/// not move when the last fragment lands and the message is replaced by the
+/// run's own reading of its output.
+private struct AgentReplyBubble: View {
+    let markdown: String
+
+    var body: some View {
+        AgentMarkdownMessageView(markdown: markdown)
+            .padding(12)
+            .frame(maxWidth: 620, alignment: .leading)
+            .background(
+                UnevenRoundedRectangle(
+                    topLeadingRadius: 0,
+                    bottomLeadingRadius: 14,
+                    bottomTrailingRadius: 14,
+                    topTrailingRadius: 14
+                )
+                .fill(LampChatSurface.agentBubble)
+            )
+            .overlay(
+                UnevenRoundedRectangle(
+                    topLeadingRadius: 0,
+                    bottomLeadingRadius: 14,
+                    bottomTrailingRadius: 14,
+                    topTrailingRadius: 14
+                )
+                .stroke(LampChatSurface.agentBubbleBorder)
+            )
+            .modifier(CopyableMessage(text: markdown))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+    }
+}
+
+/// The same bubble, watching a reply that is still arriving.
+private struct StreamingAgentReplyBubble: View {
+    @ObservedObject var content: StreamingAgentMessage
+
+    var body: some View {
+        AgentReplyBubble(markdown: content.markdown)
     }
 }
 
@@ -556,6 +622,9 @@ private final class NativeAgentChatModel: ObservableObject {
     private var streamedReply = ""
     private var shownStreamedReply = ""
     private var streamTask: Task<Void, Never>?
+    /// The bubble the arriving reply is written into. One object for the run,
+    /// put in the message once; see `StreamingAgentMessage`.
+    private var streamingMessage: StreamingAgentMessage?
 
     private let person = NativeAgentChatUser(
         id: "lamp-user",
@@ -717,6 +786,7 @@ private final class NativeAgentChatModel: ObservableObject {
         // could not be resumed starts from nothing, as it does.
         streamedReply = ""
         shownStreamedReply = ""
+        streamingMessage = nil
         activity = nil
         let proposedSessionID = provider == .claude && resumedSessionID == nil
             ? UUID().uuidString.lowercased() : nil
@@ -820,15 +890,21 @@ private final class NativeAgentChatModel: ObservableObject {
         guard let loadingMessageID, streamedReply != shownStreamedReply else { return }
         shownStreamedReply = streamedReply
         let markdown = streamedReply.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !markdown.isEmpty,
-              let index = messages.firstIndex(where: { $0.id == loadingMessageID })
-        else { return }
-        // The same message, so the transcript neither grows nor scrolls: the
-        // loader becomes the reply it was standing in for.
+        guard !markdown.isEmpty else { return }
+        if let streamingMessage {
+            // The array is not touched again while the reply arrives: the cell
+            // is watching this.
+            streamingMessage.markdown = markdown
+            return
+        }
+        guard let index = messages.firstIndex(where: { $0.id == loadingMessageID }) else { return }
+        // The loader becomes the reply it was standing in for, once.
+        let arriving = StreamingAgentMessage(markdown: markdown)
+        streamingMessage = arriving
         messages[index] = NativeAgentChatMessage(
             id: loadingMessageID,
             user: agentUser,
-            messageKind: .custom(AgentMessageContent(markdown: markdown)),
+            messageKind: .custom(arriving),
             isSender: false,
             date: messages[index].date
         )
@@ -855,6 +931,7 @@ private final class NativeAgentChatModel: ObservableObject {
         activity = nil
         streamedReply = ""
         shownStreamedReply = ""
+        streamingMessage = nil
         // Whatever the loader became — a partial reply, or the loader still —
         // goes, and the run's own reading of its output takes its place.
         if let loadingMessageID {
@@ -1106,30 +1183,9 @@ struct NativeAgentChatView: View {
                     if let content = payload as? PersonMessageContent {
                         PersonMessageView(text: content.text)
                     } else if let content = payload as? AgentMessageContent {
-                        AgentMarkdownMessageView(markdown: content.markdown)
-                            .padding(12)
-                            .frame(maxWidth: 620, alignment: .leading)
-                            .background(
-                                UnevenRoundedRectangle(
-                                    topLeadingRadius: 0,
-                                    bottomLeadingRadius: 14,
-                                    bottomTrailingRadius: 14,
-                                    topTrailingRadius: 14
-                                )
-                                .fill(LampChatSurface.agentBubble)
-                            )
-                            .overlay(
-                                UnevenRoundedRectangle(
-                                    topLeadingRadius: 0,
-                                    bottomLeadingRadius: 14,
-                                    bottomTrailingRadius: 14,
-                                    topTrailingRadius: 14
-                                )
-                                .stroke(LampChatSurface.agentBubbleBorder)
-                            )
-                            .modifier(CopyableMessage(text: content.markdown))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 12)
+                        AgentReplyBubble(markdown: content.markdown)
+                    } else if let content = payload as? StreamingAgentMessage {
+                        StreamingAgentReplyBubble(content: content)
                     }
                 }
                 .environment(\.chatStyle, chatStyle)
