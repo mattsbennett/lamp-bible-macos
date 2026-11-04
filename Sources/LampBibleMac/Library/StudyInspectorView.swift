@@ -2546,20 +2546,20 @@ private struct CommentaryUnitView: View {
                     ))
             }
             if let introduction = unit.introduction {
-                ScriptureLinkedText(text: introduction, links: unit.scriptureLinks)
+                ScriptureLinkedText(text: introduction.leftToRightParagraphs, links: unit.scriptureLinks)
                     .font(.system(size: fontSize, design: typeface.design))
             }
             if let translation = unit.translation {
-                ScriptureLinkedText(text: translation, links: unit.scriptureLinks)
+                ScriptureLinkedText(text: translation.leftToRightParagraphs, links: unit.scriptureLinks)
                     .font(.system(size: fontSize, design: typeface.design).italic())
                     .foregroundStyle(.secondary)
             }
             if let commentary = unit.commentary {
-                ScriptureLinkedText(text: commentary, links: unit.scriptureLinks)
+                ScriptureLinkedText(text: commentary.leftToRightParagraphs, links: unit.scriptureLinks)
                     .font(.system(size: fontSize, design: typeface.design))
             }
             if let footnotes = unit.footnotes {
-                ScriptureLinkedText(text: footnotes, links: unit.scriptureLinks)
+                ScriptureLinkedText(text: footnotes.leftToRightParagraphs, links: unit.scriptureLinks)
                     .font(.system(size: max(fontSize - 2, 9), design: typeface.design))
                     .foregroundStyle(.secondary)
             }
@@ -2593,6 +2593,33 @@ private struct CommentaryUnitView: View {
             return !textValues.contains {
                 $0.range(of: label, options: [.caseInsensitive]) != nil
             }
+        }
+    }
+}
+
+private extension String {
+    /// Commentary is English that quotes Hebrew. A paragraph opening on a Hebrew
+    /// word takes a right-to-left base direction and draws "(2 Sam. 22:1)" as
+    /// "(Sam. 22:1 2)", so such a paragraph starts with a left-to-right mark.
+    var leftToRightParagraphs: String {
+        guard unicodeScalars.contains(where: \.isRightToLeftLetter) else { return self }
+        return split(separator: "\n", omittingEmptySubsequences: false)
+            .map { paragraph in
+                let opensRightToLeft = paragraph.unicodeScalars
+                    .first { $0.properties.isAlphabetic }?
+                    .isRightToLeftLetter == true
+                return opensRightToLeft ? "\u{200E}" + paragraph : String(paragraph)
+            }
+            .joined(separator: "\n")
+    }
+}
+
+private extension Unicode.Scalar {
+    /// Hebrew, Syriac and Arabic, with their presentation forms.
+    var isRightToLeftLetter: Bool {
+        switch value {
+        case 0x0590...0x08FF, 0xFB1D...0xFDFF, 0xFE70...0xFEFF: true
+        default: false
         }
     }
 }
