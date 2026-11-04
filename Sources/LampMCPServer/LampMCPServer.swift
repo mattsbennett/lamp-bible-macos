@@ -19,7 +19,8 @@ public enum LampMCPServerFactory {
         applicationSupportURL: URL? = LampAgentDescriptorStore.defaultApplicationSupportURL(),
         policy: LampAgentAccessPolicy = LampAgentAccessPolicy(),
         policyURL: URL? = nil,
-        workspaceURL: URL? = nil
+        workspaceURL: URL? = nil,
+        skillsURL: URL? = nil
     ) async -> Server {
         let handler = LampMCPToolHandler(
             library: library,
@@ -27,7 +28,8 @@ public enum LampMCPServerFactory {
             applicationSupportURL: applicationSupportURL,
             policy: policy,
             policyURL: policyURL,
-            workspaceURL: workspaceURL
+            workspaceURL: workspaceURL,
+            skillsURL: skillsURL
         )
         let server = Server(
             name: "lamp-bible",
@@ -86,14 +88,16 @@ public enum LampMCPServerFactory {
         applicationSupportURL: URL? = LampAgentDescriptorStore.defaultApplicationSupportURL(),
         policy: LampAgentAccessPolicy = LampAgentAccessPolicy(),
         policyURL: URL? = nil,
-        workspaceURL: URL? = nil
+        workspaceURL: URL? = nil,
+        skillsURL: URL? = nil
     ) async throws {
         let server = await makeServer(
             library: library,
             libraryRootURL: libraryRootURL,
             applicationSupportURL: applicationSupportURL,
             policyURL: policyURL,
-            workspaceURL: workspaceURL
+            workspaceURL: workspaceURL,
+            skillsURL: skillsURL
         )
         // Client messages reach the SDK through a pipe, so each can be made
         // decodable first; see `compatibleClientMessage`.

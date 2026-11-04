@@ -60,7 +60,8 @@ struct LampMCPCommand {
                 libraryRootURL: libraryRootURL,
                 policy: policy,
                 policyURL: policyURL,
-                workspaceURL: options.workspaceURL
+                workspaceURL: options.workspaceURL,
+                skillsURL: options.skillsURL
             )
         } catch {
             FileHandle.standardError.write(Data("lamp-mcp: \(error.localizedDescription)\n".utf8))
@@ -162,6 +163,9 @@ private struct Options {
     let slideNumbers: [Int]?
     let renderWidth: Double
     let workspaceURL: URL?
+    /// The folder whose installed skills `read_skill` serves, for a session
+    /// with no workspace of its own: a reader chat.
+    let skillsURL: URL?
     /// Whether to fill in what wasn't given from the descriptor Lamp writes.
     /// Set by `--external`, and by being started with no arguments at all:
     /// that is what an outside app's config looks like, since a config cannot
@@ -181,6 +185,7 @@ private struct Options {
         var slideNumbers: [Int]?
         var renderWidth = 1_600.0
         var workspaceURL: URL?
+        var skillsURL: URL?
         var usesDescriptor = arguments.isEmpty
         var index = 0
         while index < arguments.count {
@@ -226,6 +231,10 @@ private struct Options {
                 index += 1
                 guard arguments.indices.contains(index) else { throw OptionError.missingValue(argument) }
                 workspaceURL = URL(fileURLWithPath: arguments[index], isDirectory: true)
+            case "--skills":
+                index += 1
+                guard arguments.indices.contains(index) else { throw OptionError.missingValue(argument) }
+                skillsURL = URL(fileURLWithPath: arguments[index], isDirectory: true)
             case "--slides":
                 index += 1
                 guard arguments.indices.contains(index) else { throw OptionError.missingValue(argument) }
@@ -268,6 +277,7 @@ private struct Options {
         self.slideNumbers = slideNumbers
         self.renderWidth = renderWidth
         self.workspaceURL = workspaceURL
+        self.skillsURL = skillsURL
         self.usesDescriptor = usesDescriptor
     }
 }
@@ -283,7 +293,7 @@ private enum OptionError: Error, LocalizedError {
     var errorDescription: String? {
         let usage = """
         Usage: lamp-mcp [--external]
-               lamp-mcp --library-root PATH [--bundled-modules-archive PATH] [--policy PATH] [--workspace DIR] [--health-check]
+               lamp-mcp --library-root PATH [--bundled-modules-archive PATH] [--policy PATH] [--workspace DIR] [--skills DIR] [--health-check]
                lamp-mcp --render-deck PATH [--output DIR] [--overview FILE] [--slides 1,3,5] [--width 1600] [--library-root PATH] [--manuscript PATH]
                lamp-mcp --build-deck PATH --manuscript PATH
         """

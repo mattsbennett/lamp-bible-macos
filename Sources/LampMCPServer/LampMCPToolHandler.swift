@@ -22,6 +22,9 @@ public actor LampMCPToolHandler {
     /// The agent workspace this session serves, when it has one. Only the
     /// writing's own history is reachable, and only to read.
     private let workspaceURL: URL?
+    /// Where `read_skill` finds the session's skills when it has no
+    /// workspace: a reader chat's own folder.
+    private let skillsURL: URL?
     private let encoder: JSONEncoder
     /// The policy as last read, kept because some tools have to ask about it
     /// rather than let the library enforce it.
@@ -64,7 +67,8 @@ public actor LampMCPToolHandler {
         applicationSupportURL: URL? = LampAgentDescriptorStore.defaultApplicationSupportURL(),
         policy: LampAgentAccessPolicy = LampAgentAccessPolicy(),
         policyURL: URL? = nil,
-        workspaceURL: URL? = nil
+        workspaceURL: URL? = nil,
+        skillsURL: URL? = nil
     ) {
         self.library = library
         self.libraryRootURL = libraryRootURL
@@ -72,6 +76,7 @@ public actor LampMCPToolHandler {
         self.policy = policy
         self.policyURL = policyURL
         self.workspaceURL = workspaceURL
+        self.skillsURL = skillsURL
         encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         encoder.dateEncodingStrategy = .iso8601
@@ -479,12 +484,16 @@ public actor LampMCPToolHandler {
 
     private func readSkill(named name: String?, file: String?) throws -> SkillReading {
         guard policy.isEnabled else { throw LampMCPToolError.accessDisabled }
-        guard let workspaceURL else { throw LampMCPToolError.noWorkspace }
+        // A writing workspace keeps its skills in itself; a reader chat names
+        // its folder separately, having no writing to serve.
+        guard let skillsRoot = skillsURL ?? workspaceURL else {
+            throw LampMCPToolError.noSkills
+        }
         let fileManager = FileManager.default
         // Both providers' directories hold the same installed copy; whichever
         // is there answers.
         let roots = [".claude/skills", ".agents/skills"].map {
-            workspaceURL.appendingPathComponent($0, isDirectory: true)
+            skillsRoot.appendingPathComponent($0, isDirectory: true)
         }
         let available = roots
             .flatMap { (try? fileManager.contentsOfDirectory(atPath: $0.path)) ?? [] }
@@ -757,6 +766,7 @@ public enum LampMCPToolError: Error, LocalizedError, Equatable, Sendable {
     case missingArgument(String)
     case invalidArgument(String, String)
     case noWorkspace
+    case noSkills
     case accessDisabled
     case personalContentNotAllowed
     case noLibraryRoot
@@ -778,6 +788,12 @@ public enum LampMCPToolError: Error, LocalizedError, Equatable, Sendable {
             This session serves no agent workspace, so name the writing: pass \
             `writing_id`, from list_writings, for the writing whose history \
             you want.
+            """
+        case .noSkills:
+            """
+            No skills are installed for this session: Lamp started it without \
+            a folder of skills, so there is nothing for read_skill to read. \
+            Answer without them, and say so.
             """
         case .accessDisabled:
             """

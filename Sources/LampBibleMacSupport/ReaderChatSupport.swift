@@ -82,6 +82,32 @@ public enum ReaderChatWorkspaceStore {
             .appendingPathComponent(windowID.uuidString, isDirectory: true)
     }
 
+    /// The server a reader chat in `workspace` is given.
+    ///
+    /// Built here rather than by the view, so a test can be handed the very
+    /// configuration a chat runs with. `read_skill` was tested against a
+    /// server told where the skills were, and passed, while every real chat
+    /// was started without being told and was refused.
+    ///
+    /// The skills are named by `skillsURL`, not `workspaceURL`. A reader chat
+    /// has no writing, and a session given a workspace serves that
+    /// workspace's writing history as its own.
+    public static func configuration(
+        helperExecutableURL: URL,
+        libraryRootURL: URL,
+        bundledModulesArchiveURL: URL?,
+        policyURL: URL,
+        workspace: URL
+    ) -> LampAgentMCPConfiguration {
+        LampAgentMCPConfiguration(
+            helperExecutableURL: helperExecutableURL,
+            libraryRootURL: libraryRootURL,
+            bundledModulesArchiveURL: bundledModulesArchiveURL,
+            policyURL: policyURL,
+            skillsURL: workspace
+        )
+    }
+
     public static func prepare(
         workspace: URL,
         configuration: LampAgentMCPConfiguration,

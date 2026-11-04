@@ -11,19 +11,30 @@ public struct LampAgentMCPConfiguration: Equatable, Sendable {
     /// lives in the workspace, and a server told nothing about one has nothing
     /// to report. A reader chat has no writing, so it passes none.
     public let workspaceURL: URL?
+    /// The folder whose installed skills `read_skill` serves, when it is not
+    /// the workspace.
+    ///
+    /// A reader chat's skills are installed in its own folder, and it has no
+    /// writing workspace to name, so it names this instead. Started with
+    /// neither, `read_skill` has nothing to read: every reader chat was in
+    /// that position until this was passed, told by its instructions to call
+    /// a tool that could only refuse.
+    public let skillsURL: URL?
 
     public init(
         helperExecutableURL: URL,
         libraryRootURL: URL,
         bundledModulesArchiveURL: URL? = nil,
         policyURL: URL,
-        workspaceURL: URL? = nil
+        workspaceURL: URL? = nil,
+        skillsURL: URL? = nil
     ) {
         self.helperExecutableURL = helperExecutableURL
         self.libraryRootURL = libraryRootURL
         self.bundledModulesArchiveURL = bundledModulesArchiveURL
         self.policyURL = policyURL
         self.workspaceURL = workspaceURL
+        self.skillsURL = skillsURL
     }
 
     public var arguments: [String] {
@@ -34,6 +45,9 @@ public struct LampAgentMCPConfiguration: Equatable, Sendable {
         result += ["--policy", policyURL.path]
         if let workspaceURL {
             result += ["--workspace", workspaceURL.path]
+        }
+        if let skillsURL {
+            result += ["--skills", skillsURL.path]
         }
         return result
     }

@@ -169,13 +169,14 @@ struct ReaderChatSidebarView: View {
                     NSLocalizedDescriptionKey: "The Lamp module helper is unavailable. Rebuild or reinstall Lamp Bible to restore chat access to your library.",
                 ])
             }
-            let configuration = LampAgentMCPConfiguration(
+            let configuration = ReaderChatWorkspaceStore.configuration(
                 helperExecutableURL: helper,
                 libraryRootURL: libraryModel.library.rootURL,
                 bundledModulesArchiveURL: Bundle.main.url(
                     forResource: "bundled_modules.db", withExtension: "zlib"
                 ),
-                policyURL: policyURL
+                policyURL: policyURL,
+                workspace: workspace
             )
             try writeAccessPolicy()
             try ReaderChatWorkspaceStore.prepare(
