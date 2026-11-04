@@ -96,6 +96,72 @@ public enum LampPresentationDeckSync {
         return removed.sorted()
     }
 
+    /// Removes the decks of writings that have been deleted.
+    ///
+    /// Deleting a writing used to leave its decks behind for ever: nothing on
+    /// either delete path touched them, so they sat in Slide Studio pointing
+    /// at nothing, and the phone showed them too.
+    ///
+    /// Read off the deletion ledger rather than told what a pass removed,
+    /// which is what makes it work in the three cases a report cannot reach.
+    /// A writing's row and its deletion record commit in one transaction and
+    /// its decks cannot be in it, so a crash between the two would lose the
+    /// list for good. A deck that arrives *after* its writing was deleted —
+    /// from another Mac, or a later pull — was never in any such list to
+    /// begin with. And a deletion made on the phone reaches this library as a
+    /// ledger entry and nothing else, since the phone never publishes decks.
+    /// Against the ledger all three are the same case, and running it twice
+    /// changes nothing the first run did not.
+    ///
+    /// A writing still held is not deleted whatever the ledger says, and a
+    /// ledger with no record of a writing deletes none of its decks — so a
+    /// library that is empty, or half way through its first sync, removes
+    /// nothing. The deed itself goes through `applyDeletions`, so a deck saved
+    /// since its writing went is kept by the same rule that keeps one saved
+    /// since it was deleted elsewhere.
+    @discardableResult
+    public static func removeDecksOfDeletedWritings(
+        heldWritingIDs: Set<String>,
+        deletedWritings: LampPersonalDeletionLedger,
+        in libraryRoot: URL,
+        fileManager: FileManager = .default
+    ) throws -> [String] {
+        // Folded, because a writing's identifier is not spelled the same on
+        // every platform and both the ledger and a deck's source are matched
+        // exactly everywhere else.
+        var deletedAt: [String: Int64] = [:]
+        for (key, entry) in deletedWritings.entries(of: .devotional) {
+            guard let when = entry.deletedAt else { continue }
+            let folded = key.lowercased()
+            deletedAt[folded] = max(deletedAt[folded] ?? Int64.min, when)
+        }
+        guard !deletedAt.isEmpty else { return [] }
+        let held = Set(heldWritingIDs.map { $0.lowercased() })
+
+        var incoming = LampPresentationDeckDeletionLedger()
+        for file in try deckFiles(in: decksDirectory(in: libraryRoot), fileManager: fileManager) {
+            guard let data = try? Data(contentsOf: file.url),
+                  let deck = try? LampPresentationDeckStore.decode(data),
+                  deck.source?.kind == .devotional,
+                  let writing = deck.source?.id.lowercased(),
+                  !held.contains(writing),
+                  let when = deletedAt[writing]
+            else { continue }
+            // The writing's own time, not now: a deck edited since is newer
+            // than its writing's deletion and survives, which is the rule
+            // already in force for a deck deleted on another Mac. The ledger
+            // counts in milliseconds and this one in seconds.
+            incoming.record(deck.id, at: Date(timeIntervalSince1970: Double(when) / 1000))
+        }
+        guard !incoming.isEmpty else { return [] }
+
+        let removed = try applyDeletions(incoming, in: libraryRoot, fileManager: fileManager)
+        if !removed.isEmpty {
+            try? pruneUnreferencedAssets(in: libraryRoot, fileManager: fileManager)
+        }
+        return removed
+    }
+
     public static func exportDecks(
         from libraryRoot: URL,
         to backupRoot: URL,

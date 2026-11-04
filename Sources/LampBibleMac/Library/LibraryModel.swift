@@ -931,6 +931,15 @@ final class LibraryModel: ObservableObject {
 
     func deletePersonalDevotional(id: String) async throws {
         try await library.deletePersonalDevotional(id: id)
+        // Its decks go with it, now rather than at the next sync pass: the
+        // pass would catch them anyway, from the same ledger by the same
+        // sweep, but until it ran they would sit in Slide Studio pointing at
+        // a writing that is gone.
+        try? LampPresentationDeckSync.removeDecksOfDeletedWritings(
+            heldWritingIDs: Set(try await library.personalDevotionals().map(\.id)),
+            deletedWritings: try await library.personalDeletionLedger(),
+            in: library.rootURL
+        )
         devotionals = try await library.devotionals()
     }
 

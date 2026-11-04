@@ -327,10 +327,7 @@ struct DevotionalsView: View {
             }
             Button("Cancel", role: .cancel) { devotionalPendingDeletion = nil }
         } message: {
-            // Not "from this Mac": deleting records a tombstone, which is how
-            // the deletion reaches the other devices rather than the writing
-            // coming back on the next sync.
-            Text("This deletes the writing from your library — from this Mac, and from your other devices the next time they sync. Installed module entries are never modified.")
+            Text(deletionWarning)
         }
         .onAppear {
             takeRequestedDevotional()
@@ -967,6 +964,30 @@ struct DevotionalsView: View {
                 model.errorMessage = error.localizedDescription
             }
         }
+    }
+
+    /// What deleting will take, including the decks that go with the writing.
+    ///
+    /// Named, with their slide counts, because a deck can be a great deal of
+    /// work — one of this library's is 74 slides — and a writing's decks now
+    /// go when it does. A confirmation that does not say so is an ambush.
+    private var deletionWarning: String {
+        // Not "from this Mac": deleting records a tombstone, which is how
+        // the deletion reaches the other devices rather than the writing
+        // coming back on the next sync.
+        let writing = "This deletes the writing from your library — from this Mac, and from your "
+            + "other devices the next time they sync. Installed module entries are never modified."
+        guard let pending = devotionalPendingDeletion,
+              let decks = presentationDecksByDevotionalID[pending.id],
+              !decks.isEmpty
+        else { return writing }
+        let named = decks
+            .map { "\u{201C}\($0.title)\u{201D} (\($0.slides.count) slides)" }
+            .joined(separator: ", ")
+        let lead = decks.count == 1
+            ? "Its presentation deck goes with it"
+            : "Its \(decks.count) presentation decks go with it"
+        return "\(writing)\n\n\(lead): \(named)."
     }
 
     private func delete(_ devotional: LampDevotional) {
