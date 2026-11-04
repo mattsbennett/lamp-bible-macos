@@ -386,6 +386,13 @@ struct DevotionalEditorView: View {
     @State private var date = ""
     @State private var tags = ""
     @State private var category = DevotionalEditorView.firstKindOffered
+
+    /// The kind as the library holds it, which is not always how it is shown:
+    /// a `sermon` reads as Exhortation and a `Prayer` as a prayer. Kept so an
+    /// autosave of someone else's spelling leaves it alone — the writing is
+    /// saved every 1.5 seconds, and none of those saves was a decision to
+    /// rename its kind.
+    @State private var originalCategory: String?
     @State private var seriesName = ""
     @State private var seriesOrder = 0
     @State private var summary = ""
@@ -2269,8 +2276,10 @@ struct DevotionalEditorView: View {
         author = devotional.author ?? ""
         date = devotional.date ?? Self.today
         tags = devotional.tags.joined(separator: ", ")
-        category = LampWritingCategory.canonical(devotional.category)
-            ?? DevotionalEditorView.firstKindOffered
+        originalCategory = devotional.category
+        // Blank, not the first kind offered: a writing with no kind keeps
+        // none, rather than being given one by having been opened.
+        category = LampWritingCategory.canonical(devotional.category) ?? ""
         seriesName = devotional.seriesName ?? ""
         seriesOrder = devotional.seriesOrder ?? 0
         summary = devotional.summary ?? ""
@@ -2346,7 +2355,7 @@ struct DevotionalEditorView: View {
                 tags: tags.split(separator: ",").map {
                     String($0).trimmingCharacters(in: .whitespacesAndNewlines)
                 }.filter { !$0.isEmpty },
-                category: LampWritingCategory.canonical(category),
+                category: categoryToSave,
                 seriesName: seriesName,
                 seriesOrder: seriesName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     ? nil : seriesOrder,
@@ -2567,6 +2576,16 @@ struct DevotionalEditorView: View {
     /// one, so this cannot be a crash either.
     private static var firstKindOffered: String {
         LampWritingCategory.suggestions.first ?? ""
+    }
+
+    /// The kind to store. Unchanged means unchanged: where what is shown names
+    /// the same kind the library already holds, the library's own spelling
+    /// stays, so a shared `sermon` is not quietly renamed by an autosave and a
+    /// writer's `lament` is not recapitalised for having been displayed.
+    private var categoryToSave: String? {
+        LampWritingCategory.foldedKey(category) == LampWritingCategory.foldedKey(originalCategory)
+            ? originalCategory
+            : LampWritingCategory.canonical(category)
     }
 
     private static let saveIcon: NSImage = {

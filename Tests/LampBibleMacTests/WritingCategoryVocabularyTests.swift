@@ -81,6 +81,10 @@ struct WritingCategoryVocabularyTests {
             editor.contains("LampWritingCategory.canonical(category)"),
             "the kind reaches the library untidied, so one kind can become two"
         )
+        #expect(
+            editor.contains("== LampWritingCategory.foldedKey(originalCategory)"),
+            "an autosave rewrites a kind nobody renamed; the writing saves every 1.5s"
+        )
     }
 
     /// The filter offers the kinds the library holds, so a kind a writer
