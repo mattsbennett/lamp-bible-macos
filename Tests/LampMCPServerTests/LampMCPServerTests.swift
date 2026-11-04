@@ -16,11 +16,11 @@ struct LampMCPServerTests {
     /// `write_writing_draft` existed.
     @Test func onlyTheWriteToolsSayTheyWrite() {
         let all = LampMCPToolCatalog.tools(workspace: true)
-        #expect(LampMCPToolCatalog.tools.count == 17)
+        #expect(LampMCPToolCatalog.tools.count == 18)
         #expect(LampMCPToolCatalog.deckTools.count == 3)
         #expect(LampMCPToolCatalog.writingTools.count == 2)
         #expect(LampMCPToolCatalog.writeTools.count == 2)
-        #expect(all.count == 25)
+        #expect(all.count == 26)
         #expect(Set(all.map(\.name)).count == all.count)
 
         let writing = Set(LampMCPToolCatalog.writeTools.map(\.name))

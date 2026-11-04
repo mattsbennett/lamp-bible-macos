@@ -84,6 +84,12 @@ public actor LampMCPToolHandler {
         case "list_modules":
             return try result(try await library.listModules(kinds: try kinds(arguments["kinds"])))
 
+        case "read_skill":
+            return try result(try readSkill(
+                named: arguments["name"]?.stringValue,
+                file: arguments["file"]?.stringValue
+            ))
+
         case "search_library":
             return try result(try await library.searchLibrary(
                 query: try requiredString("query", in: arguments),
@@ -447,6 +453,78 @@ public actor LampMCPToolHandler {
             not appear in list_reading_plans until then.
             """
         ))
+    }
+
+    /// What a session's skills say, served as a tool because the surfaces that
+    /// need them most cannot open a file.
+    ///
+    /// A reader chat runs Claude with `--tools ""`, which takes away Read and
+    /// Skill, and OpenCode's reader agent denies everything but `lamp_*`. The
+    /// skills are installed in the workspace all the same, and the chat is
+    /// told to read them — so it was being told to do something it had no way
+    /// to do, and said so to the reader. The text comes from the workspace's
+    /// own copy rather than a second one kept here, so a session is told
+    /// exactly what was installed for it, and a reader chat is offered only
+    /// the skills a read-only session can carry out because those are the only
+    /// ones put there.
+    struct SkillReading: Codable, Sendable {
+        /// Listed on every call, including a call that names a skill: a
+        /// mistyped name is then answered with what does exist, rather than
+        /// costing another round trip to find out.
+        let available: [String]
+        let skill: String?
+        let file: String?
+        let text: String?
+    }
+
+    private func readSkill(named name: String?, file: String?) throws -> SkillReading {
+        guard policy.isEnabled else { throw LampMCPToolError.accessDisabled }
+        guard let workspaceURL else { throw LampMCPToolError.noWorkspace }
+        let fileManager = FileManager.default
+        // Both providers' directories hold the same installed copy; whichever
+        // is there answers.
+        let roots = [".claude/skills", ".agents/skills"].map {
+            workspaceURL.appendingPathComponent($0, isDirectory: true)
+        }
+        let available = roots
+            .flatMap { (try? fileManager.contentsOfDirectory(atPath: $0.path)) ?? [] }
+            .filter { !$0.hasPrefix(".") }
+        let names = Set(available).sorted()
+        guard let name else {
+            return SkillReading(available: names, skill: nil, file: nil, text: nil)
+        }
+        // Matched against what is installed rather than sanitised: a name that
+        // is not one of these never becomes a path at all.
+        guard let skill = names.first(where: { $0 == name }) else {
+            throw LampMCPToolError.invalidArgument(
+                "name", "no skill called \(name) is installed for this session"
+            )
+        }
+        guard let root = roots.first(where: {
+            fileManager.fileExists(atPath: $0.appendingPathComponent(skill).path)
+        }) else {
+            throw LampMCPToolError.invalidArgument("name", "\(skill) could not be read")
+        }
+        let directory = root.appendingPathComponent(skill, isDirectory: true)
+        let relative = file ?? "SKILL.md"
+        guard relative.hasSuffix(".md"), !relative.hasPrefix("/"),
+              !relative.split(separator: "/").contains("..")
+        else {
+            throw LampMCPToolError.invalidArgument(
+                "file", "a skill's file is a Markdown path inside it, such as references/x.md"
+            )
+        }
+        let target = directory.appendingPathComponent(relative).standardizedFileURL
+        // Belt and braces over the checks above: whatever the path turned out
+        // to mean, it has to be inside this skill.
+        guard target.path.hasPrefix(directory.standardizedFileURL.path + "/"),
+              let text = try? String(contentsOf: target, encoding: .utf8)
+        else {
+            throw LampMCPToolError.invalidArgument(
+                "file", "\(skill) has no file \(relative)"
+            )
+        }
+        return SkillReading(available: names, skill: skill, file: relative, text: text)
     }
 
     /// Reading or changing a writing is reading or changing personal content,

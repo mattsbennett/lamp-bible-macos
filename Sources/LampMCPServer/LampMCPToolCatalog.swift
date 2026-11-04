@@ -11,6 +11,24 @@ public enum LampMCPToolCatalog {
             ]
         ),
         tool(
+            "read_skill",
+            """
+            Read a skill installed for this session. Call it with no arguments \
+            to list them, with `name` for that skill's SKILL.md, and with \
+            `name` and `file` for a Markdown file the skill refers to, such as \
+            `references/worked-example.md`. These hold the procedure to follow \
+            for the kinds of question they cover, and are worth reading before \
+            answering one. A session with no skills installed lists none.
+            """,
+            properties: [
+                "name": string("The skill to read. Omit to list what is installed."),
+                "file": string(
+                    "A Markdown file inside that skill's folder, written as the "
+                        + "skill refers to it. Omit for the skill's own SKILL.md."
+                ),
+            ]
+        ),
+        tool(
             "search_library",
             "Search across permitted translations, dictionaries, commentaries, books, devotionals, plans, quizzes, notes, and highlights.",
             properties: [
