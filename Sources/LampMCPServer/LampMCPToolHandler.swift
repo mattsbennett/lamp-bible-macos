@@ -514,10 +514,15 @@ public actor LampMCPToolHandler {
                 "file", "a skill's file is a Markdown path inside it, such as references/x.md"
             )
         }
-        let target = directory.appendingPathComponent(relative).standardizedFileURL
-        // Belt and braces over the checks above: whatever the path turned out
-        // to mean, it has to be inside this skill.
-        guard target.path.hasPrefix(directory.standardizedFileURL.path + "/"),
+        // Symlinks resolved, not just `..` folded away: a linked file, or a
+        // linked `references` folder, is a way out of the skill that
+        // `standardizedFileURL` alone would follow. Nothing can plant one in a
+        // reader workspace today — the app copies the skills in and the agent
+        // cannot write — so this is the check meaning what it says rather than
+        // a hole being closed.
+        let target = directory.appendingPathComponent(relative).resolvingSymlinksInPath()
+        let folder = directory.resolvingSymlinksInPath()
+        guard target.path.hasPrefix(folder.path + "/"),
               let text = try? String(contentsOf: target, encoding: .utf8)
         else {
             throw LampMCPToolError.invalidArgument(

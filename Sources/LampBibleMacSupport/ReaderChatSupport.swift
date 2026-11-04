@@ -15,11 +15,11 @@ public struct ReaderChatContext: Equatable, Sendable {
 
     /// Names the skills rather than telling the agent to go and find them.
     ///
-    /// Partly to save a round trip, and partly because a `tools/call` whose
-    /// `arguments` is an empty object is dropped by the MCP layer without a
-    /// reply — `arguments` left out entirely is answered, `{}` is not — and a
-    /// call with nothing to pass is exactly the shape a client sends as `{}`.
-    /// Naming them means the first call the agent makes carries a name.
+    /// It saves the chat a round trip before it can start, and it keeps the
+    /// text honest: the names come from what `ReaderChatWorkspaceStore.prepare`
+    /// installs, so a chat cannot be told about a skill that is not there, or
+    /// left unaware of one that is. That is the failure this whole change is
+    /// about, in a smaller form.
     public static var instructions: String { instructionsNaming(skills: installedSkills) }
 
     /// What `ReaderChatWorkspaceStore.prepare` installs, so the text and the

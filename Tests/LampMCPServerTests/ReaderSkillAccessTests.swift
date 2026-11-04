@@ -44,6 +44,16 @@ struct ReaderSkillAccessTests {
         try "secret".write(
             to: skill.appendingPathComponent("SKILL.txt"), atomically: true, encoding: .utf8
         )
+        // A link out of the skill, pointing at a file that really is there:
+        // without resolving links the confinement check follows it.
+        try FileManager.default.createSymbolicLink(
+            at: skill.appendingPathComponent("escape.md"),
+            withDestinationURL: root.appendingPathComponent("private.md")
+        )
+        try FileManager.default.createSymbolicLink(
+            at: skill.appendingPathComponent("linked", isDirectory: true),
+            withDestinationURL: root
+        )
         return root
     }
 
@@ -99,6 +109,10 @@ struct ReaderSkillAccessTests {
             // walk-out check, and are here to pin those rules.
             secret,                                 // absolute, and Markdown
             "SKILL.txt",                            // inside, readable, not Markdown
+            // A link, and a link to a folder: no `..`, inside the skill by
+            // name, outside it in fact.
+            "escape.md",
+            "linked/private.md",
         ]
         for file in paths {
             await #expect(throws: (any Error).self, "\(file) was served") {
