@@ -78,12 +78,12 @@ struct WritingCategoryVocabularyTests {
             "the category is a pop-up again, so a kind Lamp does not suggest cannot be written"
         )
         #expect(
-            editor.contains("LampWritingCategory.canonical(category)"),
-            "the kind reaches the library untidied, so one kind can become two"
+            editor.contains("LampWritingCategory.kindToStore(shown: category, held: originalCategory)"),
+            "an autosave rewrites a kind nobody renamed; the writing saves every 1.5s"
         )
         #expect(
-            editor.contains("== LampWritingCategory.foldedKey(originalCategory)"),
-            "an autosave rewrites a kind nobody renamed; the writing saves every 1.5s"
+            editor.contains("LampWritingCategory.displayName(devotional.category)"),
+            "the field shows the stored spelling, so it reads exhortation beside a menu saying Exhortation"
         )
     }
 

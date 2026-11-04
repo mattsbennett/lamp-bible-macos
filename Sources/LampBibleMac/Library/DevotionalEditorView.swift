@@ -2279,7 +2279,7 @@ struct DevotionalEditorView: View {
         originalCategory = devotional.category
         // Blank, not the first kind offered: a writing with no kind keeps
         // none, rather than being given one by having been opened.
-        category = LampWritingCategory.canonical(devotional.category) ?? ""
+        category = LampWritingCategory.displayName(devotional.category) ?? ""
         seriesName = devotional.seriesName ?? ""
         seriesOrder = devotional.seriesOrder ?? 0
         summary = devotional.summary ?? ""
@@ -2575,17 +2575,13 @@ struct DevotionalEditorView: View {
     /// core's, and a writing of no kind at all is a fair reading of an empty
     /// one, so this cannot be a crash either.
     private static var firstKindOffered: String {
-        LampWritingCategory.suggestions.first ?? ""
+        LampWritingCategory.suggestions.first.flatMap(LampWritingCategory.displayName) ?? ""
     }
 
-    /// The kind to store. Unchanged means unchanged: where what is shown names
-    /// the same kind the library already holds, the library's own spelling
-    /// stays, so a shared `sermon` is not quietly renamed by an autosave and a
-    /// writer's `lament` is not recapitalised for having been displayed.
+    /// The kind to store. The rule is core's, because the phone needs the same
+    /// one and neither app can test it from inside a view.
     private var categoryToSave: String? {
-        LampWritingCategory.foldedKey(category) == LampWritingCategory.foldedKey(originalCategory)
-            ? originalCategory
-            : LampWritingCategory.canonical(category)
+        LampWritingCategory.kindToStore(shown: category, held: originalCategory)
     }
 
     private static let saveIcon: NSImage = {

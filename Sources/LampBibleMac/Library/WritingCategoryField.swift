@@ -16,6 +16,11 @@ import SwiftUI
 /// second time they reach for it.
 struct WritingCategoryField: View {
     let title: String
+
+    /// The kind as shown, which is what the writer sees and edits. Not what is
+    /// stored: the editor canonicalises on save, and leaves a kind alone when
+    /// what is shown still names it, so a writer's own capitals survive being
+    /// displayed.
     @Binding var storedValue: String
 
     /// The category of every writing in the library, so the menu can offer the
@@ -34,7 +39,10 @@ struct WritingCategoryField: View {
                 Menu {
                     ForEach(offered, id: \.self) { kind in
                         Button(LampWritingCategory.displayName(kind) ?? kind) {
-                            storedValue = kind
+                            // What the menu says is what the field gets:
+                            // picking Exhortation should not write exhortation
+                            // into the box beside it.
+                            storedValue = LampWritingCategory.displayName(kind) ?? kind
                         }
                     }
                 } label: {
