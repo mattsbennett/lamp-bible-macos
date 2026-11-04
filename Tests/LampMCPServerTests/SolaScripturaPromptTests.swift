@@ -79,6 +79,32 @@ struct SolaScripturaPromptTests {
         )
     }
 
+    /// The two weightings the audit gained on 2026-11-04: how widely a claim is
+    /// witnessed, and what a reading is worth when it cannot be stated without a
+    /// word scripture does not use. Both say what evidence weighs rather than
+    /// what a verdict is called, so a surface carrying one and not the other
+    /// answers the same question differently. The clauses that stop each from
+    /// hardening into a prohibition are pinned alongside them, because those are
+    /// the lines a condensing pass drops first.
+    @Test(arguments: [
+        "breadth of witness",
+        "several writers, books or testaments",
+        "scripture is not a vote",
+        "override a writer's own usage",
+        "consensus by another name",
+        "supporting a word rather than a claim",
+        "separate them and ask for a text for each",
+        "rather than matching it against a list",
+        "a word scripture does not use is not an error",
+    ])
+    func thetwoCopiesWeighEvidenceAlike(rule: String) throws {
+        #expect(
+            LampMCPPromptCatalog.solaScripturaInstructions.lowercased().contains(rule),
+            "the prompt dropped: \(rule)"
+        )
+        #expect(try skillText.lowercased().contains(rule), "the skill dropped: \(rule)")
+    }
+
     /// Only the modules that ship may be named as present, since the prompt is
     /// read by a client whose user may have installed nothing of their own.
     @Test func thepromptNamesOnlyBundledModules() {

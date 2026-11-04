@@ -85,3 +85,48 @@ with force.
 
 "Leave it" means leave it. Writing is allowed decoration, and an audit that flags a
 figure of speech loses the authority it needs for the finding that matters.
+
+## Breadth of witness
+
+How widely a claim is witnessed is not a third axis — it does not change which
+verdict a claim takes — but it is part of the evidence, and an entry that gives the
+verdict and says nothing about the breadth has left out the fact the writer could
+least see for themselves.
+
+**Evidence from several writers, books or testaments weighs more than the same
+evidence from one.** This bites where support is cumulative: the claim is assembled
+from a pattern of texts rather than carried by a single statement. A pattern drawn
+from one writer is the narrower evidence, because a recurring turn of phrase may be
+that writer's way of saying something else, and the same pattern recurring across
+writers who were not writing together is harder to account for that way. A reading
+reached entirely inside one writer's vocabulary is a reading of that writer, and
+saying so is the finding.
+
+So when you find the texts a claim needs, note whose they are and say it. *Every
+text offered here is from John* is a fact about the evidence, not about the
+conclusion, and the remedy is the usual pair: cite a text from another writer that
+carries it, or mark the claim as drawn from this one.
+
+Where the text permits two readings and one is attested across writers while the
+other holds together inside one writer's idiom, report that difference. It promotes
+neither to entailed and settles nothing — the text still permits both — but it is
+the shape of the evidence, which is what was asked for.
+
+Four things this does not license:
+
+- **A claim is not demoted for being stated once.** Scripture is not a vote, and one
+  writer asserting a thing plainly establishes it. Breadth bears on claims assembled
+  out of texts, not on claims a text makes.
+- **It does not override a writer's own usage.** What a word or an image means *in
+  this writer* is best answered from that writer, and reaching for other writers to
+  settle it is how a sense gets imported. Narrow is right for *what this writer
+  meant*; breadth counts for *what scripture establishes*.
+- **Silence elsewhere is not a counter-witness.** That one writer treats a matter
+  and the others do not is not evidence against the claim — see pattern 8 in
+  `failure-patterns.md` — it is the reason to say how wide the support is, then stop.
+- **It is not consensus by another name.** This counts witnesses in the text, never
+  agreement among readers. Pattern 10 there is what it decays into.
+
+One caution about testaments. Support spanning both is wider than support inside
+one, but a New Testament writer's use of an Old Testament text is one witness to
+that use, not two: the breadth is in the writers, not in the citation.

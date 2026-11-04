@@ -85,6 +85,39 @@ a writer may use them. The finding is a shorthand carrying a conclusion while pr
 as the language of scripture — and the remedy is usually one sentence unpacking it from
 the texts.
 
+## Weighing a reading that needs the term
+
+The tests above are aimed at a writing in front of you. The same rewrite settles
+something else: what a *reading* is worth when it cannot be stated without a word
+scripture does not use.
+
+Put the reading, not the sentence, through the rewrite. If it survives in the
+vocabulary of the passages cited for it, the term was shorthand and nothing follows.
+If the claim disappears the moment the term does, the term is carrying the reading,
+and the texts offered for it are supporting a word rather than a claim. **That is
+the weaker-attested reading**, and where scripture permits it and permits another
+that can be said in scripture's own words, say which is which.
+
+What this asks for is unpacking, not dismissal. A term that will not reduce usually
+bundles several claims: separate them and ask for a text for each. Some will have
+one, and that is worth saying. The finding is the ones that do not, and that the
+bundle was carrying them.
+
+Two things to keep straight, because this test is easy to run badly:
+
+- **Look the word up, rather than matching it against a list.** A term may be absent
+  from every translation the reader has, or present in one translation's English and
+  absent from the rest, or present in all of them in a different sense from the one
+  the claim needs — three different findings with three different remedies.
+  `search_library` over the reader's translations tells you which. Your sense of
+  which words sound extrabiblical does not, and two terms that feel equally
+  technical routinely come back one in the text and one nowhere in it.
+- **A word scripture does not use is not an error.** It is a summary, and a summary
+  has to be defended from texts rather than used as one. The verdict on a reading
+  that needs one is *imported*, with the term named — never *wrong*. This is not a
+  gate on which words a writer may use; that gate belongs to the community whose
+  wording rule it is, and `SKILL.md` keeps the two apart.
+
 ## What is not an import
 
 Scripture's own vocabulary, in scripture's own sense, whatever has been built on it

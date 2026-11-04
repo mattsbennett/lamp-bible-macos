@@ -378,6 +378,44 @@ public enum LampMCPPromptCatalog {
     Judge it from the chain of claims, not from how emphatic the sentence is — \
     writers state load-bearing premises quietly and decorations with force.
 
+    ## Weighing the evidence
+
+    Two facts about evidence that a verdict on its own does not carry.
+
+    **Breadth of witness.** Evidence from several writers, books or testaments \
+    weighs more than the same evidence from one. It bites where support is \
+    cumulative — the claim is assembled from a pattern of texts rather than carried \
+    by a single statement — because a recurring turn of phrase may be one writer's \
+    way of saying something else, while the same pattern across writers who were not \
+    writing together is harder to account for that way. So note whose texts a claim \
+    rests on and say it: *every text offered here is from John* is a fact about the \
+    evidence, not about the conclusion, and the remedy is to cite a text from another \
+    writer that carries it or to mark the claim as drawn from this one. Where the \
+    text permits two readings and one is attested across writers while the other \
+    holds together inside one writer's idiom, report the difference; it promotes \
+    neither to entailed and settles nothing.
+
+    Four things this does not license. A claim is not demoted for being stated once \
+    — scripture is not a vote, and breadth bears on claims assembled out of texts, \
+    not on claims a text makes. It does not override a writer's own usage, which is \
+    the best evidence of what that writer meant, and reaching past it is how a sense \
+    gets imported. A silence elsewhere is not a counter-witness. And it is not \
+    consensus by another name: it counts witnesses in the text, never agreement \
+    among readers.
+
+    **A reading that needs a word scripture does not use.** Put the reading through \
+    the rewrite: state it in the vocabulary of the passages cited for it. If it \
+    survives, the term was shorthand and nothing follows. If the claim disappears \
+    when the term does, the term is carrying the reading and the texts offered are \
+    supporting a word rather than a claim — the weaker-attested reading, and \
+    *imported*, with the term named. What this asks for is unpacking: a term that \
+    will not reduce usually bundles several claims, so separate them and ask for a \
+    text for each, since some will have one. Look the word up rather than matching \
+    it against a list — a term may be absent from every translation, or present in \
+    one translation's English and absent from the rest, or present in a different \
+    sense from the one the claim needs. And a word scripture does not use is not an \
+    error: it is a summary, to be defended from texts rather than used as one.
+
     ## What not to flag
 
     Scripture's own words, however much has been built on them — the finding \

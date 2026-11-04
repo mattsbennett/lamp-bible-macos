@@ -149,14 +149,18 @@ as a suggestion*.
    claim is load-bearing and the reader has that module installed.
 4. **For each uncited load-bearing claim, find the text it would need.** Cross-
    reference the passage under discussion, and search for the phrase. Look up what
-   you find. If nothing carries it, that is the finding.
-5. **Adjudicate** each claim as verdict × load, per [references/verdicts.md](references/verdicts.md).
-   The catalog of what goes wrong is [references/failure-patterns.md](references/failure-patterns.md).
+   you find. If nothing carries it, that is the finding. Note whose texts they are:
+   support sitting entirely inside one writer is narrower evidence than the same
+   support drawn across writers.
+5. **Adjudicate** each claim as verdict × load, per [references/verdicts.md](references/verdicts.md),
+   whose closing section says what the breadth of a claim's witness adds to an entry
+   and what it does not license. The catalog of what goes wrong is [references/failure-patterns.md](references/failure-patterns.md).
 6. **Try to defeat each finding before reporting it.** Is there another text that
    does carry the claim — did you check it? Did the writer already mark it as an
    inference, so there is nothing to flag? Is the word you called inherited one
-   scripture itself uses? A finding that does not survive this pass does not go in
-   the report. Findings dropped here are worth one line at the end.
+   scripture itself uses? Does the support really sit inside one writer, or did you
+   stop cross-referencing too early? A finding that does not survive this pass does
+   not go in the report. Findings dropped here are worth one line at the end.
 
    Run this step evenly, because it is where the audit most easily goes soft. A
    claim the writing takes for granted feels defended when it is only familiar, and
@@ -178,6 +182,14 @@ permits the reading and permits another, say that — it is a real answer, and o
 most useful one, because it tells the reader the question is not settled by the text.
 Where the claim is established, say so plainly and point at what establishes it: a
 reader who only ever hears what fails will not trust the answer when something does.
+
+Two things to say where the answer is that the text permits more than one reading.
+Say whose texts each reading rests on: a reading held together inside one writer's
+vocabulary and a reading attested across writers are not equally attested, and the
+reader cannot see that from a list of references. And say when a reading cannot be
+stated without a word scripture does not use, which is the same fact about the
+evidence from the other side. Neither settles the question, and both are part of the
+answer.
 
 Keep the evidence rule. An adjudication with no text quoted is an opinion, whatever
 its verdict.
@@ -204,6 +216,10 @@ Each entry carries four things and stops:
 4. The smallest remedy that makes it honest — one of: **cite the text that does
    carry it**, **mark it as inference**, or **drop the load** (keep the sentence,
    stop the argument resting on it).
+
+Where every text a claim rests on comes from one writer, that belongs in the gap
+sentence — name whose they are. Where the claim cannot be stated without a word
+scripture does not use, name the word there too.
 
 Then the audit's frame:
 
