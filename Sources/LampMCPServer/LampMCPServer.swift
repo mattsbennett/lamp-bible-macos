@@ -95,6 +95,14 @@ public enum LampMCPServerFactory {
             library: library,
             libraryRootURL: libraryRootURL,
             applicationSupportURL: applicationSupportURL,
+            // Forwarded rather than left to the default. It makes no
+            // difference today — the helper derives this from `policyURL`,
+            // which the handler reloads before every call — but a parameter
+            // taken and dropped is a lie that costs nothing until the day
+            // someone computes a stricter one here and it is ignored in
+            // silence. This is what decides whether an agent may read the
+            // library at all.
+            policy: policy,
             policyURL: policyURL,
             workspaceURL: workspaceURL,
             skillsURL: skillsURL
