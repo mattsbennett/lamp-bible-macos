@@ -209,6 +209,33 @@ struct PassagePickerKeysTests {
         #expect(Keys.chapter(from: 4, by: 1, of: 0) == 1)
     }
 
+    // MARK: - Arrows in a chapter's verses
+
+    @Test func theVerseGridMovesLikeTheChapterGrid() {
+        let verses = Array(1...25)
+        #expect(Keys.verse(from: 8, by: Keys.chapterColumns, in: verses) == 13)
+        #expect(Keys.verse(from: 8, by: -1, in: verses) == 7)
+        #expect(Keys.verse(from: 24, by: Keys.chapterColumns, in: verses) == 25)
+        #expect(Keys.verse(from: 2, by: -Keys.chapterColumns, in: verses) == 1)
+    }
+
+    /// Matthew 17 in a translation that leaves out verse 21: the grid has
+    /// no cell for it, so the arrows step over the gap rather than into it.
+    @Test func aVerseTheTranslationLeavesOutIsSteppedOver() {
+        let verses = Array(1...20) + Array(22...27)
+        #expect(Keys.verse(from: 20, by: 1, in: verses) == 22)
+        #expect(Keys.verse(from: 22, by: -1, in: verses) == 20)
+        // Verse 16 is the 16th cell, and a row down is the 21st: verse 22.
+        #expect(Keys.verse(from: 16, by: Keys.chapterColumns, in: verses) == 22)
+    }
+
+    /// The 1 held while the verses load may not be among them; the first
+    /// press lands on the first verse rather than nowhere.
+    @Test func aVerseNotInTheGridMeansTheFirst() {
+        #expect(Keys.verse(from: 1, by: 1, in: [2, 3, 4]) == 2)
+        #expect(Keys.verse(from: 7, by: 1, in: []) == 7)
+    }
+
     // MARK: - Arrows in a list
 
     @Test func arrowsStepThroughTheRowsAndStopAtTheEnds() {

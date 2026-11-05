@@ -2844,6 +2844,55 @@ private struct PassagePickerOffer {
     let action: () -> Void
 }
 
+/// Hears a force click on a chapter in the passage picker, which SwiftUI has
+/// no gesture for. The deeper press arrives as pressure events rather than as
+/// a click, so they are watched on their way through the app, and the grid's
+/// hover says which chapter the pointer is on.
+@MainActor
+private final class PassagePickerForceClick: ObservableObject {
+    /// The chapter force clicked, each time one is.
+    let chapters = PassthroughSubject<Int, Never>()
+    private var hoveredChapter: Int?
+    private var stage = 0
+    private var eventMonitor: Any?
+
+    init() {
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .pressure) { [weak self] event in
+            self?.observe(event)
+            return event
+        }
+    }
+
+    deinit {
+        if let eventMonitor {
+            NSEvent.removeMonitor(eventMonitor)
+        }
+    }
+
+    func hover(_ chapter: Int, isInside: Bool) {
+        if isInside {
+            hoveredChapter = chapter
+        } else if hoveredChapter == chapter {
+            hoveredChapter = nil
+        }
+    }
+
+    /// For when the grid goes, since a cell that leaves under a still
+    /// pointer is not always told the pointer has left it.
+    func clearHover() {
+        hoveredChapter = nil
+    }
+
+    private func observe(_ event: NSEvent) {
+        // Pressure events keep arriving while the press is held, so the
+        // force click is the step into the second stage, not every event
+        // that reports it.
+        defer { stage = event.stage }
+        guard event.stage == 2, stage < 2, let hoveredChapter else { return }
+        chapters.send(hoveredChapter)
+    }
+}
+
 /// The picker behind the reader's passage button, and behind a new tab's plus.
 ///
 /// What the field takes differs between the two. From the reader it also takes
@@ -2855,6 +2904,10 @@ private struct PassagePickerOffer {
 /// the field, the offer, the translation and the two columns, the arrows move
 /// within whichever has focus, and Return takes it. See
 /// `LampPassagePickerKeys` for why the ring is kept rather than left to macOS.
+///
+/// Holding a chapter, force clicking it, or Space while the grid has the
+/// keyboard shows that chapter's verses in the grid's place, a level down,
+/// with a way back to the chapters above them; Esc goes back too.
 private struct PassagePickerPopover: View {
     @EnvironmentObject private var model: LibraryModel
     @EnvironmentObject private var workspace: ReaderWorkspace
@@ -2882,6 +2935,17 @@ private struct PassagePickerPopover: View {
     /// already in view — so the two are kept apart.
     @State private var scrollToBook: Int?
     @State private var scrollToChapter: Int?
+    /// The chapter whose verses the grid shows in place of the chapters, or
+    /// nil while it shows the chapters.
+    @State private var verseChapter: Int?
+    /// That chapter's verses, read from the chapter itself so that a verse
+    /// the translation leaves out has no cell. Nil while they load.
+    @State private var verses: [Int]?
+    @State private var versesError: String?
+    /// The verse the arrows reached, which Return opens.
+    @State private var verseNumber = 1
+    @State private var scrollToVerse: Int?
+    @StateObject private var forceClick = PassagePickerForceClick()
     @FocusState private var focus: LampPassagePickerStop?
 
     var body: some View {
@@ -2934,7 +2998,7 @@ private struct PassagePickerPopover: View {
                 HStack(alignment: .top, spacing: 12) {
                     booksList
                     Divider()
-                    chapterGrid
+                    passageColumn
                 }
                 .frame(height: 260)
             }
@@ -2950,6 +3014,7 @@ private struct PassagePickerPopover: View {
             resetSelection()
             focus = .field
         }
+        .onReceive(forceClick.chapters) { openVerses($0) }
         .onKeyPress(keys: [.tab, Self.backTab]) { press in
             let backwards = press.key == Self.backTab || press.modifiers.contains(.shift)
             focus = LampPassagePickerKeys.stepping(from: focus, by: backwards ? -1 : 1, through: ring)
@@ -2959,6 +3024,18 @@ private struct PassagePickerPopover: View {
             arrow(press.key)
         }
         .onKeyPress(.return) { commitFocused() }
+        // Space looks inside the chapter the grid's ring is on, as it looks
+        // inside a file in the Finder; Esc comes back out.
+        .onKeyPress(.space) {
+            guard focus == .chapters, verseChapter == nil, selectedBook != nil else { return .ignored }
+            openVerses(chapterNumber)
+            return .handled
+        }
+        .onKeyPress(.escape) {
+            guard verseChapter != nil else { return .ignored }
+            closeVerses()
+            return .handled
+        }
         // A stop can leave while it has focus: the offer row goes as soon as
         // what was typed stops being an offer, and the columns go while the
         // next translation's books load. Focus would otherwise be left on
@@ -2974,9 +3051,11 @@ private struct PassagePickerPopover: View {
             // existing book and chapter can carry straight across.
             isLoadingBooks = true
             errorMessage = nil
+            verseChapter = nil
         }
         .onChange(of: bookNumber) { oldValue, newValue in
             guard oldValue != newValue else { return }
+            verseChapter = nil
             chapterNumber = translationID == workspace.selectedTranslationID
                     && newValue == workspace.selectedBookNumber
                 ? workspace.selectedChapterNumber
@@ -2994,6 +3073,12 @@ private struct PassagePickerPopover: View {
     /// them rather than guessed.
     private static let booksColumnWidth: Double = 168
     private static let chaptersColumnWidth: Double = 236
+    /// The chapters' grid and the verses' alike, so the arrow keys and the
+    /// layout agree about what "down" is in both.
+    private static let gridColumns = Array(
+        repeating: GridItem(.fixed(38), spacing: 6),
+        count: LampPassagePickerKeys.chapterColumns
+    )
     /// ⇧Tab arrives as this, not as Tab with a shift: a Mac keyboard sends
     /// the back-tab character for it.
     private static let backTab = KeyEquivalent("\u{19}")
@@ -3122,8 +3207,14 @@ private struct PassagePickerPopover: View {
                 }
             }
             // Open on the book being read, rather than at Genesis with the
-            // reader somewhere in Kings.
-            .onAppear { proxy.scrollTo(bookNumber, anchor: .center) }
+            // reader somewhere in Kings. Once the books are in the list, and a
+            // turn after they are laid out: asked for on appearing, the list
+            // was still empty or not yet laid out, the scroll was dropped, and
+            // the column opened at Genesis with John selected out of sight.
+            .task(id: books.map(\.id)) {
+                await Task.yield()
+                proxy.scrollTo(bookNumber, anchor: .center)
+            }
             .onChange(of: scrollToBook) { _, book in
                 guard let book else { return }
                 proxy.scrollTo(book, anchor: .center)
@@ -3131,44 +3222,58 @@ private struct PassagePickerPopover: View {
         }
     }
 
+    /// The chapter grid, or one chapter's verses in its place. The keyboard
+    /// stop is the column rather than either grid, so focus stays put while
+    /// one grid gives way to the other.
+    private var passageColumn: some View {
+        ZStack(alignment: .top) {
+            if let verseChapter, let selectedBook {
+                verseLevel(book: selectedBook, chapter: verseChapter)
+                    .transition(.move(edge: .trailing))
+            } else {
+                chapterGrid
+                    .transition(.move(edge: .leading))
+            }
+        }
+        .frame(width: Self.chaptersColumnWidth)
+        .clipped()
+        .focusable()
+        .focused($focus, equals: .chapters)
+        .focusEffectDisabled()
+    }
+
     private var chapterGrid: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 if let selectedBook {
-                    LazyVGrid(
-                        columns: Array(
-                            repeating: GridItem(.fixed(38), spacing: 6),
-                            count: LampPassagePickerKeys.chapterColumns
-                        ),
-                        spacing: 6
-                    ) {
+                    LazyVGrid(columns: Self.gridColumns, spacing: 6) {
                         ForEach(1...selectedBook.chapterCount, id: \.self) { chapter in
                             Button {
+                                // A hold that showed the verses ends with the
+                                // chapter being let go of, which is not a
+                                // click on it.
+                                guard verseChapter == nil else { return }
                                 commit(book: selectedBook.id, chapter: chapter)
                             } label: {
-                                Text(chapter.formatted())
-                                    .monospacedDigit()
-                                    .frame(width: 38, height: 30)
-                                    .background(
-                                        isCurrent(book: selectedBook.id, chapter: chapter)
-                                            ? AnyShapeStyle(.tint.opacity(0.25))
-                                            : AnyShapeStyle(.quaternary),
-                                        in: RoundedRectangle(cornerRadius: 6)
-                                    )
-                                    .overlay {
-                                        // The focus ring, on the chapter the
-                                        // arrows reached and Return would
-                                        // open. Only while the grid has the
-                                        // keyboard: with a mouse it is
-                                        // whichever is under the pointer.
-                                        if focus == .chapters, chapter == chapterNumber {
-                                            RoundedRectangle(cornerRadius: 6)
-                                                .strokeBorder(Color.accentColor, lineWidth: 2)
-                                        }
-                                    }
-                                    .contentShape(Rectangle())
+                                gridCell(
+                                    chapter,
+                                    isCurrent: isCurrent(book: selectedBook.id, chapter: chapter),
+                                    // On the chapter the arrows reached and
+                                    // Return would open. Only while the grid
+                                    // has the keyboard: with a mouse it is
+                                    // whichever is under the pointer.
+                                    isRinged: focus == .chapters && chapter == chapterNumber
+                                )
                             }
                             .buttonStyle(.plain)
+                            .simultaneousGesture(
+                                LongPressGesture(minimumDuration: 0.5).onEnded { _ in
+                                    openVerses(chapter)
+                                }
+                            )
+                            .onHover { forceClick.hover(chapter, isInside: $0) }
+                            .help("Hold or force click for its verses")
+                            .accessibilityAction(named: "Choose a verse") { openVerses(chapter) }
                             .id(chapter)
                         }
                     }
@@ -3180,11 +3285,7 @@ private struct PassagePickerPopover: View {
                         .frame(maxWidth: .infinity, alignment: .center)
                 }
             }
-            .frame(width: Self.chaptersColumnWidth)
-            .focusable()
-            .focused($focus, equals: .chapters)
-            .focusEffectDisabled()
-            // With a book chosen the ring sits on the chapter itself, below,
+            // With a book chosen the ring sits on the chapter itself, above,
             // which is also what says the arrows move within the grid rather
             // than Tab. Ringing the grid as well read as the whole grid being
             // selected (user, 2026-10-31). Without a book there is nothing
@@ -3194,11 +3295,96 @@ private struct PassagePickerPopover: View {
                     focusRing(.chapters, cornerRadius: 8)
                 }
             }
+            // On the chapter being read, as the books open on its book: at
+            // Psalm 119 the grid would otherwise open on 1 to 40. Again on
+            // coming back from a chapter's verses, which leaves the grid
+            // where that chapter is.
+            .task(id: selectedBook?.id) {
+                await Task.yield()
+                proxy.scrollTo(chapterNumber, anchor: .center)
+            }
             .onChange(of: scrollToChapter) { _, chapter in
                 guard let chapter else { return }
                 proxy.scrollTo(chapter, anchor: .center)
             }
         }
+    }
+
+    /// A chapter's verses, a level below the chapters: the way back sits
+    /// above them, beside the chapter they belong to.
+    private func verseLevel(book: LampTranslationBook, chapter: Int) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Button(action: closeVerses) {
+                    Label("Chapters", systemImage: "chevron.left")
+                }
+                .buttonStyle(.borderless)
+                .help("Back to the chapters (Esc)")
+                Spacer(minLength: 0)
+                Text("\(book.name) \(chapter)")
+                    .font(.callout.weight(.semibold))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 2)
+
+            if let versesError {
+                Label(versesError, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+            } else if let verses, verses.isEmpty {
+                Text("No verses in this chapter")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+            } else if let verses {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVGrid(columns: Self.gridColumns, spacing: 6) {
+                            ForEach(verses, id: \.self) { verse in
+                                Button {
+                                    commit(book: book.id, chapter: chapter, verse: verse)
+                                } label: {
+                                    gridCell(
+                                        verse,
+                                        isCurrent: false,
+                                        isRinged: focus == .chapters && verse == verseNumber
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                                .id(verse)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                    .onChange(of: scrollToVerse) { _, verse in
+                        guard let verse else { return }
+                        proxy.scrollTo(verse, anchor: .center)
+                    }
+                }
+            }
+        }
+        .task(id: chapter) { await loadVerses(book: book.id, chapter: chapter) }
+    }
+
+    /// One cell of either grid.
+    private func gridCell(_ number: Int, isCurrent: Bool, isRinged: Bool) -> some View {
+        Text(number.formatted())
+            .monospacedDigit()
+            .frame(width: 38, height: 30)
+            .background(
+                isCurrent ? AnyShapeStyle(.tint.opacity(0.25)) : AnyShapeStyle(.quaternary),
+                in: RoundedRectangle(cornerRadius: 6)
+            )
+            .overlay {
+                // The focus ring, drawn on the cell rather than around the
+                // grid; see the chapter grid's overlay.
+                if isRinged {
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(Color.accentColor, lineWidth: 2)
+                }
+            }
+            .contentShape(Rectangle())
     }
 
     private func offerRow(_ offer: PassagePickerOffer, stop: LampPassagePickerStop) -> some View {
@@ -3264,6 +3450,12 @@ private struct PassagePickerPopover: View {
             case .leftArrow: offset = -1
             default: offset = 1
             }
+            if verseChapter != nil {
+                guard let verses else { return .ignored }
+                verseNumber = LampPassagePickerKeys.verse(from: verseNumber, by: offset, in: verses)
+                scrollToVerse = verseNumber
+                return .handled
+            }
             chapterNumber = LampPassagePickerKeys.chapter(
                 from: chapterNumber,
                 by: offset,
@@ -3294,6 +3486,12 @@ private struct PassagePickerPopover: View {
         switch focus {
         case .offer:
             offer?.action()
+            return .handled
+        case .chapters where verseChapter != nil:
+            guard let selectedBook, let verseChapter, verses?.contains(verseNumber) == true else {
+                return .ignored
+            }
+            commit(book: selectedBook.id, chapter: verseChapter, verse: verseNumber)
             return .handled
         case .translation, .books, .chapters:
             guard let selectedBook else { return .ignored }
@@ -3329,13 +3527,51 @@ private struct PassagePickerPopover: View {
         ))
     }
 
-    private func commit(book: Int, chapter: Int) {
+    private func commit(book: Int, chapter: Int, verse: Int? = nil) {
         isPresented = false
         open(ReaderLocation(
             translationID: translationID,
             bookNumber: book,
-            chapterNumber: chapter
+            chapterNumber: chapter,
+            verseReference: verse.map { book * 1_000_000 + chapter * 1_000 + $0 }
         ))
+    }
+
+    // MARK: - A chapter's verses
+
+    private func openVerses(_ chapter: Int) {
+        guard verseChapter == nil, selectedBook != nil else { return }
+        forceClick.clearHover()
+        chapterNumber = chapter
+        verses = nil
+        versesError = nil
+        withAnimation(.easeInOut(duration: 0.2)) { verseChapter = chapter }
+    }
+
+    private func closeVerses() {
+        forceClick.clearHover()
+        withAnimation(.easeInOut(duration: 0.2)) { verseChapter = nil }
+    }
+
+    @MainActor
+    private func loadVerses(book: Int, chapter: Int) async {
+        let requestedTranslationID = translationID
+        do {
+            let loaded = try await model.library.chapter(
+                moduleID: requestedTranslationID,
+                bookNumber: book,
+                chapterNumber: chapter
+            )
+            guard translationID == requestedTranslationID, verseChapter == chapter else { return }
+            // A verse 0, a psalm's title in a translation that numbers it
+            // so, is the top of the chapter, which the chapter itself opens.
+            let numbers = Array(Set(loaded.verses.map(\.number).filter { $0 > 0 })).sorted()
+            verses = numbers
+            verseNumber = numbers.first ?? 1
+        } catch {
+            guard translationID == requestedTranslationID, verseChapter == chapter else { return }
+            versesError = error.localizedDescription
+        }
     }
 
     private func resetSelection() {

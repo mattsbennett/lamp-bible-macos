@@ -131,7 +131,7 @@ public enum LampPassagePickerStop: String, CaseIterable, Hashable, Sendable {
     case translation
     /// The books column.
     case books
-    /// The chapter grid.
+    /// The chapter grid, or the verse grid that takes its place.
     case chapters
 }
 
@@ -188,6 +188,20 @@ public enum LampPassagePickerKeys {
     public static func chapter(from chapter: Int, by offset: Int, of count: Int) -> Int {
         guard count > 0 else { return 1 }
         return min(max(chapter + offset, 1), count)
+    }
+
+    /// The verse an arrow key lands on in a chapter's verse grid, `offset`
+    /// as for `chapter(from:by:of:)`.
+    ///
+    /// It steps through the cells the grid has rather than through numbers:
+    /// a translation that leaves out Matthew 17:21 has no cell for it, so
+    /// right from 20 is 22, and down moves a whole row of cells. A verse not
+    /// in the grid, such as the 1 held before the verses arrived, means the
+    /// first.
+    public static func verse(from verse: Int, by offset: Int, in verses: [Int]) -> Int {
+        guard !verses.isEmpty else { return verse }
+        guard let current = verses.firstIndex(of: verse) else { return verses[0] }
+        return verses[chapter(from: current + 1, by: offset, of: verses.count) - 1]
     }
 
     /// The row an arrow key lands on in a list of `count` rows, or nil when
