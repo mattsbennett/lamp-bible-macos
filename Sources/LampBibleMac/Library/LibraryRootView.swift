@@ -3168,8 +3168,13 @@ private struct PassagePickerPopover: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 5)
+                                // The accent, as the grid marks the chapter
+                                // being read. `.selection` drew the gray a
+                                // list shows when it is not focused, which
+                                // barely showed against the popover (user,
+                                // 2026-11-05).
                                 .background(
-                                    book.id == bookNumber ? AnyShapeStyle(.selection)
+                                    book.id == bookNumber ? AnyShapeStyle(.tint.opacity(0.25))
                                         : AnyShapeStyle(.clear),
                                     in: RoundedRectangle(cornerRadius: 5)
                                 )
