@@ -239,11 +239,100 @@ public struct ReaderChatContext: Equatable, Sendable {
 }
 
 public enum ReaderChatWorkspaceStore {
-    public static func workspaceURL(libraryRootURL: URL, windowID: UUID) -> URL {
+    /// A reader chat already on disk, which a window can take up rather than
+    /// starting another.
+    public struct Chat: Equatable, Sendable {
+        public let id: UUID
+        /// When something was last said in this chat, over every provider's
+        /// transcript in it: a chat is one conversation to the reader, whichever
+        /// provider carried it on. Nil when nothing was ever said — a workspace
+        /// prepared for a window that was closed without a word in it.
+        public let lastSpoken: Date?
+
+        public init(id: UUID, lastSpoken: Date?) {
+            self.id = id
+            self.lastSpoken = lastSpoken
+        }
+    }
+
+    /// Where every reader chat's workspace sits.
+    public static func directory(libraryRootURL: URL) -> URL {
         libraryRootURL
             .appendingPathComponent("AgentWorkspaces", isDirectory: true)
             .appendingPathComponent("Reader", isDirectory: true)
-            .appendingPathComponent(windowID.uuidString, isDirectory: true)
+    }
+
+    public static func workspaceURL(libraryRootURL: URL, chatID: UUID) -> URL {
+        directory(libraryRootURL: libraryRootURL)
+            .appendingPathComponent(chatID.uuidString, isDirectory: true)
+    }
+
+    /// The reader chats on disk, the most recently spoken in first.
+    ///
+    /// One directory per chat, named by its identifier; anything else in the
+    /// folder is not a chat and is passed over.
+    public static func chats(libraryRootURL: URL) -> [Chat] {
+        let folder = directory(libraryRootURL: libraryRootURL)
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+        return ordered(names.compactMap { name in
+            guard let id = UUID(uuidString: name) else { return nil }
+            return Chat(
+                id: id,
+                lastSpoken: lastSpoken(
+                    in: workspaceURL(libraryRootURL: libraryRootURL, chatID: id)
+                )
+            )
+        })
+    }
+
+    /// When something was last said in a chat's workspace, or nil if nothing
+    /// ever was. A transcript is written when a message is sent, so a chat
+    /// nobody spoke in has none; one that was cleared has an empty transcript
+    /// dated by the clear, which is still something that happened in it.
+    public static func lastSpoken(in workspace: URL) -> Date? {
+        let folder = AgentChatTranscriptStore.directory(in: workspace)
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+        return names
+            .filter(AgentChatTranscriptStore.isTranscriptFilename)
+            .compactMap { name -> Date? in
+                guard let data = try? Data(contentsOf: folder.appendingPathComponent(name)),
+                      let transcript = try? AgentChatTranscriptStore.decode(data),
+                      !(transcript.messages.isEmpty && transcript.startedAt == nil)
+                else { return nil }
+                return transcript.lastActivity
+            }
+            .max()
+    }
+
+    /// Most recently spoken in first, and the chats nothing was said in last.
+    static func ordered(_ chats: [Chat]) -> [Chat] {
+        chats.sorted { first, second in
+            switch (first.lastSpoken, second.lastSpoken) {
+            case let (first?, second?): first > second
+            case (.some, nil): true
+            case (nil, .some): false
+            // One chat with nothing in it is the same offer as another, so they
+            // are ordered by identifier: whichever the file system happened to
+            // list first would otherwise be taken, and a different one each
+            // time leaves the rest behind for ever.
+            case (nil, nil): first.id.uuidString < second.id.uuidString
+            }
+        }
+    }
+
+    /// Which chat a window opening now should take up, and nil for none — which
+    /// means start a new one.
+    ///
+    /// With no other window holding a chat, the most recent one: a relaunch
+    /// should hand back the conversation it interrupted, and so should closing
+    /// a window and opening another. Beside a window that already holds one,
+    /// only a chat nothing was said in: a second window is asking for a second
+    /// conversation, not for the one being read in the first, and not for an
+    /// older one it never asked to see.
+    public static func claiming(from chats: [Chat], heldBy held: Set<UUID>) -> UUID? {
+        let free = ordered(chats).filter { !held.contains($0.id) }
+        guard held.isEmpty else { return free.first { $0.lastSpoken == nil }?.id }
+        return free.first?.id
     }
 
     /// The server a reader chat in `workspace` is given.

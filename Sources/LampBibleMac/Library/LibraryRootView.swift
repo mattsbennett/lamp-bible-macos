@@ -85,7 +85,15 @@ struct LibraryRootView: View {
     @State private var showingNewReaderTab = false
     @State private var readerSidebar: ReaderSidebar?
     @State private var lastReaderSidebar = ReaderSidebar.study
-    @SceneStorage("reader.chat.windowID") private var readerChatWindowID = UUID().uuidString
+    /// Which chat this window's reader chat pane is on, taken up once the
+    /// library has been read — which chats exist is read from it.
+    ///
+    /// This was `@SceneStorage`, which AppKit keeps in saved application state.
+    /// That state is deleted on a clean quit unless the reader has turned off
+    /// "Close windows when quitting an application", so on most Macs every
+    /// launch invented an identifier, and with it an empty workspace, while the
+    /// conversation from before sat in a folder nothing would ever open again.
+    @State private var readerChatID: UUID?
     @State private var requestedBookID: String?
     /// The item a search result asked for, handed to the section that shows
     /// it. Cleared by that view once taken, so returning later does not jump
@@ -142,13 +150,19 @@ struct LibraryRootView: View {
         // Kept outside the branch above so the library still loads while the
         // splash is what's on screen.
         .onAppear {
-            if UUID(uuidString: readerChatWindowID) == nil {
-                readerChatWindowID = UUID().uuidString
-            }
             model.start()
         }
+        .onDisappear {
+            // The window is closing: the chat it held is free for the next one
+            // to take up, which is how opening a window again returns to it.
+            if let readerChatID { OpenReaderChats.release(readerChatID) }
+        }
         .onChange(of: model.hasReadLibrary, initial: true) { _, read in
-            if read { restoreReaderTabs() }
+            guard read else { return }
+            restoreReaderTabs()
+            if readerChatID == nil {
+                readerChatID = OpenReaderChats.claim(libraryRootURL: model.library.rootURL)
+            }
         }
         .onChange(of: model.hasLoadedInitialContent, initial: true) { _, loaded in
             guard loaded else { return }
@@ -679,9 +693,9 @@ struct LibraryRootView: View {
                                 Color.clear
                             } else if isReaderSidebarContentReady {
                                 if (readerSidebar ?? lastReaderSidebar) == .chat,
-                                   let windowID = UUID(uuidString: readerChatWindowID) {
+                                   let readerChatID {
                                     ReaderChatSidebarView(
-                                        windowID: windowID,
+                                        chatID: readerChatID,
                                         close: { readerSidebar = nil }
                                     )
                                 } else {

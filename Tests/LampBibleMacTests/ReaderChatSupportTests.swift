@@ -320,13 +320,145 @@ struct ReaderChatSupportTests {
         #expect(!reader.contains("--settings"))
     }
 
+    /// Writes a transcript into a reader chat's workspace, as a sent message
+    /// would, so what the app reads back is read from a real file.
+    private func speak(
+        in root: URL, chat: UUID, provider: String = "codex", at date: Date
+    ) throws {
+        let workspace = ReaderChatWorkspaceStore.workspaceURL(libraryRootURL: root, chatID: chat)
+        let folder = AgentChatTranscriptStore.directory(in: workspace)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let transcript = AgentChatTranscript(
+            startedAt: date,
+            messages: [.init(role: .user, text: "Who wrote Hebrews?", date: date)]
+        )
+        try AgentChatTranscriptStore.save(transcript, providerID: provider, in: workspace)
+    }
+
+    private func prepareChat(in root: URL, chat: UUID) throws {
+        try ReaderChatWorkspaceStore.prepare(
+            workspace: ReaderChatWorkspaceStore.workspaceURL(libraryRootURL: root, chatID: chat),
+            configuration: configuration
+        )
+    }
+
+    @Test func aWindowOpeningTakesUpTheConversationItLeft() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let older = UUID()
+        let newer = UUID()
+        try speak(in: root, chat: older, at: Date(timeIntervalSince1970: 1_000))
+        try speak(in: root, chat: newer, at: Date(timeIntervalSince1970: 2_000))
+
+        let chats = ReaderChatWorkspaceStore.chats(libraryRootURL: root)
+        #expect(chats.map(\.id) == [newer, older])
+        // The whole point: at launch nothing is held, and the chat that comes
+        // back is the one last spoken in — not a new one.
+        #expect(ReaderChatWorkspaceStore.claiming(from: chats, heldBy: []) == newer)
+    }
+
+    @Test func aChatIsOneConversationWhicheverProviderCarriedItOn() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let chat = UUID()
+        try speak(in: root, chat: chat, provider: "codex", at: Date(timeIntervalSince1970: 1_000))
+        try speak(in: root, chat: chat, provider: "claude", at: Date(timeIntervalSince1970: 3_000))
+
+        let workspace = ReaderChatWorkspaceStore.workspaceURL(libraryRootURL: root, chatID: chat)
+        #expect(
+            ReaderChatWorkspaceStore.lastSpoken(in: workspace)
+                == Date(timeIntervalSince1970: 3_000)
+        )
+    }
+
+    @Test func aWorkspaceNobodySpokeInIsTakenUpRatherThanLeftBehind() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let spoken = UUID()
+        let empty = UUID()
+        try speak(in: root, chat: spoken, at: Date(timeIntervalSince1970: 1_000))
+        try prepareChat(in: root, chat: empty)
+
+        let chats = ReaderChatWorkspaceStore.chats(libraryRootURL: root)
+        // A chat with nothing in it is not a conversation to return to, so it
+        // comes after the ones that are.
+        #expect(chats.map(\.id) == [spoken, empty])
+        #expect(chats.last?.lastSpoken == nil)
+        // A second window beside the first takes the empty one instead of
+        // making another, which is what left ten of them behind.
+        #expect(ReaderChatWorkspaceStore.claiming(from: chats, heldBy: [spoken]) == empty)
+    }
+
+    @Test func aSecondWindowIsNotHandedSomeoneElsesOlderConversation() {
+        let held = UUID()
+        let older = UUID()
+        let chats = [
+            ReaderChatWorkspaceStore.Chat(id: held, lastSpoken: Date(timeIntervalSince1970: 2_000)),
+            ReaderChatWorkspaceStore.Chat(id: older, lastSpoken: Date(timeIntervalSince1970: 1_000)),
+        ]
+        // Nothing free that was never spoken in: a second window starts a new
+        // chat rather than reopening a conversation it never asked to see.
+        #expect(ReaderChatWorkspaceStore.claiming(from: chats, heldBy: [held]) == nil)
+        // And the first window still returns to the most recent one.
+        #expect(ReaderChatWorkspaceStore.claiming(from: chats, heldBy: []) == held)
+    }
+
+    @Test func twoEmptyChatsAreTakenInTheSameOrderEveryTime() {
+        let first = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+        let second = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
+        let chats = [
+            ReaderChatWorkspaceStore.Chat(id: second, lastSpoken: nil),
+            ReaderChatWorkspaceStore.Chat(id: first, lastSpoken: nil),
+        ]
+        #expect(ReaderChatWorkspaceStore.claiming(from: chats, heldBy: []) == first)
+        #expect(ReaderChatWorkspaceStore.claiming(from: chats, heldBy: [first]) == second)
+        // Both held: there is nothing to take, so the window makes its own.
+        #expect(ReaderChatWorkspaceStore.claiming(from: chats, heldBy: [first, second]) == nil)
+    }
+
+    @Test func aClearedChatIsStillAChatToComeBackTo() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cleared = UUID()
+        let workspace = ReaderChatWorkspaceStore.workspaceURL(libraryRootURL: root, chatID: cleared)
+        let when = Date(timeIntervalSince1970: 5_000)
+        try FileManager.default.createDirectory(
+            at: AgentChatTranscriptStore.directory(in: workspace), withIntermediateDirectories: true
+        )
+        try AgentChatTranscriptStore.save(
+            AgentChatTranscript(conversationID: UUID(), startedAt: when, messages: []),
+            providerID: "codex", in: workspace
+        )
+        #expect(ReaderChatWorkspaceStore.lastSpoken(in: workspace) == when)
+    }
+
+    @Test func whatIsNotAChatIsNotOfferedAsOne() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = ReaderChatWorkspaceStore.directory(libraryRootURL: root)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data().write(to: folder.appendingPathComponent(".DS_Store"))
+        try FileManager.default.createDirectory(
+            at: folder.appendingPathComponent("notes"), withIntermediateDirectories: true
+        )
+        #expect(ReaderChatWorkspaceStore.chats(libraryRootURL: root).isEmpty)
+        // Nothing to take up, so the first window makes its own chat.
+        #expect(ReaderChatWorkspaceStore.claiming(from: [], heldBy: []) == nil)
+    }
+
+    @Test func noLibraryToReadYetOffersNoChats() {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        #expect(ReaderChatWorkspaceStore.chats(libraryRootURL: root).isEmpty)
+    }
+
     @Test func readerWorkspacePreservesHistoryAndRestrictsOpenCodeTools() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let windowID = UUID()
-        let workspace = ReaderChatWorkspaceStore.workspaceURL(libraryRootURL: root, windowID: windowID)
-        #expect(workspace == ReaderChatWorkspaceStore.workspaceURL(libraryRootURL: root, windowID: windowID))
-        #expect(workspace != ReaderChatWorkspaceStore.workspaceURL(libraryRootURL: root, windowID: UUID()))
+        let chatID = UUID()
+        let workspace = ReaderChatWorkspaceStore.workspaceURL(libraryRootURL: root, chatID: chatID)
+        #expect(workspace == ReaderChatWorkspaceStore.workspaceURL(libraryRootURL: root, chatID: chatID))
+        #expect(workspace != ReaderChatWorkspaceStore.workspaceURL(libraryRootURL: root, chatID: UUID()))
         #expect(workspace.path.contains("/AgentWorkspaces/Reader/"))
         try ReaderChatWorkspaceStore.prepare(workspace: workspace, configuration: configuration)
         let transcript = workspace.appendingPathComponent(".lamp/native-chat-codex.json")

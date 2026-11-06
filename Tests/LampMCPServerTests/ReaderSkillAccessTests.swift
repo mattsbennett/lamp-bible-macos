@@ -187,7 +187,7 @@ struct ReaderSkillAccessTests {
             .appendingPathComponent("lamp-reader-skills-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: library) }
         let workspace = ReaderChatWorkspaceStore.workspaceURL(
-            libraryRootURL: library, windowID: UUID()
+            libraryRootURL: library, chatID: UUID()
         )
         let configuration = ReaderChatWorkspaceStore.configuration(
             helperExecutableURL: URL(fileURLWithPath: "/tmp/lamp-mcp"),

@@ -19,7 +19,9 @@ struct ReaderChatSidebarView: View {
     /// default a new chat opens on.
     @State private var chatChoices = AgentChatChoices()
 
-    let windowID: UUID
+    /// Which chat this pane is on. Handed in by the window, which took it up
+    /// from the library; see `OpenReaderChats`.
+    let chatID: UUID
     let close: () -> Void
 
     private var provider: AIProviderCLI {
@@ -45,7 +47,7 @@ struct ReaderChatSidebarView: View {
 
     private var workspace: URL {
         ReaderChatWorkspaceStore.workspaceURL(
-            libraryRootURL: libraryModel.library.rootURL, windowID: windowID
+            libraryRootURL: libraryModel.library.rootURL, chatID: chatID
         )
     }
 
@@ -375,6 +377,30 @@ struct ReaderChatSidebarView: View {
         } catch {
             preparationError = error.localizedDescription
         }
+    }
+}
+
+/// Which chat each open window is on.
+///
+/// A reader chat lasts as long as its transcript, not as long as the window
+/// that opened it, so a window takes one up rather than making one. Held only
+/// for this run of the app: at launch nothing is held, and the first window to
+/// open takes up the most recent conversation in the library.
+@MainActor
+enum OpenReaderChats {
+    private static var held: Set<UUID> = []
+
+    static func claim(libraryRootURL: URL) -> UUID {
+        let id = ReaderChatWorkspaceStore.claiming(
+            from: ReaderChatWorkspaceStore.chats(libraryRootURL: libraryRootURL),
+            heldBy: held
+        ) ?? UUID()
+        held.insert(id)
+        return id
+    }
+
+    static func release(_ id: UUID) {
+        held.remove(id)
     }
 }
 
