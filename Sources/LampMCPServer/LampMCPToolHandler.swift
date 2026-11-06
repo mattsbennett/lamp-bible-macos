@@ -96,12 +96,19 @@ public actor LampMCPToolHandler {
             ))
 
         case "search_library":
+            let query = arguments["query"]?.stringValue ?? ""
+            let key = arguments["strongs_key"]?.stringValue?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || key?.isEmpty == false else {
+                throw LampMCPToolError.missingArgument("query or strongs_key")
+            }
             return try result(try await library.searchLibrary(
-                query: try requiredString("query", in: arguments),
+                query: query,
                 kinds: try kinds(arguments["kinds"]),
                 moduleIDs: stringSet(arguments["module_ids"]),
                 range: arguments["range"]?.stringValue,
-                strongsKey: arguments["strongs_key"]?.stringValue,
+                strongsKey: key,
                 highlightColors: stringSet(arguments["highlight_colors"]),
                 limit: arguments["limit"]?.intValue ?? 20
             ))
@@ -487,19 +494,28 @@ public actor LampMCPToolHandler {
         guard policy.isEnabled else { throw LampMCPToolError.accessDisabled }
         // A writing workspace keeps its skills in itself; a reader chat names
         // its folder separately, having no writing to serve.
-        guard let skillsRoot = skillsURL ?? workspaceURL else {
-            throw LampMCPToolError.noSkills
-        }
         let fileManager = FileManager.default
-        // Both providers' directories hold the same installed copy; whichever
-        // is there answers.
-        let roots = [".claude/skills", ".agents/skills"].map {
-            skillsRoot.appendingPathComponent($0, isDirectory: true)
+        let roots: [URL]
+        let bundled: Bool
+        if let skillsRoot = skillsURL ?? workspaceURL {
+            // A configured session exposes only its installed selection.
+            roots = [".claude/skills", ".agents/skills"].map {
+                skillsRoot.appendingPathComponent($0, isDirectory: true)
+            }
+            bundled = false
+        } else {
+            guard let catalog = LampBundledSkills.catalogURL else {
+                throw LampMCPToolError.noSkills
+            }
+            roots = [catalog]
+            bundled = true
         }
         let available = roots
             .flatMap { (try? fileManager.contentsOfDirectory(atPath: $0.path)) ?? [] }
             .filter { !$0.hasPrefix(".") }
-        let names = Set(available).sorted()
+        let names = Set(available).filter {
+            !bundled || LampBundledSkills.studySkillNames.contains($0)
+        }.sorted()
         guard let name else {
             return SkillReading(available: names, skill: nil, file: nil, text: nil)
         }
@@ -517,24 +533,7 @@ public actor LampMCPToolHandler {
         }
         let directory = root.appendingPathComponent(skill, isDirectory: true)
         let relative = file ?? "SKILL.md"
-        guard relative.hasSuffix(".md"), !relative.hasPrefix("/"),
-              !relative.split(separator: "/").contains("..")
-        else {
-            throw LampMCPToolError.invalidArgument(
-                "file", "a skill's file is a Markdown path inside it, such as references/x.md"
-            )
-        }
-        // Symlinks resolved, not just `..` folded away: a linked file, or a
-        // linked `references` folder, is a way out of the skill that
-        // `standardizedFileURL` alone would follow. Nothing can plant one in a
-        // reader workspace today — the app copies the skills in and the agent
-        // cannot write — so this is the check meaning what it says rather than
-        // a hole being closed.
-        let target = directory.appendingPathComponent(relative).resolvingSymlinksInPath()
-        let folder = directory.resolvingSymlinksInPath()
-        guard target.path.hasPrefix(folder.path + "/"),
-              let text = try? String(contentsOf: target, encoding: .utf8)
-        else {
+        guard let text = try? LampBundledSkills.read(file: relative, inside: directory) else {
             throw LampMCPToolError.invalidArgument(
                 "file", "\(skill) has no file \(relative)"
             )

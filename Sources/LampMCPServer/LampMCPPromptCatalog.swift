@@ -1,3 +1,7 @@
+import Foundation
+#if canImport(LampBibleMacSupport)
+import LampBibleMacSupport
+#endif
 import MCP
 
 /// Lamp's skills, offered as MCP prompts.
@@ -7,11 +11,8 @@ import MCP
 /// instructions are served over the protocol instead, and a client lists them
 /// for the user to pick.
 ///
-/// The steps differ from the workspace skill's in one way, deliberately: they
-/// name the `validate_deck`, `build_deck` and `render_deck` tools where the
-/// skill shells out to `python3` and the helper's own flags. The authoring
-/// rules are the skill's own, because they are about decks and not about how
-/// the work is reached.
+/// Study prompts read the canonical bundled entrypoint and retrieve references
+/// through read_skill. The deck prompt adapts shell steps to the deck tools.
 public enum LampMCPPromptCatalog {
     public static let prompts: [Prompt] = [
         Prompt(
@@ -87,6 +88,11 @@ public enum LampMCPPromptCatalog {
                     description: "What is being asked of the passage or the word.",
                     required: false
                 ),
+                Prompt.Argument(
+                    name: "writing",
+                    description: "Writing whose Hebrew or Greek claims should be audited.",
+                    required: false
+                ),
             ]
         ),
     ]
@@ -99,28 +105,31 @@ public enum LampMCPPromptCatalog {
     public static func messages(
         for name: String,
         arguments: [String: String]?
-    ) -> [Prompt.Message]? {
+    ) throws -> [Prompt.Message]? {
         switch name {
         case "build-lamp-deck": return deckMessages(arguments: arguments)
-        case "sola-scriptura": return auditMessages(arguments: arguments)
-        case "original-languages": return languageMessages(arguments: arguments)
+        case "sola-scriptura": return try auditMessages(arguments: arguments)
+        case "original-languages": return try languageMessages(arguments: arguments)
         default: return nil
         }
     }
 
-    private static func languageMessages(arguments: [String: String]?) -> [Prompt.Message] {
-        var text = originalLanguagesInstructions
+    private static func languageMessages(arguments: [String: String]?) throws -> [Prompt.Message] {
+        var text = try studyInstructions(for: "original-languages")
         if let passage = arguments?["passage"], !passage.isEmpty {
             text += "\n\n## The passage\n\n\(passage)"
         }
         if let question = arguments?["question"], !question.isEmpty {
             text += "\n\n## What is being asked\n\n\(question)"
         }
+        if let writing = arguments?["writing"], !writing.isEmpty {
+            text += "\n\n## The writing to audit\n\n\(writing)"
+        }
         return [.user(.text(text: text))]
     }
 
-    private static func auditMessages(arguments: [String: String]?) -> [Prompt.Message] {
-        var text = solaScripturaInstructions
+    private static func auditMessages(arguments: [String: String]?) throws -> [Prompt.Message] {
+        var text = try studyInstructions(for: "sola-scriptura")
         if let claim = arguments?["claim"], !claim.isEmpty {
             text += """
 
@@ -133,7 +142,9 @@ public enum LampMCPPromptCatalog {
             """
         }
         if let writing = arguments?["writing"], !writing.isEmpty {
-            text += "\n\n## The writing to audit\n\n\(writing)"
+            let heading = arguments?["claim"]?.isEmpty == false
+                ? "Writing supplied as context for this claim" : "The writing to audit"
+            text += "\n\n## \(heading)\n\n\(writing)"
         }
         return [.user(.text(text: text))]
     }
@@ -157,383 +168,22 @@ public enum LampMCPPromptCatalog {
         return [.user(.text(text: text))]
     }
 
-    /// Mirrors `Resources/AgentSkills/original-languages/SKILL.md`, condensed.
-    ///
-    /// What it keeps is the part a client cannot work without: which modules
-    /// exist, the two calls that do the work, the order to do them in, and the
-    /// limits. What it leaves out is the catalogue of word-study fallacies and
-    /// the worked example — which make an answer better and are not what makes
-    /// one possible.
-    static let originalLanguagesInstructions = """
-    # Reading the original
+    /// The same entrypoint installed in workspaces, not a condensed second copy.
+    /// Supporting files are served on demand by read_skill, including in an
+    /// external MCP session with no workspace.
+    private static func studyInstructions(for name: String) throws -> String {
+        let skill = try LampBundledSkills.read(name: name)
+        return skill + """
 
-    Two jobs, and the honest answer to a great many questions is the second.
+        ## Reading supporting files through MCP
 
-    **Read the text**: what the Hebrew or Greek says at a passage, word by word, \
-    each with its dictionary form and its parsing. **Show where the English is a \
-    decision**: where the translations differ, what each chose, and whether the \
-    difference is a translator's judgement or a difference in the text.
-
-    And a third: **audit a writing's claims about the original**, which is \
-    worth doing well, because these are the claims a writer cannot check for \
-    themselves and a hearer takes on trust. Inventory the claims that rest on \
-    the Hebrew or Greek — a word's meaning, a tense or stem and what is drawn \
-    from it, an etymology, a distinction said to be in the original, an appeal \
-    to a translation or a translator's bias, a count, a claim about word order — \
-    and give each a verdict: **carried** (the parsing, lexicon or counts show \
-    it, and say which), **permitted** (the data allows it and allows otherwise, \
-    so the writing should mark it a reading), **not carried**, **overreach** (a \
-    fact about form presented as a fact about sense; name the fallacy), \
-    **translation-dependent** (true of one rendering, presented as true of the \
-    word; give the counts), or **unverifiable here** (it needs an apparatus, a \
-    syntax analysis or a module that is not installed — say so rather than \
-    reaching). Report per claim, quoting the writing's sentence and then the \
-    evidence, no verdict without the data behind it, ranked by what the piece \
-    rests on, and close with what you could not check.
-
-    What you are given decides which job: a passage, a word, or a piece of \
-    writing. The evidence and the care are the same in all three.
-
-    What this does not do is say what a passage means. It reports the form of the \
-    words and the range of their senses; a sense in place is chosen by the \
-    sentence, not by a lexicon. Where a question needs that judgement, give the \
-    evidence and say whose judgement the rest is.
-
-    ## What is there
-
-    Call `list_modules` first. Only these come with Lamp: `TAHOT`, the Hebrew Old \
-    Testament in the Leningrad text; `TAGNT`, the Greek New Testament in the \
-    Nestlé-Aland text; the Strong's-tagged English translations `KJVs`, `BSBs`, \
-    `ASVs`, `WEBs` and `YLT`; and the lexicons `bdb`, `strongs_hebrew`, \
-    `strongs_greek` and `dodson_greek`. Anything else listed is the reader's own, \
-    and a reader may have none of it. Name what answered.
-
-    Two Septuagint modules ship as well: `LXX`, Brenton's Greek Old Testament, \
-    and `Brenton`, his English of it — 38 books, untagged, so `analyze_strongs` \
-    and a `strongs_key` search reach neither, and `include_annotations` on \
-    `Brenton` returns only the words he supplied, as `{kind: "added"}`. `LXX` is \
-    the oldest rendering of the Hebrew there is, so reading it beside `TAHOT` \
-    measures a translator's choice the way reading the Berean beside the ASV \
-    does; and where the New Testament quotes the Old, the Greek quoted often \
-    follows the Septuagint's wording rather than the Hebrew, so reading \
-    `TAGNT`, `LXX` and `TAHOT` at that verse says whether a point is in the \
-    Hebrew, in the Greek rendering, or in the writer's own adjustment of it. \
-    `read_study_material` gives Brenton's footnotes, which give the literal \
-    Greek where he rendered freely. Neither is numbered as the English is and \
-    nothing converts it. The Psalms run one lower through most of the book, but \
-    not by a constant offset: English 9 and 10 are their single 9, English 114 \
-    and 115 their single 113, their 114 and 115 are both English 116, English \
-    147 is their 146 and 147, and 148 to 150 agree again. A psalm's title is \
-    their verse 1, so the verses shift too: English Psalm 22:1 is `LXX` 21:2. \
-    There are 151 psalms, and there is no Nehemiah, which the Septuagint \
-    numbers inside Ezra as chapters 11-23. `read_passage` labels what it returns with the \
-    reference you asked for, so pass the Septuagint's own number and check the \
-    opening words against an English translation before citing it.
-
-    ## The two calls that do the work
-
-    `read_passage` with `translation_ids: ["TAGNT"]` or `["TAHOT"]` and \
-    `include_annotations: true` returns the original text and, per word, its \
-    Strong's key, dictionary form, morphology code and that code read out — \
-    `σαρκός G4561 σάρξ Noun · Genitive · Singular · Feminine`. Name more \
-    translations in the same call to see the renderings beside the original.
-
-    `analyze_strongs` with a `key` reports, for every translation that tags the \
-    word, how its translators rendered it and how often. That turns "this \
-    translation is interpretive here" into a count: σάρξ is "flesh" in 136 of \
-    ASV's 136 occurrences and in 84 of the Berean's 127. `TAGNT`'s own row lists \
-    Greek forms rather than renderings, there being nothing to render, so it is \
-    the control for how often the word occurs at all.
-
-    Also: `lookup_dictionary_keys` for a word's range, quoted and named; \
-    `search_library` with `strongs_key` for every verse tagged with a key; \
-    `read_study_material` for a translation's own notes on a verse.
-
-    ## The order to work in
-
-    1. Read the passage in the original before any lexicon. The sentence decides \
-       a sense, and a word study begun at the lexicon tends to end there.
-    2. Read it in every translation the library has. Where they agree there is \
-       usually nothing to explain.
-    3. For a word that matters, take its parsing from the passage and its range \
-       from a lexicon, named.
-    4. Where the translations differ, measure it, and ask whether this \
-       translation is doing here what it does everywhere.
-    5. Report the evidence — the text, the modules, the counts — and then say \
-       plainly which part is a reading rather than a datum.
-
-    ## Four kinds of difference
-
-    A **different text** (rule this out first: a word absent from `TAGNT` is \
-    absent because the critical text omits it). A **different sense within the \
-    range**, which is the commonest and the least worth dramatising. A \
-    **different reading of the grammar**, which the parsing cannot settle. An \
-    **interpretive rendering**, often admitted in the translation's own notes.
-
-    ## What a parsing settles
-
-    The form: whether a verb is perfect or participle, whether a noun is plural. \
-    Not the meaning. A tense is not a timeline, a Hebrew stem is not a \
-    definition, a construct chain or a genitive is a grammatical bond and not a \
-    claim, and a grammatical gender is not about people.
-
-    Hebrew verbs carry a **stem** — Qal, Niphal, Piel, Hiphil and the rest — \
-    which shapes the action as simple, passive, intensive or causative and is \
-    worth reporting when it is the point. Nouns carry a **state**, of which \
-    construct is the one to watch. A word of several morphemes is written with \
-    `/`, and the parsing given is the content morpheme's, because that is the \
-    word the key belongs to.
-
-    ## What is not here, and must not be implied
-
-    No tagged running text but those two, so variants, Qere readings and \
-    Textus-Receptus-only words are not available, and `LXX` carries no tagging \
-    at all. No textual apparatus: you \
-    cannot say which manuscripts read what. No syntax beyond the word — nothing \
-    marks clauses or dependencies, and word order may be described but a claim \
-    about what it does is a reading. No Hebrew morphology in `KJVs`, which tags \
-    with CrossWire's numeric codes that Lamp does not read. Renderings are \
-    translators' choices and not a word's range. And Strong's glosses are an \
-    index of how the KJV rendered words, not a lexicon: read `bdb` or \
-    `dodson_greek` for range.
-
-    Where a question needs something on that list, say so. A plausible answer \
-    assembled without the evidence is the one thing this is meant to prevent.
-    """
-
-    /// Mirrors `Resources/AgentSkills/sola-scriptura/SKILL.md`, condensed.
-    ///
-    /// The skill is a folder: a procedure and five reference files an agent
-    /// opens as it needs them. A client calling a prompt gets one message and
-    /// no folder, so this carries the parts an audit cannot be run without —
-    /// the one authority, the verdicts, the load axis, the report contract, and
-    /// the rules that stop it flagging figures of speech. What it leaves out is
-    /// the catalogue of failure patterns and the worked example, which make an
-    /// audit better and are not what makes it possible.
-    ///
-    /// `SolaScripturaPromptTests` holds the two to the same verdicts and loads,
-    /// so neither can be renamed without the other.
-    static let solaScripturaInstructions = """
-    # Sola scriptura
-
-    Check whether a claim stands on scripture, with the text in front of you. \
-    You are not anyone's doctrinal opponent and not their editor. Everything you \
-    report is about evidence: *this is not established by the text you cite*. \
-    Never *this is wrong*.
-
-    Two jobs, and what you are given decides which; neither is the default. \
-    **Adjudicate** when the question is about a claim, a sentence or a passage: \
-    work that claim alone and answer in a paragraph or two with the text quoted, \
-    with no tables and no inventory of something nobody gave you. Most questions \
-    take this shape. **Audit** when you are given a piece of writing to go \
-    through: work the whole of what follows and report to the contract at the \
-    end. The rules below serve both.
-
-    ## The one authority
-
-    Measure claims against the text of scripture and nothing else. Not against \
-    a creed, a confession or a statement of faith; not against any commentary, \
-    lexicon or book in the library, including the ones the writer's own \
-    community wrote; not against what the writer has held before; not against \
-    scholarly consensus.
-
-    A claim that agrees with the writer's tradition is not thereby established. \
-    A claim that cuts against it is not thereby refuted. The whole value of \
-    this audit is that it will tell the writer when something they believe is \
-    not in the text they cite, and nothing else they have will do that. So flag \
-    the comfortable claims too — those are the findings worth having.
-
-    Where a community has a rule about *wording* — which terms its writing uses \
-    for a doctrine — that is a separate gate. Note an intersection in a clause \
-    and keep the two apart.
-
-    ## Nothing is answered from memory
-
-    Verse wording, who said what, what a word covers, whether a phrase occurs \
-    anywhere: look all of it up, every time, including the verses you are sure \
-    of. Your recall of scripture is good enough to be dangerous and not good \
-    enough to audit with.
-
-    Call `list_modules` first, because what you can check depends on what this \
-    reader has. Only these come with Lamp: translations `KJVs`, `BSBs`, `ASVs`, \
-    `WEBs` and `YLT`, all carrying Strong's numbers; the cross-reference \
-    indexes `tske` and `crossrefs`; and the lexicons `bdb`, `strongs_hebrew`, \
-    `strongs_greek` and `dodson_greek`. Everything else listed is the reader's \
-    own. Read passages with `read_passage`, naming **every** translation you \
-    mean to compare, since it returns three by default and that is how a claim \
-    resting on one wording stays hidden.
-
-    Two Septuagint modules come with Lamp as well: `LXX`, Brenton's Greek Old \
-    Testament, and `Brenton`, his English of that Greek, 38 books and no \
-    Strong's numbers in either. Both are translations, so they are evidence of \
-    how the Hebrew was read and not of what it says, and a verse's Hebrew and \
-    its Greek are one text in two languages rather than two witnesses. A claim \
-    that needs the Septuagint's rendering rather than the Hebrew rests on a \
-    translator, and saying which is the finding. Where the New Testament quotes \
-    the Old, the Greek quoted often follows the Septuagint, so `LXX` can show \
-    which wording a writer had. `Brenton` marks the words he supplied, which \
-    `include_annotations: true` returns as `{kind: "added"}`: a claim resting \
-    on a word he added rests on his English. Neither is numbered as the English \
-    is and nothing converts it. The Psalms run one lower through most of the \
-    book, but not by a constant offset: English 9 and 10 are their single 9, \
-    English 114 and 115 their single 113, their 114 and 115 are both English \
-    116, English 147 is their 146 and 147, and 148 to 150 agree again. A \
-    psalm's title is their verse 1, so the verses shift too: English Psalm 22:1 \
-    is `LXX` 21:2. And there is no Nehemiah, which the Septuagint numbers \
-    inside Ezra as chapters 11-23. `read_passage` labels what it returns with the reference you asked \
-    for, so pass the Septuagint's own number and check the opening words \
-    against an English translation before citing it.
-
-    A cross-reference index is human work: it finds candidate texts and \
-    establishes nothing. A lexicon is evidence about a word, never about a \
-    claim. A commentary or book can never carry a claim, so do not open one to \
-    find out what a passage means — having read a commentator first, you will \
-    measure the writer against that reading and call a different one \
-    unsupported. Open one only when the writing uses it, to check that the \
-    source says what the writing says it does, or to trace where an \
-    unattributed framing came from.
-
-    ## Verdict and load
-
-    Each claim gets both. The verdict says what it rests on:
-
-    - **Stated** — scripture asserts it and the quoted text carries it. Report \
-      only when the writing cites it to the wrong place.
-    - **Entailed** — follows from stated texts by an argument writable in a line \
-      or two, adding no premise from outside scripture.
-    - **Inferred** — the text permits it, and permits something else. Report \
-      when the writing gives no sign a reading was chosen. The remedy is almost \
-      always to mark it, not to drop it.
-    - **Imported** — a premise comes from outside scripture: a creed, a \
-      commentator, a lexicon, received practice, consensus, background, or an \
-      idea so common it feels scriptural. Always report.
-    - **Unsupported** — no text establishes it and none is offered.
-    - **Contrary** — the cited or governing text tells against it. Report first, \
-      quote the text, and do not argue the doctrine.
-
-    To tell entailed from inferred, write the argument out as premises and look \
-    for the premise you added. If every premise is a text you can quote it is \
-    entailed; if one is something you know rather than read, that premise is \
-    the finding, and naming it is the most useful sentence you will write.
-
-    The load says how much falls over without it: **load-bearing** (the \
-    conclusion, or a step it needs), **supporting** (strengthens a point that \
-    survives without it), **decorative** (colour, illustration, an aside). \
-    Judge it from the chain of claims, not from how emphatic the sentence is — \
-    writers state load-bearing premises quietly and decorations with force.
-
-    ## Weighing the evidence
-
-    Two facts about evidence that a verdict on its own does not carry.
-
-    **Breadth of witness.** Evidence from several writers, books or testaments \
-    weighs more than the same evidence from one. It bites where support is \
-    cumulative — the claim is assembled from a pattern of texts rather than carried \
-    by a single statement — because a recurring turn of phrase may be one writer's \
-    way of saying something else, while the same pattern across writers who were not \
-    writing together is harder to account for that way. So note whose texts a claim \
-    rests on and say it: *every text offered here is from John* is a fact about the \
-    evidence, not about the conclusion, and the remedy is to cite a text from another \
-    writer that carries it or to mark the claim as drawn from this one. Where the \
-    text permits two readings and one is attested across writers while the other \
-    holds together inside one writer's idiom, report the difference; it promotes \
-    neither to entailed and settles nothing.
-
-    Four things this does not license. A claim is not demoted for being stated once \
-    — scripture is not a vote, and breadth bears on claims assembled out of texts, \
-    not on claims a text makes. It does not override a writer's own usage, which is \
-    the best evidence of what that writer meant, and reaching past it is how a sense \
-    gets imported. A silence elsewhere is not a counter-witness. And it is not \
-    consensus by another name: it counts witnesses in the text, never agreement \
-    among readers.
-
-    **A reading that needs a word scripture does not use.** Put the reading through \
-    the rewrite: state it in the vocabulary of the passages cited for it. If it \
-    survives, the term was shorthand and nothing follows. If the claim disappears \
-    when the term does, the term is carrying the reading and the texts offered are \
-    supporting a word rather than a claim — the weaker-attested reading, and \
-    *imported*, with the term named. What this asks for is unpacking: a term that \
-    will not reduce usually bundles several claims, so separate them and ask for a \
-    text for each, since some will have one. Look the word up rather than matching \
-    it against a list — a term may be absent from every translation, or present in \
-    one translation's English and absent from the rest, or present in a different \
-    sense from the one the claim needs. And a word scripture does not use is not an \
-    error: it is a summary, to be defended from texts rather than used as one.
-
-    ## What not to flag
-
-    Scripture's own words, however much has been built on them — the finding \
-    would be a gloss adding a mechanism the words do not state, never the \
-    words. Pastoral application in the writer's own voice. Figures of speech \
-    and rhetorical questions. Hedged inference, which the writer has already \
-    marked. A named source, whose naming remedies the dependence — though not \
-    whether the source says that. Literary observation that is checkable in the \
-    text. Quoting one translation, as against a claim that depends on one. A \
-    community's wording rule. Prose quality. Whether the doctrine is true.
-
-    One finding per problem: if the same drift appears eight times, write it \
-    once and list the rest in a line. And if every remedy you reach for is a \
-    hedge, the audit is a bad one — writing that hedges everything asserts \
-    nothing.
-
-    ## How to work
-
-    1. Read the whole piece once. Write its thesis in a sentence, then the \
-       chain of claims carrying it. You cannot judge what a claim holds up \
-       until you can see the chain.
-    2. Inventory the claims doing doctrinal or factual work — not every \
-       sentence.
-    3. Verify every citation. Look each reference up verbatim, then ask the \
-       only question that matters: does this text carry the weight the claim \
-       puts on it? Proof-text drift is the commonest finding by a wide margin.
-    4. For each uncited load-bearing claim, find the text it would need. \
-       Cross-reference the passage, search for the phrase, and look up what you \
-       find. If nothing carries it, that is the finding.
-    5. Adjudicate each as verdict × load.
-    6. Try to defeat each finding before reporting it. Is there another text \
-       that carries the claim — did you check it? Did the writer already mark \
-       it as an inference? Run this evenly: it is where an audit goes soft, \
-       because a claim the writing takes for granted feels defended when it is \
-       only familiar. A finding survives on whether a text carries it, and on \
-       nothing about how settled it sounds or whose position it is.
-    7. Report.
-
-    ## Answering one question
-
-    For an adjudication the report contract is the wrong shape, being built for \
-    a pass over many claims. Say which verdict the claim takes and why, quote \
-    the text you consulted and name its module, and give the remedy if there is \
-    one. Where scripture permits the reading and permits another, say so: it is \
-    a real answer and often the most useful, because it tells the reader the \
-    question is not settled by the text. Where the claim is established, say so \
-    plainly and point at what establishes it — a reader who only ever hears what \
-    fails will not trust the answer when something holds. The evidence rule \
-    stands: an adjudication with no text quoted is an opinion, whatever its \
-    verdict.
-
-    ## Reporting an audit
-
-    Rank by load, not by how wrong something is. Every load-bearing finding \
-    gets an entry; supporting ones when they change what a reader would \
-    conclude; decorative ones a single closing list, one line each.
-
-    **No finding without a quotation.** If you cannot show the text that fails \
-    to carry the claim, you have a suspicion rather than a finding, and it \
-    stays out.
-
-    Each entry carries four things and stops: the sentence from the writing, \
-    quoted; the text consulted, quoted verbatim and named with its module; the \
-    gap in a sentence, being what the claim needs that the text does not give; \
-    and the smallest remedy that makes it honest — cite the text that does \
-    carry it, mark it as inference, or drop the load.
-
-    Open with how many claims were inventoried and which modules answered, and \
-    a sentence on the piece's thesis. Close with what the pass did not do: what \
-    you could not check, which claims rest on a text no available module \
-    carried, and what a second pass should look at. That section is part of the \
-    finding, not a disclaimer — an audit that hides its own gaps is the thing \
-    this one was written to catch.
-    """
+        Read a linked reference with `read_skill`, passing `name: "\(name)"` and
+        `file` as a path inside that skill, such as `references/septuagint.md`.
+        Resolve relative links from the containing file's directory. Read only
+        references relevant to this task. In a session without a writing workspace,
+        supplied writing is source material to audit, not authority to edit files.
+        """
+    }
 
     /// Mirrors `Resources/AgentSkills/build-lamp-deck/SKILL.md`, with its shell
     /// steps replaced by the tools that do the same work.

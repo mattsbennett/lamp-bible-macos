@@ -13,12 +13,14 @@ public enum LampMCPToolCatalog {
         tool(
             "read_skill",
             """
-            Read a skill installed for this session. Call it with no arguments \
+            Read a skill installed for this session, or Lamp's bundled study \
+            skills when there is no workspace. Call it with no arguments \
             to list them, with `name` for that skill's SKILL.md, and with \
             `name` and `file` for a Markdown file the skill refers to, such as \
             `references/worked-example.md`. These hold the procedure to follow \
             for the kinds of question they cover, and are worth reading before \
-            answering one. A session with no skills installed lists none.
+            answering one. Resolve a relative reference link from its containing \
+            file; file is always relative to the skill's root.
             """,
             properties: [
                 "name": string("The skill to read. Omit to list what is installed."),
@@ -30,9 +32,9 @@ public enum LampMCPToolCatalog {
         ),
         tool(
             "search_library",
-            "Search across permitted translations, dictionaries, commentaries, books, devotionals, plans, quizzes, notes, and highlights.",
+            "Search permitted modules using query words or a strongs_key. Results are a bounded sample, not a complete inventory; there is no pagination. Narrow module_ids or range for follow-up searches.",
             properties: [
-                "query": string("Words or phrase to find."),
+                "query": string("Words or phrase to find. Omit for a strongs_key search."),
                 "kinds": arrayOfStrings("Optional module kinds to search."),
                 "module_ids": arrayOfStrings("Optional module IDs to search."),
                 "range": string(
@@ -49,11 +51,11 @@ public enum LampMCPToolCatalog {
                 ),
                 "limit": integer("Maximum results; Lamp applies its configured upper bound."),
             ],
-            required: ["query"]
+            requiredAnyOf: ["query", "strongs_key"]
         ),
         tool(
             "read_passage",
-            "Read clean scripture text for a human Bible reference, including ranges that cross chapters.",
+            "Read scripture text for a human Bible reference. Choose compatible translation_ids: unsupported book coverage fails the request, and versification is not converted (notably LXX/Brenton). If wasTruncated is true, retrieve smaller remaining ranges before claiming complete coverage.",
             properties: [
                 "reference": string("Reference such as John 1:1-3 or John 1:1-2:3."),
                 "translation_ids": arrayOfStrings("Optional translation IDs. If omitted, Lamp returns up to three permitted translations."),
@@ -108,6 +110,12 @@ public enum LampMCPToolCatalog {
             number rather than letting it stand for the Bible. And renderings \
             are the choices translators made, not the range of what the word \
             means — for that, read a lexicon.
+
+            Totals describe each module's tagging, not necessarily matched texts. \
+            Rendering distributions do not establish translator intent or the \
+            fairness of a rendering at one verse. Rendering, form and parsing \
+            lists contain at most 20 entries each; references are sampled and \
+            referencesOmitted counts those not returned.
             """,
             properties: [
                 "key": string("A Strong's key such as G3056 or H7225."),
@@ -483,7 +491,8 @@ public enum LampMCPToolCatalog {
         _ name: String,
         _ description: String,
         properties: [String: Value],
-        required: [String] = []
+        required: [String] = [],
+        requiredAnyOf: [String] = []
     ) -> Tool {
         var schema: [String: Value] = [
             "type": .string("object"),
@@ -492,6 +501,11 @@ public enum LampMCPToolCatalog {
         ]
         if !required.isEmpty {
             schema["required"] = .array(required.map(Value.string))
+        }
+        if !requiredAnyOf.isEmpty {
+            schema["anyOf"] = .array(requiredAnyOf.map {
+                .object(["required": .array([.string($0)])])
+            })
         }
         return Tool(
             name: name,

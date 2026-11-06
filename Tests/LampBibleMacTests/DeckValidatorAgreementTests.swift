@@ -13,7 +13,7 @@ struct DeckValidatorAgreementTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent(
-                "Sources/LampBibleMac/Resources/AgentSkills/build-lamp-deck/scripts/validate_deck.py"
+                "Sources/LampBibleMacSupport/Resources/AgentSkills/build-lamp-deck/scripts/validate_deck.py"
             )
     }
 

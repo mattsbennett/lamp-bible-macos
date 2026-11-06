@@ -639,14 +639,9 @@ private enum DevotionalAgentWorkspaceStore {
     }
 
     private static func installBundledSkillsIfNeeded(in workspace: URL) throws {
-        #if SWIFT_PACKAGE
-        let resourceRoot = Bundle.module.resourceURL
-        #else
-        let resourceRoot = Bundle.main.resourceURL
-        #endif
         try WorkspaceSkillStore.installBundledSkills(
             named: WorkspaceSkillStore.bundledSkillNames,
-            from: resourceRoot?.appendingPathComponent("AgentSkills", isDirectory: true),
+            from: LampBundledSkills.catalogURL,
             intoSkillDirectoriesOf: workspace
         )
     }

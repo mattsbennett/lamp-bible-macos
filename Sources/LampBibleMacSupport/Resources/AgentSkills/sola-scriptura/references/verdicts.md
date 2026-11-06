@@ -24,18 +24,22 @@ an honest argument, and the writer keeps their point.
 
 **Imported.** A premise comes from outside scripture: a creed, a confession, a
 commentator, a lexicon, received practice, scholarly consensus, historical or
-cultural background, or a religious idea so common it feels scriptural. Always
-reported. The remedy is to name the source or to drop the load — and naming it is
+cultural background, or a religious idea so common it feels scriptural. Report
+unmarked dependence or a source promoted to scripture, not an accurately named
+external view merely for being external. The remedy is to name the source or drop
+the load — and naming it is
 usually enough. A piece may say *Bruce argues* and stand; it may not say *scripture
 teaches* when Bruce is the one who taught it.
 
-**Unsupported.** No text establishes it and none is offered. Reported. Distinguish
-this from imported: unsupported has no visible source at all, which often means the
-writer absorbed it and will be glad to know.
+**Unsupported.** The texts checked do not establish it and no adequate source is
+offered. State the scope of the check, not a corpus-wide absence established by a
+bounded search. Distinguish this from imported, which has an external premise, and
+from unverified, where the necessary evidence could not be retrieved.
 
 **Contrary.** The cited text, or the one that governs the question, tells against
-the claim. Reported first, whatever its load. Quote the text and stop; do not argue
-the doctrine.
+the claim. Within the same load, report it before other verdicts. Load remains the
+primary ordering: a decorative contradiction does not bury a load-bearing gap.
+Quote the text and explain the conflict; do not argue the doctrine.
 
 ## Telling entailed from inferred
 
@@ -43,7 +47,9 @@ This is the judgment the whole audit turns on, and there is a mechanical test.
 
 **Write the argument out as premises. Then look for the premise you added.**
 
-If every premise is a text you can quote, it is entailed. If one premise is
+Every premise must be supported by a text you can quote, and the conclusion must
+follow by a valid argument preserving the premises' scope, referents and
+qualifications. A list of quotations alone is not entailment. If one premise is
 something you know rather than something you read, that premise is the finding —
 and naming it is the most useful sentence you will write. "This needs the further
 premise that the breaking of bread in Acts 20:7 was weekly rather than occasional,
@@ -76,9 +82,9 @@ with force.
 
 | | Load-bearing | Supporting | Decorative |
 |---|---|---|---|
-| **Contrary** | Report first | Report | Report briefly |
+| **Contrary** | First within this load | First within this load | Report briefly |
 | **Unsupported** | Report | Report | Minor list |
-| **Imported** | Report | Report | Minor list |
+| **Imported** | Report unmarked dependence | Report unmarked dependence | Minor list if unmarked |
 | **Inferred** | Report | Report if it changes the conclusion | Leave it |
 | **Entailed** | Report only if the step is hidden | Leave it | Leave it |
 | **Stated** | Only if cited to the wrong place | Same | Same |

@@ -29,7 +29,8 @@ let package = Package(
                 .product(name: "LampCore", package: "lamp-bible-core"),
                 .product(name: "LampModuleKit", package: "lamp-bible-core"),
                 .product(name: "LampPresentationUI", package: "lamp-bible-core"),
-            ]
+            ],
+            resources: [.copy("Resources/AgentSkills")]
         ),
         .executableTarget(
             name: "LampBibleMac",
@@ -48,7 +49,6 @@ let package = Package(
             ],
             resources: [
                 .copy("Resources/TipTapEditor"),
-                .copy("Resources/AgentSkills"),
             ]
         ),
         .target(

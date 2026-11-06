@@ -1,6 +1,6 @@
 # Failure patterns
 
-The catalog. Check every piece against it. Most real findings are the first three.
+The catalog for a whole-writing audit; consult a relevant pattern for one question.
 
 ## 1. Proof-text drift
 
@@ -57,16 +57,18 @@ the writer should say so.
 
 "The Greek really means", a root-fallacy etymology, a Strong's gloss doing
 exegetical work, a range-of-meaning claim from a concordance. Also: an English
-distinction that exists in no original — *agape* versus *phileo* preached over
-John 21, where John uses the pair interchangeably elsewhere.
+distinction claimed from English without checking the original. For an alleged
+contrast between *agape* and *phileo* in John 21, examine the actual usage rather
+than assuming either a decisive contrast or complete interchangeability.
 
 `analyze_strongs` reports how translators rendered a word. That is their choice,
 not the word's range. For range, read a lexicon, and then cite the lexicon.
 
 Flagging one of these is as far as this audit goes. The `original-languages` skill
 audits them, with verdicts of its own for whether the language data carries a claim, so
-hand a load-bearing one over rather than half-settling it here — and say that is what
-you have done, so the writer knows the question is open and where it went.
+work a load-bearing one with that skill rather than half-settling it here, or list
+it as a language check still needed. Do not claim a handoff was performed when it
+was only recommended.
 
 ## 7. Typology asserted rather than shown
 
@@ -98,8 +100,9 @@ The universal is the writer's.
 
 "Most scholars", "it has always been understood", "we have always taught", "no one
 disputes". An appeal to agreement, in a piece whose premise is that agreement is
-not the authority. Report every instance: on a sola scriptura standard this one is
-self-refuting, whichever consensus is invoked.
+not the authority. Report when agreement is used as scriptural support, whichever
+consensus is invoked. An attributed description of a tradition's view is not that
+error and should not be reported merely for naming agreement.
 
 ## 11. Unmarked certainty
 

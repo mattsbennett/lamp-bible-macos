@@ -322,8 +322,7 @@ struct ReaderChatSidebarView: View {
             try ReaderChatWorkspaceStore.prepare(
                 workspace: workspace,
                 configuration: configuration,
-                bundledSkillsCatalog: Bundle.main.resourceURL?
-                    .appendingPathComponent("AgentSkills", isDirectory: true)
+                bundledSkillsCatalog: LampBundledSkills.catalogURL
             )
             self.configuration = configuration
             preparationError = nil

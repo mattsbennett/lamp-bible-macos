@@ -15,21 +15,23 @@ G4561 σάρξ
   BSBs  127:              flesh (84), body (17), bodies (3), people (3), physical (2)
 ```
 
-A translation that renders a word one way 136 times out of 136 has a policy. One that
-spreads it over five English words has a different policy. Neither is an error, and
-saying which is which is not a judgement about either — it is a description, and it
-tells the reader what kind of thing they are reading.
+A translation tagged with the same rendering 136 times is more uniform in this
+dataset than one tagged with several renderings. That describes the data, not the
+translator's intent, the fairness of a particular rendering, or a policy already
+proved. Check comparable occurrences before proposing a policy as an explanation.
 
 `TAGNT`'s own row lists Greek forms rather than renderings, there being nothing to
-render. It is the control: it shows how many times the word occurs in the text the
-others are translating, so a count that differs from it is a count worth asking about.
+render. It is a comparison corpus, not automatically the exact text every English
+translation follows. Unequal totals can arise from text, tagging, or alignment.
+Attribute totals to the module and do not treat them as matched denominators.
 
 ## The four kinds of difference
 
 **A different text.** The translations are not rendering the same words. This is the
-one to rule out first, because it looks like a translation difference and is not. A
-verse or clause absent from `TAGNT` is absent because the critical text omits it, and a
-translation that has it is following another text.
+one to investigate first, because it can look like a translation difference.
+Absence from `TAGNT` alone does not establish a variant or its cause. Check the
+reference, book coverage and returned text; without an apparatus or an explicit
+translator's note, leave the textual explanation unverified.
 
 **A different sense, within the range.** Both renderings are available for the word and
 the translators chose differently. Give the lexicon's range, name the lexicon, and say
@@ -46,13 +48,14 @@ footnotes, which `read_study_material` will show.
 
 ## Four questions to ask of any divergence
 
-1. **Is the text the same?** Read the original. If a word is only in some editions, say
-   so and stop.
+1. **Is the text the same?** Read the available original. Report a demonstrated
+   difference, but do not infer what unavailable editions or manuscripts contain.
 2. **Is each rendering inside the word's range?** Read a lexicon and quote it.
 3. **Does the parsing allow both?** Read it. Sometimes a rendering requires a form the
    word does not have, which settles it.
-4. **Is this translation consistent with itself?** Measure. A one-off departure from a
-   translation's own practice is the finding; conforming to it is the policy.
+4. **How does this rendering compare with the translation's tagged practice?**
+   Measure when relevant, then inspect comparable contexts. A rare rendering may
+   be contextually justified; a common one may still need explanation here.
 
 ## How to report it
 
@@ -60,5 +63,6 @@ Give the original, the renderings side by side, the lexical range with its sourc
 the counts. Then say which of the four kinds the difference is, and if the answer needs
 a judgement about the sentence, say so and attribute it.
 
-Do not say which translation is right. A reader who wants that can have the evidence
-and decide; a reader who is told has gained nothing they can check.
+For a question about fairness, explain which lexical and grammatical constraints a
+rendering satisfies and what remains interpretive. Counts alone establish neither
+which translation is right nor a translator's bias.

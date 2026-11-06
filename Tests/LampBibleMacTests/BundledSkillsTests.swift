@@ -16,7 +16,7 @@ struct BundledSkillsTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent("Sources/LampBibleMac/Resources/AgentSkills", isDirectory: true)
+            .appendingPathComponent("Sources/LampBibleMacSupport/Resources/AgentSkills", isDirectory: true)
     }
 
     private var shippedSkillNames: Set<String> {
@@ -64,26 +64,27 @@ struct BundledSkillsTests {
         }
     }
 
-    /// A reference the skill links to has to be there: an agent that follows a
-    /// dead link falls back on its own judgement without saying so.
+    /// Resolve links from every instruction file, including references which
+    /// link to siblings. Delivery parity alone would happily serve dead links.
     @Test func everyReferenceLinkedBySkillExists() throws {
         for name in try shippedSkillNames {
             let skill = catalogURL.appendingPathComponent(name, isDirectory: true)
-            let document = try String(
-                contentsOf: skill.appendingPathComponent("SKILL.md"), encoding: .utf8
-            )
-            let pattern = try NSRegularExpression(pattern: #"\]\((references/[^)]+)\)"#)
-            let matches = pattern.matches(
-                in: document,
-                range: NSRange(document.startIndex..., in: document)
-            )
-            for match in matches {
-                guard let range = Range(match.range(at: 1), in: document) else { continue }
-                let path = String(document[range])
-                #expect(
-                    FileManager.default.fileExists(atPath: skill.appendingPathComponent(path).path),
-                    "\(name)/SKILL.md links \(path), which is not there"
-                )
+            let files = try #require(FileManager.default.enumerator(at: skill, includingPropertiesForKeys: nil))
+            let pattern = try NSRegularExpression(pattern: #"\]\(([^)#]+)(?:#[^)]*)?\)"#)
+            for case let file as URL in files where file.pathExtension == "md" {
+                let document = try String(contentsOf: file, encoding: .utf8)
+                let matches = pattern.matches(in: document, range: NSRange(document.startIndex..., in: document))
+                for match in matches {
+                    let range = try #require(Range(match.range(at: 1), in: document))
+                    let path = String(document[range])
+                    if URL(string: path)?.scheme != nil { continue }
+                    let target = file.deletingLastPathComponent().appendingPathComponent(path).standardizedFileURL
+                    #expect(target.path.hasPrefix(skill.standardizedFileURL.path + "/"))
+                    #expect(
+                        FileManager.default.fileExists(atPath: target.path),
+                        "\(file.lastPathComponent) links \(path), which is not there"
+                    )
+                }
             }
         }
     }

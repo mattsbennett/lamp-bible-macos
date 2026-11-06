@@ -14,15 +14,17 @@ import Testing
 /// installed app: a compiled artifact tied to one machine's Python, in a
 /// release build, that no commit could show.
 struct BundledResourcesTests {
-    private var resourcesDirectory: URL {
+    private var sourcesDirectory: URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent("Sources/LampBibleMac/Resources")
+            .appendingPathComponent("Sources")
     }
 
-    @Test func noPythonBuildDroppingsAreShippedWithTheResources() throws {
+    @Test(arguments: ["LampBibleMac", "LampBibleMacSupport"])
+    func noPythonBuildDroppingsAreShippedWithTheResources(target: String) throws {
+        let resourcesDirectory = sourcesDirectory.appendingPathComponent("\(target)/Resources")
         let enumerator = try #require(
             FileManager.default.enumerator(
                 at: resourcesDirectory,

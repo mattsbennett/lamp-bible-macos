@@ -120,15 +120,10 @@ struct ReaderChatSupportTests {
         #expect(instructions.contains("read-only conversation"))
     }
 
-    /// The chat is a study companion, not an audit, so it may read the
-    /// commentaries — but it answers under the same discipline as every other
-    /// Lamp surface, composed from one place so it cannot be sharpened here and
-    /// left stale in the served instructions.
+    /// Delivery/composition, not a test of model decisions about sources; those
+    /// belong in the study-skill replay cases rather than frozen prose here.
     @Test func thechatAnswersUnderTheSharedDiscipline() {
         #expect(ReaderChatContext.instructions.contains(LampScriptureAnswerDiscipline.text))
-        // Consulting stays allowed; what it says is reported as theirs.
-        #expect(ReaderChatContext.instructions.contains("Consult relevant commentaries"))
-        #expect(ReaderChatContext.instructions.contains("none of them settles anything"))
         // And the discipline reaches the agent through the workspace file too.
         let context = ReaderChatContext(reference: "John 1", translationID: "KJVs", translationName: "KJV")
         #expect(context.prompt(for: "Explain this").contains(LampScriptureAnswerDiscipline.text))

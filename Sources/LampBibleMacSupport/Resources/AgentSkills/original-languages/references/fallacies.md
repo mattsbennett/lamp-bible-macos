@@ -46,8 +46,10 @@ made. Also its mirror: one English word for two different originals, read as a
 connection. Check the keys before building on either.
 
 The best-known case is ἀγαπάω and φιλέω in John 21, preached as a contrast — where the
-same chapter's other pairs are interchanged freely. The way to check is to read every
-occurrence, which `search_library` with `strongs_key` will give you.
+same chapter's other pairs invite comparison. Check the actual occurrences before
+claiming either a fixed contrast or complete interchangeability. `search_library`
+with `strongs_key` supplies a bounded sample, not every occurrence; narrow the
+scope and report incomplete coverage rather than treating the sample as exhaustive.
 
 ## Semantic anachronism
 

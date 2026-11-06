@@ -51,7 +51,7 @@ public enum LampMCPServerFactory {
             .init(prompts: LampMCPPromptCatalog.prompts)
         }
         await server.withMethodHandler(GetPrompt.self) { parameters in
-            guard let messages = LampMCPPromptCatalog.messages(
+            guard let messages = try LampMCPPromptCatalog.messages(
                 for: parameters.name,
                 arguments: parameters.arguments
             ) else {

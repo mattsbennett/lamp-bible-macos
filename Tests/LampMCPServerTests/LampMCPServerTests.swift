@@ -573,9 +573,10 @@ extension LampMCPServerTests {
             #expect(properties[name] != nil, "search_library should take \(name)")
         }
         #expect(
-            tool.inputSchema.objectValue?["required"]?.arrayValue?
-                .compactMap(\.stringValue) == ["query"],
-            "the new narrowing is optional; a plain word search still works"
+            tool.inputSchema.objectValue?["anyOf"]?.arrayValue?
+                .compactMap { $0.objectValue?["required"]?.arrayValue?.first?.stringValue }
+                == ["query", "strongs_key"],
+            "either words or a Strong's key can start a search without a dummy query"
         )
     }
 }

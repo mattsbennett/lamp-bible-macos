@@ -13,11 +13,11 @@ A phrase that returns nothing is not thereby wrong — scripture has no word for
 *canon* or for *monotheism* either. It means the phrase is a summary, and a summary
 must be defended from texts rather than used as one.
 
-**Does the claim survive a change of translation?** Pass every translation in the
-library to `read_passage` at once. Lamp always has `KJVs`, `BSBs`, `ASVs`, `WEBs` and
-`YLT`; the reader may have more. `Brenton` is always there too, but it renders the
-Greek Old Testament rather than the Hebrew and numbers its verses the Septuagint's
-way, so it is not one more English witness to the same verse — see SKILL.md.
+**Does the claim survive a change of translation?** Compare the relevant installed
+English translations with compatible coverage and numbering. Bundled candidates
+are `KJVs`, `BSBs`, `ASVs`, `WEBs` and `YLT`; use the module inventory, not an assumed
+guarantee of access. `Brenton` renders the Greek OT with its own numbering, so read
+[septuagint.md](septuagint.md) before treating its reference as a parallel.
 
 A claim that holds in one translation and dissolves in the rest rests on a
 translator, not on the text. Romans 8:3 is the standing example: four of the five

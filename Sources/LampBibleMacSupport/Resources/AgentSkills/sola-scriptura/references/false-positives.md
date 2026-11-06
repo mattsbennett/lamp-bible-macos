@@ -1,6 +1,6 @@
 # What not to flag
 
-Read this before the inventory and again before reporting. An audit that flags
+Read this for borderline claims in an inventory or report. An audit that flags
 figures of speech spends the authority it needs for the finding that matters, and
 a writer who gets forty findings reads none of them.
 
@@ -25,15 +25,16 @@ weekly memorial around this table" describes what the hearers do. The claim woul
 *as taught in Hebrews*, which attributes the practice to a text.
 
 **A claim the writer has already sourced.** When `DEVOTIONAL_CONTEXT.md` or a file
-under `context/` carries the support, the writer has done the work and told you where.
-Read it before flagging. An unsourced claim in the prose whose source sits in the
-context folder is at most a request to cite it in the text.
+under `context/` offers support, read and verify it before flagging. If it carries
+the claim, the remaining issue is at most a request to cite it in the prose. Its
+presence alone does not establish the claim or exempt a misrepresented source.
 
 ## Already honest
 
 **Hedged inference.** *I think*, *as far as we can tell from the text*, *arguably*,
 *seems to be*, *on one level*. The writer has marked it. There is nothing left to
-find, and re-flagging it teaches them that hedging buys nothing.
+find about unmarked inference. A hedge does not repair a misquotation or a claim
+the checked evidence contradicts; report that distinct problem, not another hedge.
 
 **Named external sources.** *Bruce argues*, *this is sometimes called a juridical
 parable*, *our statement of faith puts it this way*. Naming is the remedy for the
@@ -63,8 +64,8 @@ it.
 ## Not this audit's business
 
 **Translation choice.** Quoting one translation is not a finding. A claim that
-*depends* on one translation's wording where others read differently is — pass every
-translation to `read_passage` and report only the dependency.
+*depends* on one translation's wording where relevant alternatives read differently
+is — compare the installed compatible translations and report the dependency.
 
 **A community's wording rule.** Which terms a community's writing uses for a doctrine
 is a separate gate. Note an intersection in a clause; do not enforce it here.

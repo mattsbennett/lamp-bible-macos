@@ -200,7 +200,7 @@ struct ReaderSkillAccessTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent("Sources/LampBibleMac/Resources/AgentSkills", isDirectory: true)
+            .appendingPathComponent("Sources/LampBibleMacSupport/Resources/AgentSkills", isDirectory: true)
         try ReaderChatWorkspaceStore.prepare(
             workspace: workspace, configuration: configuration, bundledSkillsCatalog: shipped
         )
@@ -228,15 +228,28 @@ struct ReaderSkillAccessTests {
         }
     }
 
-    /// Started with nowhere to find skills, the answer says that, rather than
-    /// sending the agent to look for a writing it was never given.
-    @Test func asessionWithNoSkillsFolderSaysItHasNoSkills() async throws {
+    /// An external client has no workspace, but its canonical prompt still
+    /// needs to retrieve supporting references.
+    @Test func anExternalSessionCanDiscoverBundledStudySkills() async throws {
         let handler = LampMCPToolHandler(
             library: LampAgentLibrary(libraryRootURL: FileManager.default.temporaryDirectory)
         )
-        await #expect(throws: LampMCPToolError.noSkills) {
+        let listing = try await handler.call(name: "read_skill", arguments: nil)
+        let names = listing.structuredContent?.objectValue?["available"]?.arrayValue?
+            .compactMap(\.stringValue)
+        #expect(Set(names ?? []) == LampBundledSkills.studySkillNames)
+    }
+
+    @Test func aConfiguredEmptySessionDoesNotFallBackToOtherSkills() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-empty-skills-\(UUID().uuidString)")
+        let handler = LampMCPToolHandler(
+            library: LampAgentLibrary(libraryRootURL: root), skillsURL: root
+        )
+        let listing = try await handler.call(name: "read_skill", arguments: nil)
+        #expect(listing.structuredContent?.objectValue?["available"]?.arrayValue == [])
+        await #expect(throws: (any Error).self) {
             try await handler.call(name: "read_skill", arguments: ["name": .string("sola-scriptura")])
         }
-        #expect(LampMCPToolError.noSkills.localizedDescription.contains("No skills are installed"))
     }
 }

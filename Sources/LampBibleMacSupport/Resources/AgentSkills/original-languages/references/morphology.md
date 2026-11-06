@@ -43,9 +43,10 @@ on the presence of a waw or an article is read off the code, not off the parsing
 
 ## What a parsing settles, and what it does not
 
-**It settles the form.** Whether a verb is perfect or participle, whether a noun is
-plural, whether a pronoun is second person. These are facts, and where an argument
-turns on one it can be checked rather than asserted.
+**It reports the dataset's analysis of the form.** Whether a verb is perfect or
+participle, whether a noun is plural, whether a pronoun is second person. These
+can be checked against the annotations rather than asserted from recall. They do
+not expose alternative parsings or establish a clause's dependencies.
 
 **It does not settle the meaning.** The commonest overreach in the whole subject is to
 take a fact about form and present it as a fact about sense:
