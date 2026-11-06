@@ -157,6 +157,14 @@ different reading unsupported. That is not this audit, and it is how a commentat
 framing gets into the report under the audit's own name. Read the text, adjudicate,
 and leave the commentaries shut.
 
+**A reader asking what a passage means is not one of the three.** It is the commonest
+question there is, and the one where opening a commentary first does the most damage:
+the reading you meet first becomes the frame, its distinctions become the question's
+terms, and the answer arrives in a vocabulary the passage never used. Read the text,
+cross-reference it, answer from it. Then, if a source would add something the reader
+cannot get from the text — what a tradition holds, where a framing came from — say so
+and offer to go and read it, which is a different act from having already read it.
+
 Three things make one worth opening. The first is the reader's own question; the other
 two are reactions to the writing rather than inquiries of your own:
 
@@ -178,6 +186,16 @@ two are reactions to the writing rather than inquiries of your own:
 Neither use makes the source an authority. Something read for either reason is still
 reported as a source, not as support: *the argument here is Bruce's, and he offers it
 as a suggestion*.
+
+**What the library holds is never evidence.** A reader's shelf is an accident of what
+they bought, and the readings of the world are not represented on it in proportion to
+their merit: a commentary set covers all 66 books and answers every text, while a book
+written for one position covers what its author chose to treat. So *no source here
+treats this text from that reading* says nothing whatever about the reading, and a
+sentence like it must never appear among the points weighed. It is a fact about the
+library, and belongs with the other limits — what you could not check — where it warns
+the reader that one side had a fuller hearing than the other, which is the opposite of
+a point scored.
 
 ## Procedure
 
@@ -208,6 +226,14 @@ as a suggestion*.
    stop cross-referencing too early? A finding that does not survive this pass does
    not go in the report. Findings dropped here are worth one line at the end.
 
+   Ask one more thing of every step in the reasoning: **is the text I am resting on
+   itself in dispute here?** A contested text cannot settle another text in the same
+   dispute, however natural its reading looks to you, because the reader who disputes
+   the one disputes the other for the same reasons. Using it is not a strong argument
+   that some will resist; it is a circle, and it will hold up whichever side you began
+   on. Rest the step on a text both readings grant, or report that the step cannot be
+   taken.
+
    Run this step evenly, because it is where the audit most easily goes soft. A
    claim the writing takes for granted feels defended when it is only familiar, and
    this is the one step that lets you talk a finding out of existence. A finding
@@ -236,6 +262,28 @@ reader cannot see that from a list of references. And say when a reading cannot 
 stated without a word scripture does not use, which is the same fact about the
 evidence from the other side. Neither settles the question, and both are part of the
 answer.
+
+**Survey before you weigh.** A reader may ask you to say which way the evidence
+leans, and that is a fair thing to ask for. It is answerable only after the evidence
+is gathered, and gathering it is a separate act from judging it. Before giving any
+balance, set down what kinds of text each reading has to answer — not the verses that
+occur to you, which will be the famous ones and the ones the reading you met first
+made salient, but the kinds: the direct statements, the incidental descriptions, the
+accounts of the same events elsewhere, the places where the matter would have been
+mentioned had the writer held it. Then say, in the answer, which of those you actually
+read. A category you did not read is a category you cannot weigh, and the honest moves
+are to go and read it or to withhold the balance. Weighing what is to hand and calling
+it the balance of evidence is the failure this step exists to stop.
+
+**A balance that moves is a balance that was never taken.** If a reader then names an
+ordinary text and your conclusion shifts, the shift is the finding: say that the first
+answer was given before the evidence was in, and say which category you had missed. Do
+not present the new balance as a refinement of the old one, and do not let the reader
+infer that naming a text is what moved you — what moved you is that you weighed early.
+The remedy is the survey you skipped, so do it before the second answer, or the third
+will move too. A judgement that travels with whoever spoke last is worth nothing to a
+reader, and it is worse than saying the question is open, because it sounds like a
+conclusion.
 
 Keep the evidence rule. An adjudication with no text quoted is an opinion, whatever
 its verdict.

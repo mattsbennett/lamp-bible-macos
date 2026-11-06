@@ -173,6 +173,43 @@ struct SolaScripturaPromptTests {
         guard case let .text(text) = messages.first?.content else { return nil }
         return text
     }
+
+    /// Four rules written after reading a real reader chat, where the answer
+    /// opened on a commentary, counted the library's coverage as a point,
+    /// settled one disputed text with another, and gave a balance that moved as
+    /// soon as the reader named an ordinary verse. Each is the kind of rule that
+    /// a later tidy-up drops without anything failing, so each is pinned.
+    @Test func theSkillSaysACommentaryIsNotHowAPassageIsRead() throws {
+        let text = try skillText
+        #expect(text.contains("A reader asking what a passage means is not one of the three."))
+        // The prompt has carried this since before the skill did; they have to
+        // agree, or the same question gets two different answers by surface.
+        let prompt = try #require(auditText(
+            LampMCPPromptCatalog.messages(for: "sola-scriptura", arguments: nil) ?? []
+        )).split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        #expect(prompt.contains("do not open one to find out what a passage means"))
+    }
+
+    @Test func theSkillRefusesToCountTheLibraryAsEvidence() throws {
+        let text = try skillText
+        #expect(text.contains("What the library holds is never evidence."))
+        #expect(text.contains("says nothing whatever about the reading"))
+    }
+
+    @Test func theSkillForbidsSettlingADisputeWithADisputedText() throws {
+        let text = try skillText
+        #expect(text.contains("is the text I am resting on itself in dispute here?"))
+        #expect(text.contains("it is a circle"))
+    }
+
+    @Test func theSkillRequiresTheSurveyBeforeTheBalance() throws {
+        let text = try skillText
+        #expect(text.contains("Survey before you weigh."))
+        #expect(text.contains("A category you did not read is a category you cannot weigh"))
+        // The moving balance is the symptom the reader actually reports, so the
+        // skill has to name it rather than leaving it implied by the survey rule.
+        #expect(text.contains("A balance that moves is a balance that was never taken."))
+    }
 }
 
 /// Every surface that answers a scripture question says the same thing about
