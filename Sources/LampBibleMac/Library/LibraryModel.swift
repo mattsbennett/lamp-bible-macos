@@ -135,6 +135,9 @@ final class LibraryModel: ObservableObject {
     @Published private(set) var highlightsByReference: [Int: [LampVerseHighlight]] = [:]
     @Published private(set) var installedHighlightsByReference: [Int: [LampVerseHighlight]] = [:]
     @Published private(set) var noteReferences: Set<Int> = []
+    /// What is selected in the reader, for the reader chat. Its own object,
+    /// so a selection made does not redraw everything that watches the library.
+    let readerTextSelection = ReaderTextSelectionStore()
     @Published private(set) var installedNotesByReference: [Int: [LampVerseNote]] = [:]
     @Published private(set) var plans: [LampReadingPlan] = []
     @Published private(set) var devotionals: [LampDevotional] = []

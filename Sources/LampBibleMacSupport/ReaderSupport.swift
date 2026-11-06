@@ -1618,3 +1618,74 @@ public extension LampExternalBibleApplication {
         allCases.filter { $0.canOpenOnThisMac || $0.couldBeInstalledOnThisMac }
     }
 }
+
+/// Text selected in the reader, traced to the verses it came from.
+public struct ReaderSelectedPassage: Equatable, Sendable {
+    /// The words selected, without verse numbers or note letters.
+    public let text: String
+    public let firstReference: Int
+    public let lastReference: Int
+    /// The companion translation it was selected in, or nil for the one
+    /// being read.
+    public let translationID: String?
+
+    public init(text: String, firstReference: Int, lastReference: Int, translationID: String?) {
+        self.text = text
+        self.firstReference = firstReference
+        self.lastReference = lastReference
+        self.translationID = translationID
+    }
+
+    public var reference: String {
+        LampBibleReferenceFormatter.describeRange(from: firstReference, to: lastReference)
+    }
+}
+
+/// What the reader marks in the text it draws, so a selection can be traced
+/// back to scripture: which verse each character belongs to, and which
+/// characters are the reader's own marks rather than the translation's words.
+public enum ReaderTextMarks {
+    /// The verse a character belongs to, as an `NSNumber` reference.
+    public static let verse = NSAttributedString.Key("LampReaderVerse")
+    /// The companion translation a character is from, as a string. Absent
+    /// from the translation being read.
+    public static let translation = NSAttributedString.Key("LampReaderTranslation")
+    /// A verse number or a translator's note letter: drawn among the words,
+    /// and not one of them.
+    public static let apparatus = NSAttributedString.Key("LampReaderApparatus")
+
+    /// The scripture in `range`, or nil when it holds none: a selection of
+    /// only a verse number, or of a companion's name.
+    ///
+    /// Space drawn between verses carries no verse, and is kept; anything
+    /// else that carries none is not scripture, and is left out.
+    public static func passage(in text: NSAttributedString, range: NSRange) -> ReaderSelectedPassage? {
+        let range = NSIntersectionRange(range, NSRange(location: 0, length: text.length))
+        guard range.length > 0 else { return nil }
+        let string = text.string as NSString
+        var words = ""
+        var first: Int?
+        var last: Int?
+        var translationID: String?
+        text.enumerateAttributes(in: range) { attributes, run, _ in
+            guard attributes[apparatus] == nil else { return }
+            let piece = string.substring(with: run)
+            guard let reference = (attributes[verse] as? NSNumber)?.intValue else {
+                if piece.allSatisfy(\.isWhitespace) { words += piece }
+                return
+            }
+            words += piece
+            first = min(first ?? reference, reference)
+            last = max(last ?? reference, reference)
+            if translationID == nil { translationID = attributes[translation] as? String }
+        }
+        // A verse number left out leaves the space either side of it.
+        let collapsed = words
+            .replacingOccurrences(of: "[ \\t]{2,}", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let first, let last, !collapsed.isEmpty else { return nil }
+        return ReaderSelectedPassage(
+            text: collapsed, firstReference: first, lastReference: last, translationID: translationID
+        )
+    }
+}

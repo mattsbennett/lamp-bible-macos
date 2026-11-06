@@ -158,3 +158,113 @@ public enum LampWritingWorkspace {
         )
     }
 }
+
+/// What the writing editor has open and selected, as the writing chat is
+/// told it.
+///
+/// A Chat message is sent with it. A Terminal session is handed it with each
+/// message by a hook (see `AgentTerminalLaunchPlanner.contextCommand`), which
+/// reads it from `stateURL(in:)`, where the editor keeps it current.
+public struct WritingEditorFocus: Equatable, Sendable {
+    /// The file, from the workspace: `draft.md` for the writing's own prose.
+    public var documentPath: String
+    /// What the editor calls it: "Main Prose", or the file's name.
+    public var documentName: String
+    public var isVisual: Bool
+    public var selectedText: String?
+    /// Where the selection is, by line, on the Markdown surface. The visual
+    /// editor shows no lines.
+    public var selectedLines: ClosedRange<Int>?
+
+    public init(
+        documentPath: String,
+        documentName: String,
+        isVisual: Bool,
+        selectedText: String? = nil,
+        selectedLines: ClosedRange<Int>? = nil
+    ) {
+        self.documentPath = documentPath
+        self.documentName = documentName
+        self.isVisual = isVisual
+        self.selectedText = selectedText.flatMap { $0.isEmpty ? nil : $0 }
+        self.selectedLines = selectedLines
+    }
+
+    /// The Markdown surface, from its text and selection. Nothing is counted
+    /// unless something is selected, so a caret moving as the writer types
+    /// costs nothing.
+    public static func markdown(
+        documentPath: String,
+        documentName: String,
+        text: String,
+        selection: NSRange
+    ) -> WritingEditorFocus {
+        let string = text as NSString
+        let range = NSIntersectionRange(selection, NSRange(location: 0, length: string.length))
+        guard range.length > 0 else {
+            return WritingEditorFocus(documentPath: documentPath, documentName: documentName, isVisual: false)
+        }
+        func line(at location: Int) -> Int {
+            string.substring(to: location).utf16.lazy.filter { $0 == 0x0A }.count + 1
+        }
+        let first = line(at: range.location)
+        let last = line(at: NSMaxRange(range) - 1)
+        return WritingEditorFocus(
+            documentPath: documentPath,
+            documentName: documentName,
+            isVisual: false,
+            selectedText: string.substring(with: range),
+            selectedLines: first...last
+        )
+    }
+
+    /// The most of a selection the chat is sent. The agent can read the file.
+    static let maximumSelectionCharacters = 8_000
+
+    public var contextText: String {
+        let surface = isVisual ? "the visual editor" : "the Markdown editor"
+        var lines = [
+            "Lamp's writing editor, as it was when this message was sent:",
+            "Open: `\(documentPath)` (\(documentName)), in \(surface).",
+        ]
+        guard let selectedText else {
+            lines.append("Nothing is selected.")
+            return lines.joined(separator: "\n")
+        }
+        if let selectedLines {
+            let place = selectedLines.count == 1
+                ? "line \(selectedLines.lowerBound)"
+                : "lines \(selectedLines.lowerBound)–\(selectedLines.upperBound)"
+            lines.append("Selected, \(place) as the editor has it:")
+        } else {
+            lines.append("Selected, as the visual editor shows it (without its Markdown marks):")
+        }
+        let shown = selectedText.count > Self.maximumSelectionCharacters
+            ? String(selectedText.prefix(Self.maximumSelectionCharacters))
+                + "… (the selection runs on; the file has the rest)"
+            : selectedText
+        lines.append("\"\"\"\n\(shown)\n\"\"\"")
+        return lines.joined(separator: "\n")
+    }
+
+    /// A Chat message as the provider is sent it.
+    public func prompt(for message: String) -> String {
+        "\(contextText)\n\nThe user's message:\n\(message)"
+    }
+
+    /// Where the editor keeps this for a Terminal session to be handed.
+    /// Under `.lamp`, which sync leaves alone and Lamp does not open as a tab.
+    public static func stateURL(in workspace: URL) -> URL {
+        workspace
+            .appendingPathComponent(".lamp", isDirectory: true)
+            .appendingPathComponent("editor.md")
+    }
+
+    public func write(to workspace: URL) throws {
+        let url = Self.stateURL(in: workspace)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        try (contextText + "\n").write(to: url, atomically: true, encoding: .utf8)
+    }
+}

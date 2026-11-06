@@ -404,6 +404,58 @@ struct AgentTerminalLaunchPlannerTests {
     }
 }
 
+struct AgentTerminalEditorContextTests {
+    @Test func theEditorsStateGoesWithEachMessageToClaudeAndCodex() throws {
+        let settings = try JSONSerialization.jsonObject(with: AgentTerminalLaunchPlanner.claudeSettings()) as? [String: Any]
+        let hooks = try #require(settings?["hooks"] as? [String: [[String: [[String: String]]]]])
+        #expect(hooks["UserPromptSubmit"]?.first?["hooks"]?.map { $0["command"] } == [
+            AgentTerminalLaunchPlanner.captureCommand(prefix: "claude"),
+            AgentTerminalLaunchPlanner.contextCommand,
+        ])
+        #expect(hooks["Stop"]?.first?["hooks"]?.count == 1)
+        #expect(hooks["SessionStart"]?.first?["hooks"]?.count == 1)
+
+        // Pinned, as the Stop hook is: changing this makes every user trust
+        // Lamp's hooks again in Codex.
+        let codex = AgentTerminalLaunchPlanner.codexHookOverrides()
+        #expect(codex.count == 6)
+        #expect(codex[3] == #"hooks.UserPromptSubmit=[{hooks=[{type="command",command="d=\"${LAMP_CAPTURE_DIR:-}\"; [ -n \"$d\" ] || exit 0; mkdir -p \"$d\" && t=$(mktemp \"$d/.codex.XXXXXXXX\") && cat > \"$t\" && mv \"$t\" \"$d/codex.${t##*.}.json\"; exit 0"},{type="command",command="cat > /dev/null; f=\"${LAMP_EDITOR_STATE:-}\"; [ -n \"$f\" ] && [ -s \"$f\" ] && cat \"$f\"; exit 0"}]}]"#)
+    }
+
+    @Test func theLaunchNamesTheEditorsStateFile() {
+        let state = URL(fileURLWithPath: "/tmp/Lamp Writing/.lamp/editor.md")
+        let request = AgentTerminalLaunchPlanner.Request(
+            provider: .claude, executable: "claude", resumeSessionID: nil, newSessionID: "s",
+            recapFile: nil, recapText: nil,
+            captureDirectory: URL(fileURLWithPath: "/tmp/captured"),
+            claudeSettingsFile: URL(fileURLWithPath: "/tmp/claude-settings.json"),
+            openCodeConfigDirectory: URL(fileURLWithPath: "/tmp/opencode"),
+            editorStateFile: state
+        )
+        #expect(AgentTerminalLaunchPlanner.plan(request).environment["LAMP_EDITOR_STATE"] == state.path)
+    }
+
+    @Test func theContextHookPrintsTheStateAndNothingWithoutIt() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("lamp editor \(UUID().uuidString).md")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let state = "Lamp's writing editor, as it was when this message was sent:\nOpen: `draft.md` (Main Prose), in the visual editor.\nNothing is selected.\n"
+        try state.write(to: file, atomically: true, encoding: .utf8)
+        let command = AgentTerminalLaunchPlanner.contextCommand
+
+        let given = try run("/bin/sh", ["-c", command], stdin: CapturedPayloads.claudeStop, environment: ["LAMP_EDITOR_STATE": file.path])
+        #expect(given.status == 0)
+        #expect(given.text == state)
+
+        let outside = try run("/bin/sh", ["-c", command], stdin: CapturedPayloads.claudeStop, environment: ["LAMP_EDITOR_STATE": ""])
+        #expect(outside.status == 0)
+        #expect(outside.text.isEmpty)
+
+        let missing = try run("/bin/sh", ["-c", command], stdin: "{}", environment: ["LAMP_EDITOR_STATE": file.path + ".gone"])
+        #expect(missing.status == 0)
+        #expect(missing.text.isEmpty)
+    }
+}
+
 struct AgentTerminalShellTests {
     @Test func quotingSurvivesARealShell() throws {
         let awkward = "It's a \"path\" with $HOME, `ticks`, \\backslash and spaces"

@@ -1134,7 +1134,10 @@ struct NativeAgentChatView: View {
     let provider: AIProviderCLI
     let mode: AgentChatMode
     let canSend: Bool
-    let preparePrompt: (String) throws -> String
+    /// The message as the provider is to be sent it. Begun at Send, on the
+    /// main actor, so what it reads of the app is read then; it may then
+    /// wait, to read the library.
+    let preparePrompt: (String) async throws -> String
     /// Reports whether a reply is in flight. A container that can take this
     /// view off screen needs to know: tearing it down stops the run.
     let onRunningChanged: (Bool) -> Void
@@ -1151,13 +1154,15 @@ struct NativeAgentChatView: View {
     @State private var terminalRequest: AIProviderTerminalRequest?
     @State private var showingClearConfirmation = false
     @State private var submissionError: String?
+    /// A message is being prepared, between Send and the run starting.
+    @State private var isPreparing = false
 
     init(
         provider: AIProviderCLI,
         workspace: URL,
         mode: AgentChatMode = .writing,
         canSend: Bool = true,
-        preparePrompt: @escaping (String) throws -> String = { $0 },
+        preparePrompt: @escaping (String) async throws -> String = { $0 },
         onRunningChanged: @escaping (Bool) -> Void = { _ in },
         outlivesView: Bool = false
     ) {
@@ -1232,22 +1237,28 @@ struct NativeAgentChatView: View {
                         message: $draft,
                         placeholder: model.isRunning ? "\(provider.shortName) is working…" : "Message \(provider.shortName)"
                     ) { prompt in
-                        do {
-                            // Prepare synchronously before starting the task: the current
-                            // chapter must be captured at Send, not after navigation.
-                            let contextualPrompt = try preparePrompt(prompt)
-                            submissionError = nil
-                            Task {
+                        guard !isPreparing else { return false }
+                        isPreparing = true
+                        // Started now, and on the main actor until it first
+                        // waits, so the reader's place is read at Send and not
+                        // after a navigation.
+                        Task {
+                            defer { isPreparing = false }
+                            do {
+                                let contextualPrompt = try await preparePrompt(prompt)
+                                submissionError = nil
+                                isPreparing = false
                                 await model.send(prompt, contextualPrompt: contextualPrompt)
                                 scrollToBottom = true
+                            } catch {
+                                submissionError = error.localizedDescription
+                                // The message goes back where it was written.
+                                if draft.isEmpty { draft = prompt }
                             }
-                            return true
-                        } catch {
-                            submissionError = error.localizedDescription
-                            return false
                         }
+                        return true
                     }
-                    .disabled(!canSend || model.isRunning || connectionState != .connected)
+                    .disabled(!canSend || isPreparing || model.isRunning || connectionState != .connected)
                 }
                 // SwiftyChat gives every message its own right-click menu,
                 // which hides the one selected text would have.

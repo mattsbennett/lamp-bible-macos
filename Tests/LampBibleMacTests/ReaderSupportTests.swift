@@ -945,3 +945,59 @@ struct TypedReaderLocationTests {
         #expect(location("John 3")?.translationID == "bsb")
     }
 }
+
+struct ReaderTextMarksTests {
+    /// Verses as the reader draws them: each verse's number marked as not
+    /// scripture, its words tagged with its verse, and a plain space between.
+    private func paragraph(_ verses: [(reference: Int, number: String, words: String)], translation: String? = nil) -> NSAttributedString {
+        let text = NSMutableAttributedString()
+        for (index, verse) in verses.enumerated() {
+            if index > 0 { text.append(NSAttributedString(string: " ")) }
+            var tagged: [NSAttributedString.Key: Any] = [ReaderTextMarks.verse: NSNumber(value: verse.reference)]
+            if let translation { tagged[ReaderTextMarks.translation] = translation }
+            var number = tagged
+            number[ReaderTextMarks.apparatus] = true
+            text.append(NSAttributedString(string: verse.number, attributes: number))
+            text.append(NSAttributedString(string: " " + verse.words, attributes: tagged))
+        }
+        return text
+    }
+
+    @Test func aSelectionAcrossVersesIsTheirWordsAndTheirReference() throws {
+        let text = paragraph([
+            (43_003_016, "16", "For God so loved the world."),
+            (43_003_017, "17", "For God did not send his Son."),
+        ])
+        let start = (text.string as NSString).range(of: "loved").location
+        let end = NSMaxRange((text.string as NSString).range(of: "send"))
+        let passage = try #require(ReaderTextMarks.passage(in: text, range: NSRange(location: start, length: end - start)))
+        #expect(passage.text == "loved the world. For God did not send")
+        #expect(passage.reference == "John 3:16–17")
+        #expect(passage.translationID == nil)
+    }
+
+    @Test func noteLettersAreLeftOut() throws {
+        let text = NSMutableAttributedString(attributedString: paragraph([(43_003_016, "16", "For God so loved")]))
+        let at = (text.string as NSString).range(of: "loved").location
+        text.insert(NSAttributedString(string: "a", attributes: [
+            ReaderTextMarks.verse: NSNumber(value: 43_003_016), ReaderTextMarks.apparatus: true,
+        ]), at: at - 1)
+        let passage = try #require(ReaderTextMarks.passage(in: text, range: NSRange(location: 0, length: text.length)))
+        #expect(passage.text == "For God so loved")
+        #expect(passage.reference == "John 3:16")
+    }
+
+    @Test func aCompanionSaysWhichTranslationItIs() throws {
+        let text = paragraph([(43_003_016, "16", "Car Dieu a tant aimé le monde")], translation: "LSG")
+        let passage = try #require(ReaderTextMarks.passage(in: text, range: NSRange(location: 0, length: text.length)))
+        #expect(passage.translationID == "LSG")
+    }
+
+    @Test func aSelectionOfNoScriptureIsNone() {
+        let text = NSMutableAttributedString(string: "LSG  ")
+        text.append(paragraph([(43_003_016, "16", "Car Dieu")]))
+        #expect(ReaderTextMarks.passage(in: text, range: NSRange(location: 0, length: 3)) == nil)
+        #expect(ReaderTextMarks.passage(in: text, range: NSRange(location: 5, length: 2)) == nil)
+        #expect(ReaderTextMarks.passage(in: text, range: NSRange(location: 2, length: 0)) == nil)
+    }
+}

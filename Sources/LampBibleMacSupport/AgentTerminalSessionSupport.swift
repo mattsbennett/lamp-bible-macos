@@ -18,6 +18,11 @@ import Foundation
 // Each hook drops its payload, unaltered, into its own file. Lamp reads only the
 // documented fields, so a release that adds fields changes nothing, and one that
 // removes them stops capture visibly rather than corrupting the transcript.
+//
+// One more hook goes the other way. With each message, Claude Code and Codex
+// run a `UserPromptSubmit` hook that prints what the writing editor has open and
+// selected, and both add what such a hook prints to what the model is given.
+// OpenCode has no such hook; its instructions point it at the same file.
 
 /// What one captured file says happened in a Terminal session.
 public enum AgentTerminalCaptureEvent: Equatable, Sendable {
@@ -355,6 +360,7 @@ public enum AgentTerminalLauncher {
         workspace: URL,
         installID: String,
         openCodeConfigDirectory: URL,
+        editorStateFile: URL? = nil,
         now: Date = Date()
     ) throws -> Prepared {
         guard let provider = AIProviderIdentity.wireProvider(forProviderID: providerID) else {
@@ -398,7 +404,8 @@ public enum AgentTerminalLauncher {
             recapText: recapText,
             captureDirectory: AgentTerminalCaptureStore.captureDirectory(in: workspace),
             claudeSettingsFile: claudeSettings,
-            openCodeConfigDirectory: openCodeConfigDirectory
+            openCodeConfigDirectory: openCodeConfigDirectory,
+            editorStateFile: editorStateFile
         ))
         let script = terminalDirectory.appendingPathComponent("launch.sh")
         try AgentTerminalLaunchPlanner.shellScript(for: plan)
@@ -587,6 +594,9 @@ public enum AgentTerminalLaunchPlanner {
         public var captureDirectory: URL
         public var claudeSettingsFile: URL
         public var openCodeConfigDirectory: URL
+        /// What the writing editor has open and selected, kept current by
+        /// the editor, for the context hook to hand over with each message.
+        public var editorStateFile: URL?
 
         public init(
             provider: AgentChatWireProvider,
@@ -597,7 +607,8 @@ public enum AgentTerminalLaunchPlanner {
             recapText: String?,
             captureDirectory: URL,
             claudeSettingsFile: URL,
-            openCodeConfigDirectory: URL
+            openCodeConfigDirectory: URL,
+            editorStateFile: URL? = nil
         ) {
             self.provider = provider
             self.executable = executable
@@ -608,10 +619,12 @@ public enum AgentTerminalLaunchPlanner {
             self.captureDirectory = captureDirectory
             self.claudeSettingsFile = claudeSettingsFile
             self.openCodeConfigDirectory = openCodeConfigDirectory
+            self.editorStateFile = editorStateFile
         }
     }
 
     public static let captureDirectoryVariable = "LAMP_CAPTURE_DIR"
+    public static let editorStateVariable = "LAMP_EDITOR_STATE"
     static let noticeFormatName = "lamp-terminal-notice"
 
     public static func plan(_ request: Request) -> AgentTerminalLaunchPlan {
@@ -622,6 +635,9 @@ public enum AgentTerminalLaunchPlanner {
             guardedEnvironment: [],
             capturePrefix: AgentTerminalCaptureStore.filePrefix(for: request.provider)
         )
+        if let editorState = request.editorStateFile {
+            plan.environment[editorStateVariable] = editorState.path
+        }
         switch request.provider {
         case .claude:
             // Settings passed this way add to the user's own, hooks included.
@@ -704,11 +720,15 @@ public enum AgentTerminalLaunchPlanner {
         return lines.joined(separator: "\n") + "\n"
     }
 
-    /// The settings file for Claude's capture hooks.
+    /// The settings file for Claude's capture hooks, and the context hook
+    /// that hands over the editor's state with each message.
     public static func claudeSettings() throws -> Data {
-        let hook: [String: Any] = ["type": "command", "command": captureCommand(prefix: "claude")]
+        let capture: [String: Any] = ["type": "command", "command": captureCommand(prefix: "claude")]
+        let context: [String: Any] = ["type": "command", "command": contextCommand]
         let settings: [String: Any] = [
-            "hooks": Dictionary(uniqueKeysWithValues: capturedEvents.map { ($0, [["hooks": [hook]]]) }),
+            "hooks": Dictionary(uniqueKeysWithValues: capturedEvents.map { event in
+                (event, [["hooks": event == contextEvent ? [capture, context] : [capture]]])
+            }),
         ]
         return try JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys])
     }
@@ -721,11 +741,30 @@ public enum AgentTerminalLaunchPlanner {
     /// identical on every launch: any change, even to whitespace, asks the user
     /// to trust them again.
     public static func codexHookOverrides() -> [String] {
-        let handler = "{type=\"command\",command=\(tomlString(captureCommand(prefix: "codex")))}"
-        return capturedEvents.flatMap { ["-c", "hooks.\($0)=[{hooks=[\(handler)]}]"] }
+        let capture = "{type=\"command\",command=\(tomlString(captureCommand(prefix: "codex")))}"
+        let context = "{type=\"command\",command=\(tomlString(contextCommand))}"
+        return capturedEvents.flatMap { event in
+            let handlers = event == contextEvent ? "\(capture),\(context)" : capture
+            return ["-c", "hooks.\(event)=[{hooks=[\(handlers)]}]"]
+        }
     }
 
     static let capturedEvents = ["SessionStart", "UserPromptSubmit", "Stop"]
+    /// When the editor's state is handed over: with each message, where both
+    /// CLIs add what a hook prints to what the model is given.
+    static let contextEvent = "UserPromptSubmit"
+
+    /// Prints what the writing editor has open and selected, from the file
+    /// the launch names. Like the capture hook it names no path of its own,
+    /// so it is the same for every workspace and Codex's trust in it holds,
+    /// and it does nothing outside Lamp's launches.
+    ///
+    /// It reads its payload first, which it has no use for, so the CLI never
+    /// finds the pipe closed on it; and it always succeeds, since an editor
+    /// with nothing to say must not stop a message.
+    static let contextCommand =
+        "cat > /dev/null; f=\"${\(editorStateVariable):-}\"; "
+            + "[ -n \"$f\" ] && [ -s \"$f\" ] && cat \"$f\"; exit 0"
 
     /// Copies the hook's payload into the capture folder. It names no path of
     /// its own — the folder comes from the launch's environment — so it is the

@@ -1861,12 +1861,14 @@ private struct ReaderTextRepresentable: NSViewRepresentable {
         textView.textStorage?.setAttributedString(attributedText)
         textView.marks = marks
         textView.openNote = openNote
+        textView.selectionStore = context.environment.readerTextSelection
         return textView
     }
 
     func updateNSView(_ textView: ReaderTextView, context: Context) {
         context.coordinator.openLink = openLink
         textView.openNote = openNote
+        textView.selectionStore = context.environment.readerTextSelection
         textView.textLeading = textLeading
         if textView.attributedString() != attributedText {
             let selection = textView.selectedRange()
@@ -1943,10 +1945,27 @@ private final class ReaderTextView: NSTextView {
         }
     }
     var openNote: ((Int) -> Void)?
+    /// Told what the reader selects here, for the reader chat.
+    weak var selectionStore: ReaderTextSelectionStore?
 
     /// The strip the marks are drawn in. Drawn in the text view's own pass,
     /// after its text, they never reached the screen.
     private let margin = ReaderMarginView()
+
+    override func setSelectedRanges(
+        _ ranges: [NSValue],
+        affinity: NSSelectionAffinity,
+        stillSelecting: Bool
+    ) {
+        super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
+        // Once a drag ends, and only for the reader's own selecting: the view
+        // also puts a selection back itself, whenever its text is replaced.
+        guard !stillSelecting, window?.firstResponder === self,
+              let selectionStore, let textStorage else { return }
+        selectionStore.textView(
+            self, selected: ReaderTextMarks.passage(in: textStorage, range: selectedRange())
+        )
+    }
 
     override var textContainerOrigin: NSPoint { NSPoint(x: textLeading, y: 0) }
 
@@ -3833,6 +3852,7 @@ private struct TranslationReaderView: View, Equatable {
         .environment(\.openURL, OpenURLAction { url in
             handleReaderLink(url) ? .handled : .systemAction
         })
+        .environment(\.readerTextSelection, model.readerTextSelection)
     }
 
     /// A hidden reader ignores everything handed to it until it is shown again.
@@ -5120,12 +5140,16 @@ private struct TranslationReaderView: View, Equatable {
             baselineOffset: max(fontSize * 0.28, 4)
         )
         numberAttributes[.link] = verseURL
+        numberAttributes[ReaderTextMarks.verse] = NSNumber(value: verse.id)
+        numberAttributes[ReaderTextMarks.apparatus] = true
         result.append(NSAttributedString(
             string: verse.number.formatted(),
             attributes: numberAttributes
         ))
 
-        result.append(NSAttributedString(string: " ", attributes: bodyTextAttributes()))
+        var spaceAttributes = bodyTextAttributes()
+        spaceAttributes[ReaderTextMarks.verse] = NSNumber(value: verse.id)
+        result.append(NSAttributedString(string: " ", attributes: spaceAttributes))
         return result
     }
 
@@ -5254,10 +5278,28 @@ private struct TranslationReaderView: View, Equatable {
         return result
     }
 
+    /// A verse's words, each character marked with the verse it belongs to,
+    /// so text selected in the reader can say where it is from.
     private func verseBodyText(
         for verse: LampVerse,
         range: ReaderTextRange? = nil,
         column: ReaderVerseColumn = .reading
+    ) -> NSAttributedString {
+        let body = NSMutableAttributedString(
+            attributedString: untaggedVerseBodyText(for: verse, range: range, column: column)
+        )
+        let whole = NSRange(location: 0, length: body.length)
+        body.addAttribute(ReaderTextMarks.verse, value: NSNumber(value: verse.id), range: whole)
+        if let companionID = column.companionID {
+            body.addAttribute(ReaderTextMarks.translation, value: companionID, range: whole)
+        }
+        return body
+    }
+
+    private func untaggedVerseBodyText(
+        for verse: LampVerse,
+        range: ReaderTextRange?,
+        column: ReaderVerseColumn
     ) -> NSAttributedString {
         let text = styledText(for: verse, column: column)
         let characterIndices = Array(verse.text.indices) + [verse.text.endIndex]
@@ -5322,6 +5364,7 @@ private struct TranslationReaderView: View, Equatable {
                 baselineOffset: max(fontSize * 0.32, 5)
             )
             attributes[.link] = readerFootnoteURL(verse: verse.id, index: insertion.index, companionID: companionID)
+            attributes[ReaderTextMarks.apparatus] = true
             guard insertion.location <= result.length else { continue }
             result.insert(
                 NSAttributedString(

@@ -411,6 +411,10 @@ struct DevotionalEditorView: View {
     @State private var footnotesRevealToken = 0
     @State private var tipTapCoordinator: TipTapEditorCoordinator?
     @State private var tipTapSelection = TipTapSelectionState()
+    /// The text selected in the visual editor, read from the page a moment
+    /// after the selection settles, while the agent pane is open to be told.
+    @State private var visualSelectedText = ""
+    @State private var visualSelectionRead: Task<Void, Never>?
     @State private var visualEditorIsReady = false
     @State private var find = WritingFindController()
     @State private var markdownFinder = MarkdownTextFinder()
@@ -520,6 +524,43 @@ struct DevotionalEditorView: View {
         )
     }
 
+    /// What the writing chat is told the editor has open and selected.
+    private var editorFocus: WritingEditorFocus {
+        let document = selectedWorkspaceDocumentID.flatMap { id in
+            workspaceDocuments.first { $0.id == id }
+        }
+        let path = document?.relativePath ?? LampWritingWorkspace.draftFilename
+        let name = document == nil ? "Main Prose" : path
+        guard !isEditingVisually else {
+            return WritingEditorFocus(
+                documentPath: path, documentName: name, isVisual: true,
+                selectedText: visualSelectedText
+            )
+        }
+        return .markdown(
+            documentPath: path,
+            documentName: name,
+            text: activeTextBinding.wrappedValue,
+            selection: activeSelectionBinding.wrappedValue
+        )
+    }
+
+    /// The page's selection, read once it has stopped changing: it reports a
+    /// change for every caret move, which is every keystroke, and the text is
+    /// a trip into the page.
+    private func readVisualSelectionSoon() {
+        visualSelectionRead?.cancel()
+        guard showingAgentWorkspace else { return }
+        visualSelectionRead = Task {
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled, let tipTapCoordinator else { return }
+            tipTapCoordinator.getSelectedText { text in
+                let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if visualSelectedText != text { visualSelectedText = text }
+            }
+        }
+    }
+
     private var workspaceDocumentEditTrigger: [String] {
         workspaceDocuments.map { "\($0.id)\u{0}\($0.text)" }
     }
@@ -578,6 +619,7 @@ struct DevotionalEditorView: View {
                                 devotionalID: identifier,
                                 draftMarkdown: content,
                                 contextDocument: agentContextDocument,
+                                editorFocus: editorFocus,
                                 importDraft: { importedDraft in
                                     content = importedDraft
                                 }
@@ -630,6 +672,13 @@ struct DevotionalEditorView: View {
         .focusedSceneValue(\.writingFind, find)
         .onChange(of: activeFindTarget.map(ObjectIdentifier.init), initial: true) {
             find.attach(activeFindTarget)
+        }
+        // What is selected when the agent pane opens, or another document is
+        // shown, has had no change of selection to report it.
+        .onChange(of: showingAgentWorkspace) { readVisualSelectionSoon() }
+        .onChange(of: selectedWorkspaceDocumentID) {
+            visualSelectedText = ""
+            readVisualSelectionSoon()
         }
         .sheet(isPresented: $showingAudioRecorder) {
             DevotionalAudioRecorderView(devotionalID: identifier) { storedURL in
@@ -959,6 +1008,7 @@ struct DevotionalEditorView: View {
                     coordinator.onSelectionChanged = { selection in
                         DispatchQueue.main.async {
                             tipTapSelection = selection
+                            readVisualSelectionSoon()
                         }
                     }
                     // Nothing should reach this editor's text once it has gone.

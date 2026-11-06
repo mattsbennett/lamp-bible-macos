@@ -1,3 +1,4 @@
+import AppKit
 import LampCore
 #if canImport(LampBibleMacSupport)
 import LampBibleMacSupport
@@ -48,14 +49,139 @@ struct ReaderChatSidebarView: View {
         return personalContentEnabled ? "\(modules) and personal study content" : modules
     }
 
-    private var context: ReaderChatContext? {
+    private var context: ReaderChatContext? { capture()?.context(notes: []) }
+
+    /// What a message is sent with that can be read from the reader at once.
+    /// The reader's notes are read from the library after, by `notes(on:)`.
+    private struct Capture {
+        let reference: String
+        let translationID: String
+        let translationName: String
+        let selectedVerse: String?
+        let selection: ReaderChatContext.Selection?
+        let sharesPersonalStudy: Bool
+        let highlights: [ReaderChatContext.Highlight]
+        let noteReferences: [Int]
+
+        func context(notes: [ReaderChatContext.Note]) -> ReaderChatContext {
+            ReaderChatContext(
+                reference: reference,
+                translationID: translationID,
+                translationName: translationName,
+                selectedVerse: selectedVerse,
+                selection: selection,
+                personalStudy: sharesPersonalStudy
+                    ? .shared(notes: notes, highlights: highlights)
+                    : .notShared
+            )
+        }
+    }
+
+    private func capture() -> Capture? {
         guard let book = libraryModel.selectedBook,
               let translation = libraryModel.selectedTranslation else { return nil }
-        return ReaderChatContext(
-            reference: "\(book.name) \(libraryModel.selectedChapterNumber)",
+        let chapter = libraryModel.selectedChapterNumber
+        let inChapter = { (reference: Int) in
+            reference / 1_000 == book.id * 1_000 + chapter
+        }
+        let sharesPersonalStudy = ReaderChatContext.sharesPersonalStudy(under: accessPolicy)
+        let selection = libraryModel.readerTextSelection.current.map { passage in
+            ReaderChatContext.Selection(
+                text: passage.text,
+                reference: passage.reference,
+                translationName: passage.translationID.map { id in
+                    libraryModel.modules.first { $0.id == id }?.name ?? id
+                } ?? translation.name
+            )
+        }
+        return Capture(
+            reference: "\(book.name) \(chapter)",
             translationID: translation.id,
-            translationName: translation.name
+            translationName: translation.name,
+            selectedVerse: libraryModel.selectedVerseReference.flatMap { reference in
+                inChapter(reference)
+                    ? LampBibleReferenceFormatter.describeRange(from: reference, to: reference)
+                    : nil
+            },
+            selection: selection,
+            sharesPersonalStudy: sharesPersonalStudy,
+            highlights: sharesPersonalStudy
+                ? personalHighlights(where: inChapter)
+                : [],
+            noteReferences: sharesPersonalStudy
+                ? libraryModel.noteReferences.filter(inChapter).sorted()
+                : []
         )
+    }
+
+    /// The reader's own highlights in the chapter, with the words each marks.
+    private func personalHighlights(where inChapter: @escaping (Int) -> Bool) -> [ReaderChatContext.Highlight] {
+        let verses = Dictionary(
+            (libraryModel.chapter?.verses ?? []).map { ($0.id, $0.text) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        return libraryModel.highlightsByReference.keys.filter(inChapter).sorted().flatMap { reference in
+            libraryModel.personalHighlights(for: reference).map { highlight in
+                ReaderChatContext.Highlight(
+                    reference: LampBibleReferenceFormatter.describeRange(from: reference, to: reference),
+                    color: highlight.color.map(Self.colorName),
+                    style: Self.styleName(highlight.style),
+                    words: verses[reference].flatMap { Self.words(of: highlight, in: $0) }
+                )
+            }
+        }
+    }
+
+    /// The words a highlight marks, or nil when it marks the whole verse or
+    /// its offsets no longer fit the verse.
+    private static func words(of highlight: LampVerseHighlight, in text: String) -> String? {
+        let start = max(highlight.startOffset, 0)
+        let end = min(highlight.endOffset, text.count)
+        guard end > start, start > 0 || end < text.count else { return nil }
+        let characters = Array(text)
+        return String(characters[start..<end]).trimmingCharacters(in: .whitespaces)
+    }
+
+    private static func colorName(_ hex: String) -> String {
+        let stored = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
+        return StudyHighlightPalette.colors
+            .first { $0.hex.caseInsensitiveCompare(stored) == .orderedSame }?
+            .name.lowercased() ?? hex
+    }
+
+    private static func styleName(_ style: LampHighlightStyle) -> String? {
+        switch style {
+        case .highlight: nil
+        case .underlineSolid: "underlined"
+        case .underlineDashed: "dashed underline"
+        case .underlineDotted: "dotted underline"
+        }
+    }
+
+    /// The reader's own notes on these verses, each once: a note on several
+    /// verses is found from each of them.
+    private func notes(on references: [Int]) async -> [ReaderChatContext.Note] {
+        var seen: Set<String> = []
+        var notes: [ReaderChatContext.Note] = []
+        for reference in references {
+            guard let note = try? await libraryModel.personalNote(for: reference),
+                  seen.insert(note.id).inserted else { continue }
+            // Verse 0 is the chapter's own note, which "Genesis 1:0" would
+            // not say.
+            let verses = ([reference] + note.verseReferences).filter { $0 % 1_000 != 0 }
+            let chapter = reference - reference % 1_000
+            notes.append(ReaderChatContext.Note(
+                reference: verses.isEmpty
+                    ? LampBibleReferenceFormatter.describeRange(from: chapter + 1, to: chapter + 999)
+                        + " (the whole chapter)"
+                    : LampBibleReferenceFormatter.describeRange(
+                        from: verses.min() ?? reference, to: verses.max() ?? reference
+                    ),
+                title: note.title,
+                content: note.content
+            ))
+        }
+        return notes
     }
 
     var body: some View {
@@ -85,14 +211,24 @@ struct ReaderChatSidebarView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                if let context {
-                    Label(context.reference, systemImage: "book")
+                if let capture = capture() {
+                    Label(capture.reference, systemImage: "book")
                         .font(.subheadline.weight(.medium))
-                    Text(context.translationName)
+                    Text(capture.translationName)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                        .help(context.translationName)
+                        .help(capture.translationName)
+                    ReaderChatAttachmentsLine(
+                        selection: libraryModel.readerTextSelection,
+                        selectedVerse: capture.selectedVerse,
+                        personalStudy: capture.sharesPersonalStudy
+                            ? .shared(
+                                notedVerses: capture.noteReferences.count,
+                                highlights: capture.highlights.count
+                            )
+                            : .notShared
+                    )
                 } else {
                     Text("Choose a chapter in the reader to begin.")
                         .font(.caption)
@@ -118,13 +254,14 @@ struct ReaderChatSidebarView: View {
                     mode: .reader(configuration),
                     canSend: context != nil,
                     preparePrompt: { question in
-                        guard let context else {
+                        guard let capture = capture() else {
                             throw CocoaError(.fileReadUnknown, userInfo: [
                                 NSLocalizedDescriptionKey: "Choose a chapter in the reader first.",
                             ])
                         }
                         try writeAccessPolicy()
-                        return context.prompt(for: question)
+                        let notes = await notes(on: capture.noteReferences)
+                        return capture.context(notes: notes).prompt(for: question)
                     },
                     // The pane is closed, swapped for Study and emptied out of
                     // sight; none of those should end the conversation in it.
@@ -193,5 +330,102 @@ struct ReaderChatSidebarView: View {
         } catch {
             preparationError = error.localizedDescription
         }
+    }
+}
+
+/// What each message is sent with besides the chapter, said where the
+/// reader can see it before sending: the chat being told of a selection or a
+/// note should never be a surprise.
+private struct ReaderChatAttachmentsLine: View {
+    enum PersonalStudy {
+        case notShared
+        case shared(notedVerses: Int, highlights: Int)
+    }
+
+    @ObservedObject var selection: ReaderTextSelectionStore
+    let selectedVerse: String?
+    let personalStudy: PersonalStudy
+
+    private var parts: [String] {
+        var parts: [String] = []
+        if let passage = selection.current {
+            parts.append("Selection: \(passage.reference)")
+        } else if let selectedVerse {
+            parts.append(selectedVerse)
+        }
+        switch personalStudy {
+        case .notShared:
+            parts.append("notes and highlights not shared")
+        case .shared(0, 0):
+            parts.append("no notes or highlights here")
+        case .shared(let notedVerses, let highlights):
+            var counts: [String] = []
+            if notedVerses > 0 { counts.append(notedVerses == 1 ? "1 note" : "\(notedVerses) notes") }
+            if highlights > 0 { counts.append(highlights == 1 ? "1 highlight" : "\(highlights) highlights") }
+            parts.append("your " + counts.joined(separator: ", "))
+        }
+        return parts
+    }
+
+    private var help: String {
+        var help = "Each message is sent with the chapter, the verse marked in the reader"
+        help += ", any text selected in it"
+        switch personalStudy {
+        case .notShared:
+            help += ". Your notes and highlights are not, because personal study content is off in AI & Agents settings."
+        case .shared:
+            help += ", and your own notes and highlights in the chapter."
+        }
+        if let passage = selection.current {
+            help += "\n\nSelected: “\(passage.text.prefix(300))\(passage.text.count > 300 ? "…" : "")”"
+        }
+        return help
+    }
+
+    var body: some View {
+        Label(parts.joined(separator: " · "), systemImage: "paperclip")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(2)
+            .help(help)
+    }
+}
+
+/// The text selected in the reader, as the reader chat is told it.
+///
+/// One selection across the reader, as there is one in a document: each
+/// paragraph is its own text view, and each keeps its own selection, so
+/// selecting in one clears the one before. Told only of the reader's own
+/// selecting; see `ReaderTextView.setSelectedRanges`.
+@MainActor
+final class ReaderTextSelectionStore: ObservableObject {
+    @Published private(set) var selection: ReaderSelectedPassage?
+    private weak var holder: NSTextView?
+
+    /// The selection, while the text it was made in is still on screen. A
+    /// chapter left, or text scrolled far enough away to be put away, takes
+    /// its selection with it, as it does from sight.
+    var current: ReaderSelectedPassage? {
+        holder?.window == nil ? nil : selection
+    }
+
+    func textView(_ textView: NSTextView, selected passage: ReaderSelectedPassage?) {
+        let previous = holder
+        holder = passage == nil ? nil : textView
+        if let previous, previous !== textView {
+            previous.setSelectedRange(NSRange(location: previous.selectedRange().location, length: 0))
+        }
+        if selection != passage { selection = passage }
+    }
+}
+
+private struct ReaderTextSelectionKey: EnvironmentKey {
+    static let defaultValue: ReaderTextSelectionStore? = nil
+}
+
+extension EnvironmentValues {
+    var readerTextSelection: ReaderTextSelectionStore? {
+        get { self[ReaderTextSelectionKey.self] }
+        set { self[ReaderTextSelectionKey.self] = newValue }
     }
 }

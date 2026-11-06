@@ -122,3 +122,66 @@ struct WritingWorkspaceTests {
         )
     }
 }
+
+struct WritingEditorFocusTests {
+    private let text = "# Title\n\nFirst paragraph.\nSecond line here.\n\nLast."
+
+    @Test func aMarkdownSelectionSaysItsLinesAndWords() {
+        let start = (text as NSString).range(of: "paragraph").location
+        let end = NSMaxRange((text as NSString).range(of: "Second line"))
+        let focus = WritingEditorFocus.markdown(
+            documentPath: "draft.md", documentName: "Main Prose", text: text,
+            selection: NSRange(location: start, length: end - start)
+        )
+        #expect(focus.selectedText == "paragraph.\nSecond line")
+        #expect(focus.selectedLines == 3...4)
+        #expect(focus.contextText == """
+        Lamp's writing editor, as it was when this message was sent:
+        Open: `draft.md` (Main Prose), in the Markdown editor.
+        Selected, lines 3–4 as the editor has it:
+        \"\"\"
+        paragraph.
+        Second line
+        \"\"\"
+        """)
+    }
+
+    @Test func aCaretIsNothingSelected() {
+        let focus = WritingEditorFocus.markdown(
+            documentPath: "outline.md", documentName: "outline.md", text: text,
+            selection: NSRange(location: 12, length: 0)
+        )
+        #expect(focus.selectedText == nil)
+        #expect(focus.contextText.hasSuffix("Open: `outline.md` (outline.md), in the Markdown editor.\nNothing is selected."))
+    }
+
+    @Test func aSelectionOnOneLineSaysSo() {
+        let focus = WritingEditorFocus.markdown(
+            documentPath: "draft.md", documentName: "Main Prose", text: text,
+            selection: (text as NSString).range(of: "Last")
+        )
+        #expect(focus.selectedLines == 6...6)
+        #expect(focus.contextText.contains("Selected, line 6 as the editor has it:"))
+    }
+
+    @Test func theVisualEditorSaysItsTextIsWithoutMarks() {
+        let focus = WritingEditorFocus(documentPath: "draft.md", documentName: "Main Prose", isVisual: true, selectedText: "First paragraph.")
+        #expect(focus.contextText.contains("in the visual editor."))
+        #expect(focus.contextText.contains("as the visual editor shows it (without its Markdown marks)"))
+        #expect(WritingEditorFocus(documentPath: "draft.md", documentName: "Main Prose", isVisual: true, selectedText: "").selectedText == nil)
+    }
+
+    @Test func aChatMessageFollowsTheEditorsState() {
+        let focus = WritingEditorFocus(documentPath: "draft.md", documentName: "Main Prose", isVisual: true)
+        #expect(focus.prompt(for: "Tighten this") == focus.contextText + "\n\nThe user's message:\nTighten this")
+    }
+
+    @Test func itIsKeptWhereTheHookReadsIt() throws {
+        let workspace = FileManager.default.temporaryDirectory.appendingPathComponent("lamp-focus-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let focus = WritingEditorFocus(documentPath: "draft.md", documentName: "Main Prose", isVisual: false)
+        try focus.write(to: workspace)
+        #expect(WritingEditorFocus.stateURL(in: workspace).path.hasSuffix("/.lamp/editor.md"))
+        #expect(try String(contentsOf: WritingEditorFocus.stateURL(in: workspace), encoding: .utf8) == focus.contextText + "\n")
+    }
+}
