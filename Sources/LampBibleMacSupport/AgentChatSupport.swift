@@ -6,6 +6,65 @@ public enum AgentChatWireProvider: String, Sendable {
     case openCode
 }
 
+/// Which model a provider's CLI should run, when the reader does not want its
+/// default.
+///
+/// Lamp names no model of its own. A model list in an app goes stale the week
+/// after it ships, and a reader whose provider has a newer one would be stuck
+/// with whatever was current when the build was made. So the only names
+/// offered are the provider's own standing aliases, which the CLI resolves to
+/// whatever it currently means by them, and anything else is typed in and
+/// passed through untouched.
+public enum AgentChatModelChoice {
+    /// Where one provider's choice is kept. Per provider, because a name means
+    /// nothing to another one.
+    public static func defaultsKey(_ provider: AgentChatWireProvider) -> String {
+        "chat.model.\(provider.rawValue)"
+    }
+
+    /// Names the provider itself keeps pointed at its current models. Empty
+    /// where a provider publishes no such aliases: then the choice is its
+    /// default or a name the reader types, and guessing a list would be
+    /// inventing one.
+    public static func aliases(_ provider: AgentChatWireProvider) -> [String] {
+        switch provider {
+        case .claude: ["opus", "sonnet", "haiku"]
+        case .codex, .openCode: []
+        }
+    }
+
+    /// What a stored choice is worth passing on: nothing, for an empty or
+    /// blank one, which means the provider's default.
+    public static func canonical(_ stored: String?) -> String? {
+        guard let trimmed = stored?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty
+        else { return nil }
+        return trimmed
+    }
+
+    /// The flag this provider takes. Each spells it differently, and openCode
+    /// wants a qualified name rather than a bare one.
+    public static func arguments(
+        for model: String?, provider: AgentChatWireProvider
+    ) -> [String] {
+        guard let model = canonical(model) else { return [] }
+        switch provider {
+        case .claude, .openCode: return ["--model", model]
+        case .codex: return ["-m", model]
+        }
+    }
+
+    /// What to show beneath the picker, so a reader typing a name knows the
+    /// shape the provider expects.
+    public static func hint(_ provider: AgentChatWireProvider) -> String {
+        switch provider {
+        case .claude: "An alias such as opus, or a full model name."
+        case .codex: "A model name the Codex CLI accepts."
+        case .openCode: "provider/model, optionally #variant."
+        }
+    }
+}
+
 public enum AgentChatMode: Equatable, Sendable {
     case writing
     case reader(LampAgentMCPConfiguration)
@@ -23,14 +82,19 @@ public enum AgentChatLaunchArguments {
         sessionID: String?,
         proposedSessionID: String?,
         mode: AgentChatMode = .writing,
-        permissionHookSettings: String? = nil
+        permissionHookSettings: String? = nil,
+        model: String? = nil
     ) -> [String] {
+        let modelArguments = AgentChatModelChoice.arguments(for: model, provider: provider)
         switch provider {
         case .codex:
             var arguments = [
                 "exec", "--json", "--sandbox", mode.isReadOnly ? "read-only" : "workspace-write",
                 "--skip-git-repo-check",
             ]
+            // Before `resume`, which is a subcommand and takes the flags that
+            // follow it as its own.
+            arguments += modelArguments
             if case .reader(let configuration) = mode {
                 // Explicit overrides also work before a generated workspace is trusted.
                 arguments += ["-c", "approval_policy=\"never\""]
@@ -44,6 +108,7 @@ public enum AgentChatLaunchArguments {
                 "-p", "--output-format", "stream-json", "--verbose",
                 "--include-partial-messages", "--permission-mode", mode.isReadOnly ? "dontAsk" : "acceptEdits",
             ]
+            arguments += modelArguments
             if case .reader(let configuration) = mode {
                 arguments += [
                     "--tools", "", "--allowedTools", "mcp__lamp__*",
@@ -64,6 +129,7 @@ public enum AgentChatLaunchArguments {
             return arguments
         case .openCode:
             var arguments = ["run", "--format", "json"]
+            arguments += modelArguments
             if mode.isReadOnly { arguments += ["--pure", "--agent", "lamp-reader"] }
             if let sessionID { arguments += ["--session", sessionID] }
             arguments += ["--", prompt]

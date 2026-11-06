@@ -895,7 +895,13 @@ private final class NativeAgentChatModel: ObservableObject {
                 sessionID: resumedSessionID,
                 proposedSessionID: proposedSessionID,
                 mode: mode,
-                permissionHookSettings: channel.map { ClaudePermissionHook.settingsJSON(for: $0) }
+                permissionHookSettings: channel.map { ClaudePermissionHook.settingsJSON(for: $0) },
+                // Read as the run starts rather than held on the model: the
+                // picker writes straight to defaults, and a chat left open
+                // while it changed would otherwise keep launching the old one.
+                model: UserDefaults.standard.string(
+                    forKey: AgentChatModelChoice.defaultsKey(wire)
+                )
             ),
             workingDirectory: workspace,
             onLine: { line in

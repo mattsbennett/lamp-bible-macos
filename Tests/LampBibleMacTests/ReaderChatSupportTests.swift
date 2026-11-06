@@ -76,6 +76,73 @@ struct ReaderChatSupportTests {
         #expect(!openCode.contains("--agent"))
     }
 
+    @Test func noModelIsNamedUnlessTheReaderPicksOne() {
+        // The default has to stay silent. Naming a model Lamp believes in would
+        // pin every chat to whatever was current when the build was made.
+        for provider in [AgentChatWireProvider.claude, .codex, .openCode] {
+            let arguments = AgentChatLaunchArguments.make(
+                provider: provider, prompt: "Read", sessionID: nil, proposedSessionID: nil
+            )
+            #expect(!arguments.contains("--model"))
+            #expect(!arguments.contains("-m"))
+        }
+    }
+
+    @Test func eachProviderIsToldTheModelInItsOwnFlag() {
+        let claude = AgentChatLaunchArguments.make(
+            provider: .claude, prompt: "Read", sessionID: nil, proposedSessionID: nil,
+            model: "opus"
+        )
+        #expect(value(after: "--model", in: claude) == "opus")
+        let codex = AgentChatLaunchArguments.make(
+            provider: .codex, prompt: "Read", sessionID: nil, proposedSessionID: nil,
+            model: "a-codex-model"
+        )
+        #expect(value(after: "-m", in: codex) == "a-codex-model")
+        let openCode = AgentChatLaunchArguments.make(
+            provider: .openCode, prompt: "Read", sessionID: nil, proposedSessionID: nil,
+            model: "anthropic/claude#thinking"
+        )
+        #expect(value(after: "--model", in: openCode) == "anthropic/claude#thinking")
+    }
+
+    @Test func aModelReachesCodexAndNotItsResumeSubcommand() {
+        // `resume` takes the flags after it as its own, so the model has to be
+        // named before it or it is read as an argument of the subcommand.
+        let codex = AgentChatLaunchArguments.make(
+            provider: .codex, prompt: "Read", sessionID: "session-1", proposedSessionID: nil,
+            model: "a-codex-model"
+        )
+        let model = try! #require(codex.firstIndex(of: "-m"))
+        let resume = try! #require(codex.firstIndex(of: "resume"))
+        #expect(model < resume)
+    }
+
+    @Test func aBlankModelMeansTheProvidersOwnDefault() {
+        for blank in ["", "   ", "\n"] {
+            let arguments = AgentChatLaunchArguments.make(
+                provider: .claude, prompt: "Read", sessionID: nil, proposedSessionID: nil,
+                model: blank
+            )
+            #expect(!arguments.contains("--model"))
+        }
+        // And a name is passed on as typed, trimmed of the spaces around it.
+        #expect(AgentChatModelChoice.canonical("  opus  ") == "opus")
+        #expect(AgentChatModelChoice.canonical(nil) == nil)
+    }
+
+    @Test func onlyTheProvidersOwnAliasesAreOffered() {
+        // Lamp names no model of its own: Claude's aliases are the CLI's, and
+        // a provider that publishes none is offered none rather than a guess.
+        #expect(AgentChatModelChoice.aliases(.claude) == ["opus", "sonnet", "haiku"])
+        #expect(AgentChatModelChoice.aliases(.codex).isEmpty)
+        #expect(AgentChatModelChoice.aliases(.openCode).isEmpty)
+        // Each provider keeps its own choice; one key cannot serve two.
+        let keys = Set([AgentChatWireProvider.claude, .codex, .openCode]
+            .map(AgentChatModelChoice.defaultsKey))
+        #expect(keys.count == 3)
+    }
+
     @Test func writingAsksAboutToolCallsOnlyWhereItCanAnswer() {
         let settings = #"{"hooks":{}}"#
         let claude = AgentChatLaunchArguments.make(
