@@ -125,7 +125,10 @@ struct ReaderChatSidebarView: View {
                         }
                         try writeAccessPolicy()
                         return context.prompt(for: question)
-                    }
+                    },
+                    // The pane is closed, swapped for Study and emptied out of
+                    // sight; none of those should end the conversation in it.
+                    outlivesView: true
                 )
                 .id("\(provider.rawValue)|\(workspace.path)")
             } else if let preparationError {

@@ -101,11 +101,6 @@ struct LibraryRootView: View {
     @State private var readerSidebarRevealedWidth: Double = 0
     @State private var isReaderSidebarContentReady = false
     @State private var isReaderSidebarTransitioning = false
-    /// Set when leaving the reader closed its study column. The reader takes no
-    /// updates while it's out of sight, so the column is still drawn open there,
-    /// and the close reaches it only as it's shown again: where it mustn't
-    /// animate, or the column would be seen closing.
-    @State private var readerSidebarClosedOutOfSight = false
     @State private var planReadingMode: PlanReadingMode?
     // Keep hover mutations out of this view's observation graph. Only the small
     // readout observes the store, so moving between words cannot rebuild the
@@ -303,22 +298,12 @@ struct LibraryRootView: View {
             workspace.requestedStrongsKey = nil
         }
         .onChange(of: selection) { _, newValue in
+            // The study or chat column stays open out of sight, and is open
+            // when the reader comes back. Closing it on the way out looked
+            // like losing the chat in it (user, 2026-11-05).
             if !isReaderSelection(newValue) {
-                if readerSidebar != nil || isReaderSidebarMounted {
-                    readerSidebarClosedOutOfSight = true
-                }
-                // Closed outright rather than by the column's animated task,
-                // which would run only once the reader is shown again.
-                readerSidebar = nil
-                isReaderSidebarMounted = false
-                isReaderSidebarContentReady = false
-                isReaderSidebarTransitioning = false
-                readerSidebarRevealedWidth = 0
                 // Its popover hangs from the reader's tab bar.
                 showingNewReaderTab = false
-            } else if readerSidebarClosedOutOfSight {
-                // Shown again, and the update that showed it closed the column.
-                readerSidebarClosedOutOfSight = false
             }
         }
         .onChange(of: workspace.currentLocation) { _, location in
@@ -682,7 +667,17 @@ struct LibraryRootView: View {
 
                     if isReaderSidebarMounted {
                         StudyInspectorColumn(width: $studyInspectorWidth) {
-                            if isReaderSidebarContentReady {
+                            if !isShown {
+                                // Out of sight, the column keeps its place
+                                // and nothing in it. What it holds observes
+                                // the library, and would redraw for every
+                                // change made in another section — beneath
+                                // the reader's gate, which only stops what
+                                // the reader is handed. The chat is kept by
+                                // `KeptAgentChats`, a reply still arriving
+                                // included, and is shown again on return.
+                                Color.clear
+                            } else if isReaderSidebarContentReady {
                                 if (readerSidebar ?? lastReaderSidebar) == .chat,
                                    let windowID = UUID(uuidString: readerChatWindowID) {
                                     ReaderChatSidebarView(
@@ -723,9 +718,7 @@ struct LibraryRootView: View {
                 // transaction opened there does not reliably reach the update
                 // that renders it.
                 .animation(
-                    readerSidebarClosedOutOfSight
-                        ? nil
-                        : .smooth(duration: StudyInspectorMetrics.revealDuration),
+                    .smooth(duration: StudyInspectorMetrics.revealDuration),
                     value: revealedWidth
                 )
                 .frame(width: geometry.size.width, height: geometry.size.height)

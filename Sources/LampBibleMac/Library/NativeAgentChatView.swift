@@ -352,6 +352,51 @@ private struct StreamingAgentReplyBubble: View {
 
     var body: some View {
         AgentReplyBubble(markdown: content.markdown)
+            .background { ChatScrollOvershootGuard(length: content.markdown.utf16.count) }
+    }
+}
+
+/// Keeps the chat from scrolling past its end while a reply grows.
+///
+/// SwiftyChat lists its messages in a lazy stack anchored at the bottom. As
+/// the reply grows, the stack re-estimates the rows above it that it has
+/// put away, and the content can come out shorter than the place it is
+/// scrolled to: the whole pane went blank part way through a long reply, and
+/// came back only when the pane was rebuilt (user, 2026-11-05). In a harness
+/// with a 6,000-character history, the view stood wholly past the end by
+/// 4,900 characters of reply; with this, never.
+///
+/// It moves the view only when it is past the end, and only as far back as
+/// the end, so a reader who has scrolled up to read is left where they are.
+/// It lives in the arriving reply, so it acts only while there is one.
+private struct ChatScrollOvershootGuard: NSViewRepresentable {
+    /// Changes as the reply does, which is when to look.
+    let length: Int
+
+    func makeNSView(context: Context) -> OvershootGuardView { OvershootGuardView() }
+
+    func updateNSView(_ view: OvershootGuardView, context: Context) {
+        view.clampSoon()
+    }
+
+    final class OvershootGuardView: NSView {
+        override func setFrameSize(_ newSize: NSSize) {
+            super.setFrameSize(newSize)
+            clampSoon()
+        }
+
+        /// After the pass that grew the reply, once the list has laid out.
+        func clampSoon() {
+            DispatchQueue.main.async { [weak self] in
+                guard let scrollView = self?.enclosingScrollView,
+                      let document = scrollView.documentView else { return }
+                let clip = scrollView.contentView
+                let end = max(document.frame.height - clip.bounds.height, 0)
+                guard clip.bounds.origin.y > end + 0.5 else { return }
+                clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: end))
+                scrollView.reflectScrolledClipView(clip)
+            }
+        }
     }
 }
 
@@ -569,6 +614,34 @@ private struct NativeAgentChatInputView: View {
         guard canSubmit else { return }
         let submittedMessage = message
         if onCommit(submittedMessage) { message = "" }
+    }
+}
+
+/// Reader chats, kept past their pane.
+///
+/// The reader's chat pane comes and goes: it is closed, swapped for Study, and
+/// emptied while another section is shown. A conversation owned by the pane
+/// went with it, and going stopped the reply it was waiting on, saving it half
+/// written; the next message's agent said its last reply had never arrived
+/// (user, 2026-11-05). Kept here, a pane that comes back finds the
+/// conversation as it was, a reply still arriving included.
+///
+/// One per provider and workspace, which is one per window and provider, and
+/// only for this run of the app: the transcript on disk is what lasts.
+@MainActor
+private enum KeptAgentChats {
+    private static var models: [String: NativeAgentChatModel] = [:]
+
+    static func model(
+        provider: AIProviderCLI,
+        workspace: URL,
+        mode: AgentChatMode
+    ) -> NativeAgentChatModel {
+        let key = "\(provider.rawValue)|\(workspace.standardizedFileURL.path)"
+        if let model = models[key] { return model }
+        let model = NativeAgentChatModel(provider: provider, workspace: workspace, mode: mode)
+        models[key] = model
+        return model
     }
 }
 
@@ -1065,6 +1138,10 @@ struct NativeAgentChatView: View {
     /// Reports whether a reply is in flight. A container that can take this
     /// view off screen needs to know: tearing it down stops the run.
     let onRunningChanged: (Bool) -> Void
+    /// Whether the conversation outlives this view, so that taking the view
+    /// away leaves a reply running and a new view shows it. See
+    /// `KeptAgentChats`.
+    let outlivesView: Bool
 
     @StateObject private var model: NativeAgentChatModel
     @State private var draft = ""
@@ -1081,16 +1158,18 @@ struct NativeAgentChatView: View {
         mode: AgentChatMode = .writing,
         canSend: Bool = true,
         preparePrompt: @escaping (String) throws -> String = { $0 },
-        onRunningChanged: @escaping (Bool) -> Void = { _ in }
+        onRunningChanged: @escaping (Bool) -> Void = { _ in },
+        outlivesView: Bool = false
     ) {
         self.provider = provider
         self.mode = mode
         self.canSend = canSend
         self.preparePrompt = preparePrompt
         self.onRunningChanged = onRunningChanged
-        _model = StateObject(wrappedValue: NativeAgentChatModel(
-            provider: provider, workspace: workspace, mode: mode
-        ))
+        self.outlivesView = outlivesView
+        _model = StateObject(wrappedValue: outlivesView
+            ? KeptAgentChats.model(provider: provider, workspace: workspace, mode: mode)
+            : NativeAgentChatModel(provider: provider, workspace: workspace, mode: mode))
     }
 
     var body: some View {
@@ -1210,7 +1289,7 @@ struct NativeAgentChatView: View {
             onRunningChanged(running)
         }
         .onDisappear {
-            model.cancel()
+            if !outlivesView { model.cancel() }
             onRunningChanged(false)
         }
         .sheet(item: $authenticationProvider, onDismiss: {
