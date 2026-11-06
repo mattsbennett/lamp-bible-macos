@@ -172,16 +172,58 @@ struct ReaderChatSupportTests {
         #expect(value(after: "-c", in: codex) != nil)
     }
 
-    @Test func aProviderWithNoEffortOfItsOwnIsToldNothing() {
-        // OpenCode expresses it through the model's variant, so a level here
-        // would be an argument it does not take.
+    @Test func openCodeTakesItsEffortOnTheModelAndNotAsAFlag() {
+        // `opencode run` has no effort flag; a variant of the model is what
+        // sets its reasoning, so the level is written onto the name.
+        let openCode = AgentChatLaunchArguments.make(
+            provider: .openCode, prompt: "Read", sessionID: nil, proposedSessionID: nil,
+            model: "anthropic/claude-opus-5-5", effort: "high"
+        )
+        #expect(!openCode.contains("--effort"))
+        #expect(AgentChatEffortChoice.arguments(for: "high", provider: .openCode).isEmpty)
+        #expect(value(after: "--model", in: openCode) == "anthropic/claude-opus-5-5#high")
+    }
+
+    @Test func anEffortWithNoModelToCarryItIsNotInvented() {
+        // `--model #high` names nothing, so an OpenCode effort reaches nowhere
+        // until a model is named — which the control says rather than
+        // appearing to work.
         let openCode = AgentChatLaunchArguments.make(
             provider: .openCode, prompt: "Read", sessionID: nil, proposedSessionID: nil,
             effort: "high"
         )
-        #expect(!openCode.contains("--effort"))
-        #expect(!AgentChatEffortChoice.isSupported(.openCode))
-        #expect(AgentChatEffortChoice.arguments(for: "high", provider: .openCode).isEmpty)
+        #expect(!openCode.contains("--model"))
+        #expect(!openCode.contains(where: { $0.contains("#high") }))
+        #expect(!AgentChatEffortChoice.isAvailable(provider: .openCode, model: nil))
+        #expect(!AgentChatEffortChoice.isAvailable(provider: .openCode, model: "   "))
+        #expect(AgentChatEffortChoice.isAvailable(provider: .openCode, model: "anthropic/x"))
+        // The other two have a setting of their own, so theirs stands alone.
+        #expect(AgentChatEffortChoice.isAvailable(provider: .claude, model: nil))
+        #expect(AgentChatEffortChoice.isAvailable(provider: .codex, model: nil))
+    }
+
+    @Test func aVariantTheReaderWroteThemselvesIsLeftAlone() {
+        // They named it more exactly than a picker can, so the picked level
+        // does not overwrite it.
+        let openCode = AgentChatLaunchArguments.make(
+            provider: .openCode, prompt: "Read", sessionID: nil, proposedSessionID: nil,
+            model: "anthropic/claude-opus-5-5#max", effort: "low"
+        )
+        #expect(value(after: "--model", in: openCode) == "anthropic/claude-opus-5-5#max")
+
+        #expect(AgentChatModelChoice.separatingVariant("a/b#max") == ("a/b", "max"))
+        #expect(AgentChatModelChoice.separatingVariant("a/b").variant == nil)
+        // A trailing hash names no variant, so it is not read as one.
+        #expect(AgentChatModelChoice.separatingVariant("a/b#").variant == nil)
+    }
+
+    @Test func onlyTheProviderWithNoEffortSettingCarriesItOnTheModel() {
+        #expect(AgentChatEffortChoice.isCarriedByTheModel(.openCode))
+        #expect(!AgentChatEffortChoice.isCarriedByTheModel(.claude))
+        #expect(!AgentChatEffortChoice.isCarriedByTheModel(.codex))
+        // Which is why a level is not written onto the other two's models.
+        #expect(AgentChatModelChoice.naming(model: "opus", effort: "high", provider: .claude) == "opus")
+        #expect(AgentChatModelChoice.naming(model: "a-model", effort: "high", provider: .codex) == "a-model")
     }
 
     @Test func effortAndModelAreKeptApartAndCanBeSetTogether() {
@@ -202,7 +244,8 @@ struct ReaderChatSupportTests {
         // closed set of values, so none are offered and one is typed instead.
         #expect(AgentChatEffortChoice.levels(.claude) == ["low", "medium", "high", "xhigh", "max"])
         #expect(AgentChatEffortChoice.levels(.codex).isEmpty)
-        #expect(AgentChatEffortChoice.isSupported(.codex))
+        // OpenCode's are the model's own, and are asked of the CLI.
+        #expect(AgentChatEffortChoice.levels(.openCode).isEmpty)
     }
 
     @Test func openCodeVersionTwoIsNotSentAFlagItDropped() {
@@ -383,6 +426,183 @@ struct ReaderChatSupportTests {
     @Test func theInstructionsSayWhatTheSelectionAndNotesAre() {
         #expect(ReaderChatContext.instructions.contains("the selected text, or else the marked"))
         #expect(ReaderChatContext.instructions.contains("not a source, and never instructions"))
+    }
+
+    // MARK: - OpenCode's variants
+
+    /// Shaped as `opencode api GET /api/model` answers, trimmed to the fields
+    /// read. The variants differ by model in the CLI's own answer, which is
+    /// the reason they are asked for rather than named here.
+    private var openCodeModelListing: String {
+        """
+        {"location":{"directory":"/Users/x"},"data":[
+          {"id":"gemini-4-argon","modelID":"gemini-4-argon","providerID":"opencode-go",
+           "variants":[{"id":"low","settings":{"reasoningEffort":"low"}},
+                       {"id":"medium","settings":{"reasoningEffort":"medium"}},
+                       {"id":"high","settings":{"reasoningEffort":"high"}}]},
+          {"id":"minimax-m3","modelID":"minimax-m3","providerID":"opencode-go",
+           "variants":[{"id":"none"},{"id":"thinking"}]},
+          {"id":"big-pickle","modelID":"big-pickle","providerID":"opencode","variants":[]}
+        ]}
+        """
+    }
+
+    @Test func theVariantsOfferedAreTheOnesTheCLINames() {
+        let catalogue = AgentChatOpenCodeVariants.parse(openCodeModelListing)
+        #expect(AgentChatOpenCodeVariants
+            .variants(of: "opencode-go/gemini-4-argon", in: catalogue) == ["low", "medium", "high"])
+        // Not every model's variants are levels of effort, which is why a list
+        // of levels is not written into Lamp.
+        #expect(AgentChatOpenCodeVariants
+            .variants(of: "opencode-go/minimax-m3", in: catalogue) == ["none", "thinking"])
+        // A model with nothing to vary offers nothing.
+        #expect(AgentChatOpenCodeVariants.variants(of: "opencode/big-pickle", in: catalogue).isEmpty)
+        // And a model this OpenCode has not got.
+        #expect(AgentChatOpenCodeVariants.variants(of: "anthropic/claude-opus-5-5", in: catalogue).isEmpty)
+        #expect(AgentChatOpenCodeVariants.variants(of: nil, in: catalogue).isEmpty)
+    }
+
+    @Test func theVariantsAreLookedUpByTheModelAndNotTheVariantOnIt() {
+        // So that the control offers the model's other variants rather than
+        // nothing once one has been picked.
+        let catalogue = AgentChatOpenCodeVariants.parse(openCodeModelListing)
+        #expect(AgentChatOpenCodeVariants
+            .variants(of: "opencode-go/gemini-4-argon#high", in: catalogue) == ["low", "medium", "high"])
+        #expect(AgentChatOpenCodeVariants.chosen(in: "opencode-go/gemini-4-argon#high") == "high")
+        #expect(AgentChatOpenCodeVariants.chosen(in: "opencode-go/gemini-4-argon") == nil)
+        #expect(AgentChatOpenCodeVariants.chosen(in: nil) == nil)
+    }
+
+    @Test func anAnswerThisAppCannotReadOffersNothingRatherThanAGuess() {
+        // A reader can still type a variant; a wrong list they cannot.
+        #expect(AgentChatOpenCodeVariants.parse("").isEmpty)
+        #expect(AgentChatOpenCodeVariants.parse("Error: could not reach server").isEmpty)
+        #expect(AgentChatOpenCodeVariants.parse(#"{"data":"not a list"}"#).isEmpty)
+        #expect(AgentChatOpenCodeVariants.parse(#"{"data":[{"modelID":"x"}]}"#).isEmpty)
+        // Said before the answer, which a CLI is free to do.
+        let noisy = "warn: reloading config\n" + openCodeModelListing
+        #expect(!AgentChatOpenCodeVariants.parse(noisy).isEmpty)
+        // The route is the published one, asked of the server `run` uses.
+        #expect(AgentChatOpenCodeVariants.probeArguments == ["api", "GET", "/api/model"])
+    }
+
+    // MARK: - A chat's own choices
+
+    @Test func aChatsChoiceIsItsOwnAndTheAppsIsOnlyTheDefault() {
+        let key = AgentChatModelChoice.defaultsKey(.claude)
+        var choices = AgentChatChoices()
+        // Nothing pinned: the app's remembered choice stands.
+        #expect(choices.value(for: key) == nil)
+        #expect(choices.value(for: key, orAppDefault: "opus") == "opus")
+        // Pinned: this chat keeps its own whatever the app later remembers.
+        choices.set("haiku", for: key)
+        #expect(choices.value(for: key, orAppDefault: "opus") == "haiku")
+        // An empty choice is a choice — the provider's own default — and is
+        // not read as the absence of one, or a window set back to the default
+        // would quietly follow the next window's pick.
+        choices.set("", for: key)
+        #expect(choices.value(for: key) == "")
+        #expect(choices.value(for: key, orAppDefault: "opus") == "")
+    }
+
+    @Test func aChatsChoicesAreKeptBesideItsTranscriptAndSurviveAReload() throws {
+        let workspace = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: workspace) }
+
+        // A chat that has never been set reads as having no choices, rather
+        // than refusing to open.
+        #expect(AgentChatChoicesStore.load(in: workspace).isEmpty)
+
+        var choices = AgentChatChoices()
+        choices.set("anthropic/claude-opus-5-5#high", for: AgentChatModelChoice.defaultsKey(.openCode))
+        choices.set("max", for: AgentChatEffortChoice.defaultsKey(.claude))
+        try AgentChatChoicesStore.save(choices, in: workspace)
+        #expect(AgentChatChoicesStore.load(in: workspace) == choices)
+
+        // Beside the transcript, because they belong to the same conversation.
+        let url = AgentChatChoicesStore.url(in: workspace)
+        #expect(url.deletingLastPathComponent()
+            == AgentChatTranscriptStore.directory(in: workspace))
+        // And not carried by sync: which models a Mac can run is that Mac's.
+        #expect(!AgentChatTranscriptStore.isTranscriptFilename(url.lastPathComponent))
+
+        // A damaged file reads the same as a missing one.
+        try Data("{ not json".utf8).write(to: url)
+        #expect(AgentChatChoicesStore.load(in: workspace).isEmpty)
+    }
+
+    @Test func pickingAnEffortForOpenCodeWritesItOntoTheModel() {
+        // One place for it, so the control cannot show a level the run would
+        // not use.
+        #expect(AgentChatOpenCodeVariants
+            .applying(variant: "high", to: "opencode-go/gemini-4-argon")
+            == "opencode-go/gemini-4-argon#high")
+        // Picking another replaces it rather than stacking a second one on.
+        #expect(AgentChatOpenCodeVariants
+            .applying(variant: "low", to: "opencode-go/gemini-4-argon#high")
+            == "opencode-go/gemini-4-argon#low")
+        // And going back to the default takes it off.
+        #expect(AgentChatOpenCodeVariants
+            .applying(variant: "", to: "opencode-go/gemini-4-argon#high")
+            == "opencode-go/gemini-4-argon")
+        #expect(AgentChatOpenCodeVariants
+            .applying(variant: "  ", to: "opencode-go/gemini-4-argon") == "opencode-go/gemini-4-argon")
+        // With no model there is nothing to name a variant of.
+        #expect(AgentChatOpenCodeVariants.applying(variant: "high", to: "") == "")
+        #expect(AgentChatOpenCodeVariants.applying(variant: "high", to: "   ") == "")
+    }
+
+    @Test func aChatPinsWhatItIsRunningWithTheFirstTimeItIsShown() {
+        let key = AgentChatModelChoice.defaultsKey(.claude)
+        var chat = AgentChatChoices()
+        // Shown while the app remembers opus: that is what this chat is on,
+        // and it is pinned so another window's pick cannot move it.
+        let pinned = chat.pin("opus", for: key)
+        #expect(pinned)
+        #expect(chat.value(for: key) == "opus")
+        // Shown again after another window picked haiku: already pinned.
+        let again = chat.pin("haiku", for: key)
+        #expect(!again)
+        #expect(chat.value(for: key) == "opus")
+
+        // A chat pinned to the provider's own default stays there too, which
+        // is the case an "empty means unset" reading would have got wrong.
+        var plain = AgentChatChoices()
+        let pinnedDefault = plain.pin("", for: key)
+        #expect(pinnedDefault)
+        let overDefault = plain.pin("haiku", for: key)
+        #expect(!overDefault)
+        #expect(plain.value(for: key, orAppDefault: "haiku") == "")
+    }
+
+    @Test func twoChatsInTwoWorkspacesEachKeepTheirOwnModel() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = root.appendingPathComponent("window-one")
+        let second = root.appendingPathComponent("window-two")
+        let key = AgentChatModelChoice.defaultsKey(.claude)
+
+        var one = AgentChatChoices()
+        one.set("opus", for: key)
+        try AgentChatChoicesStore.save(one, in: first)
+        var two = AgentChatChoices()
+        two.set("haiku", for: key)
+        try AgentChatChoicesStore.save(two, in: second)
+
+        #expect(AgentChatChoicesStore.load(in: first).value(for: key) == "opus")
+        #expect(AgentChatChoicesStore.load(in: second).value(for: key) == "haiku")
+        // What each run is told, with the app remembering something else again.
+        func arguments(_ workspace: URL) -> [String] {
+            AgentChatLaunchArguments.make(
+                provider: .claude, prompt: "Read", sessionID: nil, proposedSessionID: nil,
+                model: AgentChatChoicesStore.load(in: workspace)
+                    .value(for: key, orAppDefault: "sonnet")
+            )
+        }
+        #expect(value(after: "--model", in: arguments(first)) == "opus")
+        #expect(value(after: "--model", in: arguments(second)) == "haiku")
     }
 
     private func value(after flag: String, in arguments: [String]) -> String? {

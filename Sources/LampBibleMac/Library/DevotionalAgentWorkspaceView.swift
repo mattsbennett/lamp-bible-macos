@@ -997,8 +997,8 @@ struct DevotionalAgentWorkspaceView: View {
             }
             .labelsHidden()
             .frame(maxWidth: 150)
-            AgentChatProviderChoice(kind: .model, provider: selectedProvider)
-            AgentChatProviderChoice(kind: .effort, provider: selectedProvider)
+            AgentChatProviderChoice(kind: .model, provider: selectedProvider, workspace: workspaceURL)
+            AgentChatProviderChoice(kind: .effort, provider: selectedProvider, workspace: workspaceURL)
 
             Picker("Session interface", selection: $sessionModeID) {
                 ForEach(AgentSessionDisplayMode.allCases) { mode in

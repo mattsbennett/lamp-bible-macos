@@ -205,12 +205,19 @@ struct ReaderChatSidebarView: View {
                     }
                     .labelsHidden()
                     .frame(maxWidth: 160)
-                    AgentChatProviderChoice(kind: .model, provider: provider)
-                    AgentChatProviderChoice(kind: .effort, provider: provider)
                     Spacer()
                     Label("Read-only", systemImage: "lock")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+
+                // On their own line: this pane is as narrow as 364pt, and a
+                // qualified model name beside the provider and the badge left
+                // all three of them truncated to their first few letters.
+                HStack {
+                    AgentChatProviderChoice(kind: .model, provider: provider, workspace: workspace)
+                    AgentChatProviderChoice(kind: .effort, provider: provider, workspace: workspace)
+                    Spacer()
                 }
 
                 if let capture = capture() {

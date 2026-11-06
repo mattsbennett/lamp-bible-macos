@@ -911,6 +911,7 @@ private final class NativeAgentChatModel: ObservableObject {
             pendingApprovals = []
         }
         let wire = provider.wireProvider
+        let chatChoices = AgentChatChoicesStore.load(in: workspace)
         // Through a stream rather than a task per line: separate tasks are not
         // ordered, and a reply whose fragments arrive out of order is a reply
         // with its words shuffled. Each line is parsed on the thread that read
@@ -932,13 +933,22 @@ private final class NativeAgentChatModel: ObservableObject {
                 mode: mode,
                 permissionHookSettings: channel.map { ClaudePermissionHook.settingsJSON(for: $0) },
                 // Read as the run starts rather than held on the model: the
-                // picker writes straight to defaults, and a chat left open
-                // while it changed would otherwise keep launching the old one.
-                model: UserDefaults.standard.string(
-                    forKey: AgentChatModelChoice.defaultsKey(wire)
+                // picker writes straight to this chat's own choices, and a
+                // chat left open while they changed would otherwise keep
+                // launching the old one. This chat's choice first, so that two
+                // windows on two models each run theirs, and what the app
+                // remembers only where this chat has pinned nothing.
+                model: chatChoices.value(
+                    for: AgentChatModelChoice.defaultsKey(wire),
+                    orAppDefault: UserDefaults.standard.string(
+                        forKey: AgentChatModelChoice.defaultsKey(wire)
+                    )
                 ),
-                effort: UserDefaults.standard.string(
-                    forKey: AgentChatEffortChoice.defaultsKey(wire)
+                effort: chatChoices.value(
+                    for: AgentChatEffortChoice.defaultsKey(wire),
+                    orAppDefault: UserDefaults.standard.string(
+                        forKey: AgentChatEffortChoice.defaultsKey(wire)
+                    )
                 ),
                 providerMajorVersion: runner.majorVersion(ofExecutableNamed: provider.executable)
             ),

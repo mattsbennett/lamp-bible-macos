@@ -42,12 +42,38 @@ public enum AgentChatModelChoice {
         return trimmed
     }
 
+    /// A model name split from the variant written onto it, the way OpenCode
+    /// spells `provider/model#variant`.
+    public static func separatingVariant(_ model: String) -> (base: String, variant: String?) {
+        guard let hash = model.firstIndex(of: "#") else { return (model, nil) }
+        let variant = String(model[model.index(after: hash)...])
+        return (String(model[..<hash]), variant.isEmpty ? nil : variant)
+    }
+
+    /// The model as this provider is to be told it, which for OpenCode is
+    /// where its effort goes: `opencode run` has no effort flag, and a variant
+    /// is the one thing a single run can be told about how a model reasons.
+    ///
+    /// A variant the reader wrote onto the name themselves stands, because
+    /// they named it more exactly than a picker can. An effort with no model
+    /// to carry it is dropped, because `--model #high` names nothing.
+    public static func naming(
+        model: String?, effort: String?, provider: AgentChatWireProvider
+    ) -> String? {
+        guard let model = canonical(model) else { return nil }
+        guard AgentChatEffortChoice.isCarriedByTheModel(provider),
+              let effort = canonical(effort),
+              separatingVariant(model).variant == nil
+        else { return model }
+        return "\(model)#\(effort)"
+    }
+
     /// The flag this provider takes. Each spells it differently, and openCode
     /// wants a qualified name rather than a bare one.
     public static func arguments(
-        for model: String?, provider: AgentChatWireProvider
+        for model: String?, effort: String? = nil, provider: AgentChatWireProvider
     ) -> [String] {
-        guard let model = canonical(model) else { return [] }
+        guard let model = naming(model: model, effort: effort, provider: provider) else { return [] }
         switch provider {
         case .claude, .openCode: return ["--model", model]
         case .codex: return ["-m", model]
@@ -60,10 +86,10 @@ public enum AgentChatModelChoice {
         switch provider {
         case .claude: "An alias such as opus, or a full model name."
         case .codex: "A model name the Codex CLI accepts."
-        // Where OpenCode's effort is chosen from here: `opencode run` takes no
-        // effort of its own, and a variant is the one thing a single run can
-        // be told. Which variants exist is the reader's own configuration.
-        case .openCode: "provider/model, and #variant to choose how it reasons."
+        // The Effort beside this writes the #variant, so a reader who wants
+        // one picked for them need not spell it. One written here by hand
+        // stands over it.
+        case .openCode: "provider/model, or provider/model#variant."
         }
     }
 }
@@ -71,28 +97,40 @@ public enum AgentChatModelChoice {
 /// How hard a provider's CLI should think, when the reader does not want its
 /// default.
 ///
-/// Only where the provider has such a setting and documents it. Claude Code
-/// takes a level on the command line; Codex keeps one in its own config, which
-/// an override can set for a single run; OpenCode has no separate notion of it
-/// — effort rides in the model's variant, which `AgentChatModelChoice` already
-/// carries. Offering a control that did nothing would be worse than offering
-/// none.
+/// All three can be told, by three different means, and each is the one its
+/// own CLI documents: Claude Code takes a level on the command line; Codex
+/// keeps one in its config, which an override sets for a single run; OpenCode
+/// has no setting of its own, and carries it in the model's variant — which
+/// is why a level here can reach it only once a model is named.
 public enum AgentChatEffortChoice {
     public static func defaultsKey(_ provider: AgentChatWireProvider) -> String {
         "chat.effort.\(provider.rawValue)"
     }
 
-    /// Whether this provider has an effort of its own to set.
-    public static func isSupported(_ provider: AgentChatWireProvider) -> Bool {
+    /// Whether the provider takes its effort inside the model it is given
+    /// rather than in a setting of its own. OpenCode does: a variant of the
+    /// model is what sets its reasoning.
+    public static func isCarriedByTheModel(_ provider: AgentChatWireProvider) -> Bool {
         switch provider {
-        case .claude, .codex: true
-        case .openCode: false
+        case .openCode: true
+        case .claude, .codex: false
         }
     }
 
+    /// Whether an effort can reach the provider as things stand. OpenCode's
+    /// rides on the model's name, so until a model is named there is nothing
+    /// to write it onto and a level picked now would go nowhere — better said
+    /// than silently dropped.
+    public static func isAvailable(provider: AgentChatWireProvider, model: String?) -> Bool {
+        guard isCarriedByTheModel(provider) else { return true }
+        return AgentChatModelChoice.canonical(model) != nil
+    }
+
     /// The levels the provider itself names. Claude Code lists these in its
-    /// own `--help`; Codex documents the setting but not a closed set of
-    /// values, so none are offered and a level is typed instead.
+    /// own `--help`. Codex documents the setting but no closed set of values,
+    /// so none are offered and a level is typed instead. OpenCode's differ by
+    /// model — one takes low through max, another only none and thinking — so
+    /// they are asked of the CLI instead; see `AgentChatOpenCodeVariants`.
     public static func levels(_ provider: AgentChatWireProvider) -> [String] {
         switch provider {
         case .claude: ["low", "medium", "high", "xhigh", "max"]
@@ -107,13 +145,15 @@ public enum AgentChatEffortChoice {
     public static func arguments(
         for effort: String?, provider: AgentChatWireProvider
     ) -> [String] {
-        guard let effort = canonical(effort), isSupported(provider) else { return [] }
+        guard let effort = canonical(effort) else { return [] }
         switch provider {
         case .claude: return ["--effort", effort]
         // Codex has no flag for it; the setting lives in `~/.codex/config.toml`
         // and `-c` overrides one key for this run alone, leaving the reader's
         // own config as they wrote it.
         case .codex: return ["-c", "model_reasoning_effort=\"\(effort)\""]
+        // Nothing of its own: the level is written onto the model by
+        // `AgentChatModelChoice.naming`, which is where OpenCode reads it.
         case .openCode: return []
         }
     }
@@ -122,8 +162,181 @@ public enum AgentChatEffortChoice {
         switch provider {
         case .claude: "A level such as high. Claude Code names low to max."
         case .codex: "A value your Codex accepts for model_reasoning_effort."
-        case .openCode: "OpenCode sets this through the model's variant."
+        case .openCode: "A variant of this model, such as high. It is written onto the model name, which is how OpenCode is told."
         }
+    }
+}
+
+/// Which variants the installed OpenCode says a model has.
+///
+/// Read from the CLI's own list rather than named here. Variants are not one
+/// fixed set: a reasoning model may take low through max, another only none
+/// and thinking, and a model with nothing to vary has none at all. OpenCode
+/// resolves the name when the run reaches the model, not when the flag is
+/// parsed, so a level this app invented would be taken at the command line and
+/// fail at the answer.
+public enum AgentChatOpenCodeVariants {
+    /// What to ask the CLI. `opencode api` addresses the same server its own
+    /// `run` uses, and this route is in the server's published OpenAPI.
+    public static let probeArguments = ["api", "GET", "/api/model"]
+
+    /// Reads the CLI's answer into the variants each `provider/model` has.
+    ///
+    /// Anything unexpected reads as nothing known rather than as a guess: an
+    /// OpenCode that answers differently leaves the control offering what the
+    /// reader types, which still works, instead of a list that does not.
+    public static func parse(_ output: String) -> [String: [String]] {
+        guard let payload = object(in: output) else { return [:] }
+        let models = payload["data"] as? [[String: Any]] ?? []
+        var catalogue: [String: [String]] = [:]
+        for model in models {
+            guard let providerID = model["providerID"] as? String,
+                  let modelID = model["modelID"] as? String
+            else { continue }
+            let variants = (model["variants"] as? [[String: Any]] ?? [])
+                .compactMap { $0["id"] as? String }
+                .filter { !$0.isEmpty }
+            guard !variants.isEmpty else { continue }
+            catalogue["\(providerID)/\(modelID)"] = variants
+        }
+        return catalogue
+    }
+
+    /// The variants of the model the reader chose. A variant already written
+    /// onto the name is left out of the lookup: what is wanted is the other
+    /// variants the model has, so that one can be swapped for another.
+    public static func variants(of model: String?, in catalogue: [String: [String]]) -> [String] {
+        guard let model = AgentChatModelChoice.canonical(model) else { return [] }
+        return catalogue[AgentChatModelChoice.separatingVariant(model).base] ?? []
+    }
+
+    /// The variant the reader is on, where it was written onto the model.
+    public static func chosen(in model: String?) -> String? {
+        guard let model = AgentChatModelChoice.canonical(model) else { return nil }
+        return AgentChatModelChoice.separatingVariant(model).variant
+    }
+
+    /// The model with this variant on it, which is how a picked effort is kept
+    /// for OpenCode: on the model itself, so that what the control shows and
+    /// what the run is given cannot come apart. An empty variant takes it back
+    /// to the plain model, and with no model there is nothing to name.
+    public static func applying(variant: String, to model: String) -> String {
+        let base = AgentChatModelChoice.separatingVariant(model).base
+        guard AgentChatModelChoice.canonical(base) != nil else { return "" }
+        guard let variant = AgentChatModelChoice.canonical(variant) else { return base }
+        return "\(base)#\(variant)"
+    }
+
+    private static func object(in output: String) -> [String: Any]? {
+        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let data = trimmed.data(using: .utf8),
+           let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            return payload
+        }
+        // A CLI is free to say something before its answer. The braces are
+        // only tried when the whole of it would not parse.
+        guard let start = trimmed.firstIndex(of: "{"),
+              let end = trimmed.lastIndex(of: "}"), start < end,
+              let data = String(trimmed[start...end]).data(using: .utf8)
+        else { return nil }
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    }
+}
+
+/// What one chat is set to run with, kept beside that chat.
+///
+/// Two windows on two models is the point of it: a choice made in a window's
+/// chat belongs to that chat and not to the app. What the app remembers is the
+/// default a new chat opens on, and it is pinned into the chat the first time
+/// that chat is shown — so a choice made in another window afterwards leaves
+/// this one where the reader left it.
+public struct AgentChatChoices: Equatable, Sendable, Codable {
+    private var values: [String: String]
+
+    public init(_ values: [String: String] = [:]) {
+        self.values = values
+    }
+
+    /// This chat's own choice, or nil where it has none. An empty string is a
+    /// choice — the provider's own default — and not the absence of one, which
+    /// is why the two are told apart rather than both read as "nothing set".
+    public func value(for key: String) -> String? {
+        values[key]
+    }
+
+    /// What this chat runs with: its own choice where it has one, and what the
+    /// app remembers where it has not.
+    public func value(for key: String, orAppDefault appDefault: String?) -> String? {
+        values[key] ?? appDefault
+    }
+
+    public mutating func set(_ value: String, for key: String) {
+        values[key] = value
+    }
+
+    /// Pins what this chat is running with, the first time it is shown.
+    ///
+    /// Until it is pinned the chat is only following what the app remembers,
+    /// and the app remembers whatever was picked last in any window — so a
+    /// pick made in a second window would quietly move the first one too.
+    /// Pinning is what stops that; a chat that has already pinned a choice,
+    /// the provider's own default included, is left as it is.
+    ///
+    /// - Returns: whether anything changed, so a caller need only write when
+    ///   there is something new to write.
+    @discardableResult
+    public mutating func pin(_ appDefault: String, for key: String) -> Bool {
+        guard values[key] == nil else { return false }
+        values[key] = appDefault
+        return true
+    }
+
+    public var isEmpty: Bool { values.isEmpty }
+
+    public init(from decoder: Decoder) throws {
+        values = try decoder.singleValueContainer().decode([String: String].self)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(values)
+    }
+}
+
+/// Where a chat's own choices are kept: beside its transcript, because they
+/// belong to the same conversation and last exactly as long as it does.
+///
+/// Not synced. Which models a Mac can run depends on what is installed and
+/// signed in there, so the model another Mac chose is not a choice this one
+/// can keep — see `AgentChatTranscriptStore.isTranscriptFilename`, which is
+/// what sync carries and does not admit this name.
+public enum AgentChatChoicesStore {
+    public static let filename = "chat-choices.json"
+
+    public static func url(in workspace: URL) -> URL {
+        AgentChatTranscriptStore.directory(in: workspace).appendingPathComponent(filename)
+    }
+
+    /// A missing or damaged file reads as a chat with no choices of its own,
+    /// so it falls back to the app's defaults rather than refusing to open.
+    public static func load(in workspace: URL) -> AgentChatChoices {
+        guard let data = try? Data(contentsOf: url(in: workspace)),
+              let choices = try? JSONDecoder().decode(AgentChatChoices.self, from: data)
+        else { return AgentChatChoices() }
+        return choices
+    }
+
+    public static func save(_ choices: AgentChatChoices, in workspace: URL) throws {
+        let url = url(in: workspace)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        var data = try encoder.encode(choices)
+        data.append(0x0A)
+        try data.write(to: url, options: .atomic)
     }
 }
 
@@ -179,7 +392,11 @@ public enum AgentChatLaunchArguments {
         effort: String? = nil,
         providerMajorVersion: Int? = nil
     ) -> [String] {
-        let modelArguments = AgentChatModelChoice.arguments(for: model, provider: provider)
+        // The effort is given to both: one of them takes it. A provider with a
+        // setting of its own gets a flag for it, and OpenCode, which has none,
+        // has it written onto the model's name instead.
+        let modelArguments = AgentChatModelChoice
+            .arguments(for: model, effort: effort, provider: provider)
             + AgentChatEffortChoice.arguments(for: effort, provider: provider)
         switch provider {
         case .codex:
