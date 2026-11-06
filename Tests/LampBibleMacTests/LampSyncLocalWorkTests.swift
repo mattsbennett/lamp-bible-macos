@@ -540,6 +540,19 @@ struct LampSyncLocalWorkTests {
         try write("rebuilt", to: index)
         try fileManager.setAttributes([.modificationDate: newer], ofItemAtPath: index.path)
         try write("rebuilt", to: library.appendingPathComponent("Bundled/second.db.zlib"))
+        // My writing's and My Notes' search indexes, the word lists of module
+        // files, and what building those or extracting the bundle leaves for
+        // a moment: all made again from what the library holds.
+        for derived in [
+            "Indexes/PersonalDevotionals.sqlite",
+            "Indexes/PersonalNotes.sqlite",
+            "Indexes/Words/mcheyne.sqlite",
+            "Indexes/Words/.mcheyne.sqlite-\(UUID().uuidString)",
+            "Bundled/.prepare.lock",
+            "Bundled/.bundled_modules-\(UUID().uuidString).sqlite",
+        ] {
+            try write("rebuilt", to: library.appendingPathComponent(derived))
+        }
 
         #expect(marks(library) == before)
     }
