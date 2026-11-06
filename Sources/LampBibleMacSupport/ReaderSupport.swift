@@ -1533,18 +1533,45 @@ public struct ReaderTabCollection: Codable, Equatable, Sendable {
     }
 }
 
+/// Each reader window's tabs, kept under the session that window took up.
+///
+/// There was one snapshot for the whole app, written by whichever window
+/// changed its tabs last. One window never noticed. Two did: they overwrote
+/// each other as they were read in, and at the next launch both opened on the
+/// same tabs, because the same snapshot was all there was to open on. Scene
+/// storage was meant to keep them apart, and cannot: macOS throws it away on a
+/// clean quit, which is the very moment it was there for.
 public enum ReaderTabSessionStore {
     private static let lastSessionKey = "reader.tabs.lastSession"
+    private static let sessionsKey = "reader.tabs.sessions"
+    /// How many windows' tabs are kept, most recently saved first. Far more
+    /// than are ever open at once; the cap is only so that sessions cannot
+    /// pile up unread for as long as the app is installed.
+    static let keptSessions = 24
 
+    static func key(for session: UUID) -> String {
+        "reader.tabs.session.\(session.uuidString)"
+    }
+
+    /// The tabs for `session`.
+    ///
+    /// A session with none of its own falls back to the last tabs any window
+    /// saved, but only when this window is picking up where the app left off.
+    /// A second window opened beside one starts at the chapter being read
+    /// instead: it was opened to read something else, and handing it a copy of
+    /// the other window's tabs — which it would then save over — is how the
+    /// two came to share one set in the first place.
     public static func load(
-        sceneData: Data?,
+        session: UUID,
+        resumingLastSession: Bool,
         defaults: UserDefaults = .standard,
         translationIDs: Set<String>,
         fallbackLocation: ReaderLocation?
     ) -> ReaderTabCollection {
-        // Scene storage preserves each restored window. The defaults snapshot
-        // also reopens tabs when macOS creates a fresh window after relaunch.
-        var collection = [sceneData, defaults.data(forKey: lastSessionKey)]
+        var collection = [
+            defaults.data(forKey: key(for: session)),
+            resumingLastSession ? defaults.data(forKey: lastSessionKey) : nil,
+        ]
             .compactMap { $0 }
             .lazy
             .compactMap { try? JSONDecoder().decode(ReaderTabCollection.self, from: $0) }
@@ -1555,14 +1582,25 @@ public enum ReaderTabSessionStore {
         return collection
     }
 
-    @discardableResult
     public static func save(
         _ collection: ReaderTabCollection,
+        session: UUID,
         defaults: UserDefaults = .standard
-    ) -> Data? {
-        guard let data = try? JSONEncoder().encode(collection) else { return nil }
+    ) {
+        guard let data = try? JSONEncoder().encode(collection) else { return }
+        defaults.set(data, forKey: key(for: session))
+        // Kept as well, so that a session with no tabs of its own — the first
+        // window after this app learned to keep them apart, or after a chat
+        // was deleted — still opens on what was last being read.
         defaults.set(data, forKey: lastSessionKey)
-        return data
+        var sessions = [session.uuidString]
+            + (defaults.stringArray(forKey: sessionsKey) ?? [])
+                .filter { $0 != session.uuidString }
+        for forgotten in sessions.dropFirst(keptSessions) {
+            defaults.removeObject(forKey: "reader.tabs.session.\(forgotten)")
+        }
+        sessions = Array(sessions.prefix(keptSessions))
+        defaults.set(sessions, forKey: sessionsKey)
     }
 }
 

@@ -80,8 +80,10 @@ struct LibraryRootView: View {
     @State private var showingImporter = false
     @State private var showingStudyDataImporter = false
     @State private var readerTabs = ReaderTabCollection()
-    @SceneStorage("reader.tabs") private var savedReaderTabs: Data?
     @State private var hasRestoredReaderTabs = false
+    /// Whether this window is picking up where the app left off, which decides
+    /// whether it opens on the last tabs any window saved or on a fresh one.
+    @State private var isResumingReaderSession = false
     @State private var showingNewReaderTab = false
     @State private var readerSidebar: ReaderSidebar?
     @State private var lastReaderSidebar = ReaderSidebar.study
@@ -159,10 +161,13 @@ struct LibraryRootView: View {
         }
         .onChange(of: model.hasReadLibrary, initial: true) { _, read in
             guard read else { return }
-            restoreReaderTabs()
+            // Before the tabs, which are kept under the session taken up here.
             if readerChatID == nil {
-                readerChatID = OpenReaderChats.claim(libraryRootURL: model.library.rootURL)
+                let claimed = OpenReaderChats.claim(libraryRootURL: model.library.rootURL)
+                readerChatID = claimed.chat
+                isResumingReaderSession = claimed.resuming
             }
+            restoreReaderTabs()
         }
         .onChange(of: model.hasLoadedInitialContent, initial: true) { _, loaded in
             guard loaded else { return }
@@ -174,8 +179,8 @@ struct LibraryRootView: View {
             if !refreshing { restoreReaderTabs() }
         }
         .onChange(of: readerTabs) { _, tabs in
-            guard hasRestoredReaderTabs else { return }
-            savedReaderTabs = ReaderTabSessionStore.save(tabs)
+            guard hasRestoredReaderTabs, let readerChatID else { return }
+            ReaderTabSessionStore.save(tabs, session: readerChatID)
         }
         .environmentObject(workspace)
         .task {
@@ -460,11 +465,13 @@ struct LibraryRootView: View {
     /// once the library has been read: which translations remain, for the
     /// tabs, and which note and highlight modules the chapter is read with.
     private func restoreReaderTabs() {
-        guard !hasRestoredReaderTabs, model.hasReadLibrary, !model.isRefreshing else { return }
+        guard !hasRestoredReaderTabs, let readerChatID,
+              model.hasReadLibrary, !model.isRefreshing else { return }
         // A failed library load must not replace saved tabs with an empty session.
         guard model.errorMessage == nil || !model.modules.isEmpty else { return }
         readerTabs = ReaderTabSessionStore.load(
-            sceneData: savedReaderTabs,
+            session: readerChatID,
+            resumingLastSession: isResumingReaderSession,
             translationIDs: Set(model.translations.map(\.id)),
             fallbackLocation: model.readerLocation
         )

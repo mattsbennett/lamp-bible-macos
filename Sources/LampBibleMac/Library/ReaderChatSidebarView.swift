@@ -390,13 +390,26 @@ struct ReaderChatSidebarView: View {
 enum OpenReaderChats {
     private static var held: Set<UUID> = []
 
-    static func claim(libraryRootURL: URL) -> UUID {
+    /// - Returns: the chat this window is on, and whether it is picking up
+    ///   where the app left off — true when no other window held one, which is
+    ///   what a launch looks like, and a lone window being opened again. The
+    ///   window's tabs follow the same rule; see `ReaderTabSessionStore`.
+    static func claim(libraryRootURL: URL) -> (chat: UUID, resuming: Bool) {
+        let resuming = held.isEmpty
         let id = ReaderChatWorkspaceStore.claiming(
             from: ReaderChatWorkspaceStore.chats(libraryRootURL: libraryRootURL),
             heldBy: held
         ) ?? UUID()
         held.insert(id)
-        return id
+        // The session is kept in the library, so the window can take it up
+        // again at the next launch — its tabs included — whether or not a word
+        // is ever said in its chat. Without this, a reader who never opens the
+        // chat pane has no session that outlives the run.
+        try? FileManager.default.createDirectory(
+            at: ReaderChatWorkspaceStore.workspaceURL(libraryRootURL: libraryRootURL, chatID: id),
+            withIntermediateDirectories: true
+        )
+        return (id, resuming)
     }
 
     static func release(_ id: UUID) {

@@ -434,11 +434,12 @@ struct ReaderSupportTests {
         let firstID = tabs.selectedID
         tabs.add(location: john)
         tabs.close(firstID)
-        ReaderTabSessionStore.save(tabs, defaults: defaults)
+        let session = UUID()
+        ReaderTabSessionStore.save(tabs, session: session, defaults: defaults)
 
         let relaunchedDefaults = try #require(UserDefaults(suiteName: suite))
         let restored = ReaderTabSessionStore.load(
-            sceneData: nil, defaults: relaunchedDefaults,
+            session: session, resumingLastSession: true, defaults: relaunchedDefaults,
             translationIDs: ["WEB", "KJV"], fallbackLocation: genesis
         )
         #expect(restored == tabs)
@@ -446,25 +447,86 @@ struct ReaderSupportTests {
         #expect(restored.selectedTab?.location == john)
     }
 
-    @Test func restoredWindowUsesItsOwnTabsBeforeTheLastSessionFallback() throws {
+    @Test func twoWindowsKeepTheirOwnTabsAcrossARelaunch() throws {
         let suite = "reader-tabs-tests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let genesis = ReaderLocation(translationID: "WEB", bookNumber: 1, chapterNumber: 1)
         let john = ReaderLocation(translationID: "WEB", bookNumber: 43, chapterNumber: 3)
+        let window = UUID()
+        let otherWindow = UUID()
         let windowTabs = ReaderTabCollection(initialLocation: genesis)
         let otherWindowTabs = ReaderTabCollection(initialLocation: john)
-        let sceneData = ReaderTabSessionStore.save(windowTabs, defaults: defaults)
-        ReaderTabSessionStore.save(otherWindowTabs, defaults: defaults)
+        ReaderTabSessionStore.save(windowTabs, session: window, defaults: defaults)
+        // Saved second, so the shared snapshot is this one. Before, that is
+        // all either window had to open on, and both opened on John.
+        ReaderTabSessionStore.save(otherWindowTabs, session: otherWindow, defaults: defaults)
 
         #expect(ReaderTabSessionStore.load(
-            sceneData: sceneData, defaults: defaults,
+            session: window, resumingLastSession: true, defaults: defaults,
             translationIDs: ["WEB"], fallbackLocation: nil
         ) == windowTabs)
         #expect(ReaderTabSessionStore.load(
-            sceneData: Data("invalid JSON".utf8), defaults: defaults,
+            session: otherWindow, resumingLastSession: true, defaults: defaults,
             translationIDs: ["WEB"], fallbackLocation: nil
         ) == otherWindowTabs)
+    }
+
+    @Test func aWindowOpenedBesideAnotherStartsAtWhatIsBeingReadAndNotOnItsTabs() throws {
+        let suite = "reader-tabs-tests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let genesis = ReaderLocation(translationID: "WEB", bookNumber: 1, chapterNumber: 1)
+        let john = ReaderLocation(translationID: "WEB", bookNumber: 43, chapterNumber: 3)
+        var open = ReaderTabCollection(initialLocation: genesis)
+        open.add(location: john)
+        ReaderTabSessionStore.save(open, session: UUID(), defaults: defaults)
+
+        let second = ReaderTabSessionStore.load(
+            session: UUID(), resumingLastSession: false, defaults: defaults,
+            translationIDs: ["WEB"], fallbackLocation: genesis
+        )
+        #expect(second.tabs.count == 1)
+        #expect(second.selectedTab?.location == genesis)
+
+        // The first window after a launch does take them up, which is how the
+        // tabs saved before this app kept them per window are not lost.
+        let first = ReaderTabSessionStore.load(
+            session: UUID(), resumingLastSession: true, defaults: defaults,
+            translationIDs: ["WEB"], fallbackLocation: genesis
+        )
+        #expect(first == open)
+    }
+
+    @Test func oldSessionsTabsAreForgottenRatherThanKeptForEver() throws {
+        let suite = "reader-tabs-tests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let genesis = ReaderLocation(translationID: "WEB", bookNumber: 1, chapterNumber: 1)
+        let oldest = UUID()
+        ReaderTabSessionStore.save(
+            ReaderTabCollection(initialLocation: genesis), session: oldest, defaults: defaults
+        )
+        let newest = (0..<ReaderTabSessionStore.keptSessions).map { _ in UUID() }
+        for session in newest {
+            ReaderTabSessionStore.save(
+                ReaderTabCollection(initialLocation: genesis), session: session, defaults: defaults
+            )
+        }
+        #expect(defaults.data(forKey: ReaderTabSessionStore.key(for: oldest)) == nil)
+        #expect(defaults.data(forKey: ReaderTabSessionStore.key(for: try #require(newest.first))) != nil)
+        #expect(defaults.data(forKey: ReaderTabSessionStore.key(for: try #require(newest.last))) != nil)
+
+        // Saving again moves a session back to the front, so the one in daily
+        // use is not forgotten because others were opened around it.
+        ReaderTabSessionStore.save(
+            ReaderTabCollection(initialLocation: genesis),
+            session: try #require(newest.first), defaults: defaults
+        )
+        ReaderTabSessionStore.save(
+            ReaderTabCollection(initialLocation: genesis), session: UUID(), defaults: defaults
+        )
+        #expect(defaults.data(forKey: ReaderTabSessionStore.key(for: try #require(newest.first))) != nil)
     }
 
     @Test func removedTranslationsFallBackToAnAvailableTab() {
@@ -504,8 +566,10 @@ struct ReaderSupportTests {
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let previousLocation = ReaderLocation(translationID: "WEB", bookNumber: 19, chapterNumber: 23)
+        let session = UUID()
+        defaults.set(Data("not JSON".utf8), forKey: ReaderTabSessionStore.key(for: session))
         let restored = ReaderTabSessionStore.load(
-            sceneData: Data("not JSON".utf8), defaults: defaults,
+            session: session, resumingLastSession: true, defaults: defaults,
             translationIDs: ["WEB"], fallbackLocation: previousLocation
         )
         #expect(restored.tabs.count == 1)
