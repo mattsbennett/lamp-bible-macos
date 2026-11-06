@@ -139,6 +139,10 @@ struct DevotionalsView: View {
     @AppStorage("writing.groupBy") private var groupByRawValue = WritingGroupBy.none.rawValue
     @State private var devotionalPendingDeletion: LampDevotional?
     @State private var footnoteHighlight = DevotionalFootnoteHighlight()
+    /// Find in the preview. The preview cannot be written to, so the bar it
+    /// puts up offers Find and no Replace.
+    @State private var previewFind = WritingFindController()
+    @State private var previewFinder = WritingPreviewFinder()
     @State private var exportedURL: URL?
     @State private var presentationDecksByDevotionalID: [String: [LampPresentationDeck]] = [:]
     private let rowSummaries = WritingRowSummaries.shared
@@ -575,20 +579,43 @@ struct DevotionalsView: View {
 
     private func devotionalDetail(_ devotional: LampDevotional) -> some View {
         ScrollViewReader { proxy in
-            devotionalDocument(devotional)
-                // A marker in the prose is a link to its note. Every other link
-                // is one the writer put there and opens as it would anywhere else.
-                .environment(\.openURL, OpenURLAction { url in
-                    guard let number = LampDevotionalFootnotes.markerNumber(in: url) else {
-                        return .systemAction
-                    }
-                    withAnimation(.easeInOut(duration: 0.25)) {
-                        proxy.scrollTo(DevotionalFootnoteAnchor(number: number), anchor: .center)
-                    }
-                    footnoteHighlight.show(number)
-                    return .handled
-                })
+            VStack(spacing: 0) {
+                if previewFind.isVisible {
+                    WritingFindBar(controller: previewFind)
+                    Divider()
+                }
+                devotionalDocument(devotional)
+            }
+            // A marker in the prose is a link to its note. Every other link
+            // is one the writer put there and opens as it would anywhere else.
+            .environment(\.openURL, OpenURLAction { url in
+                guard let number = LampDevotionalFootnotes.markerNumber(in: url) else {
+                    return .systemAction
+                }
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    proxy.scrollTo(DevotionalFootnoteAnchor(number: number), anchor: .center)
+                }
+                footnoteHighlight.show(number)
+                return .handled
+            })
+            .onChange(of: previewFinder.scrollTo) { _, request in
+                guard let request else { return }
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    proxy.scrollTo(
+                        DevotionalPreviewBlockAnchor(index: request.block),
+                        anchor: .center
+                    )
+                }
+            }
         }
+        // ⌘F reaches whichever writing surface has focus. Here that is the
+        // preview, which is read-only, so Find and Replace stays unavailable
+        // rather than opening a bar whose Replace does nothing.
+        .focusedValue(\.writingFind, previewFind)
+        // Moving to another writing keeps the query — it is the same bar — and
+        // the new text is searched as it is rendered, because the preview
+        // hands the finder its runs every time it draws.
+        .onAppear { previewFind.attach(previewFinder) }
     }
 
     private func devotionalDocument(_ devotional: LampDevotional) -> some View {
@@ -662,7 +689,11 @@ struct DevotionalsView: View {
                     // Without this an unwritten draft is a title over a divider
                     // over nothing, which reads as a rendering failure.
                     emptyState: AnyView(emptyDraftState(devotional)),
-                    titleShownAbove: devotional.title
+                    titleShownAbove: devotional.title,
+                    // The writing itself is what Find searches. The notes
+                    // below it are a list of their own, and each preview
+                    // numbers its runs from the top of its own text.
+                    finder: previewFinder
                 )
 
                 if !numbered.footnotes.isEmpty || !numbered.preamble.isEmpty {

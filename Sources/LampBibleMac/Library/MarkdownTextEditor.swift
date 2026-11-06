@@ -146,7 +146,7 @@ struct MarkdownTextEditor: NSViewRepresentable {
 /// Held by the editor window, which outlives any one text view, so a search
 /// carries on when the Markdown surface comes back or shows another file.
 @MainActor
-final class MarkdownTextFinder: WritingFindTarget {
+final class MarkdownTextFinder: WritingReplaceTarget {
     var onFindStatusChanged: ((WritingFindStatus) -> Void)?
     private weak var textView: NSTextView?
     private var query = ""

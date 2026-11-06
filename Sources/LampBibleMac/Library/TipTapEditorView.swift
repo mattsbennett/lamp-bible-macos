@@ -982,7 +982,7 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
 
 /// The bundle searches the document as it is shown, a block at a time, so
 /// what the find bar finds in the visual editor is the text a reader sees.
-extension TipTapEditorCoordinator: WritingFindTarget {
+extension TipTapEditorCoordinator: WritingReplaceTarget {
     func setSearch(
         _ query: String,
         options: WritingFindOptions,

@@ -21,6 +21,9 @@ struct DevotionalContentView: View {
     /// The title the host already displays above this content. A first heading
     /// that only restates it is dropped rather than printed twice.
     var titleShownAbove: String?
+    /// Finds text in what is drawn here. Given one, this view hands it the
+    /// writing's runs as they are rendered and draws the matches it reports.
+    var finder: WritingPreviewFinder?
 
     @State private var presentedImage: PresentedDevotionalImage?
     @State private var renderedContent: RenderedDevotionalContent?
@@ -46,11 +49,12 @@ struct DevotionalContentView: View {
                 emptyState
             } else if let renderedContent, renderedContent.source == markdown {
                 LazyVStack(alignment: .leading, spacing: 16) {
-                    ForEach(Array(visibleBlocks(of: renderedContent).enumerated()), id: \.offset) { _, block in
+                    ForEach(Array(visibleBlocks(of: renderedContent).enumerated()), id: \.offset) { index, block in
                         switch block {
                         case .prose(let prose):
                             proseBlock(prose)
                                 .textSelection(.enabled)
+                                .id(DevotionalPreviewBlockAnchor(index: index))
                         case .image(let caption, let url):
                             DevotionalImageBlockView(
                                 caption: caption,
@@ -73,6 +77,10 @@ struct DevotionalContentView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        .environment(
+            \.writingPreviewHighlight,
+            WritingPreviewHighlight(result: finder?.result ?? .none)
+        )
         .task(id: markdown) {
             let source = markdown
             if renderedContent?.source != source {
@@ -80,7 +88,9 @@ struct DevotionalContentView: View {
             }
             let blocks = await DevotionalContentRenderer.shared.render(source)
             guard !Task.isCancelled, source == markdown else { return }
-            renderedContent = RenderedDevotionalContent(source: source, blocks: blocks)
+            let content = RenderedDevotionalContent(source: source, blocks: blocks)
+            renderedContent = content
+            handToFinder(content)
         }
         .sheet(item: $presentedImage) { item in
             VStack(spacing: 14) {
@@ -230,6 +240,24 @@ struct DevotionalContentView: View {
         RenderedText(item: item)
     }
 
+    /// Hands the finder the text now on screen, and which block each run is
+    /// in so the current match can be scrolled to. Only the blocks actually
+    /// drawn are included: a heading dropped for restating the title is not
+    /// in the preview, so finding it would scroll to nothing.
+    private func handToFinder(_ content: RenderedDevotionalContent) {
+        guard let finder else { return }
+        let blocks = visibleBlocks(of: content)
+        var runs: [WritingPreviewRun] = []
+        var blockOfRun: [Int: Int] = [:]
+        for (index, block) in blocks.enumerated() {
+            for item in block.runs {
+                runs.append(WritingPreviewRun(id: item.id, text: item.searchable))
+                blockOfRun[item.id] = index
+            }
+        }
+        finder.setRuns(runs, blocks: blockOfRun)
+    }
+
     private func unavailableMedia(_ label: String, systemImage: String) -> some View {
         Label("\(label) is unavailable on this Mac", systemImage: systemImage)
             .foregroundStyle(.secondary)
@@ -250,17 +278,32 @@ struct DevotionalContentView: View {
 /// A run of the writing's prose, its inline Markdown resolved.
 private struct RenderedText: View {
     let item: RenderedProseItem
+    @Environment(\.writingPreviewHighlight) private var highlight
 
     var body: some View {
+        let found = highlight.ranges(inRun: item.id)
         if let attributed = item.attributed {
             // The writing's own links, and the footnote markers, are drawn in
             // the tint. Without this they take the app's accent, which belongs
             // to controls rather than to anything in the text.
-            Text(attributed).tint(.lampLink)
-        } else {
+            Text(marking(found, in: attributed)).tint(.lampLink)
+        } else if found.isEmpty {
             Text(item.plain)
+        } else {
+            Text(marking(found, in: AttributedString(item.plain)))
         }
     }
+
+    private func marking(_ found: [NSRange], in text: AttributedString) -> AttributedString {
+        guard !found.isEmpty else { return text }
+        return text.markingFindMatches(found, current: highlight.currentRange(inRun: item.id))
+    }
+}
+
+/// What a block of the preview is scrolled to by, so the find bar can take the
+/// reader to the match it has made current.
+struct DevotionalPreviewBlockAnchor: Hashable {
+    var index: Int
 }
 
 /// One item of a list as the writing sets it: the marker in a column of its
@@ -311,7 +354,14 @@ struct DevotionalFootnoteList: View {
 
         init(_ footnote: LampDevotionalFootnotes.Footnote) {
             id = footnote.number
-            item = RenderedProseItem(LampDevotionalFootnotes.displayText(of: footnote))
+            // The notes are not part of the writing's own runs, which are
+            // numbered from zero upward. Numbering these below zero keeps the
+            // two apart, so a find in the writing never marks a note that
+            // happens to share a run number with it.
+            item = RenderedProseItem(
+                LampDevotionalFootnotes.displayText(of: footnote),
+                id: -footnote.number - 1
+            )
         }
     }
 
@@ -390,21 +440,54 @@ private enum RenderedDevotionalBlock: Sendable {
     case prose(RenderedProseBlock)
     case image(caption: String, url: URL)
     case audio(label: String, url: URL)
+
+    /// Every run of text this block draws, in reading order. A picture or a
+    /// recording has none; its caption is a label rather than the writing.
+    var runs: [RenderedProseItem] {
+        guard case .prose(let prose) = self else { return [] }
+        return prose.runs
+    }
 }
 
 /// A run of prose with its inline markdown already resolved. Parsing happens off
 /// the main actor, so the attributed value is built once per edit rather than on
 /// every layout pass.
 private struct RenderedProseItem: Sendable {
+    /// This run's place in the writing, counted in reading order. Find uses it
+    /// to say which run a match is in; nothing else does.
+    let id: Int
     let plain: String
     let attributed: AttributedString?
 
-    init(_ source: String) {
+    init(_ source: String, id: Int) {
+        self.id = id
         plain = source
         attributed = try? AttributedString(
             markdown: source,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         )
+    }
+
+    /// The text as it is drawn, which is what find searches: the inline
+    /// Markdown is resolved, so `**grace**` is found by searching for `grace`
+    /// and not by searching for the asterisks.
+    var searchable: String {
+        if let attributed { return String(attributed.characters) }
+        return plain
+    }
+}
+
+/// Hands out run numbers in reading order as a document is built.
+private struct RunNumbering {
+    private var next = 0
+
+    mutating func take() -> Int {
+        defer { next += 1 }
+        return next
+    }
+
+    mutating func item(_ source: String) -> RenderedProseItem {
+        RenderedProseItem(source, id: take())
     }
 }
 
@@ -421,26 +504,42 @@ private enum RenderedProseBlock: Sendable {
     case codeBlock(language: String?, code: String)
     case rule
 
-    init(_ block: DevotionalProseBlock) {
+    /// Every run of prose this block draws, in reading order. A code fence has
+    /// none: it is kept verbatim and holds no inline markdown to resolve.
+    var runs: [RenderedProseItem] {
+        switch self {
+        case .heading(_, let text): [text]
+        case .paragraph(let text): [text]
+        case .quote(let paragraphs): paragraphs
+        case .bulletList(let items): items
+        case .numberedList(let items): items
+        case .nestedBulletList(let items): items.map(\.text)
+        case .nestedNumberedList(let items): items.map(\.text)
+        case .table(let headers, let rows): headers + rows.flatMap { $0 }
+        case .codeBlock, .rule: []
+        }
+    }
+
+    init(_ block: DevotionalProseBlock, numbering: inout RunNumbering) {
         switch block {
         case .heading(let level, let text):
-            self = .heading(level: level, text: RenderedProseItem(text))
+            self = .heading(level: level, text: numbering.item(text))
         case .paragraph(let text):
-            self = .paragraph(RenderedProseItem(text))
+            self = .paragraph(numbering.item(text))
         case .quote(let paragraphs):
-            self = .quote(paragraphs.map(RenderedProseItem.init))
+            self = .quote(paragraphs.map { numbering.item($0) })
         case .bulletList(let items):
-            self = .bulletList(items.map(RenderedProseItem.init))
+            self = .bulletList(items.map { numbering.item($0) })
         case .numberedList(let items):
-            self = .numberedList(items.map(RenderedProseItem.init))
+            self = .numberedList(items.map { numbering.item($0) })
         case .nestedBulletList(let items):
-            self = .nestedBulletList(items.map(RenderedListLine.init))
+            self = .nestedBulletList(items.map { RenderedListLine($0, numbering: &numbering) })
         case .nestedNumberedList(let items):
-            self = .nestedNumberedList(items.map(RenderedListLine.init))
+            self = .nestedNumberedList(items.map { RenderedListLine($0, numbering: &numbering) })
         case .table(let headers, let rows):
             self = .table(
-                headers: headers.map(RenderedProseItem.init),
-                rows: rows.map { $0.map(RenderedProseItem.init) }
+                headers: headers.map { numbering.item($0) },
+                rows: rows.map { row in row.map { numbering.item($0) } }
             )
         case .codeBlock(let language, let code):
             self = .codeBlock(language: language, code: code)
@@ -454,9 +553,9 @@ private struct RenderedListLine: Sendable {
     let depth: Int
     let text: RenderedProseItem
 
-    init(_ item: DevotionalListLine) {
+    init(_ item: DevotionalListLine, numbering: inout RunNumbering) {
         depth = item.depth
-        text = RenderedProseItem(item.text)
+        text = numbering.item(item.text)
     }
 }
 
@@ -471,6 +570,9 @@ private actor DevotionalContentRenderer {
         if let cached = cache[markdown] {
             return cached
         }
+        // Runs are numbered across the whole document, in reading order, so a
+        // find in the preview can say which run a match is in.
+        var numbering = RunNumbering()
         let rendered = DevotionalMarkdownParser.parse(markdown).flatMap {
             block -> [RenderedDevotionalBlock] in
             switch block {
@@ -479,7 +581,7 @@ private actor DevotionalContentRenderer {
                 // be split back into headings, quotes, lists and paragraphs before
                 // any of them can be styled.
                 return DevotionalProseParser.parse(value).map {
-                    .prose(RenderedProseBlock($0))
+                    .prose(RenderedProseBlock($0, numbering: &numbering))
                 }
             case .image(let caption, let url):
                 return [.image(caption: caption, url: url)]

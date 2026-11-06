@@ -4,9 +4,13 @@ import LampBibleMacSupport
 #endif
 import SwiftUI
 
-/// A writing surface the find bar searches: the visual editor or the Markdown
-/// text view. Results come back later, since the visual editor answers from
-/// its web page.
+/// A writing surface the find bar searches: the visual editor, the Markdown
+/// text view, or the read-only preview. Results come back later, since the
+/// visual editor answers from its web page.
+///
+/// Replacing is `WritingReplaceTarget`, which a surface that can be edited
+/// also conforms to. A surface that cannot — the preview — conforms to this
+/// alone, and the bar offers it Find and no Replace, without being told to.
 @MainActor
 protocol WritingFindTarget: AnyObject {
     /// Shows every match of `query` and makes current the first at or after
@@ -19,17 +23,23 @@ protocol WritingFindTarget: AnyObject {
     )
     func findNext(completion: @escaping (WritingFindStatus) -> Void)
     func findPrevious(completion: @escaping (WritingFindStatus) -> Void)
-    /// Replaces the current match, as one change Undo takes back, and makes
-    /// the next match after it current.
-    func replaceCurrent(with replacement: String, completion: @escaping (WritingFindStatus) -> Void)
-    /// Replaces every match as one change Undo takes back, and says how many.
-    func replaceAll(with replacement: String, completion: @escaping (Int) -> Void)
     /// Takes the matches off the text. Selecting the current one leaves the
     /// found text selected with the caret back in the text, as a Mac find bar
     /// does when it closes.
     func endSearch(selectingCurrent: Bool)
     /// Told when editing changes the matches while a search is set.
     var onFindStatusChanged: ((WritingFindStatus) -> Void)? { get set }
+}
+
+/// A writing surface that can also be written to, and so can replace what the
+/// find bar found.
+@MainActor
+protocol WritingReplaceTarget: WritingFindTarget {
+    /// Replaces the current match, as one change Undo takes back, and makes
+    /// the next match after it current.
+    func replaceCurrent(with replacement: String, completion: @escaping (WritingFindStatus) -> Void)
+    /// Replaces every match as one change Undo takes back, and says how many.
+    func replaceAll(with replacement: String, completion: @escaping (Int) -> Void)
 }
 
 /// The find bar of one writing window, and the surface it searches.
@@ -69,10 +79,16 @@ final class WritingFindController {
     @ObservationIgnored private var requestNumber = 0
 
     var canStep: Bool { (status?.count ?? 0) > 0 }
-    var canReplaceCurrent: Bool { (status?.current ?? 0) > 0 }
+    var canReplaceCurrent: Bool { canReplace && (status?.current ?? 0) > 0 }
+
+    /// Whether the surface on screen can be written to. A preview cannot, and
+    /// is offered Find alone.
+    var canReplace: Bool { target is any WritingReplaceTarget }
+
+    private var replaceTarget: (any WritingReplaceTarget)? { target as? any WritingReplaceTarget }
 
     func show(replacing: Bool) {
-        if replacing { isReplacing = true }
+        if replacing, canReplace { isReplacing = true }
         if !isVisible {
             isVisible = true
             search()
@@ -103,13 +119,13 @@ final class WritingFindController {
     }
 
     func replaceCurrent() {
-        guard let target, canReplaceCurrent else { return }
+        guard let target = replaceTarget, canReplaceCurrent else { return }
         let replacement = replacement
         request { target.replaceCurrent(with: replacement, completion: $0) }
     }
 
     func replaceAll() {
-        guard let target, canStep else { return }
+        guard let target = replaceTarget, canStep else { return }
         requestNumber += 1
         let number = requestNumber
         target.replaceAll(with: replacement) { [weak self] count in
@@ -126,6 +142,10 @@ final class WritingFindController {
         target?.onFindStatusChanged = nil
         target?.endSearch(selectingCurrent: false)
         target = newTarget
+        // Moving from an editor to a preview leaves the query, but there is
+        // now nothing to replace: the replace row goes rather than sitting
+        // there with its buttons dead.
+        if !canReplace { isReplacing = false }
         newTarget?.onFindStatusChanged = { [weak self] status in
             guard let self, self.isVisible, !self.query.isEmpty else { return }
             self.status = status
@@ -174,21 +194,32 @@ struct WritingFindBar: View {
     var body: some View {
         Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 6) {
             GridRow {
-                Picker("Find or Replace", selection: $controller.isReplacing) {
-                    Text("Find").tag(false)
-                    Text("Replace").tag(true)
+                if controller.canReplace {
+                    Picker("Find or Replace", selection: $controller.isReplacing) {
+                        Text("Find").tag(false)
+                        Text("Replace").tag(true)
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .fixedSize()
+                    .help("Find, or find and replace")
+                } else {
+                    // A preview cannot be written to, so there is no choice to
+                    // offer. The label still says what the bar is.
+                    Text("Find")
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
                 }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .fixedSize()
-                .help("Find, or find and replace")
 
                 field(.find) {
-                    optionsMenu
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
                     TextField("Find", text: $controller.query)
                         .textFieldStyle(.plain)
                         .focused($focusedField, equals: .find)
                         .onSubmit { controller.findNext() }
+                    optionToggles
                     Text(statusText)
                         .font(.callout)
                         .monospacedDigit()
@@ -260,17 +291,57 @@ struct WritingFindBar: View {
             .onTapGesture { focusedField = which }
     }
 
-    private var optionsMenu: some View {
-        Menu {
-            Toggle("Match Case", isOn: $controller.options.matchesCase)
-            Toggle("Whole Words", isOn: $controller.options.wholeWords)
-        } label: {
-            Image(systemName: "magnifyingglass")
+    /// Match Case and Whole Words, in the field where the text being searched
+    /// for is. They were behind the magnifying glass's menu, where someone who
+    /// does not already know the Mac search field never found them, and where
+    /// nothing said whether they were on.
+    private var optionToggles: some View {
+        HStack(spacing: 2) {
+            optionToggle(
+                "Aa",
+                isOn: $controller.options.matchesCase,
+                name: "Match Case",
+                help: "Match case: find Grace but not grace"
+            )
+            optionToggle(
+                "ab",
+                isOn: $controller.options.wholeWords,
+                name: "Whole Words",
+                help: "Whole words: find law but not lawless",
+                underlined: true
+            )
         }
-        .menuStyle(.borderlessButton)
         .fixedSize()
-        .help("Find options")
-        .accessibilityLabel("Find options")
+    }
+
+    private func optionToggle(
+        _ label: String,
+        isOn: Binding<Bool>,
+        name: String,
+        help: String,
+        underlined: Bool = false
+    ) -> some View {
+        Button {
+            isOn.wrappedValue.toggle()
+        } label: {
+            Text(label)
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .underline(underlined)
+                .monospacedDigit()
+                .foregroundStyle(isOn.wrappedValue ? Color.white : Color.secondary)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(isOn.wrappedValue ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.clear))
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 4))
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .accessibilityLabel(name)
+        .accessibilityValue(isOn.wrappedValue ? "On" : "Off")
+        .accessibilityAddTraits(isOn.wrappedValue ? [.isSelected] : [])
     }
 
     private var isNotFound: Bool {
