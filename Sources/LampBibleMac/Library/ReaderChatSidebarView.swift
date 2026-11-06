@@ -14,11 +14,34 @@ struct ReaderChatSidebarView: View {
     @AppStorage("agent.moduleAccess.personal") private var personalContentEnabled = false
     @State private var configuration: LampAgentMCPConfiguration?
     @State private var preparationError: String?
+    /// What this window's chat is set to run with, read from beside its own
+    /// transcript. `providerID` above is what the app remembers, which is the
+    /// default a new chat opens on.
+    @State private var chatChoices = AgentChatChoices()
 
     let windowID: UUID
     let close: () -> Void
 
-    private var provider: AIProviderCLI { AIProviderCLI(rawValue: providerID) ?? .codex }
+    private var provider: AIProviderCLI {
+        AIProviderCLI(
+            rawValue: chatChoices.value(for: AgentChatChoices.providerKey, orAppDefault: providerID) ?? providerID
+        ) ?? .codex
+    }
+
+    /// Picking a provider sets this chat's, and what the app remembers, so the
+    /// next window opens on it. Windows already open keep their own.
+    private var providerSelection: Binding<String> {
+        Binding(
+            get: { provider.rawValue },
+            set: { chosen in
+                var updated = chatChoices
+                updated.set(chosen, for: AgentChatChoices.providerKey)
+                try? AgentChatChoicesStore.save(updated, in: workspace)
+                chatChoices = updated
+                providerID = chosen
+            }
+        )
+    }
 
     private var workspace: URL {
         ReaderChatWorkspaceStore.workspaceURL(
@@ -198,7 +221,7 @@ struct ReaderChatSidebarView: View {
                 }
 
                 HStack {
-                    Picker("Provider", selection: $providerID) {
+                    Picker("Provider", selection: providerSelection) {
                         ForEach(AIProviderCLI.allCases) { provider in
                             Text(provider.shortName).tag(provider.rawValue)
                         }
@@ -215,8 +238,14 @@ struct ReaderChatSidebarView: View {
                 // qualified model name beside the provider and the badge left
                 // all three of them truncated to their first few letters.
                 HStack {
-                    AgentChatProviderChoice(kind: .model, provider: provider, workspace: workspace)
-                    AgentChatProviderChoice(kind: .effort, provider: provider, workspace: workspace)
+                    AgentChatProviderChoice(
+                        kind: .model, provider: provider, workspace: workspace,
+                        chatChoices: $chatChoices
+                    )
+                    AgentChatProviderChoice(
+                        kind: .effort, provider: provider, workspace: workspace,
+                        chatChoices: $chatChoices
+                    )
                     Spacer()
                 }
 
@@ -292,6 +321,7 @@ struct ReaderChatSidebarView: View {
         }
         .background(.background)
         .onAppear(perform: prepareWorkspace)
+        .onChange(of: provider) { _, _ in loadChoices() }
         .onChange(of: accessPolicy) { _, _ in
             do {
                 try writeAccessPolicy()
@@ -311,7 +341,14 @@ struct ReaderChatSidebarView: View {
         try JSONEncoder().encode(accessPolicy).write(to: policyURL, options: .atomic)
     }
 
+    private func loadChoices() {
+        chatChoices = AgentChatOwnChoices.pinned(in: workspace, appProviderID: providerID)
+    }
+
     private func prepareWorkspace() {
+        // Before the chat pane is given a configuration to mount with, so it
+        // is never built against a provider this chat is not on.
+        loadChoices()
         do {
             guard let helper = AgentModuleAccessPreferences.mcpHelperExecutableURL else {
                 throw CocoaError(.fileNoSuchFile, userInfo: [

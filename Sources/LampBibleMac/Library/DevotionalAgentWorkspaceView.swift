@@ -834,6 +834,10 @@ struct DevotionalAgentWorkspaceView: View {
     /// How tall the draft, context and skills sit above the chat or terminal.
     @AppStorage("devotional.agent.workspaceHeight") private var workspaceSectionHeight = 310.0
     @State private var workspaceURL: URL?
+    /// What this writing's chat is set to run with, read from beside its own
+    /// transcript. `providerID` above is what the app remembers, which is the
+    /// default a new workspace opens on.
+    @State private var chatChoices = AgentChatChoices()
     /// Whether the chat pane is waiting on a reply. It stays mounted while it
     /// is, so changing mode doesn't stop the run.
     @State private var chatIsReplying = false
@@ -881,7 +885,28 @@ struct DevotionalAgentWorkspaceView: View {
     @State private var isImportingPresentation = false
 
     private var selectedProvider: AIProviderCLI {
-        AIProviderCLI(rawValue: providerID) ?? .codex
+        AIProviderCLI(
+            rawValue: chatChoices.value(for: AgentChatChoices.providerKey, orAppDefault: providerID) ?? providerID
+        ) ?? .codex
+    }
+
+    /// Picking a provider sets this writing's, and what the app remembers, so
+    /// the next workspace opens on it. Workspaces already open keep their own.
+    private var providerSelection: Binding<String> {
+        Binding(
+            get: { selectedProvider.rawValue },
+            set: { chosen in
+                var updated = chatChoices
+                updated.set(chosen, for: AgentChatChoices.providerKey)
+                if let workspaceURL { try? AgentChatChoicesStore.save(updated, in: workspaceURL) }
+                chatChoices = updated
+                providerID = chosen
+            }
+        )
+    }
+
+    private func loadChoices(in workspace: URL) {
+        chatChoices = AgentChatOwnChoices.pinned(in: workspace, appProviderID: providerID)
     }
 
     private var sessionMode: AgentSessionDisplayMode {
@@ -940,6 +965,9 @@ struct DevotionalAgentWorkspaceView: View {
             }
         }
         .background(SwiftUI.Color(nsColor: .windowBackgroundColor))
+        .onChange(of: selectedProvider) { _, _ in
+            if let workspaceURL { loadChoices(in: workspaceURL) }
+        }
         .task(id: "\(libraryRootURL.path)|\(devotionalID)") {
             prepareWorkspace()
             while !Task.isCancelled {
@@ -990,15 +1018,21 @@ struct DevotionalAgentWorkspaceView: View {
 
     private var agentToolbar: some View {
         HStack(spacing: 8) {
-            Picker("Provider", selection: $providerID) {
+            Picker("Provider", selection: providerSelection) {
                 ForEach(AIProviderCLI.allCases, id: \.rawValue) { provider in
                     Text(provider.shortName).tag(provider.rawValue)
                 }
             }
             .labelsHidden()
             .frame(maxWidth: 150)
-            AgentChatProviderChoice(kind: .model, provider: selectedProvider, workspace: workspaceURL)
-            AgentChatProviderChoice(kind: .effort, provider: selectedProvider, workspace: workspaceURL)
+            AgentChatProviderChoice(
+                kind: .model, provider: selectedProvider, workspace: workspaceURL,
+                chatChoices: $chatChoices
+            )
+            AgentChatProviderChoice(
+                kind: .effort, provider: selectedProvider, workspace: workspaceURL,
+                chatChoices: $chatChoices
+            )
 
             Picker("Session interface", selection: $sessionModeID) {
                 ForEach(AgentSessionDisplayMode.allCases) { mode in
@@ -1323,6 +1357,9 @@ struct DevotionalAgentWorkspaceView: View {
                 contextDocument: contextDocument,
                 mcpConfiguration: mcpConfiguration
             )
+            // Before the chat pane is given a workspace to mount with, so it
+            // is never built against a provider this writing is not on.
+            loadChoices(in: workspace)
             workspaceURL = workspace
             try DevotionalAgentWorkspaceStore.writeContext(contextDocument, to: workspace)
             writeEditorFocus(editorFocus)

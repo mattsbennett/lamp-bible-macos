@@ -274,6 +274,10 @@ public struct AgentChatChoices: Equatable, Sendable, Codable {
         values[key] = value
     }
 
+    /// Where a chat's own provider is kept. One key, not one per provider
+    /// like the model and the effort: this is which provider the chat is.
+    public static let providerKey = "chat.provider"
+
     /// Pins what this chat is running with, the first time it is shown.
     ///
     /// Until it is pinned the chat is only following what the app remembers,
@@ -300,6 +304,30 @@ public struct AgentChatChoices: Equatable, Sendable, Codable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         try container.encode(values)
+    }
+}
+
+/// Pinning a chat to what it is running with.
+///
+/// A chat that has pinned nothing is only following what the app remembers,
+/// and the app remembers whatever was picked last in any window — so a pick
+/// made in a second window would move the first one with it. Pinning is what
+/// keeps the two apart, and it is done when a chat is first shown and again
+/// when it changes provider, since each provider has a model and an effort of
+/// its own that were never pinned while another provider was current.
+public enum AgentChatChoicesPin {
+    public static func pinning(
+        _ choices: AgentChatChoices,
+        providerID: String,
+        provider: AgentChatWireProvider,
+        model: String,
+        effort: String
+    ) -> (choices: AgentChatChoices, changed: Bool) {
+        var pinned = choices
+        var changed = pinned.pin(providerID, for: AgentChatChoices.providerKey)
+        changed = pinned.pin(model, for: AgentChatModelChoice.defaultsKey(provider)) || changed
+        changed = pinned.pin(effort, for: AgentChatEffortChoice.defaultsKey(provider)) || changed
+        return (pinned, changed)
     }
 }
 

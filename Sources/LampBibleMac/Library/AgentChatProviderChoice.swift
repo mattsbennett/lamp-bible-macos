@@ -76,8 +76,9 @@ struct AgentChatProviderChoice: View {
     @AppStorage(AgentChatEffortChoice.defaultsKey(.codex)) private var codexEffort = ""
     @AppStorage(AgentChatEffortChoice.defaultsKey(.openCode)) private var openCodeEffort = ""
 
-    /// This chat's own choices, read from beside its transcript.
-    @State private var chatChoices = AgentChatChoices()
+    /// This chat's own choices, held by the pane the chat is in so that the
+    /// controls and the run all read one copy.
+    @Binding var chatChoices: AgentChatChoices
     /// What the installed OpenCode says this model's variants are. Asked of
     /// the CLI, because they differ by model and are not Lamp's to name.
     @State private var variants: [String] = []
@@ -147,16 +148,11 @@ struct AgentChatProviderChoice: View {
     }
 
     var body: some View {
-        // Always drawn, even where it cannot be set yet: a control that
-        // appeared and disappeared as a model was named would also have to
-        // learn the chat's model before it could decide, and it learns that by
-        // being on screen. So it is always here, and says why when it is not
-        // yet of any use.
+        // Always drawn, even where it cannot be set yet: a control that came
+        // and went as a model was named would leave the row jumping about, and
+        // what it would say instead is worth saying.
         picker
-            .task(id: adoptKey) {
-                let loaded = adopt()
-                await loadVariants(of: model(in: loaded))
-            }
+            .task(id: variantRequest) { await loadVariants() }
     }
 
     private var picker: some View {
@@ -249,24 +245,6 @@ struct AgentChatProviderChoice: View {
         isEditing = false
     }
 
-    /// Reads this chat's choices, and the first time a chat is shown pins what
-    /// it is running with into them — so a choice made in another window
-    /// afterwards, which also moves what the app remembers, leaves this chat
-    /// where the reader left it.
-    @discardableResult
-    private func adopt() -> AgentChatChoices {
-        guard let workspace else {
-            chatChoices = AgentChatChoices()
-            return chatChoices
-        }
-        var loaded = AgentChatChoicesStore.load(in: workspace)
-        if loaded.pin(writtenAppDefault.wrappedValue, for: writtenKey) {
-            try? AgentChatChoicesStore.save(loaded, in: workspace)
-        }
-        chatChoices = loaded
-        return loaded
-    }
-
     /// Which choice this control writes, and what the app remembers of it. For
     /// OpenCode's effort that is the model, because the variant it sets lives
     /// on the model's own name.
@@ -293,28 +271,46 @@ struct AgentChatProviderChoice: View {
         writtenAppDefault.wrappedValue = written
     }
 
-    private func loadVariants(of model: String) async {
+    private func loadVariants() async {
         guard editsTheModelsVariant else { return }
-        variants = await OpenCodeVariantCatalogue.variants(of: model, workspace: workspace)
+        variants = await OpenCodeVariantCatalogue.variants(of: chatModel, workspace: workspace)
     }
 
-    /// Everything that would make this control show something else. The app's
-    /// remembered defaults are in it because a pick writes one, which is how a
-    /// change made by the other control in this window reaches this one.
-    private var adoptKey: AdoptKey {
-        AdoptKey(
-            workspace: workspace?.path,
-            provider: wire.rawValue,
-            model: modelAppDefault.wrappedValue,
-            effort: appDefault.wrappedValue
+    /// Asked again whenever the answer could differ: another model has another
+    /// model's variants, and another project directory another OpenCode
+    /// configuration.
+    private var variantRequest: String {
+        "\(workspace?.path ?? "")|\(chatModel)"
+    }
+}
+
+/// A chat's own choices, read from beside its transcript and pinned to what
+/// the chat is running with.
+///
+/// Pinned when a chat is first shown and again when it changes provider: each
+/// provider has a model and an effort of its own, which were never pinned
+/// while another was current. Without pinning, a chat is still only following
+/// what the app remembers — and the app remembers whatever was picked last in
+/// any window, so a pick made in a second window would move the first with it.
+@MainActor
+enum AgentChatOwnChoices {
+    static func pinned(in workspace: URL, appProviderID: String) -> AgentChatChoices {
+        let loaded = AgentChatChoicesStore.load(in: workspace)
+        let current = AIProviderCLI(
+            rawValue: loaded.value(
+                for: AgentChatChoices.providerKey, orAppDefault: appProviderID
+            ) ?? appProviderID
+        ) ?? .codex
+        let wire = current.wireProvider
+        let result = AgentChatChoicesPin.pinning(
+            loaded,
+            providerID: current.rawValue,
+            provider: wire,
+            model: UserDefaults.standard.string(forKey: AgentChatModelChoice.defaultsKey(wire)) ?? "",
+            effort: UserDefaults.standard.string(forKey: AgentChatEffortChoice.defaultsKey(wire)) ?? ""
         )
-    }
-
-    private struct AdoptKey: Equatable {
-        let workspace: String?
-        let provider: String
-        let model: String
-        let effort: String
+        if result.changed { try? AgentChatChoicesStore.save(result.choices, in: workspace) }
+        return result.choices
     }
 }
 

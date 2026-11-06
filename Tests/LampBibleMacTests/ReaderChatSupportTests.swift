@@ -576,6 +576,61 @@ struct ReaderChatSupportTests {
         #expect(plain.value(for: key, orAppDefault: "haiku") == "")
     }
 
+    @Test func aChatPinsItsProviderAndThatProvidersSettings() {
+        // Shown while the app remembers Claude on opus: all three are pinned,
+        // so another window's picks cannot move this chat.
+        let first = AgentChatChoicesPin.pinning(
+            AgentChatChoices(), providerID: "claude", provider: .claude,
+            model: "opus", effort: "high"
+        )
+        #expect(first.changed)
+        #expect(first.choices.value(for: AgentChatChoices.providerKey) == "claude")
+        #expect(first.choices.value(for: AgentChatModelChoice.defaultsKey(.claude)) == "opus")
+        #expect(first.choices.value(for: AgentChatEffortChoice.defaultsKey(.claude)) == "high")
+
+        // Shown again after another window moved the app on: nothing changes.
+        let again = AgentChatChoicesPin.pinning(
+            first.choices, providerID: "codex", provider: .claude,
+            model: "haiku", effort: "low"
+        )
+        #expect(!again.changed)
+        #expect(again.choices == first.choices)
+    }
+
+    @Test func changingProviderPinsTheNewOnesSettingsAndLeavesTheOlds() {
+        // Each provider has a model and an effort of its own, and the new
+        // one's were never pinned while the old one was current — so they
+        // would still be following whatever the app last remembered.
+        let claude = AgentChatChoicesPin.pinning(
+            AgentChatChoices(), providerID: "claude", provider: .claude,
+            model: "opus", effort: "high"
+        ).choices
+        let codex = AgentChatChoicesPin.pinning(
+            claude, providerID: "codex", provider: .codex,
+            model: "a-codex-model", effort: "medium"
+        )
+        #expect(codex.changed)
+        #expect(codex.choices.value(for: AgentChatModelChoice.defaultsKey(.codex)) == "a-codex-model")
+        // The provider was already pinned, so switching does not go through
+        // here: the picker writes it, and what was pinned for Claude stands
+        // for when this chat is put back on Claude.
+        #expect(codex.choices.value(for: AgentChatChoices.providerKey) == "claude")
+        #expect(codex.choices.value(for: AgentChatModelChoice.defaultsKey(.claude)) == "opus")
+    }
+
+    @Test func aChatWithNoProviderOfItsOwnFollowsTheApp() {
+        let none = AgentChatChoices()
+        #expect(none.value(for: AgentChatChoices.providerKey, orAppDefault: "codex") == "codex")
+        var pinned = AgentChatChoices()
+        pinned.set("openCode", for: AgentChatChoices.providerKey)
+        #expect(pinned.value(for: AgentChatChoices.providerKey, orAppDefault: "codex") == "openCode")
+        // One key for the provider, and not one of the per-provider keys.
+        #expect(AgentChatChoices.providerKey != AgentChatModelChoice.defaultsKey(.claude))
+        #expect(![AgentChatWireProvider.claude, .codex, .openCode]
+            .flatMap { [AgentChatModelChoice.defaultsKey($0), AgentChatEffortChoice.defaultsKey($0)] }
+            .contains(AgentChatChoices.providerKey))
+    }
+
     @Test func twoChatsInTwoWorkspacesEachKeepTheirOwnModel() throws {
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent(UUID().uuidString)
