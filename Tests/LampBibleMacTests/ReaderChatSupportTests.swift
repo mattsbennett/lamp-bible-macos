@@ -55,8 +55,11 @@ struct ReaderChatSupportTests {
             == (resuming ? "existing-session" : "proposed-session"))
 
         let openCode = arguments(.openCode)
+        // The agent is what makes this read-only: its permissions deny
+        // everything but the Lamp tools. `--pure` was a second belt on
+        // version 1 and is gone from version 2, so it is version-dependent
+        // and this restriction is not.
         #expect(value(after: "--agent", in: openCode) == "lamp-reader")
-        #expect(openCode.contains("--pure"))
         #expect(openCode.contains("--session") == resuming)
     }
 
@@ -141,6 +144,119 @@ struct ReaderChatSupportTests {
         let keys = Set([AgentChatWireProvider.claude, .codex, .openCode]
             .map(AgentChatModelChoice.defaultsKey))
         #expect(keys.count == 3)
+    }
+
+    @Test func effortIsSilentUnlessTheReaderPicksOne() {
+        for provider in [AgentChatWireProvider.claude, .codex, .openCode] {
+            let arguments = AgentChatLaunchArguments.make(
+                provider: provider, prompt: "Read", sessionID: nil, proposedSessionID: nil
+            )
+            #expect(!arguments.contains("--effort"))
+            #expect(!arguments.contains { $0.hasPrefix("model_reasoning_effort") })
+        }
+    }
+
+    @Test func eachProviderIsToldTheEffortTheWayItTakesIt() {
+        let claude = AgentChatLaunchArguments.make(
+            provider: .claude, prompt: "Read", sessionID: nil, proposedSessionID: nil,
+            effort: "high"
+        )
+        #expect(value(after: "--effort", in: claude) == "high")
+        // Codex has no flag for it: `-c` overrides the one key for this run,
+        // leaving the reader's own config.toml as they wrote it.
+        let codex = AgentChatLaunchArguments.make(
+            provider: .codex, prompt: "Read", sessionID: nil, proposedSessionID: nil,
+            effort: "high"
+        )
+        #expect(codex.contains(#"model_reasoning_effort="high""#))
+        #expect(value(after: "-c", in: codex) != nil)
+    }
+
+    @Test func aProviderWithNoEffortOfItsOwnIsToldNothing() {
+        // OpenCode expresses it through the model's variant, so a level here
+        // would be an argument it does not take.
+        let openCode = AgentChatLaunchArguments.make(
+            provider: .openCode, prompt: "Read", sessionID: nil, proposedSessionID: nil,
+            effort: "high"
+        )
+        #expect(!openCode.contains("--effort"))
+        #expect(!AgentChatEffortChoice.isSupported(.openCode))
+        #expect(AgentChatEffortChoice.arguments(for: "high", provider: .openCode).isEmpty)
+    }
+
+    @Test func effortAndModelAreKeptApartAndCanBeSetTogether() {
+        let claude = AgentChatLaunchArguments.make(
+            provider: .claude, prompt: "Read", sessionID: nil, proposedSessionID: nil,
+            model: "opus", effort: "max"
+        )
+        #expect(value(after: "--model", in: claude) == "opus")
+        #expect(value(after: "--effort", in: claude) == "max")
+        // Six keys, never one serving two settings or two providers.
+        let keys = Set([AgentChatWireProvider.claude, .codex, .openCode]
+            .flatMap { [AgentChatModelChoice.defaultsKey($0), AgentChatEffortChoice.defaultsKey($0)] })
+        #expect(keys.count == 6)
+    }
+
+    @Test func onlyTheLevelsClaudeCodeNamesAreOffered() {
+        // Taken from the CLI's own --help. Codex documents the setting but no
+        // closed set of values, so none are offered and one is typed instead.
+        #expect(AgentChatEffortChoice.levels(.claude) == ["low", "medium", "high", "xhigh", "max"])
+        #expect(AgentChatEffortChoice.levels(.codex).isEmpty)
+        #expect(AgentChatEffortChoice.isSupported(.codex))
+    }
+
+    @Test func openCodeVersionTwoIsNotSentAFlagItDropped() {
+        // Version 2 answers an unknown flag by printing its usage and
+        // stopping, so a reader chat came back as the CLI's help text.
+        let two = AgentChatLaunchArguments.make(
+            provider: .openCode, prompt: "Read", sessionID: nil, proposedSessionID: nil,
+            mode: .reader(configuration), providerMajorVersion: 2
+        )
+        #expect(!two.contains("--pure"))
+        // What actually keeps it read-only stays, whichever version it is.
+        #expect(value(after: "--agent", in: two) == "lamp-reader")
+
+        let one = AgentChatLaunchArguments.make(
+            provider: .openCode, prompt: "Read", sessionID: nil, proposedSessionID: nil,
+            mode: .reader(configuration), providerMajorVersion: 1
+        )
+        #expect(one.contains("--pure"))
+        #expect(value(after: "--agent", in: one) == "lamp-reader")
+    }
+
+    @Test func anUnreadableOpenCodeVersionIsTreatedAsTheCurrentOne() {
+        // Omitting the flag on a CLI that still takes it costs nothing,
+        // because the agent carries the restriction. Sending it to one that
+        // dropped it breaks every chat, so an unknown version takes the
+        // harmless branch rather than the status quo.
+        let unknown = AgentChatLaunchArguments.make(
+            provider: .openCode, prompt: "Read", sessionID: nil, proposedSessionID: nil,
+            mode: .reader(configuration), providerMajorVersion: nil
+        )
+        #expect(!unknown.contains("--pure"))
+        #expect(value(after: "--agent", in: unknown) == "lamp-reader")
+        #expect(!AgentChatCLIVersion.openCodeTakesPure(major: nil))
+        #expect(AgentChatCLIVersion.openCodeTakesPure(major: 1))
+        #expect(!AgentChatCLIVersion.openCodeTakesPure(major: 3))
+    }
+
+    @Test func aVersionIsReadOutOfWhatACLIPrints() {
+        #expect(AgentChatCLIVersion.major(fromVersionOutput: "opencode v2.0.32") == 2)
+        #expect(AgentChatCLIVersion.major(fromVersionOutput: "1.0.5\n") == 1)
+        #expect(AgentChatCLIVersion.major(fromVersionOutput: "opencode version 10.2") == 10)
+        #expect(AgentChatCLIVersion.major(fromVersionOutput: "") == nil)
+        #expect(AgentChatCLIVersion.major(fromVersionOutput: "unknown") == nil)
+    }
+
+    @Test func onlyAReaderChatIsGivenAnAgentAtAll() {
+        // Writing keeps the reader's own OpenCode setup; the restriction and
+        // the agent belong to the read-only chat.
+        let writing = AgentChatLaunchArguments.make(
+            provider: .openCode, prompt: "Write", sessionID: nil, proposedSessionID: nil,
+            providerMajorVersion: 2
+        )
+        #expect(!writing.contains("--agent"))
+        #expect(!writing.contains("--pure"))
     }
 
     @Test func writingAsksAboutToolCallsOnlyWhereItCanAnswer() {

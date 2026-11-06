@@ -60,8 +60,100 @@ public enum AgentChatModelChoice {
         switch provider {
         case .claude: "An alias such as opus, or a full model name."
         case .codex: "A model name the Codex CLI accepts."
-        case .openCode: "provider/model, optionally #variant."
+        // Where OpenCode's effort is chosen from here: `opencode run` takes no
+        // effort of its own, and a variant is the one thing a single run can
+        // be told. Which variants exist is the reader's own configuration.
+        case .openCode: "provider/model, and #variant to choose how it reasons."
         }
+    }
+}
+
+/// How hard a provider's CLI should think, when the reader does not want its
+/// default.
+///
+/// Only where the provider has such a setting and documents it. Claude Code
+/// takes a level on the command line; Codex keeps one in its own config, which
+/// an override can set for a single run; OpenCode has no separate notion of it
+/// — effort rides in the model's variant, which `AgentChatModelChoice` already
+/// carries. Offering a control that did nothing would be worse than offering
+/// none.
+public enum AgentChatEffortChoice {
+    public static func defaultsKey(_ provider: AgentChatWireProvider) -> String {
+        "chat.effort.\(provider.rawValue)"
+    }
+
+    /// Whether this provider has an effort of its own to set.
+    public static func isSupported(_ provider: AgentChatWireProvider) -> Bool {
+        switch provider {
+        case .claude, .codex: true
+        case .openCode: false
+        }
+    }
+
+    /// The levels the provider itself names. Claude Code lists these in its
+    /// own `--help`; Codex documents the setting but not a closed set of
+    /// values, so none are offered and a level is typed instead.
+    public static func levels(_ provider: AgentChatWireProvider) -> [String] {
+        switch provider {
+        case .claude: ["low", "medium", "high", "xhigh", "max"]
+        case .codex, .openCode: []
+        }
+    }
+
+    public static func canonical(_ stored: String?) -> String? {
+        AgentChatModelChoice.canonical(stored)
+    }
+
+    public static func arguments(
+        for effort: String?, provider: AgentChatWireProvider
+    ) -> [String] {
+        guard let effort = canonical(effort), isSupported(provider) else { return [] }
+        switch provider {
+        case .claude: return ["--effort", effort]
+        // Codex has no flag for it; the setting lives in `~/.codex/config.toml`
+        // and `-c` overrides one key for this run alone, leaving the reader's
+        // own config as they wrote it.
+        case .codex: return ["-c", "model_reasoning_effort=\"\(effort)\""]
+        case .openCode: return []
+        }
+    }
+
+    public static func hint(_ provider: AgentChatWireProvider) -> String {
+        switch provider {
+        case .claude: "A level such as high. Claude Code names low to max."
+        case .codex: "A value your Codex accepts for model_reasoning_effort."
+        case .openCode: "OpenCode sets this through the model's variant."
+        }
+    }
+}
+
+/// Which release of a provider's CLI is installed, where its command line has
+/// changed between them.
+///
+/// Only OpenCode needs this so far. Its version 2 dropped `--pure`, and an
+/// unknown flag makes it print its usage and stop rather than refuse the flag,
+/// so a reader chat answered with the CLI's help text instead of scripture and
+/// nothing in the output said why.
+public enum AgentChatCLIVersion {
+    /// The major version in what a CLI prints for `--version`, e.g. 2 from
+    /// "opencode v2.0.32". Nil when the output is not of that shape, which is
+    /// treated as "assume the current release" rather than guessed at.
+    public static func major(fromVersionOutput output: String) -> Int? {
+        for token in output.split(whereSeparator: \.isWhitespace) {
+            let digits = token.drop { !$0.isNumber }.prefix { $0.isNumber }
+            if !digits.isEmpty, let value = Int(digits) { return value }
+        }
+        return nil
+    }
+
+    /// Whether this OpenCode takes `--pure`. Version 1 did; 2 does not, and an
+    /// unknown version is read as the current one, because passing the flag to
+    /// a CLI that has dropped it breaks every chat, while omitting it on one
+    /// that still has it costs nothing: the read-only restriction is carried
+    /// by the `lamp-reader` agent's own permissions, not by this flag.
+    public static func openCodeTakesPure(major: Int?) -> Bool {
+        guard let major else { return false }
+        return major < 2
     }
 }
 
@@ -83,9 +175,12 @@ public enum AgentChatLaunchArguments {
         proposedSessionID: String?,
         mode: AgentChatMode = .writing,
         permissionHookSettings: String? = nil,
-        model: String? = nil
+        model: String? = nil,
+        effort: String? = nil,
+        providerMajorVersion: Int? = nil
     ) -> [String] {
         let modelArguments = AgentChatModelChoice.arguments(for: model, provider: provider)
+            + AgentChatEffortChoice.arguments(for: effort, provider: provider)
         switch provider {
         case .codex:
             var arguments = [
@@ -130,7 +225,16 @@ public enum AgentChatLaunchArguments {
         case .openCode:
             var arguments = ["run", "--format", "json"]
             arguments += modelArguments
-            if mode.isReadOnly { arguments += ["--pure", "--agent", "lamp-reader"] }
+            if mode.isReadOnly {
+                // `--pure` went in version 2, and an unknown flag makes
+                // OpenCode print its usage instead of answering. What keeps
+                // the chat read-only is the lamp-reader agent's own
+                // permissions, which deny everything but the Lamp tools.
+                if AgentChatCLIVersion.openCodeTakesPure(major: providerMajorVersion) {
+                    arguments += ["--pure"]
+                }
+                arguments += ["--agent", "lamp-reader"]
+            }
             if let sessionID { arguments += ["--session", sessionID] }
             arguments += ["--", prompt]
             return arguments

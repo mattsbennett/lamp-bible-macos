@@ -67,7 +67,7 @@
 		A1000000000000000000001D /* MarkdownEditing.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001C /* MarkdownEditing.swift */; };
 		A10000000000000000000112 /* WritingFindSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000112 /* WritingFindSupport.swift */; };
 		A10000000000000000000113 /* WritingFindBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000113 /* WritingFindBar.swift */; };
-		A100000000000000000000320 /* AgentChatModelPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000320 /* AgentChatModelPicker.swift */; };
+		A100000000000000000000320 /* AgentChatProviderChoice.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000320 /* AgentChatProviderChoice.swift */; };
 		A100000000000000000000301 /* WritingPreviewFinder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000301 /* WritingPreviewFinder.swift */; };
 		A100000000000000000000300 /* WritingPreviewFindSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000300 /* WritingPreviewFindSupport.swift */; };
 		A10000000000000000000114 /* AgentToolApprovalSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000114 /* AgentToolApprovalSupport.swift */; };
@@ -191,7 +191,7 @@
 		B1000000000000000000001C /* MarkdownEditing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/MarkdownEditing.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000112 /* WritingFindSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/WritingFindSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000113 /* WritingFindBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/WritingFindBar.swift; sourceTree = SOURCE_ROOT; };
-		B100000000000000000000320 /* AgentChatModelPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/AgentChatModelPicker.swift; sourceTree = SOURCE_ROOT; };
+		B100000000000000000000320 /* AgentChatProviderChoice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/AgentChatProviderChoice.swift; sourceTree = SOURCE_ROOT; };
 		B100000000000000000000301 /* WritingPreviewFinder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/WritingPreviewFinder.swift; sourceTree = SOURCE_ROOT; };
 		B100000000000000000000300 /* WritingPreviewFindSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/WritingPreviewFindSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000114 /* AgentToolApprovalSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/AgentToolApprovalSupport.swift; sourceTree = SOURCE_ROOT; };
@@ -404,7 +404,7 @@
 				B1000000000000000000001B /* MarkdownTextEditor.swift */,
 				B10000000000000000000112 /* WritingFindSupport.swift */,
 				B10000000000000000000113 /* WritingFindBar.swift */,
-				B100000000000000000000320 /* AgentChatModelPicker.swift */,
+				B100000000000000000000320 /* AgentChatProviderChoice.swift */,
 				B100000000000000000000301 /* WritingPreviewFinder.swift */,
 				B100000000000000000000300 /* WritingPreviewFindSupport.swift */,
 				B10000000000000000000114 /* AgentToolApprovalSupport.swift */,
@@ -686,7 +686,7 @@
 				A1000000000000000000001C /* MarkdownTextEditor.swift in Sources */,
 				A10000000000000000000112 /* WritingFindSupport.swift in Sources */,
 				A10000000000000000000113 /* WritingFindBar.swift in Sources */,
-				A100000000000000000000320 /* AgentChatModelPicker.swift in Sources */,
+				A100000000000000000000320 /* AgentChatProviderChoice.swift in Sources */,
 				A100000000000000000000301 /* WritingPreviewFinder.swift in Sources */,
 				A100000000000000000000300 /* WritingPreviewFindSupport.swift in Sources */,
 				A10000000000000000000114 /* AgentToolApprovalSupport.swift in Sources */,

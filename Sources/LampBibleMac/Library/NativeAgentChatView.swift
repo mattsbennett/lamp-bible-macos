@@ -148,6 +148,41 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
         }
     }
 
+    /// The major version the installed CLI reports, or nil when it will not
+    /// say. Asked once per executable for the app's run: a CLI does not change
+    /// under a running app, and this is a process launch per chat message
+    /// otherwise.
+    func majorVersion(ofExecutableNamed name: String) -> Int? {
+        Self.versionLock.lock()
+        let known = Self.versionsByName[name]
+        Self.versionLock.unlock()
+        if let known { return known }
+        guard let url = try? resolveExecutable(named: name) else { return nil }
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = url
+        process.arguments = ["--version"]
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return nil }
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let major = AgentChatCLIVersion.major(
+            fromVersionOutput: String(decoding: data, as: UTF8.self)
+        )
+        Self.versionLock.lock()
+        Self.versionsByName[name] = major
+        Self.versionLock.unlock()
+        return major
+    }
+
+    // Shared across runners — a reader chat and a writing chat each have their
+    // own — so it is guarded. Two chats answering at once would otherwise be
+    // writing this dictionary from two threads.
+    private nonisolated(unsafe) static var versionsByName: [String: Int?] = [:]
+    private static let versionLock = NSLock()
+
     private func resolveExecutable(named name: String) throws -> URL {
         let process = Process()
         let output = Pipe()
@@ -901,7 +936,11 @@ private final class NativeAgentChatModel: ObservableObject {
                 // while it changed would otherwise keep launching the old one.
                 model: UserDefaults.standard.string(
                     forKey: AgentChatModelChoice.defaultsKey(wire)
-                )
+                ),
+                effort: UserDefaults.standard.string(
+                    forKey: AgentChatEffortChoice.defaultsKey(wire)
+                ),
+                providerMajorVersion: runner.majorVersion(ofExecutableNamed: provider.executable)
             ),
             workingDirectory: workspace,
             onLine: { line in

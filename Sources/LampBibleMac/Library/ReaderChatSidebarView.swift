@@ -205,7 +205,8 @@ struct ReaderChatSidebarView: View {
                     }
                     .labelsHidden()
                     .frame(maxWidth: 160)
-                    AgentChatModelPicker(provider: provider)
+                    AgentChatProviderChoice(kind: .model, provider: provider)
+                    AgentChatProviderChoice(kind: .effort, provider: provider)
                     Spacer()
                     Label("Read-only", systemImage: "lock")
                         .font(.caption)
