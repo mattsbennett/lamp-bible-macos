@@ -1777,4 +1777,3 @@ enum QuizCardSurface {
     static var card: Color { .lampCardFill }
     static var answer: Color { Color.primary.opacity(0.05) }
 }
-
