@@ -264,7 +264,8 @@ struct StrongsAnalysisPane: View {
             if let gloss = entry?.gloss, !gloss.isEmpty {
                 Text(gloss)
                     .font(.system(size: fontSize))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.primary.opacity(0.78))
+                    .lineSpacing(2)
             }
             Text(countSummary(analysis))
                 .font(.caption)
@@ -293,9 +294,9 @@ struct StrongsAnalysisPane: View {
                     .chartClickable()
                     .help("Show every occurrence again")
                 } else {
-                    Text("Choose a bar, a chapter or a rendering to narrow these.")
+                    Label("Choose a bar, a chapter or a rendering to narrow these.", systemImage: "hand.point.up.left")
                         .font(.callout)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)
@@ -318,23 +319,23 @@ struct StrongsAnalysisPane: View {
     // MARK: - Overview
 
     private func overview(_ analysis: LampStrongsAnalysis) -> some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 24) {
             if !analysis.renderings.isEmpty {
-                group("Rendered As") {
+                group("Rendered As", note: "What translators reached for, not what the word means.") {
+                    let most = analysis.renderings.map(\.count).max() ?? 0
                     ForEach(analysis.renderings) { rendering in
-                        renderingRow(rendering)
+                        renderingRow(rendering, most: most)
                     }
-                    Text("What translators reached for, not what the word means.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
                 }
             }
             if !analysis.forms.isEmpty {
                 group("Forms") {
+                    let most = analysis.forms.map(\.count).max() ?? 0
                     ForEach(analysis.forms) { form in
                         chooseRow(
                             title: form.text,
                             count: form.count,
+                            most: most,
                             isChosen: filter == .form(form.text)
                         ) {
                             choose(.form(form.text))
@@ -346,6 +347,7 @@ struct StrongsAnalysisPane: View {
                 group("Grammar") {
                     ForEach(LampGrammarFeature.allCases, id: \.self) { feature in
                         let values = analysis.grammar.filter { $0.feature == feature }
+                        let most = values.map(\.count).max() ?? 0
                         if !values.isEmpty {
                             Text(feature.title)
                                 .font(.caption.weight(.semibold))
@@ -355,6 +357,7 @@ struct StrongsAnalysisPane: View {
                                 chooseRow(
                                     title: count.value,
                                     count: count.count,
+                                    most: most,
                                     isChosen: filter
                                         == .grammar(feature: feature, value: count.value)
                                 ) {
@@ -370,11 +373,12 @@ struct StrongsAnalysisPane: View {
         .padding(.vertical, 12)
     }
 
-    private func renderingRow(_ rendering: LampStrongsAnalysis.Rendering) -> some View {
+    private func renderingRow(_ rendering: LampStrongsAnalysis.Rendering, most: Int) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             chooseRow(
                 title: rendering.text.isEmpty ? "(no English of its own)" : rendering.text,
                 count: rendering.count,
+                most: most,
                 isChosen: filter == .rendering(id: rendering.id, text: rendering.text)
             ) {
                 choose(.rendering(id: rendering.id, text: rendering.text))
@@ -392,7 +396,9 @@ struct StrongsAnalysisPane: View {
                     }
                 }
                 .font(.caption)
-                .padding(.leading, 10)
+                .foregroundStyle(.secondary)
+                .padding(.leading, 6)
+                .padding(.top, 1)
             }
         }
     }
@@ -415,7 +421,7 @@ struct StrongsAnalysisPane: View {
     /// How tall the canonical-order columns stand.
     private static let columnsHeight: Double = 132
     /// A horizontal bar's thickness.
-    private static let barHeight: Double = 18
+    private static let barHeight: Double = 16
     /// The ring or pie's side.
     private static let ringSize: Double = 164
     /// The ring's share of its radius. A pie fills to the middle.
@@ -492,6 +498,10 @@ struct StrongsAnalysisPane: View {
                     .fixedSize()
                 }
                 Spacer(minLength: 0)
+            }
+
+            if style == .bars {
+                expectationKey
             }
 
             switch style {
@@ -858,20 +868,22 @@ struct StrongsAnalysisPane: View {
                     .font(.system(size: Self.chartLabelSize))
                     .lineLimit(1)
                     .frame(width: 112, alignment: .trailing)
+                // Squared-off ends: a capsule only a few points long drew as a
+                // dot, which read as a different kind of mark from the bars.
                 GeometryReader { proxy in
                     ZStack(alignment: .leading) {
-                        Capsule().fill(.quaternary)
-                        Capsule()
+                        RoundedRectangle(cornerRadius: 4).fill(Self.barTrack)
+                        RoundedRectangle(cornerRadius: 4)
                             .fill(fill(for: bar.expectation))
                             .frame(width: bar.share > 0
-                                ? max(2, proxy.size.width * bar.share)
+                                ? max(4, proxy.size.width * bar.share)
                                 : 0)
                     }
                 }
                 .frame(height: Self.barHeight)
                 Text(measureLabel(bar))
-                    .font(.system(size: Self.chartLabelSize).monospacedDigit())
-                    .frame(width: 60, alignment: .trailing)
+                    .font(.system(size: Self.chartLabelSize, weight: .medium).monospacedDigit())
+                    .frame(width: 40, alignment: .trailing)
                 standing(bar.expectation)
                     .frame(width: 18)
             }
@@ -941,8 +953,41 @@ struct StrongsAnalysisPane: View {
     private func fill(for expectation: LampStrongsAnalysis.Expectation) -> AnyShapeStyle {
         switch expectation {
         case .more: AnyShapeStyle(.tint)
-        case .fewer: AnyShapeStyle(.secondary)
+        case .fewer: AnyShapeStyle(Color.primary.opacity(0.32))
         case .asExpected: AnyShapeStyle(.tint.opacity(0.55))
+        }
+    }
+
+    /// What the three shades and the arrows mean, said once above the bars.
+    /// The help on each bar said it, but only to a reader who hovered, and
+    /// the grey bars and arrows otherwise had to be guessed at.
+    private var expectationKey: some View {
+        HStack(spacing: 14) {
+            keyItem(.more, "More than chance", arrow: "arrow.up")
+            keyItem(.asExpected, "As expected", arrow: nil)
+            keyItem(.fewer, "Fewer than chance", arrow: "arrow.down")
+            Spacer(minLength: 0)
+        }
+        .font(.system(size: Self.chartFinePrintSize))
+        .foregroundStyle(.secondary)
+        .accessibilityElement(children: .combine)
+    }
+
+    private func keyItem(
+        _ expectation: LampStrongsAnalysis.Expectation,
+        _ title: String,
+        arrow: String?
+    ) -> some View {
+        HStack(spacing: 5) {
+            RoundedRectangle(cornerRadius: 2.5)
+                .fill(fill(for: expectation))
+                .frame(width: 14, height: 9)
+            Text(title)
+            if let arrow {
+                Image(systemName: arrow)
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(expectation == .more ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+            }
         }
     }
 
@@ -1067,43 +1112,74 @@ struct StrongsAnalysisPane: View {
 
     // MARK: - Pieces
 
+    /// A section of the overview: the shared section heading, with what the
+    /// section means said beneath it rather than trailing after.
     private func group<Content: View>(
         _ title: String,
+        note: String? = nil,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .lampSectionHeading()
+            if let note {
+                Text(note)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.bottom, 4)
+            }
             content()
         }
     }
 
+    /// A row that is also a bar: the figure sits beside its word, and the
+    /// bar under the pair gives every count a length to compare by eye.
+    /// Right-aligned at the pane's far edge, the figures were too far from
+    /// the words they counted to be read across to.
     private func chooseRow(
         title: String,
         count: Int,
+        most: Int,
         isChosen: Bool,
         choose: @escaping () -> Void
     ) -> some View {
         Button(action: choose) {
-            HStack(spacing: 6) {
-                Text(title).font(.system(size: fontSize)).lineLimit(1)
-                Spacer()
+            HStack(spacing: 10) {
+                Text(title)
+                    .font(.system(size: fontSize))
+                    .lineLimit(1)
+                    .frame(width: 150, alignment: .leading)
+                GeometryReader { proxy in
+                    ZStack(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 3).fill(Self.barTrack)
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(.tint.opacity(isChosen ? 1 : 0.6))
+                            .frame(width: most > 0
+                                ? max(3, proxy.size.width * Double(count) / Double(most))
+                                : 0)
+                    }
+                }
+                .frame(height: 8)
                 Text("\(count)")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: Self.chartLabelSize, weight: .medium).monospacedDigit())
+                    .frame(minWidth: 30, alignment: .trailing)
             }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
             .background(
-                isChosen ? AnyShapeStyle(.tint.opacity(0.18)) : AnyShapeStyle(.clear),
-                in: RoundedRectangle(cornerRadius: 5)
+                isChosen ? AnyShapeStyle(.tint.opacity(0.14)) : AnyShapeStyle(.clear),
+                in: RoundedRectangle(cornerRadius: 6)
             )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .chartClickable()
+        .help("\(title): \(count)")
     }
+
+    /// The empty length behind a bar, a step off the pane in either
+    /// appearance: `.quaternary` all but vanished on dark.
+    private static var barTrack: Color { Color.primary.opacity(0.08) }
 
     /// Choosing the filter already in force removes it, so the same click both
     /// narrows and widens and nobody has to find the chip to get back.

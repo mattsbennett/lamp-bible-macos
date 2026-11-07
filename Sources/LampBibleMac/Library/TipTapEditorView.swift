@@ -72,6 +72,10 @@ struct TipTapEditorView: NSViewRepresentable {
     var lineBreaks = false
     /// What a click on a footnote's marker does here.
     var footnoteClicks: TipTapFootnoteClicks = .jump
+    /// The face the writing is set in, when the host has one: the writing
+    /// editor sets its prose as the preview does, so a writer sees the page
+    /// their readers will. Nil keeps the bundle's own system sans.
+    var proseTypeface: ProseTypeface?
     var onCoordinatorReady: (TipTapEditorCoordinator) -> Void
 
     func makeCoordinator() -> TipTapEditorCoordinator {
@@ -106,6 +110,7 @@ struct TipTapEditorView: NSViewRepresentable {
         coordinator.setContent(markdownContent)
         coordinator.setFontSize(fontSize)
         coordinator.setTheme(isDark: context.environment.colorScheme == .dark)
+        coordinator.setProseTypeface(proseTypeface)
         coordinator.setPlaceholder(placeholder)
         coordinator.onReady = { [weak coordinator] in coordinator.map(onCoordinatorReady) }
         // Last: a page that is already ready takes everything above at once.
@@ -128,6 +133,7 @@ struct TipTapEditorView: NSViewRepresentable {
         ))
         coordinator.setFontSize(fontSize)
         coordinator.setTheme(isDark: context.environment.colorScheme == .dark)
+        coordinator.setProseTypeface(proseTypeface)
         applyBackgroundColor(to: webView, coordinator: coordinator)
 
         // Changes made by TipTap have already updated lastKnownMarkdown. A
@@ -295,6 +301,9 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     private var pendingTheme: Bool?
     private var pendingBackgroundColor: String?
     private var appliedBackgroundColor: String?
+    private var shownProseTypeface: ProseTypeface??
+    private var pendingProseTypeface: ProseTypeface??
+    private var appliedProseTypeface: ProseTypeface??
     private var appliedTheme: Bool?
     private var appliedMediaMap: [String: String]?
     private var appliedFontSize: Double?
@@ -515,6 +524,10 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
             pendingBackgroundColor = nil
             setBackgroundColor(color)
         }
+        if let typeface = pendingProseTypeface {
+            pendingProseTypeface = nil
+            setProseTypeface(typeface)
+        }
         reportReady()
     }
 
@@ -660,6 +673,7 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         hasPainted = false
         appliedTheme = nil
         appliedBackgroundColor = nil
+        appliedProseTypeface = nil
         appliedMediaMap = nil
         appliedFontSize = nil
         appliedFootnoteClicks = nil
@@ -671,6 +685,7 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         pendingPlaceholder = shownPlaceholder
         pendingTheme = shownTheme
         pendingBackgroundColor = shownBackgroundColor
+        pendingProseTypeface = shownProseTypeface
         page?.prepareForReload()
         webView.reload()
     }
@@ -887,6 +902,60 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         appliedBackgroundColor = cssColor
         evaluate("window.editorAPI.setBackgroundColor(\(Self.javascriptString(cssColor)))")
     }
+
+    /// Sets the writing in the face the host reads it in. Only the writing
+    /// page's own stylesheet (`writingPageStyleScript`) gives the class a
+    /// meaning, so a compact note editor is never restyled by it.
+    func setProseTypeface(_ typeface: ProseTypeface?) {
+        shownProseTypeface = .some(typeface)
+        guard isReady else {
+            pendingProseTypeface = .some(typeface)
+            return
+        }
+        guard appliedProseTypeface != .some(typeface) else { return }
+        appliedProseTypeface = .some(typeface)
+        evaluate("document.documentElement.classList.toggle('lamp-serif', \(typeface == .serif))")
+    }
+
+    /// The writing editor's page, set as a page rather than a form.
+    ///
+    /// The bundle is built for a phone: prose runs edge to edge inside a 16pt
+    /// margin, which on a Mac window made lines of 150 characters. Here the
+    /// text sits in a centred column of about 70 characters, with the leading
+    /// and list spacing of the preview, so writing and reading look alike.
+    /// The column is in `em`s, so it keeps its measure as the size changes.
+    /// Every rule leads with `html`: this sheet goes in at document start,
+    /// before the bundle's, which would otherwise win each tie.
+    ///
+    /// The editor's size setting is shared with the Markdown surface, which
+    /// starts smaller because monospaced text reads larger; the visual page
+    /// is scaled back up by that difference (15 → 17) so it opens at the
+    /// size the writing is read at.
+    static let writingPageStyleScript = """
+    (function () {
+      var style = document.createElement('style');
+      style.id = 'lamp-writing-page';
+      style.textContent = [
+        'html #tiptap-editor { font-size: calc(var(--font-size) * 1.13); max-width: calc(35em + 112px);',
+        '  margin: 0 auto; padding: 48px 56px 160px; }',
+        'html.lamp-serif .tiptap { font-family: ui-serif, "New York", "Iowan Old Style", Georgia, serif; }',
+        'body:not(.dark) { --text-color: #1f1f21 !important; }',
+        'body.dark { --text-color: rgba(255, 255, 255, 0.88) !important; }',
+        'html .tiptap p { line-height: 1.7; margin-bottom: 0.85em; }',
+        'html .tiptap ul, html .tiptap ol { padding-left: 1.35em; margin-bottom: 0.9em; }',
+        'html .tiptap li { line-height: 1.65; margin-bottom: 0.4em; padding-left: 0.15em; }',
+        'html .tiptap li > ul, html .tiptap li > ol { margin-top: 0.4em; }',
+        'html .tiptap li::marker { color: color-mix(in srgb, var(--text-color) 62%, transparent); }',
+        'html .tiptap h1, html .tiptap h2, html .tiptap h3 { letter-spacing: -0.01em; }',
+        'html .tiptap h1 { font-size: 1.95em; line-height: 1.2; margin-top: 1.3em; margin-bottom: 0.5em; }',
+        'html .tiptap h2 { font-size: 1.5em; line-height: 1.25; margin-top: 1.3em; margin-bottom: 0.45em; }',
+        'html .tiptap h3 { font-size: 1.22em; margin-top: 1.15em; }',
+        'html .tiptap > :first-child { margin-top: 0; }',
+        'html .tiptap blockquote { padding: 10px 16px; border-left-width: 3px; }'
+      ].join('\\n');
+      (document.head || document.documentElement).appendChild(style);
+    })();
+    """
 
     /// Overrides the stylesheet's `--bg-color` from a `<style>` element the host
     /// owns, at document start, before the bundle's own `setBackgroundColor` can
@@ -1187,6 +1256,15 @@ final class TipTapEditorPool {
             injectionTime: .atDocumentStart,
             forMainFrameOnly: true
         ))
+        if !key.compact {
+            // The writing editor is the only full-pane host; a note's compact
+            // editor keeps the bundle's own layout.
+            configuration.userContentController.addUserScript(WKUserScript(
+                source: TipTapEditorCoordinator.writingPageStyleScript,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            ))
+        }
         configuration.userContentController.addUserScript(WKUserScript(
             source: TipTapEditorCoordinator.firstPaintScript,
             injectionTime: .atDocumentStart,

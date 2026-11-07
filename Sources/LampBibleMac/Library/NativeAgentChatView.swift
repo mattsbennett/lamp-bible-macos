@@ -345,7 +345,12 @@ private struct AgentActivityLine: View {
     }
 }
 
-/// A reply in its bubble.
+/// A reply, set on the page rather than in a bubble.
+///
+/// The way Claude's and ChatGPT's own apps set an answer: the person's words
+/// sit in a bubble, and the reply is the page. Boxed, a reply in a pane this
+/// narrow lost a fifth of its width to the bubble's border and padding, and
+/// a long answer became a tall grey slab.
 ///
 /// Shared by the finished reply and the one still arriving, so the words do
 /// not move when the last fragment lands and the message is replaced by the
@@ -355,29 +360,11 @@ private struct AgentReplyBubble: View {
 
     var body: some View {
         AgentMarkdownMessageView(markdown: markdown)
-            .padding(12)
-            .frame(maxWidth: 620, alignment: .leading)
-            .background(
-                UnevenRoundedRectangle(
-                    topLeadingRadius: 0,
-                    bottomLeadingRadius: 14,
-                    bottomTrailingRadius: 14,
-                    topTrailingRadius: 14
-                )
-                .fill(LampChatSurface.agentBubble)
-            )
-            .overlay(
-                UnevenRoundedRectangle(
-                    topLeadingRadius: 0,
-                    bottomLeadingRadius: 14,
-                    bottomTrailingRadius: 14,
-                    topTrailingRadius: 14
-                )
-                .stroke(LampChatSurface.agentBubbleBorder)
-            )
+            .frame(maxWidth: 640, alignment: .leading)
+            .padding(.vertical, 6)
             .modifier(CopyableMessage(text: markdown))
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 18)
     }
 }
 
@@ -500,25 +487,29 @@ private struct PersonMessageView: View {
 
     private var bubble: UnevenRoundedRectangle {
         UnevenRoundedRectangle(
-            topLeadingRadius: 14,
-            bottomLeadingRadius: 14,
-            bottomTrailingRadius: 14,
-            topTrailingRadius: 0
+            topLeadingRadius: 16,
+            bottomLeadingRadius: 16,
+            bottomTrailingRadius: 16,
+            topTrailingRadius: 5
         )
     }
 
     var body: some View {
         Text(text)
+            .font(.system(size: 14))
+            .lineSpacing(2)
             .textSelection(.enabled)
             .foregroundStyle(.primary)
             .fixedSize(horizontal: false, vertical: true)
-            .padding(12)
+            .padding(.horizontal, 13)
+            .padding(.vertical, 9)
             .background(bubble.fill(LampChatSurface.personBubble))
-            .overlay(bubble.stroke(LampChatSurface.personBubbleBorder))
             .modifier(CopyableMessage(text: text))
-            .frame(maxWidth: 620, alignment: .trailing)
+            .frame(maxWidth: 520, alignment: .trailing)
             .frame(maxWidth: .infinity, alignment: .trailing)
-            .padding(.horizontal, 12)
+            .padding(.leading, 40)
+            .padding(.trailing, 14)
+            .padding(.vertical, 4)
     }
 }
 
@@ -602,33 +593,28 @@ private struct NativeAgentChatInputView: View {
         !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// One rounded field with Send inside it, as Messages and ChatGPT draw
+    /// theirs. Send is drawn as an outline until there is something to
+    /// send, so an empty field shows where to type rather than a pale
+    /// button that looked broken.
     var body: some View {
-        HStack(alignment: .center, spacing: 8) {
+        HStack(alignment: .bottom, spacing: 6) {
             TextField(placeholder, text: $message, axis: .vertical)
-                .lineLimit(1...5)
+                .font(.system(size: 14))
+                .lineLimit(1...6)
                 .textFieldStyle(.plain)
                 .submitLabel(.send)
                 .onSubmit(submit)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(SwiftUI.Color(nsColor: .controlBackgroundColor))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .stroke(.secondary.opacity(0.14), lineWidth: 1)
-                )
+                .padding(.leading, 14)
+                .padding(.vertical, 9)
 
             Button(action: submit) {
                 Image(systemName: "arrow.up")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 30, height: 30)
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(canSubmit ? SwiftUI.Color.white : SwiftUI.Color.secondary)
+                    .frame(width: 26, height: 26)
                     .background(
-                        canSubmit
-                            ? SwiftUI.Color.accentColor
-                            : SwiftUI.Color.secondary.opacity(0.35),
+                        canSubmit ? SwiftUI.Color.accentColor : SwiftUI.Color.primary.opacity(0.07),
                         in: Circle()
                     )
             }
@@ -636,13 +622,21 @@ private struct NativeAgentChatInputView: View {
             .contentShape(Circle())
             .disabled(!canSubmit)
             .help("Send message")
+            .padding(.trailing, 6)
+            .padding(.bottom, 5)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
         .background(
-            SwiftUI.Color(nsColor: .windowBackgroundColor)
-                .shadow(color: .black.opacity(0.06), radius: 8, x: 0, y: -2)
+            RoundedRectangle(cornerRadius: 19)
+                .fill(SwiftUI.Color(nsColor: .controlBackgroundColor))
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: 19)
+                .stroke(SwiftUI.Color.primary.opacity(0.13), lineWidth: 1)
+        )
+        .padding(.horizontal, 14)
+        .padding(.top, 8)
+        .padding(.bottom, 12)
+        .background(LampChatSurface.conversation)
     }
 
     private func submit() {
@@ -1334,6 +1328,17 @@ struct NativeAgentChatView: View {
                     }
                 }
                 .environment(\.chatStyle, chatStyle)
+                // Lines scrolled up under the header fade out rather than
+                // being cut through the middle of a word.
+                .overlay(alignment: .top) {
+                    LinearGradient(
+                        colors: [LampChatSurface.conversation, LampChatSurface.conversation.opacity(0)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: 18)
+                    .allowsHitTesting(false)
+                }
 
                 if connectionState != .connected || model.messages.isEmpty {
                     emptyState
@@ -1380,10 +1385,20 @@ struct NativeAgentChatView: View {
         }
     }
 
+    private var isReaderChat: Bool {
+        if case .reader = mode { return true }
+        return false
+    }
+
     private var chatHeader: some View {
-        HStack(spacing: 10) {
-            Label(provider.shortName, systemImage: provider.systemImage)
-                .font(.subheadline.weight(.semibold))
+        HStack(spacing: 8) {
+            // The reader's pane names its provider in its own menu just
+            // above; said again here it read as a second header.
+            if !isReaderChat {
+                Label(provider.shortName, systemImage: provider.systemImage)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
             Label(connectionState.label, systemImage: connectionState.systemImage)
                 .font(.caption)
                 .foregroundStyle(connectionState.color)
@@ -1405,8 +1420,8 @@ struct NativeAgentChatView: View {
             .disabled(model.messages.isEmpty || model.isRunning)
             .help("Start a new chat")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
     }
 
     @ViewBuilder

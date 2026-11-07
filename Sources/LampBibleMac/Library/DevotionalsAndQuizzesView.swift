@@ -240,18 +240,27 @@ struct DevotionalsView: View {
                     // remain as tall as their intrinsic content requires.
                     .environment(\.defaultMinListRowHeight, 1)
                     .contentMargins(.bottom, 52, for: .scrollContent)
-                    .frame(minWidth: 235, idealWidth: 295, maxWidth: 375)
+                    .frame(minWidth: 220, idealWidth: 260, maxWidth: 300)
+                    // A footer action in the list's own voice, as Notes and
+                    // Mail put theirs: a full-width filled button was the
+                    // loudest thing in the window, louder than the writing.
                     .overlay(alignment: .bottom) {
-                        Button {
-                            beginEditing(nil)
-                        } label: {
-                            Label("New Writing", systemImage: "plus")
-                                .frame(maxWidth: .infinity)
+                        VStack(spacing: 0) {
+                            Divider()
+                            Button {
+                                beginEditing(nil)
+                            } label: {
+                                Label("New Writing", systemImage: "plus")
+                                    .fontWeight(.medium)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(.tint)
+                            .help("Create new writing")
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 11)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .help("Create new writing")
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
                         .frame(maxWidth: .infinity)
                         .background(.bar)
                     }
@@ -278,25 +287,8 @@ struct DevotionalsView: View {
         .searchable(text: $query, prompt: "Search writing")
         .toolbar {
             ToolbarItemGroup {
-                Picker("Category", selection: $categoryFilter) {
-                    Text("All Categories").tag(String?.none)
-                    ForEach(devotionalCategories, id: \.self) { category in
-                        Text(LampWritingCategory.displayName(category) ?? category)
-                            .tag(Optional(category))
-                    }
-                }
-                .accessibilityLabel("Filter writing by category")
-                .help("Filter writing by category")
-                Picker("Collection", selection: $moduleFilter) {
-                    Text("All Collections").tag(String?.none)
-                    ForEach(devotionalCollections, id: \.id) { collection in
-                        Text(collection.name).tag(Optional(collection.id))
-                    }
-                }
-                .accessibilityLabel("Filter writing by collection")
-                .help("Filter writing by collection")
-                sortMenu
-                groupMenu
+                filterMenu
+                arrangeMenu
                 TextSizeMenu(
                     fontSize: $devotionalFontSize,
                     lineSpacing: $devotionalLineSpacing,
@@ -307,11 +299,16 @@ struct DevotionalsView: View {
                     help: "Adjust the reading typeface, text size, and line spacing"
                 )
                 if let devotional = selectedDevotional {
-                    Button("Present", systemImage: "rectangle.inset.filled.and.person.filled") {
+                    // Named: its figure-at-a-screen symbol, alone, read as
+                    // a person rather than as presenting.
+                    Button {
                         openWindow(
                             id: "devotional-presenter",
                             value: DevotionalPresentationRequest(devotionalID: devotional.id)
                         )
+                    } label: {
+                        Label("Present", systemImage: "play.rectangle")
+                            .labelStyle(.titleAndIcon)
                     }
                     .help("Present selected writing")
                 }
@@ -345,8 +342,72 @@ struct DevotionalsView: View {
         .task { await monitorLinkedPresentationDecks() }
     }
 
-    private var sortMenu: some View {
-        Menu("Sort By", systemImage: "arrow.up.arrow.down") {
+    /// Category and collection filters in one menu that says what is shown.
+    /// As two pop-ups reading "All Categories" and "All Collections" they
+    /// were the widest pills in a crowded toolbar, and said nothing at all
+    /// while nothing was filtered.
+    private var filterMenu: some View {
+        Menu {
+            Picker("Category", selection: $categoryFilter) {
+                Text("All Categories").tag(String?.none)
+                ForEach(devotionalCategories, id: \.self) { category in
+                    Text(LampWritingCategory.displayName(category) ?? category)
+                        .tag(Optional(category))
+                }
+            }
+            .pickerStyle(.inline)
+            .accessibilityLabel("Filter writing by category")
+            Picker("Collection", selection: $moduleFilter) {
+                Text("All Collections").tag(String?.none)
+                ForEach(devotionalCollections, id: \.id) { collection in
+                    Text(collection.name).tag(Optional(collection.id))
+                }
+            }
+            .pickerStyle(.inline)
+            .accessibilityLabel("Filter writing by collection")
+        } label: {
+            Label(
+                filterSummary,
+                systemImage: categoryFilter == nil && moduleFilter == nil
+                    ? "line.3.horizontal.decrease.circle"
+                    : "line.3.horizontal.decrease.circle.fill"
+            )
+            .labelStyle(.titleAndIcon)
+        }
+        .accessibilityLabel("Filter writing")
+        .help("Filter writing by category and collection")
+    }
+
+    /// What the filter menu says: everything, or the category and the
+    /// collection being shown.
+    private var filterSummary: String {
+        var parts: [String] = []
+        if let categoryFilter {
+            parts.append(LampWritingCategory.displayName(categoryFilter) ?? categoryFilter)
+        }
+        if let moduleFilter, let collection = devotionalCollections.first(where: { $0.id == moduleFilter }) {
+            parts.append(collection.name)
+        }
+        return parts.isEmpty ? "All Writing" : parts.joined(separator: " · ")
+    }
+
+    /// Sorting and grouping in one menu: two unlabelled pills beside each
+    /// other were two more symbols to decode in an already busy toolbar.
+    private var arrangeMenu: some View {
+        Menu("Sort and Group", systemImage: "arrow.up.arrow.down") {
+            Section("Sort By") {
+                sortItems
+            }
+            Section("Group By") {
+                groupItems
+            }
+        }
+        .accessibilityLabel("Sort and group writing")
+        .help("Sort and group writing")
+    }
+
+    @ViewBuilder
+    private var sortItems: some View {
             ForEach(WritingSortOrder.allCases) { option in
                 Button {
                     sortOrderRawValue = option.rawValue
@@ -358,13 +419,10 @@ struct DevotionalsView: View {
                     }
                 }
             }
-        }
-        .accessibilityLabel("Sort writing")
-        .help("Sort writing")
     }
 
-    private var groupMenu: some View {
-        Menu("Group By", systemImage: "rectangle.3.group") {
+    @ViewBuilder
+    private var groupItems: some View {
             ForEach(WritingGroupBy.allCases) { option in
                 Button {
                     groupByRawValue = option.rawValue
@@ -376,9 +434,6 @@ struct DevotionalsView: View {
                     }
                 }
             }
-        }
-        .accessibilityLabel("Group writing")
-        .help("Group writing")
     }
 
     /// Drawn by hand rather than left to `Section(_ title:)`.
@@ -461,12 +516,13 @@ struct DevotionalsView: View {
                 if let snippet = rowSnippet(for: devotional) {
                     Text(snippet)
                         .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .foregroundStyle(Color.lampSecondaryText)
+                        .lineLimit(3)
+                        .lineSpacing(1)
                 }
                 Text(rowMetadata(for: devotional))
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .font(.subheadline)
+                    .foregroundStyle(Color.lampSecondaryText)
                     .lineLimit(1)
             }
             Spacer(minLength: 4)
@@ -637,7 +693,7 @@ struct DevotionalsView: View {
                                 size: devotionalFontSize * 1.25,
                                 design: devotionalTypeface.design
                             ))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Color.lampSecondaryText)
                     }
                     detailMetadata(devotional)
                 }
@@ -731,10 +787,21 @@ struct DevotionalsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .frame(maxWidth: 760, alignment: .leading)
-            .padding(32)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
+            // A reading measure of about 70 characters, set from the text
+            // size so it holds as the size changes, and centred in the pane
+            // as a page is. A fixed 760 points made lines of 100 characters
+            // at the default size.
+            .frame(maxWidth: Self.readingMeasure(for: devotionalFontSize), alignment: .leading)
+            .padding(.horizontal, 40)
+            .padding(.top, 36)
+            .padding(.bottom, 48)
+            .frame(maxWidth: .infinity, alignment: .top)
         }
+    }
+
+    /// The column a writing is read in, in points, for a text size.
+    static func readingMeasure(for fontSize: Double) -> CGFloat {
+        CGFloat(min(max(fontSize * 33, 500), 880))
     }
 
     @ViewBuilder
@@ -812,17 +879,17 @@ struct DevotionalsView: View {
                 ReadingTimeMenu(statistics: statistics, showsIcon: true)
             }
             if devotional.isEditable {
-                Button("Edit") {
+                // A button rather than a word of tinted text: it is the way
+                // into the editor, and read as a stray link.
+                Button("Edit", systemImage: "pencil") {
                     beginEditing(devotional)
                 }
-                .buttonStyle(.plain)
-                .fontWeight(.semibold)
-                .foregroundStyle(.tint)
+                .buttonStyle(.borderedProminent)
                 .help("Edit this writing")
             }
         }
-        .font(.subheadline)
-        .foregroundStyle(.secondary)
+        .font(.callout)
+        .foregroundStyle(Color.lampSecondaryText)
     }
 
     /// Stored dates are the portable `yyyy-MM-dd`; a reader wants their own
@@ -1233,41 +1300,65 @@ struct QuizzesView: View {
         .onDisappear { readAloud.stop() }
     }
 
+    /// The quiz, the age group and the day, on one line over the column of
+    /// questions and aligned to it. Spread across the full window, the
+    /// controls floated with gaps of their own choosing and lined up with
+    /// nothing below them.
     private func quizControls(_ quiz: LampQuizModule) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .firstTextBaseline, spacing: 16) {
-                Picker("Quiz", selection: $selectedModuleID) {
-                    ForEach(model.quizModules) { module in
-                        Text(module.name).tag(Optional(module.id))
-                    }
+        HStack(alignment: .center, spacing: 12) {
+            Picker("Quiz", selection: $selectedModuleID) {
+                ForEach(model.quizModules) { module in
+                    Text(module.name).tag(Optional(module.id))
                 }
-                .frame(maxWidth: 360)
-
-                Picker("Age Group", selection: $selectedAgeGroupID) {
-                    ForEach(quiz.ageGroups) { ageGroup in
-                        Text("\(ageGroup.label) (\(ageGroup.ageRange))")
-                            .tag(Optional(ageGroup.id))
-                    }
-                }
-                .frame(maxWidth: 300)
-
-                Stepper(value: $day, in: 1...maximumDay) {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(selectedDateDescription)
-                        Text("Day \(day)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .fixedSize()
-
-                QuizOptionsMenu()
             }
+            .labelsHidden()
+            .fixedSize()
+            .help("Quiz")
 
+            Picker("Age Group", selection: $selectedAgeGroupID) {
+                ForEach(quiz.ageGroups) { ageGroup in
+                    Text("\(ageGroup.label) (\(ageGroup.ageRange))")
+                        .tag(Optional(ageGroup.id))
+                }
+            }
+            .labelsHidden()
+            .fixedSize()
+            .help("Age group")
+
+            Spacer(minLength: 12)
+
+            // The day, stepped either way. The date it falls on heads the
+            // questions just below, in full.
+            HStack(spacing: 2) {
+                Button("Previous Day", systemImage: "chevron.left") {
+                    day = max(day - 1, 1)
+                }
+                .disabled(day <= 1)
+                Text("Day \(day)")
+                    .font(.callout.weight(.medium).monospacedDigit())
+                    .frame(minWidth: 64)
+                    .help(selectedDateDescription)
+                Button("Next Day", systemImage: "chevron.right") {
+                    day = min(day + 1, maximumDay)
+                }
+                .disabled(day >= maximumDay)
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.borderless)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Day")
+
+            QuizOptionsMenu()
         }
-        .padding(20)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: QuizzesView.columnWidth)
+        .padding(.horizontal, 28)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity)
     }
+
+    /// The column the questions are read in: answers run to two lines at
+    /// most, rather than one line of a hundred characters.
+    static let columnWidth: CGFloat = 740
 
     @ViewBuilder
     private func questionContent(_ quiz: LampQuizModule) -> some View {
@@ -1282,34 +1373,42 @@ struct QuizzesView: View {
             )
         } else {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 16) {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    HStack(alignment: .lastTextBaseline) {
+                        VStack(alignment: .leading, spacing: 3) {
                             Text(selectedDateDescription)
                                 .font(.largeTitle.bold())
-                            Text("Day \(day)")
+                            Text(quiz.name)
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }
                         Spacer()
                         Text("\(questions.count) question\(questions.count == 1 ? "" : "s")")
+                            .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
+                    .padding(.bottom, 6)
 
-                    ForEach(questions) { question in
-                        questionCard(question)
+                    ForEach(Array(questions.enumerated()), id: \.element.id) { index, question in
+                        questionCard(question, number: index + 1)
                     }
                 }
-                .frame(maxWidth: 820)
-                .padding(28)
+                .frame(maxWidth: Self.columnWidth)
+                .padding(.horizontal, 28)
+                .padding(.top, 24)
+                .padding(.bottom, 36)
                 .frame(maxWidth: .infinity, alignment: .top)
             }
+            // The window, with the cards a step off it, as cards are drawn
+            // across the app.
+            .background(QuizCardSurface.page)
         }
     }
 
-    private func questionCard(_ question: LampQuizQuestion) -> some View {
+    private func questionCard(_ question: LampQuizQuestion, number: Int) -> some View {
         QuizQuestionCard(
             question: question,
+            number: number,
             answerVisible: alwaysShowAnswers || revealedAnswers.contains(question.id),
             allowsAnswerToggle: !alwaysShowAnswers,
             showsTheme: true,
@@ -1403,6 +1502,9 @@ struct QuizQuestionCard: View {
     @AppStorage("reader.readAloud.voice") private var readAloudVoice = ""
     @AppStorage("reader.readAloud.rate") private var readAloudRate = 0.5
     let question: LampQuizQuestion
+    /// Its place in the day's quiz, shown at the head of the card. Nil
+    /// where a single question stands alone.
+    var number: Int? = nil
     let answerVisible: Bool
     let allowsAnswerToggle: Bool
     let showsTheme: Bool
@@ -1422,6 +1524,16 @@ struct QuizQuestionCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
             HStack(spacing: 9) {
+                // Numbered, so fifteen like cards read as a sequence, and a
+                // child can be asked "number four" across the room.
+                if let number {
+                    Text("\(number)")
+                        .font(.callout.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(.primary.opacity(0.75))
+                        .frame(minWidth: 26, minHeight: 26)
+                        .background(Color.primary.opacity(0.07), in: Circle())
+                        .accessibilityLabel("Question \(number)")
+                }
                 Button {
                     openReference(question.startReference)
                 } label: {
@@ -1444,14 +1556,21 @@ struct QuizQuestionCard: View {
                         .help("Christ-focused question")
                 }
                 if showsTheme, !question.theme.isEmpty {
-                    Text(question.theme)
+                    Text(question.theme.capitalized)
                         .font(.caption.weight(.medium))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.primary.opacity(0.82))
                         .lineLimit(1)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 3)
+                        .background(Color.primary.opacity(0.09), in: Capsule())
                 }
 
                 Button(action: toggleReadAloud) {
                     Label(readAloudButtonTitle, systemImage: readAloudButtonImage)
+                        .font(.system(size: 14))
+                        .foregroundStyle(.primary.opacity(0.75))
+                        .frame(width: 26, height: 26)
+                        .contentShape(Rectangle())
                 }
                 .labelStyle(.iconOnly)
                 .buttonStyle(.borderless)
@@ -1461,13 +1580,16 @@ struct QuizQuestionCard: View {
             quizText(question.question, annotations: question.questionAnnotations, weight: .semibold)
 
             if answerVisible {
-                Divider()
+                // The answer on a ground of its own, so an answered card is
+                // told from an unanswered one by more than its height.
+                VStack(alignment: .leading, spacing: 10) {
                 quizText(question.answer, annotations: question.answerAnnotations, weight: .regular)
 
                 let references = Array(Set(question.references + question.crossReferences)).sorted()
                 if !references.isEmpty {
                     ScrollView(.horizontal) {
-                        HStack(spacing: 8) {
+                        // Spaced as separate targets, not a run of blue.
+                        HStack(spacing: 16) {
                             ForEach(references, id: \.self) { reference in
                                 ScriptureReferenceButton(link: LampScriptureLink(
                                     startReference: reference
@@ -1479,18 +1601,36 @@ struct QuizQuestionCard: View {
                     }
                     .scrollIndicators(.hidden)
                 }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(QuizCardSurface.answer, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
             }
 
             if allowsAnswerToggle {
-                Button(answerVisible ? "Hide Answer" : "Reveal Answer", action: toggleAnswer)
-                    .buttonStyle(.bordered)
+                // Neutral, in the text's own colour: a red pill on every card
+                // read as a warning beside the blue references, two accents
+                // competing; the weight of the label carries it instead.
+                Button(action: toggleAnswer) {
+                    Label(
+                        answerVisible ? "Hide Answer" : "Reveal Answer",
+                        systemImage: answerVisible ? "eye.slash" : "eye"
+                    )
+                    .fontWeight(answerVisible ? .regular : .medium)
+                    .padding(.horizontal, 4)
+                }
+                .buttonStyle(.bordered)
             }
         }
-        .padding(showsTheme ? 18 : 13)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: showsTheme ? 12 : 10))
+        .padding(showsTheme ? 20 : 13)
+        .background(
+            showsTheme ? AnyShapeStyle(QuizCardSurface.card) : AnyShapeStyle(.background.secondary),
+            in: RoundedRectangle(cornerRadius: showsTheme ? LampMetrics.cardRadius : 10, style: .continuous)
+        )
         .overlay {
-            RoundedRectangle(cornerRadius: showsTheme ? 12 : 10)
-                .stroke(.separator.opacity(0.45), lineWidth: 1)
+            RoundedRectangle(cornerRadius: showsTheme ? LampMetrics.cardRadius : 10, style: .continuous)
+                .strokeBorder(showsTheme ? AnyShapeStyle(Color.lampCardStroke) : AnyShapeStyle(.separator.opacity(0.45)))
                 .allowsHitTesting(false)
         }
         .overlay {
@@ -1629,3 +1769,12 @@ struct QuizQuestionCard: View {
         }
     }
 }
+
+/// The quiz page's layers: the window, cards one step off it, and the
+/// revealed answer set into its card.
+enum QuizCardSurface {
+    static var page: Color { Color(nsColor: .windowBackgroundColor) }
+    static var card: Color { .lampCardFill }
+    static var answer: Color { Color.primary.opacity(0.05) }
+}
+

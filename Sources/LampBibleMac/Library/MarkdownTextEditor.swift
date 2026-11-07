@@ -20,6 +20,12 @@ struct MarkdownTextEditor: NSViewRepresentable {
     var revealToken: Int = 0
     /// What the writing editor's find bar searches this text view through.
     var finder: MarkdownTextFinder?
+    /// The longest line, in characters, before the text is held to a centred
+    /// column. Nil runs it the full width, as a small field wants.
+    var measure: Int?
+    /// Set in the system's text face rather than monospaced, for a field of
+    /// notes beside prose rather than a source to edit.
+    var monospaced = true
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -31,7 +37,8 @@ struct MarkdownTextEditor: NSViewRepresentable {
         // the find bar tints matches with temporary attributes, which TextKit 1
         // redraws as they change. TextKit 2's rendering attributes stayed on
         // screen as they were before a match moved.
-        let textView = NSTextView(usingTextLayoutManager: false)
+        let textView = MeasuredTextView(usingTextLayoutManager: false)
+        textView.measure = measureWidth
         textView.minSize = .zero
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         textView.isVerticallyResizable = true
@@ -66,8 +73,14 @@ struct MarkdownTextEditor: NSViewRepresentable {
         // Each of these relays out the whole document, so only touch them when they
         // actually changed — reapplying them every update keeps the window in a
         // constraints pass it never finishes.
-        if textView.font?.pointSize != CGFloat(fontSize) {
-            textView.font = .monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        let font: NSFont = monospaced
+            ? .monospacedSystemFont(ofSize: fontSize, weight: .regular)
+            : .systemFont(ofSize: fontSize)
+        if textView.font != font {
+            textView.font = font
+        }
+        if let measured = textView as? MeasuredTextView, measured.measure != measureWidth {
+            measured.measure = measureWidth
         }
         if textView.isEditable != isEditable {
             textView.isEditable = isEditable
@@ -106,6 +119,12 @@ struct MarkdownTextEditor: NSViewRepresentable {
                 window.makeFirstResponder(textView)
             }
         }
+    }
+
+    /// The column's width in points: a monospaced character is 0.6 of the
+    /// point size across.
+    private var measureWidth: CGFloat? {
+        measure.map { CGFloat($0) * CGFloat(fontSize) * (monospaced ? 0.6 : 0.5) }
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -362,5 +381,33 @@ enum MarkdownCommand: String, CaseIterable, Identifiable {
         case .bulletList: MarkdownEditor.togglePrefix("- ", in: text, selection: selection)
         case .numberedList: MarkdownEditor.togglePrefix("1. ", in: text, selection: selection)
         }
+    }
+}
+
+/// A text view that keeps its lines to a measure by widening its side
+/// insets as it grows, so the source of a writing is set in a column as the
+/// visual editor sets it, rather than in lines the width of the window.
+final class MeasuredTextView: NSTextView {
+    /// The widest the text runs, in points; nil for the full width.
+    var measure: CGFloat? {
+        didSet { if measure != oldValue { updateInset(for: frame.width) } }
+    }
+
+    private static let minimumInset: CGFloat = 12
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        updateInset(for: newSize.width)
+    }
+
+    private func updateInset(for width: CGFloat) {
+        let side: CGFloat
+        if let measure, width > measure + 2 * Self.minimumInset {
+            side = ((width - measure) / 2).rounded()
+        } else {
+            side = Self.minimumInset
+        }
+        guard textContainerInset.width != side else { return }
+        textContainerInset = NSSize(width: side, height: textContainerInset.height)
     }
 }

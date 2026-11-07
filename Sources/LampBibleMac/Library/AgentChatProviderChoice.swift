@@ -184,18 +184,23 @@ struct AgentChatProviderChoice: View {
                 Text(unavailableReason)
             }
         } label: {
-            Text(chosen ?? kind.defaultLabel)
-                .lineLimit(1)
-                .truncationMode(.middle)
+            ChatControlMenuLabel(
+                title: chosen ?? kind.defaultLabel,
+                isPlaceholder: chosen == nil,
+                // Capped rather than sized to its content: a qualified model
+                // name runs to forty characters, and in the reader's sidebar
+                // that would push what sits beside it off the edge. Cut in
+                // the middle it keeps its family and its date, and the
+                // tooltip carries the whole of it.
+                maxTitleWidth: kind == .model ? 150 : 110
+            )
         }
         .menuStyle(.button)
-        .buttonStyle(.bordered)
-        .controlSize(.small)
-        // Capped rather than sized to its content: a qualified model name runs
-        // to forty characters, and in the reader's sidebar that would push
-        // what sits beside it off the edge. A clipped name is still readable
-        // from its start, and the tooltip carries the whole of it.
-        .frame(maxWidth: kind == .model ? 190 : 140)
+        .menuIndicator(.hidden)
+        .buttonStyle(ChatControlButtonStyle())
+        // Its own width, always: the default labels are short, and a pop-up
+        // offered less than its title squeezed "Default model" to "Defa…model".
+        .fixedSize()
         .help(helpText)
         .accessibilityLabel(kind.title)
         .accessibilityValue(chosen ?? "\(provider.shortName) default")
@@ -342,5 +347,62 @@ enum OpenCodeVariantCatalogue {
         guard !catalogue.isEmpty else { return [] }
         byDirectory[directory.path] = catalogue
         return AgentChatOpenCodeVariants.variants(of: model, in: catalogue)
+    }
+}
+
+/// The title of one of a chat's menus, with the chevron that says it opens.
+struct ChatControlMenuLabel: View {
+    let title: String
+    var systemImage: String?
+    /// The provider's own default, said in a quieter voice than a choice.
+    var isPlaceholder = false
+    var maxTitleWidth: CGFloat?
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if let systemImage {
+                Image(systemName: systemImage)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            Text(title)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .foregroundStyle(isPlaceholder ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+                .frame(maxWidth: maxTitleWidth, alignment: .leading)
+                .fixedSize(horizontal: maxTitleWidth == nil, vertical: false)
+            Image(systemName: "chevron.down")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(.tertiary)
+        }
+    }
+}
+
+/// A chat's quiet controls: no bezel until the pointer is over one, as in
+/// the title bars of Mail and Messages, so the conversation is what the eye
+/// meets rather than a row of grey lozenges above it.
+struct ChatControlButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        ChatControlButtonBody(configuration: configuration)
+    }
+}
+
+private struct ChatControlButtonBody: View {
+    let configuration: ButtonStyleConfiguration
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var isHovered = false
+
+    var body: some View {
+        configuration.label
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(isEnabled ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
+            .padding(.horizontal, 6)
+            .frame(minWidth: 22, minHeight: 22)
+            .background(
+                Color.primary.opacity(configuration.isPressed ? 0.12 : (isHovered && isEnabled ? 0.07 : 0)),
+                in: RoundedRectangle(cornerRadius: 6)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 6))
+            .onHover { isHovered = $0 }
     }
 }

@@ -230,19 +230,32 @@ struct LibraryRootView: View {
         }
     }
 
+    /// A sidebar group's name, in the readable secondary grey: the system's
+    /// own sidebar headings were the faintest text in the window, most of all
+    /// in dark.
+    private func sidebarHeading(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(Color.lampSecondaryText)
+    }
+
     private var libraryInterface: some View {
         NavigationSplitView {
             List(selection: $selection) {
-                Section("Study") {
+                Section {
                     ForEach(LibrarySection.allCases.filter { $0 != .modules }) { section in
                         Label(section.rawValue, systemImage: section.systemImage)
                             .tag(LibrarySelection.section(section))
                     }
+                } header: {
+                    sidebarHeading("Study")
                 }
 
-                Section("Library") {
+                Section {
                     Label(LibrarySection.modules.rawValue, systemImage: LibrarySection.modules.systemImage)
                         .tag(LibrarySelection.section(.modules))
+                } header: {
+                    sidebarHeading("Library")
                 }
             }
             .navigationTitle("Lamp Bible")
@@ -798,17 +811,44 @@ struct LibraryRootView: View {
         }
     }
 
+    /// The passage this window's reader is on, for Today's way back to it:
+    /// the verse being studied, or else the chapter's first.
+    private var todayReaderPlace: TodayReaderPlace? {
+        guard let chapter = workspace.chapter else { return nil }
+        let verse = chapter.verses.first { $0.id == workspace.selectedVerseReference }
+            ?? chapter.verses.first { $0.number > 0 }
+        let translation = model.translations.first { $0.id == chapter.translationID }
+        return TodayReaderPlace(
+            title: "\(chapter.book.name) \(chapter.number)",
+            // The full name: a short one like "BSBs", with its s for
+            // Strong's, read as a cryptic code at a card's foot.
+            translation: translation?.name ?? translation?.abbreviation ?? "",
+            verseNumber: verse?.number,
+            verseText: verse?.text
+        )
+    }
+
     @ViewBuilder
     private var sectionDetail: some View {
         switch selection {
         case .section(.reader):
             EmptyView()
         case .section(.today):
-            TodayPlansView(
+            TodayView(
+                readerPlace: todayReaderPlace,
                 showImporter: { showingImporter = true },
                 showPlans: { selection = .section(.plans) },
                 openReading: openPlanReading,
-                openAllReadings: openAllPlanReadings
+                openAllReadings: openAllPlanReadings,
+                continueReading: { selection = .section(.reader) },
+                openQuiz: { moduleID in
+                    requestedQuizModuleID = moduleID
+                    selection = .section(.quizzes)
+                },
+                openWriting: { id in
+                    requestedDevotionalID = id
+                    selection = .section(.devotionals)
+                }
             )
         case .section(.plans):
             ReadingPlansView(
@@ -993,7 +1033,10 @@ private struct StudyInspectorColumn<Content: View>: View {
             content
                 .frame(width: clampedWidth)
         }
-        .background(.background)
+        // A step off the reader's page, as an inspector is, so the two panes
+        // part along their edge rather than along a hairline alone, which on
+        // the dark window all but vanished.
+        .background(Color.lampInspectorFill)
     }
 
     private var clampedWidth: Double {
@@ -1717,6 +1760,32 @@ private struct ReaderPassageChapter: Identifiable {
 /// making one from a descriptor each time is a third of what building a
 /// paragraph costs. A handful of sizes and weights is all there ever is.
 @MainActor
+/// A highlight's ground behind the text, one per colour, kept: the reader
+/// compares its text before setting it again, and a colour made afresh each
+/// time would never compare equal.
+///
+/// On the dark reader a highlight is the colour lifted a third of the way to
+/// white as a translucent tint, keeping the reader's light text (4.5:1 or
+/// better over every palette colour). The plain colour at the same strength
+/// went to olive and maroon on charcoal; a nearly solid ground with dark
+/// words over it was a jarring inversion of the page around it. On white it
+/// is a pale wash behind the text's own colour.
+private enum ReaderHighlightGrounds {
+    static var grounds: [NSColor: NSColor] = [:]
+
+    static func ground(for color: NSColor) -> NSColor {
+        if let ground = grounds[color] { return ground }
+        let lifted = color.usingColorSpace(.sRGB)?.blended(withFraction: 0.35, of: .white) ?? color
+        let ground = NSColor(name: nil) { appearance in
+            appearance.lampIsDark
+                ? lifted.withAlphaComponent(0.38)
+                : color.withAlphaComponent(0.32)
+        }
+        grounds[color] = ground
+        return ground
+    }
+}
+
 private enum ReaderFonts {
     struct Key: Hashable {
         let size: CGFloat
@@ -1838,6 +1907,25 @@ private enum ReaderParallel {
         let gaps = columnGap * CGFloat(max(columns - 1, 0))
         // The rows' own padding, either side.
         return (passageWidth - 16 - gaps) / CGFloat(max(columns, 1)) < minimumColumnWidth
+    }
+}
+
+/// Where the reader's text sits in its column.
+private enum ReaderTextInset {
+    /// Each row's own inset either side, which leaves room for a highlight's
+    /// ground to reach a little past the words. The title and headings take
+    /// the same, so the left edge of everything on the page is one line.
+    static let horizontal: CGFloat = 8
+    /// Between a heading and the text it heads, whichever verse that text
+    /// begins with. It used to depend on whether that verse opened a
+    /// paragraph, so one heading sat further from its text than the next.
+    static let belowHeading: CGFloat = 9
+    /// One column's widest, padding included: about 70 characters of the
+    /// reader's serif, the middle of the comfortable range for prose, at
+    /// whatever size it is set. A fixed 780 ran the default size to 80 and
+    /// more, and a large size down to 50.
+    static func singleColumnWidth(fontSize: CGFloat) -> CGFloat {
+        min(max(fontSize * 34.8, 520), 1_100) + horizontal * 2
     }
 }
 
@@ -2016,8 +2104,10 @@ private final class ReaderTextView: NSTextView {
 
     fileprivate func drawMarks() {
         guard !marks.isEmpty else { return }
+        // The accent, in the margin beside the text rather than in it: the
+        // grey bar was too faint to say which verse the study pane is on.
         if let bar = selectionBar() {
-            NSColor.secondaryLabelColor.setFill()
+            NSColor.controlAccentColor.setFill()
             NSBezierPath(roundedRect: bar, xRadius: 1.5, yRadius: 1.5).fill()
         }
         for icon in placedIcons() {
@@ -2048,9 +2138,9 @@ private final class ReaderTextView: NSTextView {
               let last = lineBand(at: max(NSMaxRange(range) - 1, range.location))
         else { return nil }
         return NSRect(
-            x: ReaderMargin.width - 10,
+            x: ReaderMargin.width - 10.5,
             y: first.minY + 1,
-            width: 2.5,
+            width: 3,
             height: max(last.maxY - first.minY - 2, 3)
         )
     }
@@ -2871,6 +2961,84 @@ struct ReaderLexicalHoverObserver: NSViewRepresentable {
 }
 
 /// What the field is offering to do with what has been typed.
+/// Where the book list is scrolled to, for the track beside it.
+private struct PassagePickerScrollPosition: Equatable {
+    var offset: CGFloat = 0
+    var content: CGFloat = 0
+    var visible: CGFloat = 0
+}
+
+/// A slim track beside the book list with a thumb for the part in view.
+/// Not a control: the list scrolls as lists do.
+private struct PassagePickerScrollTrack: View {
+    let position: PassagePickerScrollPosition
+
+    var body: some View {
+        GeometryReader { geometry in
+            let height = geometry.size.height
+            if position.content > position.visible, position.visible > 0 {
+                let fraction = position.visible / position.content
+                let thumb = max(height * fraction, 24)
+                let travel = max(position.content - position.visible, 1)
+                let progress = min(max(position.offset / travel, 0), 1)
+                ZStack(alignment: .top) {
+                    Capsule().fill(Color.lampTileFill)
+                    Capsule()
+                        .fill(Color.lampSecondaryText.opacity(0.7))
+                        .frame(height: thumb)
+                        .offset(y: (height - thumb) * progress)
+                }
+            }
+        }
+        .frame(width: 4)
+        .padding(.vertical, 4)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+/// A chapter or verse in the passage picker's grid. The one being read is
+/// solid accent, as the chosen book is; the rest are quiet tiles that lift
+/// under the pointer.
+private struct PassagePickerCell: View {
+    let number: Int
+    let isCurrent: Bool
+    let isRinged: Bool
+    @State private var isHovered = false
+
+    var body: some View {
+        Text(number.formatted())
+            .monospacedDigit()
+            .fontWeight(isCurrent ? .semibold : .regular)
+            .foregroundStyle(isCurrent ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+            .frame(width: 42, height: 32)
+            // Raised tiles, a step lighter than the popover and edged, rather
+            // than grey blocks on grey, which read as heavy and flat.
+            .background(
+                isCurrent ? AnyShapeStyle(.tint)
+                    : AnyShapeStyle(isHovered ? Color.lampRowHover : Color.lampRaisedTile),
+                in: RoundedRectangle(cornerRadius: LampMetrics.tileRadius)
+            )
+            // A hairline round each tile, so its edge holds in both modes.
+            .overlay {
+                if !isCurrent {
+                    RoundedRectangle(cornerRadius: LampMetrics.tileRadius)
+                        .strokeBorder(Color.lampCardStroke)
+                }
+            }
+            .overlay {
+                // The focus ring, drawn on the cell rather than around the
+                // grid; see the chapter grid's overlay.
+                if isRinged {
+                    RoundedRectangle(cornerRadius: LampMetrics.tileRadius)
+                        .strokeBorder(isCurrent ? Color.primary.opacity(0.55) : Color.accentColor, lineWidth: 2)
+                }
+            }
+            .contentShape(Rectangle())
+            .onHover { isHovered = $0 }
+    }
+}
+
 private struct PassagePickerOffer {
     let icon: String
     let title: String
@@ -2979,6 +3147,7 @@ private struct PassagePickerPopover: View {
     @State private var verseNumber = 1
     @State private var scrollToVerse: Int?
     @StateObject private var forceClick = PassagePickerForceClick()
+    @State private var booksScroll = PassagePickerScrollPosition()
     @FocusState private var focus: LampPassagePickerStop?
 
     var body: some View {
@@ -2989,8 +3158,10 @@ private struct PassagePickerPopover: View {
                     .foregroundStyle(.secondary)
             }
 
+            // Large: typing a reference is the fastest way through the picker.
             TextField(fieldPrompt, text: $typed)
                 .textFieldStyle(.roundedBorder)
+                .controlSize(.large)
                 .focused($focus, equals: .field)
                 .onSubmit(commitTyped)
 
@@ -3021,19 +3192,32 @@ private struct PassagePickerPopover: View {
                     ProgressView().controlSize(.small)
                     Text("Loading books…").font(.caption).foregroundStyle(.secondary)
                 }
-                .frame(maxWidth: .infinity, minHeight: 260)
+                .frame(maxWidth: .infinity, minHeight: Self.columnsHeight)
             } else if let errorMessage {
                 Label(errorMessage, systemImage: "exclamationmark.triangle")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 260)
+                    .frame(maxWidth: .infinity, minHeight: Self.columnsHeight)
             } else {
-                HStack(alignment: .top, spacing: 12) {
-                    booksList
-                    Divider()
-                    passageColumn
+                VStack(alignment: .leading, spacing: 6) {
+                    // What each column chooses, named, so the two levels read
+                    // as book then chapter at a glance.
+                    HStack(spacing: 25) {
+                        Text("Book")
+                            .lampSectionHeading()
+                            .padding(.leading, 8)
+                            .frame(width: Self.booksColumnWidth, alignment: .leading)
+                        Text(verseChapter == nil ? "Chapter" : "Verse")
+                            .lampSectionHeading()
+                    }
+                    .accessibilityHidden(true)
+                    HStack(alignment: .top, spacing: 12) {
+                        booksList
+                        Divider()
+                        passageColumn
+                    }
+                    .frame(height: Self.columnsHeight)
                 }
-                .frame(height: 260)
             }
         }
         // Wide enough for what is inside it. The books column, the divider,
@@ -3043,6 +3227,14 @@ private struct PassagePickerPopover: View {
         // margin.
         .padding(20)
         .frame(width: Self.booksColumnWidth + Self.chaptersColumnWidth + 65)
+        .fixedSize(horizontal: false, vertical: true)
+        // Opaque, and one step off the page in both appearances. The
+        // popover's glass let the passage behind it through as a smear of
+        // grey words under the books and chapters, which is noise exactly
+        // where the eye is choosing; and on the white page its edge all but
+        // disappeared.
+        .background(Color.lampPopoverFill)
+        .presentationBackground(Color.lampPopoverFill)
         .onAppear {
             resetSelection()
             focus = .field
@@ -3104,12 +3296,15 @@ private struct PassagePickerPopover: View {
 
     /// The two columns, named so the popover's width can be worked out from
     /// them rather than guessed.
-    private static let booksColumnWidth: Double = 168
-    private static let chaptersColumnWidth: Double = 236
+    private static let booksColumnWidth: Double = 176
+    private static let chaptersColumnWidth: Double = 246
+    /// Tall enough for a dozen books at once, and the 50 chapters of Genesis
+    /// with no more than a short scroll.
+    private static let columnsHeight: Double = 352
     /// The chapters' grid and the verses' alike, so the arrow keys and the
     /// layout agree about what "down" is in both.
     private static let gridColumns = Array(
-        repeating: GridItem(.fixed(38), spacing: 6),
+        repeating: GridItem(.fixed(42), spacing: 6),
         count: LampPassagePickerKeys.chapterColumns
     )
     /// ⇧Tab arrives as this, not as Tab with a shift: a Mac keyboard sends
@@ -3192,24 +3387,36 @@ private struct PassagePickerPopover: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 1) {
                     ForEach(matchingBooks) { book in
+                        if let testament = testamentHeading(before: book) {
+                            Text(testament)
+                                .lampSectionHeading()
+                                .padding(.horizontal, 8)
+                                .padding(.top, book.id == matchingBooks.first?.id ? 2 : 10)
+                                .padding(.bottom, 3)
+                                .accessibilityAddTraits(.isHeader)
+                        }
                         Button {
                             focus = .books
                             bookNumber = book.id
                         } label: {
                             Text(book.name)
                                 .lineLimit(1)
+                                .fontWeight(book.id == bookNumber ? .semibold : .regular)
+                                .foregroundStyle(book.id == bookNumber ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 5)
-                                // The accent, as the grid marks the chapter
+                                // The accent, solid, as a list draws the row
+                                // it has chosen and the grid the chapter
                                 // being read. `.selection` drew the gray a
                                 // list shows when it is not focused, which
                                 // barely showed against the popover (user,
-                                // 2026-11-05).
+                                // 2026-11-05), and a pale tint of the accent
+                                // was hardly better in dark.
                                 .background(
-                                    book.id == bookNumber ? AnyShapeStyle(.tint.opacity(0.25))
+                                    book.id == bookNumber ? AnyShapeStyle(.tint)
                                         : AnyShapeStyle(.clear),
-                                    in: RoundedRectangle(cornerRadius: 5)
+                                    in: RoundedRectangle(cornerRadius: LampMetrics.tileRadius - 1)
                                 )
                                 .overlay {
                                     // The focus ring, on the book the arrows
@@ -3218,8 +3425,8 @@ private struct PassagePickerPopover: View {
                                     // keyboard is elsewhere, as the book the
                                     // chapters belong to.
                                     if focus == .books, book.id == bookNumber {
-                                        RoundedRectangle(cornerRadius: 5)
-                                            .strokeBorder(Color.accentColor, lineWidth: 2)
+                                        RoundedRectangle(cornerRadius: LampMetrics.tileRadius - 1)
+                                            .strokeBorder(Color.primary.opacity(0.55), lineWidth: 2)
                                     }
                                 }
                                 .contentShape(Rectangle())
@@ -3228,9 +3435,28 @@ private struct PassagePickerPopover: View {
                         .id(book.id)
                     }
                 }
-                .padding(.vertical, 2)
+                .padding(.vertical, 10)
             }
             .frame(width: Self.booksColumnWidth)
+            // The list goes on past both edges, which a track beside it shows
+            // all the time: where in the 66 books the visible ones are, and
+            // how much more there is either way. The system's overlay
+            // scroller only shows while scrolling, and fading the rows out at
+            // the edges made them look disabled.
+            .scrollIndicators(.never)
+            .onScrollGeometryChange(for: PassagePickerScrollPosition.self) { geometry in
+                PassagePickerScrollPosition(
+                    offset: geometry.contentOffset.y,
+                    content: geometry.contentSize.height,
+                    visible: geometry.containerSize.height
+                )
+            } action: { _, position in
+                booksScroll = position
+            }
+            .overlay(alignment: .trailing) {
+                PassagePickerScrollTrack(position: booksScroll)
+                    .offset(x: 7)
+            }
             .focusable()
             .focused($focus, equals: .books)
             .focusEffectDisabled()
@@ -3316,6 +3542,15 @@ private struct PassagePickerPopover: View {
                         }
                     }
                     .padding(.vertical, 2)
+                    // Said under the grid, where a short book leaves room:
+                    // holding a chapter for its verses was only in a tooltip.
+                    Label("Hold a chapter to choose a verse", systemImage: "hand.tap")
+                        .font(.callout)
+                        .foregroundStyle(Color.lampSecondaryText)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 14)
+                        .padding(.leading, 2)
+                        .accessibilityHidden(true)
                 } else {
                     Text("Choose a book")
                         .font(.caption)
@@ -3407,22 +3642,19 @@ private struct PassagePickerPopover: View {
 
     /// One cell of either grid.
     private func gridCell(_ number: Int, isCurrent: Bool, isRinged: Bool) -> some View {
-        Text(number.formatted())
-            .monospacedDigit()
-            .frame(width: 38, height: 30)
-            .background(
-                isCurrent ? AnyShapeStyle(.tint.opacity(0.25)) : AnyShapeStyle(.quaternary),
-                in: RoundedRectangle(cornerRadius: 6)
-            )
-            .overlay {
-                // The focus ring, drawn on the cell rather than around the
-                // grid; see the chapter grid's overlay.
-                if isRinged {
-                    RoundedRectangle(cornerRadius: 6)
-                        .strokeBorder(Color.accentColor, lineWidth: 2)
-                }
-            }
-            .contentShape(Rectangle())
+        PassagePickerCell(number: number, isCurrent: isCurrent, isRinged: isRinged)
+    }
+
+    /// The heading over the first book of each testament, by the canonical
+    /// numbering every translation's books carry: 1–39 the Old, 40–66 the
+    /// New. Books past 66 (deuterocanonical) go unheaded under the New.
+    private func testamentHeading(before book: LampTranslationBook) -> String? {
+        let books = matchingBooks
+        guard let index = books.firstIndex(where: { $0.id == book.id }) else { return nil }
+        let previous = index > books.startIndex ? books[books.index(before: index)].id : nil
+        if book.id <= 39, previous == nil { return "Old Testament" }
+        if (40...66).contains(book.id), previous.map({ $0 < 40 }) ?? true { return "New Testament" }
+        return nil
     }
 
     private func offerRow(_ offer: PassagePickerOffer, stop: LampPassagePickerStop) -> some View {
@@ -4437,7 +4669,7 @@ private struct TranslationReaderView: View, Equatable {
     /// The passage's widest: one column's measure on its own, and each column
     /// about that, side by side.
     private func passageWidth(for chapters: [LampChapter]) -> CGFloat {
-        guard readerLayoutMode == .sideBySide else { return 780 }
+        guard readerLayoutMode == .sideBySide else { return ReaderTextInset.singleColumnWidth(fontSize: fontSize) }
         return ReaderParallel.maximumColumnWidth * CGFloat(parallelColumnCount(for: chapters))
     }
 
@@ -4778,7 +5010,7 @@ private struct TranslationReaderView: View, Equatable {
         .fixedSize(horizontal: false, vertical: true)
         .overlay(alignment: .topLeading) { parallelRowMarks(for: row.reference) }
         .padding(.top, row.main.map { topPadding(for: $0) } ?? 5)
-        .padding(.horizontal, 8)
+        .padding(.horizontal, ReaderTextInset.horizontal)
         .padding(.vertical, 3)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -4864,9 +5096,9 @@ private struct TranslationReaderView: View, Equatable {
         let iconTop = font.ascender - font.xHeight / 2 - iconSize / 2
         ZStack(alignment: .topLeading) {
             if workspace.selectedVerseReference == reference {
-                RoundedRectangle(cornerRadius: 1.25)
-                    .fill(Color(nsColor: .secondaryLabelColor))
-                    .frame(width: 2.5)
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(Color.accentColor)
+                    .frame(width: 3)
                     .padding(.vertical, 1)
                     .offset(x: -10)
             }
@@ -4914,17 +5146,25 @@ private struct TranslationReaderView: View, Equatable {
         stacksCompanion: Bool = false
     ) -> some View {
         let headingsByVerse = Dictionary(grouping: chapter.headings, by: \.beforeVerse)
-        VStack(alignment: .leading, spacing: 5) {
-            Text(chapter.book.name)
-                .font(.largeTitle.bold())
-                .textSelection(.enabled)
+        // The book in the reader's own face, as a printed Bible opens one, and
+        // the chapter beneath it in small tracked capitals: one title, read
+        // as a title, rather than two lines of chrome at different sizes.
+        VStack(alignment: .leading, spacing: 6) {
             Text("Chapter \(chapter.number)")
-                .font(.title2)
-                .foregroundStyle(.secondary)
+                .font(.system(size: 12, weight: .semibold))
+                .textCase(.uppercase)
+                .tracking(1.4)
+                .foregroundStyle(Color.lampVerseNumber)
+                .textSelection(.enabled)
+            Text(chapter.book.name)
+                .font(.system(size: max(fontSize * 1.7, 30), weight: .bold, design: typeface.design))
                 .textSelection(.enabled)
         }
-        .padding(.top, isFirst ? 0 : 52)
-        .padding(.bottom, 28)
+        // Level with the text and the headings, which the rows set in by
+        // their own padding.
+        .padding(.horizontal, ReaderTextInset.horizontal)
+        .padding(.top, isFirst ? 0 : 56)
+        .padding(.bottom, 4)
         .id(isFirst ? "chapter-top" : "chapter-\(chapter.book.id)-\(chapter.number)")
 
         if readerLayoutMode == .sideBySide {
@@ -4958,18 +5198,21 @@ private struct TranslationReaderView: View, Equatable {
             ForEach(chapter.verses) { verse in
                 // Heading and verse share one identity so the scroll link reports
                 // whole verses; loose heading ids would look like verse references.
+                let headings = headingsByVerse[verse.number] ?? []
                 VStack(alignment: .leading, spacing: 0) {
-                    readerHeadings(headingsByVerse[verse.number] ?? [])
-                    verseRow(verse, showsInstantDetails: showsInstantDetails)
+                    readerHeadings(headings, opensChapter: verse.id == chapter.verses.first?.id)
+                    verseRow(verse, followsHeading: !headings.isEmpty, showsInstantDetails: showsInstantDetails)
                 }
                 .id(verse.id)
             }
         } else {
             ForEach(continuousParagraphs(in: chapter)) { paragraph in
+                let headings = headingsByVerse[paragraph.firstVerse.number] ?? []
                 VStack(alignment: .leading, spacing: 0) {
-                    readerHeadings(headingsByVerse[paragraph.firstVerse.number] ?? [])
+                    readerHeadings(headings, opensChapter: paragraph.firstVerse.id == chapter.verses.first?.id)
                     continuousParagraph(
                         paragraph,
+                        followsHeading: !headings.isEmpty,
                         showsInstantDetails: showsInstantDetails
                     )
                 }
@@ -4985,26 +5228,39 @@ private struct TranslationReaderView: View, Equatable {
     }
 
     @ViewBuilder
-    private func readerHeadings(_ headings: [LampHeading]) -> some View {
+    /// `opensChapter`: the headings straight under the chapter's title, which
+    /// the title's own space already sets off. A full heading's space on top
+    /// of it left a gap the panel kept calling out.
+    private func readerHeadings(_ headings: [LampHeading], opensChapter: Bool = false) -> some View {
         ForEach(headings) { heading in
+            // Sized from the text rather than fixed, so a heading keeps its
+            // rank over the body at any reading size; and set in by the same
+            // inset as the verses, which used to start 8 points right of it.
             Text(heading.text)
-                .font(heading.level == 1 ? .title2.weight(.semibold) : .title3.weight(.semibold))
+                .font(.system(
+                    size: heading.level == 1 ? max(fontSize * 1.1, 17) : max(fontSize * 0.9, 15),
+                    weight: heading.level == 1 ? .bold : .semibold
+                ))
                 .textSelection(.enabled)
-                .padding(.top, heading.level == 1 ? 26 : 18)
-                .padding(.bottom, 10)
+                .padding(.top, opensChapter && heading.id == headings.first?.id
+                         ? 14
+                         : (heading.level == 1 ? 34 : 28))
+                .padding(.bottom, ReaderTextInset.belowHeading)
+                .padding(.horizontal, ReaderTextInset.horizontal)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     private func continuousParagraph(
         _ paragraph: ReaderParagraph,
+        followsHeading: Bool,
         showsInstantDetails: Bool
     ) -> some View {
         continuousParagraphText(paragraph)
             .fixedSize(horizontal: false, vertical: true)
-            .padding(.top, continuousTopPadding(for: paragraph.firstVerse))
+            .padding(.top, followsHeading ? 0 : continuousTopPadding(for: paragraph.firstVerse))
             .padding(.leading, paragraphIndent(for: paragraph))
-            .padding(.horizontal, 8)
+            .padding(.horizontal, ReaderTextInset.horizontal)
             .padding(.vertical, 3)
             .frame(maxWidth: .infinity, alignment: .leading)
             .overlay {
@@ -5154,11 +5410,17 @@ private struct TranslationReaderView: View, Equatable {
         // inside scripture takes the accent, where a red numeral next to
         // red-letter text reads as part of the words of Christ. A verse's notes
         // are marked in the margin too.
+        //
+        // Set in the system's sans rather than the reader's serif: at a
+        // numeral's size the serif's thin strokes broke up, and a sans figure
+        // is what the eye picks out scanning down for a verse. Tabular figures,
+        // so 18 and 19 take the same room.
         var numberAttributes = markerTextAttributes(
-            size: max(fontSize * 0.58, 10),
+            size: max(fontSize * 0.7, 11.5),
             weight: .semibold,
-            color: isSelected ? .labelColor : .secondaryLabelColor,
-            baselineOffset: max(fontSize * 0.28, 4)
+            color: isSelected ? .labelColor : .lampVerseNumber,
+            baselineOffset: max(fontSize * 0.3, 4),
+            apparatus: true
         )
         numberAttributes[.link] = verseURL
         numberAttributes[ReaderTextMarks.verse] = NSNumber(value: verse.id)
@@ -5378,11 +5640,12 @@ private struct TranslationReaderView: View, Equatable {
         let result = NSMutableAttributedString(attributedString: body)
         for insertion in insertions {
             var attributes = markerTextAttributes(
-                size: max(fontSize * 0.55, 10),
-                weight: .semibold,
+                size: max(fontSize * 0.64, 11),
+                weight: .bold,
                 // It opens the note, so it reads as a link.
                 color: .lampLink,
-                baselineOffset: max(fontSize * 0.32, 5)
+                baselineOffset: max(fontSize * 0.32, 5),
+                apparatus: true
             )
             attributes[.link] = readerFootnoteURL(verse: verse.id, index: insertion.index, companionID: companionID)
             attributes[ReaderTextMarks.apparatus] = true
@@ -5431,12 +5694,12 @@ private struct TranslationReaderView: View, Equatable {
     }
 
     @ViewBuilder
-    private func verseRow(_ verse: LampVerse, showsInstantDetails: Bool) -> some View {
+    private func verseRow(_ verse: LampVerse, followsHeading: Bool = false, showsInstantDetails: Bool) -> some View {
         renderedVerseText(for: verse)
             .fixedSize(horizontal: false, vertical: true)
-            .padding(.top, topPadding(for: verse))
+            .padding(.top, followsHeading ? 0 : topPadding(for: verse))
             .padding(.leading, partialPoetryRange(for: verse) == nil ? poetryIndent(for: verse) : 0)
-            .padding(.horizontal, 8)
+            .padding(.horizontal, ReaderTextInset.horizontal)
             .padding(.vertical, 3)
             .frame(maxWidth: .infinity, alignment: .leading)
             .help(verseStudyHelp(verse))
@@ -5815,7 +6078,7 @@ private struct TranslationReaderView: View, Equatable {
             case .highlight:
                 result.addAttribute(
                     .backgroundColor,
-                    value: color.withAlphaComponent(0.34),
+                    value: ReaderHighlightGrounds.ground(for: color),
                     range: range
                 )
             case .underlineSolid:
@@ -5851,14 +6114,19 @@ private struct TranslationReaderView: View, Equatable {
         ]
     }
 
+    /// `apparatus` sets the mark in the system sans with tabular figures, for
+    /// the numbers and letters set in among scripture rather than the words.
     private func markerTextAttributes(
         size: CGFloat,
         weight: NSFont.Weight,
         color: NSColor,
-        baselineOffset: CGFloat
+        baselineOffset: CGFloat,
+        apparatus: Bool = false
     ) -> [NSAttributedString.Key: Any] {
         var result = bodyTextAttributes()
-        result[.font] = readerFont(size: size, weight: weight)
+        result[.font] = apparatus
+            ? NSFont.monospacedDigitSystemFont(ofSize: size, weight: weight)
+            : readerFont(size: size, weight: weight)
         result[.foregroundColor] = color
         result[.baselineOffset] = baselineOffset
         return result
@@ -5991,8 +6259,12 @@ private struct TranslationReaderView: View, Equatable {
 
     @ToolbarContentBuilder
     private var readerToolbar: some ToolbarContent {
+        // One capsule for the whole of where you are and how to move from it,
+        // rather than five: the passage reads as the control, and the steps
+        // either side of it as its own. The chapter steps stay one click
+        // away; the book steps beside them are quieter.
         ToolbarItem(placement: .principal) {
-            ControlGroup {
+            HStack(spacing: 0) {
                 Button {
                     navigateBookBackward()
                 } label: {
@@ -6061,6 +6333,7 @@ private struct TranslationReaderView: View, Equatable {
                 .help("Next Book")
                 .accessibilityLabel("Next Book")
             }
+            .buttonStyle(.accessoryBar)
             .controlSize(.regular)
         }
 
@@ -6141,15 +6414,9 @@ private struct TranslationReaderView: View, Equatable {
             .fixedSize()
             .help("Choose the reader layout, typeface, and text size, and see what the verse marks mean")
 
-            Button {
-                toggleReadAloud()
-            } label: {
-                Label(readAloudButtonTitle, systemImage: readAloudButtonImage)
-            }
-            .disabled(readAloudVerses.isEmpty)
-            .help(readAloudButtonTitle)
-
-            Menu("Read Aloud Options", systemImage: "speaker.wave.2") {
+            // One control, as Music's play button is: a click plays or pauses,
+            // and the arrow beside it holds where to start from and stop.
+            Menu {
                 Button(
                     planReadingMode == nil ? "Read Chapter from Beginning" : "Read Reading from Beginning",
                     systemImage: "text.book.closed"
@@ -6168,9 +6435,15 @@ private struct TranslationReaderView: View, Equatable {
                 }
                 Button("Stop", systemImage: "stop") { readAloud.stop() }
                     .disabled(readAloud.state == .stopped)
+            } label: {
+                Label(readAloudButtonTitle, systemImage: readAloudButtonImage)
+            } primaryAction: {
+                toggleReadAloud()
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
+            .disabled(readAloudVerses.isEmpty)
+            .help("\(readAloudButtonTitle) — the arrow has where to start from")
         }
 
         ToolbarItemGroup(placement: .primaryAction) {
@@ -6261,187 +6534,9 @@ private struct VerseAnnotationRange: Hashable {
 }
 
 
-private struct InstalledModulesView: View {
-    @EnvironmentObject private var model: LibraryModel
-    @State private var moduleToRemove: LampInstalledModule?
-    @State private var exportRequest: ModuleExportRequest?
-    let showImporter: () -> Void
+// The Modules section's view is InstalledModulesView.swift.
 
-    private var exportChoices: [ModuleExportChoice] {
-        LampPersonalModule.allCases.map(ModuleExportChoice.personal)
-            + model.modules.filter { !$0.isBundled }.map(ModuleExportChoice.installed)
-    }
-
-    var body: some View {
-        List {
-            personalModuleSection
-            moduleSection("Translations", modules: model.modules.filter { $0.kind == .translation })
-            moduleSection("Dictionaries", modules: model.modules.filter { $0.kind == .dictionary })
-            moduleSection("Commentaries", modules: model.modules.filter { $0.kind == .commentary })
-            moduleSection("Books", modules: model.modules.filter { $0.kind == .book })
-            moduleSection("Reading Plans", modules: model.planModules)
-            moduleSection("Writing", modules: model.devotionalModules)
-            moduleSection("Quizzes", modules: model.quizModuleInstallations)
-            moduleSection("Notes", modules: model.noteModules)
-            moduleSection("Highlights", modules: model.highlightModules)
-        }
-        .navigationTitle("Modules")
-        .toolbar {
-            ToolbarItemGroup {
-                Button("Install Module…", systemImage: "plus", action: showImporter)
-                    .help("Install a Lamp module")
-                Button("Export Module…", systemImage: "square.and.arrow.up") {
-                    exportRequest = ModuleExportRequest(initialChoiceID: nil)
-                }
-                .help("Export a personal or user-installed module")
-                Button("Show Library in Finder", systemImage: "folder") {
-                    NSWorkspace.shared.open(model.library.rootURL)
-                }
-                .help("Show the Lamp Bible library in Finder")
-            }
-        }
-        .sheet(item: $exportRequest) { request in
-            ModuleExportWizard(
-                choices: exportChoices,
-                initialChoiceID: request.initialChoiceID
-            )
-            .environmentObject(model)
-        }
-        .confirmationDialog(
-            "Remove Module?",
-            isPresented: Binding(
-                get: { moduleToRemove != nil },
-                set: { if !$0 { moduleToRemove = nil } }
-            ),
-            presenting: moduleToRemove
-        ) { module in
-            Button("Remove \(module.name)", role: .destructive) {
-                model.remove(module)
-                moduleToRemove = nil
-            }
-        } message: { module in
-            // Not "the installed copy": `LibraryModel.remove(_:)` records the
-            // removal through LampSyncRemovedModules first, which is what stops
-            // the next sync fetching the module back — and so is what carries
-            // the removal to the other devices.
-            Text("This removes \(module.name) from your library — from this Mac, and from your other devices the next time they sync. Your original .lamp file is not affected.")
-        }
-    }
-
-    private var personalModuleSection: some View {
-        Section("Personal") {
-            ForEach(LampPersonalModule.allCases) { personalModule in
-                let choice = ModuleExportChoice.personal(personalModule)
-                HStack(spacing: 12) {
-                    Image(systemName: icon(for: personalModule.kind))
-                        .font(.title3)
-                        .foregroundStyle(.tint)
-                        .frame(width: 28)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(personalModule.name)
-                        Text("Personal")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button("Export", systemImage: "square.and.arrow.up") {
-                        exportRequest = ModuleExportRequest(initialChoiceID: choice.id)
-                    }
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.borderless)
-                    .help("Export \(personalModule.name)")
-                }
-                .padding(.vertical, 4)
-                .contextMenu {
-                    Button("Export Module…", systemImage: "square.and.arrow.up") {
-                        exportRequest = ModuleExportRequest(initialChoiceID: choice.id)
-                    }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func moduleSection(_ title: String, modules: [LampInstalledModule]) -> some View {
-        if !modules.isEmpty {
-            Section(title) {
-                ForEach(modules) { module in
-                    HStack(spacing: 12) {
-                        Image(systemName: icon(for: module.kind))
-                            .font(.title3)
-                            .foregroundStyle(.tint)
-                            .frame(width: 28)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(module.name)
-                            HStack {
-                                if let abbreviation = module.abbreviation {
-                                    Text(abbreviation)
-                                }
-                                if module.isBundled {
-                                    Label("Built In", systemImage: "shippingbox.fill")
-                                } else {
-                                    Text(ByteCountFormatter.string(
-                                        fromByteCount: Int64(module.compressedByteCount),
-                                        countStyle: .file
-                                    ))
-                                }
-                            }
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        if !module.isBundled {
-                            Button("Export", systemImage: "square.and.arrow.up") {
-                                exportRequest = ModuleExportRequest(
-                                    initialChoiceID: ModuleExportChoice.installed(module).id
-                                )
-                            }
-                            .labelStyle(.iconOnly)
-                            .buttonStyle(.borderless)
-                            .help("Export \(module.name)")
-                            Button("Remove", systemImage: "trash", role: .destructive) {
-                                moduleToRemove = module
-                            }
-                            .labelStyle(.iconOnly)
-                            .buttonStyle(.borderless)
-                            .help("Remove \(module.name)")
-                        }
-                    }
-                    .padding(.vertical, 4)
-                    .contextMenu {
-                        if !module.isBundled {
-                            Button("Export Module…", systemImage: "square.and.arrow.up") {
-                                exportRequest = ModuleExportRequest(
-                                    initialChoiceID: ModuleExportChoice.installed(module).id
-                                )
-                            }
-                            Divider()
-                            Button("Remove Module", role: .destructive) {
-                                moduleToRemove = module
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private func icon(for kind: LampModuleKind) -> String {
-        switch kind {
-        case .translation: "books.vertical"
-        case .dictionary: "character.book.closed"
-        case .commentary: "text.book.closed"
-        case .book: "book.closed"
-        case .plan: "checklist"
-        case .devotional: "sun.max"
-        case .quiz: "questionmark.bubble"
-        case .notes: "note.text"
-        case .highlights: "highlighter"
-        }
-    }
-}
-
-private struct ModuleExportChoice: Identifiable {
+struct ModuleExportChoice: Identifiable {
     enum Source {
         case personal(LampPersonalModule)
         case installed(LampInstalledModule)
@@ -6485,12 +6580,12 @@ private struct ModuleExportChoice: Identifiable {
     }
 }
 
-private struct ModuleExportRequest: Identifiable {
+struct ModuleExportRequest: Identifiable {
     let id = UUID()
     let initialChoiceID: String?
 }
 
-private struct ModuleExportWizard: View {
+struct ModuleExportWizard: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var model: LibraryModel
     let choices: [ModuleExportChoice]

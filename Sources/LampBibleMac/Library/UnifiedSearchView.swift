@@ -88,7 +88,7 @@ struct UnifiedSearchView: View {
 
     private var selectedResult: LampModuleSearchResult? {
         model.moduleSearchResults.first { $0.id == selectedResultID }
-            ?? model.moduleSearchResults.first
+            ?? resultGroups.first?.results.first
     }
 
     private var availableModules: [(id: String, name: String)] {
@@ -174,6 +174,7 @@ struct UnifiedSearchView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+        refineFilters
         devotionalFilters
         Group {
             if showsStrongsAnalysis {
@@ -206,7 +207,10 @@ struct UnifiedSearchView: View {
             }
         }
         .navigationTitle("Search")
-        .searchable(text: $query, placement: .toolbar, prompt: "Search Bibles and modules")
+        // Short enough to stay whole once the Strong's key field joins the
+        // toolbar: the longer "Search Bibles and modules" was cut to
+        // "Search Bibles and n…" at the default window size.
+        .searchable(text: $query, placement: .toolbar, prompt: "Search Library")
         .onSubmit(of: .search) {
             // On submit rather than as it is typed: "H7" is a plausible key
             // while someone is still typing "H7225", and moving the text out
@@ -246,7 +250,9 @@ struct UnifiedSearchView: View {
         .onChange(of: highlightColor) { _, _ in runSearch() }
         .onChange(of: model.moduleSearchResults) { _, results in
             if !results.contains(where: { $0.id == selectedResultID }) {
-                selectedResultID = results.first?.id
+                // The first row on screen, which grouping may have moved
+                // from the first result core returned.
+                selectedResultID = resultGroups.first?.results.first?.id
             }
         }
         .toolbar { searchToolbar }
@@ -277,7 +283,7 @@ struct UnifiedSearchView: View {
                 ContentUnavailableView {
                     Label("Search Your Library", systemImage: "text.magnifyingglass")
                 } description: {
-                    Text("Search scripture, dictionaries, commentaries, books, notes, devotionals, plans, quizzes, and highlighted verses.")
+                    Text("Search scripture, dictionaries, commentaries, books, notes, writing, plans, quizzes, and highlighted verses.")
                 } actions: {
                     if model.modules.isEmpty {
                         Button("Install Module…", action: showImporter)
@@ -587,83 +593,215 @@ struct UnifiedSearchView: View {
         query = ""
     }
 
+    /// The results, shelved by what they are: scripture first, then the
+    /// reader's own notes and writing, then reference works and books.
+    ///
+    /// Each group says once what it is, and once which module its hits came
+    /// from when they all came from one — which is what every row repeated
+    /// before, in a badge and a caption, until the repetition was most of
+    /// what a row said. Within a group the results keep the order core gave
+    /// them.
+    private var resultGroups: [SearchResultGroup] {
+        SearchResultGroup.groups(
+            from: model.moduleSearchResults,
+            readerTranslationID: model.selectedTranslationID
+        )
+    }
+
+    /// Every result in the order it is shown, for moving through them by key.
+    private var shownResults: [LampModuleSearchResult] {
+        resultGroups.flatMap(\.results)
+    }
+
+    /// The results, drawn as a stack rather than a List so the selected row
+    /// can be marked the way the passage pane marks the hit verse — a soft
+    /// ground and an accent rule — instead of the List's broad grey block,
+    /// which outweighed everything around it. The arrow keys still move
+    /// through the results.
     private var resultsList: some View {
         VStack(spacing: 0) {
             referenceOffer
             strongsAnalysisOffer
-            List(selection: $selectedResultID) {
-                ForEach(model.moduleSearchResults) { result in
-                    VStack(alignment: .leading, spacing: 9) {
-                        HStack(spacing: 8) {
-                            Image(systemName: icon(for: result.kind))
-                                .foregroundStyle(.tint)
-                            if let highlightColor = color(for: result.highlightColor) {
-                                Circle().fill(highlightColor).frame(width: 10, height: 10)
-                            }
-                            Text(result.title)
-                                .font(.headline)
-                                .lineLimit(2)
-                            Spacer()
-                            Text(result.kind.displayName)
-                                .font(.caption.weight(.medium))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(.quaternary, in: Capsule())
-                        }
-                        Text(result.moduleName)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        snippetText(result.snippet)
-                            .font(.system(size: hitFontSize))
-                            .lineLimit(3)
-                            .foregroundStyle(.primary)
-                    }
-                    .padding(.vertical, 12)
-                    // The whole row, not just the ink. Without this the row
-                    // is only hit-testable where its text happens to be, so
-                    // a right-click in the space beside a short snippet
-                    // landed on the list rather than the row — which is why
-                    // the context menu did not appear at all.
-                    .contentShape(Rectangle())
-                    .tag(Optional(result.id))
-                    // Clicking a verse shows it in its context, which is what
-                    // the preview is for. Selection also moves with the
-                    // click, so the detail pane keeps up; a simultaneous
-                    // gesture leaves the list's own handling alone. Hung off
-                    // the click rather than off selection because the list
-                    // selects the first result by itself whenever the
-                    // results change, and that must not open anything.
-                    .simultaneousGesture(TapGesture().onEnded {
-                        if previewTranslation(of: result) != nil {
-                            previewedResult = result
-                        }
-                    })
-                    .popover(isPresented: previewBinding(for: result), arrowEdge: .trailing) {
-                        preview(for: result)
-                    }
-                    .contextMenu {
-                        if previewTranslation(of: result) != nil {
-                            Button("Preview in Context") { previewedResult = result }
-                        }
-                        if let reference = result.startReference {
-                            Button("Open \(result.referenceDescription ?? "Reference")") {
-                                saveSearch()
-                                openReference(reference, translationID(of: result))
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                        ForEach(resultGroups) { group in
+                            Section {
+                                ForEach(Array(group.results.enumerated()), id: \.element.id) { index, result in
+                                    if index > 0 {
+                                        // Not against the selected row,
+                                        // whose own ground already marks it.
+                                        let touchesSelection = result.id == selectedResult?.id
+                                            || group.results[index - 1].id == selectedResult?.id
+                                        Divider()
+                                            .overlay(Color.lampCardStroke)
+                                            .padding(.horizontal, 16)
+                                            .opacity(touchesSelection ? 0 : 1)
+                                    }
+                                    resultRow(result, showsModule: group.moduleName == nil)
+                                        .id(result.id)
+                                }
+                            } header: {
+                                resultGroupHeader(group)
                             }
                         }
-                        if result.kind == .dictionary, let key = lexiconKey(of: result) {
-                            Button("Look Up \(key)") {
-                                saveSearch()
-                                openDictionaryEntry(key, result.title)
-                            }
-                        }
-                        Button("Copy Result") { copy(result) }
                     }
+                    .padding(.bottom, 16)
+                }
+                .background(Color(nsColor: .controlBackgroundColor))
+                .focusable()
+                .focusEffectDisabled()
+                .onKeyPress(.downArrow) {
+                    moveSelection(by: 1, proxy: proxy)
+                    return .handled
+                }
+                .onKeyPress(.upArrow) {
+                    moveSelection(by: -1, proxy: proxy)
+                    return .handled
                 }
             }
-            .listStyle(.inset)
         }
         .frame(minWidth: 340, idealWidth: 440)
+    }
+
+    private func moveSelection(by offset: Int, proxy: ScrollViewProxy) {
+        let results = shownResults
+        guard !results.isEmpty else { return }
+        let current = results.firstIndex { $0.id == selectedResult?.id } ?? 0
+        let next = min(max(current + offset, 0), results.count - 1)
+        selectedResultID = results[next].id
+        withAnimation(.easeOut(duration: 0.15)) {
+            proxy.scrollTo(results[next].id, anchor: nil)
+        }
+    }
+
+    private func resultGroupHeader(_ group: SearchResultGroup) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: icon(for: group.kind))
+                .foregroundStyle(.tint)
+                .imageScale(.small)
+            // The shared heading style a size up: at caption size, over a
+            // list this long, it was the one thing on the page judged too
+            // small to find.
+            Text(group.kind.displayName)
+                .lampSectionHeading()
+                .font(.subheadline.weight(.semibold))
+            // The count in words and in the readable grey, not tracked into
+            // the heading's capitals where "SCRIPTURE 19" read as one label.
+            Text(resultCountDescription(group))
+                .font(.subheadline)
+                .foregroundStyle(Color.lampSecondaryText)
+                .monospacedDigit()
+            Spacer(minLength: 8)
+            if let moduleName = group.moduleName {
+                Text(moduleName)
+                    .font(.subheadline)
+                    .foregroundStyle(Color.lampSecondaryText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Color.lampCardStroke).frame(height: 1)
+        }
+    }
+
+    private func resultCountDescription(_ group: SearchResultGroup) -> String {
+        let count = group.results.count
+        let noun = switch group.kind {
+        case .translation, .highlights: count == 1 ? "verse" : "verses"
+        default: count == 1 ? "result" : "results"
+        }
+        return "\(count) \(noun)"
+    }
+
+    /// Scripture is read for its words, so the verse leads and the reference
+    /// is its label. Everything else is found by its title, so the title
+    /// leads and the excerpt steps down a size beneath it.
+    private func resultRow(_ result: LampModuleSearchResult, showsModule: Bool) -> some View {
+        let isScripture = result.kind == .translation || result.kind == .highlights
+        let isSelected = result.id == selectedResult?.id
+        return VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                if let highlightColor = color(for: result.highlightColor) {
+                    Circle().fill(highlightColor).frame(width: 9, height: 9)
+                }
+                Text(result.title)
+                    .font(.system(size: isScripture ? 14 : 13.5, weight: .semibold))
+                    .lineLimit(2)
+                Spacer(minLength: 6)
+                if showsModule {
+                    Text(result.moduleName)
+                        .font(.subheadline)
+                        .foregroundStyle(Color.lampSecondaryText)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: 160, alignment: .trailing)
+                }
+            }
+            snippetText(result.snippet)
+                .font(.system(size: isScripture ? hitFontSize : max(13, hitFontSize - 3)))
+                .lineSpacing(isScripture ? 2 : 3)
+                .lineLimit(3)
+                .foregroundStyle(isScripture ? Color.primary : Color.lampSecondaryText)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.leading, 16)
+        .padding(.trailing, 14)
+        .padding(.vertical, 11)
+        .background {
+            if isSelected {
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: LampMetrics.tileRadius, style: .continuous)
+                        .fill(Color.lampTileFill)
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .fill(.tint)
+                        .frame(width: 3)
+                        .padding(.vertical, 8)
+                }
+                .padding(.horizontal, 6)
+            }
+        }
+        // The whole row, not just the ink, so a click or right-click in the
+        // space beside a short snippet still lands on it.
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+        // A click selects the result, so the detail pane follows, and shows
+        // a verse in its context, which is what the preview is for. The
+        // first result is selected by itself when results arrive; that
+        // opens nothing, because it is not a click.
+        .onTapGesture {
+            selectedResultID = result.id
+            if previewTranslation(of: result) != nil {
+                previewedResult = result
+            }
+        }
+        .popover(isPresented: previewBinding(for: result), arrowEdge: .trailing) {
+            preview(for: result)
+        }
+        .contextMenu {
+            if previewTranslation(of: result) != nil {
+                Button("Preview in Context") { previewedResult = result }
+            }
+            if let reference = result.startReference {
+                Button("Open \(result.referenceDescription ?? "Reference")") {
+                    saveSearch()
+                    openReference(reference, translationID(of: result))
+                }
+            }
+            if result.kind == .dictionary, let key = lexiconKey(of: result) {
+                Button("Look Up \(key)") {
+                    saveSearch()
+                    openDictionaryEntry(key, result.title)
+                }
+            }
+            Button("Copy Result") { copy(result) }
+        }
     }
 
     /// The preview, anchored on the row it is about.
@@ -699,41 +837,70 @@ struct UnifiedSearchView: View {
         )
     }
 
+    /// The selected result, read properly.
+    ///
+    /// A verse is shown where it stands, with the verses either side at the
+    /// reader's own size, so the pane answers "is this the one I meant?" on
+    /// its own — it showed the same snippet as the row, smaller, over a
+    /// column of empty space. Anything else gets its excerpt at a reading
+    /// size, in the face its kind is read in.
     private func resultDetail(_ result: LampModuleSearchResult) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 7) {
+            VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: 8) {
                     Label(result.kind.displayName, systemImage: icon(for: result.kind))
-                        .font(.headline)
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.tint)
                     Text(result.title)
-                        .font(.largeTitle.bold())
-                    if let subtitle = result.subtitle, !subtitle.isEmpty {
-                        Text(subtitle)
-                            .font(.title3)
-                            .foregroundStyle(.secondary)
-                    }
-                    Text(result.moduleName)
-                        .foregroundStyle(.secondary)
-                }
-
-                if let description = result.referenceDescription {
-                    Label(description, systemImage: "book")
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 28, weight: .bold))
+                        .fixedSize(horizontal: false, vertical: true)
+                    detailByline(result)
                 }
 
                 Divider()
 
-                snippetText(result.snippet)
-                    .font(result.kind == .translation ? .system(.body, design: .serif) : .body)
-                    .lineSpacing(5)
-                    .textSelection(.enabled)
+                if let translationID = previewTranslation(of: result),
+                   let reference = result.startReference {
+                    SearchContextPassage(
+                        reference: reference,
+                        translationID: translationID,
+                        query: query,
+                        fontSize: detailFontSize,
+                        context: previewContext
+                    )
+                    .id("\(result.id)|\(previewContext)")
+                } else {
+                    snippetText(result.snippet)
+                        .font(.system(size: detailFontSize - 1, design: detailDesign(for: result.kind)))
+                        .lineSpacing(detailFontSize * 0.4)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
-                HStack {
+                HStack(spacing: 8) {
                     if let reference = result.startReference {
                         Button("Open in Reader", systemImage: "book") {
                             saveSearch()
                             openReference(reference, translationID(of: result))
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    if result.kind == .book {
+                        Button("Open Book", systemImage: "book.closed") {
+                            saveSearch()
+                            openBook(result)
+                        }
+                        .buttonStyle(.borderedProminent)
+                    } else if result.kind == .dictionary, let key = lexiconKey(of: result) {
+                        Button("Look Up", systemImage: "character.book.closed") {
+                            saveSearch()
+                            openDictionaryEntry(key, result.title)
+                        }
+                        .buttonStyle(.bordered)
+                    } else if [.devotional, .plan, .quiz].contains(result.kind) {
+                        Button("Open \(result.kind.displayName)", systemImage: icon(for: result.kind)) {
+                            saveSearch()
+                            openKind(result)
                         }
                         .buttonStyle(.borderedProminent)
                     }
@@ -743,32 +910,52 @@ struct UnifiedSearchView: View {
                         }
                         .buttonStyle(.bordered)
                     }
-                    if result.kind == .book {
-                        Button("Open Book") {
-                            saveSearch()
-                            openBook(result)
-                        }
-                        .buttonStyle(.bordered)
-                    } else if result.kind == .dictionary, let key = lexiconKey(of: result) {
-                        Button("Look Up", systemImage: "character.book.closed") {
-                            saveSearch()
-                            openDictionaryEntry(key, result.title)
-                        }
-                        .buttonStyle(.bordered)
-                    } else if [.devotional, .plan, .quiz].contains(result.kind) {
-                        Button("Open \(result.kind.displayName)") {
-                            saveSearch()
-                            openKind(result)
-                        }
-                        .buttonStyle(.bordered)
-                    }
                     Button("Copy", systemImage: "doc.on.doc") { copy(result) }
                         .buttonStyle(.bordered)
                 }
+                .controlSize(.large)
             }
-            .frame(maxWidth: 720, alignment: .leading)
-            .padding(32)
+            .frame(maxWidth: 640, alignment: .leading)
+            .padding(.horizontal, 40)
+            .padding(.vertical, 34)
             .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+    }
+
+    /// Where the result came from, said once: the module, and the passage a
+    /// non-scripture result is about.
+    @ViewBuilder
+    private func detailByline(_ result: LampModuleSearchResult) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let subtitle = result.subtitle, !subtitle.isEmpty,
+               subtitle != result.title, subtitle != result.moduleName,
+               result.kind != .translation {
+                Text(subtitle)
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+            }
+            HStack(spacing: 6) {
+                Text(result.moduleName)
+                if let description = result.referenceDescription, description != result.title {
+                    Text("·")
+                    Label(description, systemImage: "book")
+                }
+            }
+            .font(.callout)
+            .foregroundStyle(Color.lampSecondaryText)
+        }
+    }
+
+    /// A reading size for the pane: the reader's own setting, where a verse
+    /// read in the reader is set.
+    private var detailFontSize: Double {
+        max(15, readerFontSize)
+    }
+
+    private func detailDesign(for kind: LampModuleKind) -> Font.Design {
+        switch kind {
+        case .translation, .highlights, .book, .commentary, .devotional: .serif
+        default: .default
         }
     }
 
@@ -781,7 +968,7 @@ struct UnifiedSearchView: View {
                     Text(kind.displayName).tag(Optional(kind))
                 }
             }
-            .frame(minWidth: 150)
+            .frame(minWidth: 130, maxWidth: 160)
         }
 
         ToolbarItem {
@@ -791,66 +978,120 @@ struct UnifiedSearchView: View {
                     Text(module.name).tag(Optional(module.id))
                 }
             }
-            .frame(minWidth: 170)
+            // Capped, so a long module name cannot take the search
+            // field's room: uncapped, "All Modules" grew to a third of the
+            // toolbar and the field beside it shrank until it truncated.
+            .frame(minWidth: 150, maxWidth: 220)
         }
+    }
 
-        if selectedKind == .translation || selectedKind == .highlights {
-            ToolbarItem {
-                Picker("Books", selection: $bookScope) {
-                    ForEach(BookSearchScope.allCases, id: \.self) { scope in
-                        Text(scope.rawValue).tag(scope)
-                    }
-                }
-                .frame(minWidth: 140)
-            }
-        }
-
-        if selectedKind == .translation || selectedKind == .dictionary {
-            ToolbarItem {
-                TextField("Strong's key", text: $strongsKey)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 130)
-            }
-        }
-
-        if selectedKind == .highlights {
-            ToolbarItem {
-                // The palette for the colours highlights are actually made
-                // in, and the field kept beside it for anything else: a
-                // highlight imported from elsewhere, or made before a palette
-                // colour changed, has a hex nothing in the menu matches.
-                HStack(spacing: 6) {
+    /// The filters that refine one kind of content — which books, a Strong's
+    /// key, a highlight colour — as a row of chips under the toolbar.
+    ///
+    /// Out of the toolbar, where five same-weight controls in a row could not
+    /// be parsed; and drawn as one family of soft chips rather than a mix of
+    /// a filled popup and a bordered field, which read as a second, smaller
+    /// toolbar bolted under the first. Each chip says what it filters.
+    @ViewBuilder
+    private var refineFilters: some View {
+        let showsBooks = selectedKind == .translation || selectedKind == .highlights
+        let showsStrongs = selectedKind == .translation || selectedKind == .dictionary
+        let showsColour = selectedKind == .highlights
+        if showsBooks || showsStrongs || showsColour {
+            HStack(spacing: 8) {
+                if showsBooks {
                     Menu {
-                        Button("Any Colour") { highlightColor = "" }
-                        Divider()
-                        ForEach(StudyHighlightPalette.colors) { swatch in
-                            Button {
-                                highlightColor = swatch.hex
-                            } label: {
-                                Label {
-                                    Text(swatch.name)
-                                } icon: {
-                                    Image(systemName: "circle.fill")
-                                        .foregroundStyle(swatch.color)
-                                }
+                        Picker("Books", selection: $bookScope) {
+                            ForEach(BookSearchScope.allCases, id: \.self) { scope in
+                                Text(scope.rawValue).tag(scope)
                             }
                         }
+                        .pickerStyle(.inline)
+                        .labelsHidden()
                     } label: {
-                        Image(systemName: "circle.fill")
-                            .foregroundStyle(
-                                color(for: highlightColor) ?? Color.secondary.opacity(0.4)
-                            )
+                        Label(bookScope.rawValue, systemImage: "book")
                     }
                     .menuStyle(.borderlessButton)
                     .fixedSize()
-                    .help(highlightName ?? "Filter by highlight colour")
-
-                    TextField("Hex", text: $highlightColor)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 86)
-                        .help("Six hex digits, for a colour not in the palette")
+                    .filterChip()
+                    .help("Which books of the Bible to search")
                 }
+                if showsStrongs {
+                    HStack(spacing: 6) {
+                        Image(systemName: "number")
+                            .foregroundStyle(Color.lampSecondaryText)
+                        TextField(
+                            "Strong's key",
+                            text: $strongsKey,
+                            prompt: Text("Strong’s number, e.g. G26")
+                                .foregroundStyle(Color.lampSecondaryText)
+                        )
+                        .textFieldStyle(.plain)
+                        .frame(width: 168)
+                        if !strongsKey.isEmpty {
+                            Button("Clear Strong's Key", systemImage: "xmark.circle.fill") {
+                                strongsKey = ""
+                            }
+                            .labelStyle(.iconOnly)
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(Color.lampSecondaryText)
+                        }
+                    }
+                    .filterChip()
+                    .help("A Strong's number such as G26 or H430, to find every place it is translated")
+                }
+                if showsColour {
+                    // The palette for the colours highlights are actually made
+                    // in, and the field kept beside it for anything else: a
+                    // highlight imported from elsewhere, or made before a palette
+                    // colour changed, has a hex nothing in the menu matches.
+                    HStack(spacing: 6) {
+                        Menu {
+                            Button("Any Colour") { highlightColor = "" }
+                            Divider()
+                            ForEach(StudyHighlightPalette.colors) { swatch in
+                                Button {
+                                    highlightColor = swatch.hex
+                                } label: {
+                                    Label {
+                                        Text(swatch.name)
+                                    } icon: {
+                                        Image(systemName: "circle.fill")
+                                            .foregroundStyle(swatch.color)
+                                    }
+                                }
+                            }
+                        } label: {
+                            Label {
+                                Text(highlightName ?? "Any Colour")
+                            } icon: {
+                                Image(systemName: "circle.fill")
+                                    .foregroundStyle(
+                                        color(for: highlightColor) ?? Color.secondary.opacity(0.4)
+                                    )
+                            }
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                        .help(highlightName ?? "Filter by highlight colour")
+
+                        TextField(
+                            "Hex",
+                            text: $highlightColor,
+                            prompt: Text("Hex").foregroundStyle(Color.lampSecondaryText)
+                        )
+                        .textFieldStyle(.plain)
+                        .frame(width: 64)
+                        .help("Six hex digits, for a colour not in the palette")
+                    }
+                    .filterChip()
+                }
+                Spacer(minLength: 0)
             }
+            .font(.callout)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            Divider()
         }
     }
 
@@ -1033,6 +1274,71 @@ struct UnifiedSearchView: View {
     }
 }
 
+/// One shelf of search results: one kind, and within scripture, one
+/// translation.
+///
+/// Grouping only. The order of results inside a group is core's, untouched,
+/// and so is which results there are; this decides which shelf comes first
+/// and what each shelf says about itself.
+private struct SearchResultGroup: Identifiable {
+    let kind: LampModuleKind
+    /// The module every result in the group came from, when there is one.
+    let moduleName: String?
+    let results: [LampModuleSearchResult]
+    let id: String
+
+    /// The order shelves are shown in. Scripture leads because a word search
+    /// in a Bible app is first a search of the Bible; the reader's own notes
+    /// and writing come next, then reference works, then everything else.
+    private static let kindOrder: [LampModuleKind] = [
+        .translation, .highlights, .notes, .devotional,
+        .commentary, .dictionary, .book, .plan, .quiz,
+    ]
+
+    static func groups(
+        from results: [LampModuleSearchResult],
+        readerTranslationID: String?
+    ) -> [SearchResultGroup] {
+        let byKind = Dictionary(grouping: results, by: \.kind)
+        let kinds = kindOrder + byKind.keys.filter { !kindOrder.contains($0) }
+        return kinds.flatMap { kind -> [SearchResultGroup] in
+            guard let hits = byKind[kind], !hits.isEmpty else { return [] }
+            guard kind == .translation else {
+                return [SearchResultGroup(
+                    kind: kind, moduleName: commonModule(of: hits), results: hits, id: kind.rawValue
+                )]
+            }
+            // Scripture, a shelf per translation, the one being read first:
+            // the same verse in four translations is four hits, and they read
+            // better side by side within a translation than interleaved.
+            var order: [String] = []
+            var byModule: [String: [LampModuleSearchResult]] = [:]
+            for hit in hits {
+                if byModule[hit.moduleID] == nil { order.append(hit.moduleID) }
+                byModule[hit.moduleID, default: []].append(hit)
+            }
+            if let readerTranslationID, let index = order.firstIndex(of: readerTranslationID) {
+                order.insert(order.remove(at: index), at: 0)
+            }
+            return order.compactMap { moduleID in
+                guard let moduleHits = byModule[moduleID] else { return nil }
+                return SearchResultGroup(
+                    kind: kind,
+                    moduleName: moduleHits.first?.moduleName,
+                    results: moduleHits,
+                    id: "\(kind.rawValue):\(moduleID)"
+                )
+            }
+        }
+    }
+
+    private static func commonModule(of results: [LampModuleSearchResult]) -> String? {
+        guard let first = results.first?.moduleID,
+              results.allSatisfy({ $0.moduleID == first }) else { return nil }
+        return results.first?.moduleName
+    }
+}
+
 private enum BookSearchScope: String, CaseIterable {
     case all = "All Books"
     case oldTestament = "Old Testament"
@@ -1058,7 +1364,7 @@ private extension LampModuleKind {
         case .dictionary: "Dictionaries"
         case .commentary: "Commentaries"
         case .book: "Books"
-        case .devotional: "Devotionals"
+        case .devotional: "Writing"
         case .notes: "Notes"
         case .plan: "Reading Plans"
         case .highlights: "Highlights"
@@ -1164,18 +1470,7 @@ private struct SearchHitPreview: View {
     /// The verse with the searched words marked, as the result list marks
     /// them — so the preview and the row agree about what was found.
     private func markedText(_ text: String) -> Text {
-        let marked = LampSearchQuery(query).markedSnippet(text, limit: .max)
-        var remaining = marked[...]
-        var rendered = Text("")
-        while let opening = remaining.range(of: LampSearchSnippet.openingMark),
-              let closing = remaining[opening.upperBound...]
-                  .range(of: LampSearchSnippet.closingMark) {
-            rendered = rendered + Text(String(remaining[..<opening.lowerBound]))
-            rendered = rendered
-                + Text.lampFindMatch(remaining[opening.upperBound..<closing.lowerBound])
-            remaining = remaining[closing.upperBound...]
-        }
-        return rendered + Text(String(remaining))
+        searchMarkedText(text, query: query)
     }
 
     private func load() async {
@@ -1202,5 +1497,128 @@ private struct SearchHitPreview: View {
             errorMessage = error.localizedDescription
         }
         isLoading = false
+    }
+}
+
+/// A verse with the searched words marked, as the result list marks them —
+/// so the preview, the detail pane and the row agree about what was found.
+private func searchMarkedText(_ text: String, query: String) -> Text {
+    let marked = LampSearchQuery(query).markedSnippet(text, limit: .max)
+    var remaining = marked[...]
+    var rendered = Text("")
+    while let opening = remaining.range(of: LampSearchSnippet.openingMark),
+          let closing = remaining[opening.upperBound...]
+              .range(of: LampSearchSnippet.closingMark) {
+        rendered = rendered + Text(String(remaining[..<opening.lowerBound]))
+        rendered = rendered
+            + Text.lampFindMatch(remaining[opening.upperBound..<closing.lowerBound])
+        remaining = remaining[closing.upperBound...]
+    }
+    return rendered + Text(String(remaining))
+}
+
+/// A scripture hit set in its passage, in the detail pane.
+///
+/// The verse that matched is in the text's full colour and the verses
+/// around it a step quieter, so the eye lands on the hit and can still read
+/// on either side of it.
+private struct SearchContextPassage: View {
+    @EnvironmentObject private var model: LibraryModel
+    let reference: Int
+    let translationID: String
+    let query: String
+    let fontSize: Double
+    let context: Int
+
+    @State private var verses: [LampVerse] = []
+    @State private var isLoading = true
+    @State private var errorMessage: String?
+
+    private var hitVerse: Int {
+        LampBibleReferenceFormatter.components(of: reference).verse
+    }
+
+    var body: some View {
+        Group {
+            if isLoading {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else if let errorMessage {
+                Text(errorMessage)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: fontSize * 0.5) {
+                    ForEach(verses) { verse in
+                        let isHit = verse.number == hitVerse
+                        (
+                            Text("\(verse.number)")
+                                .font(.system(size: max(10, fontSize * 0.62), weight: .semibold))
+                                .foregroundStyle(Color.lampVerseNumber)
+                                .baselineOffset(fontSize * 0.28)
+                                + Text("\u{2009}")
+                                + searchMarkedText(verse.text, query: query)
+                        )
+                        .font(.system(size: fontSize, design: .serif))
+                        .lineSpacing(fontSize * 0.32)
+                        // The verses around the hit are there to be read, so
+                        // they keep a reading colour; the hit is told apart by
+                        // a rule and a ground of its own rather than by
+                        // fading everything else, which left the context
+                        // washed out.
+                        .foregroundStyle(isHit ? Color.primary : Color.lampProse.opacity(0.82))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, isHit ? 8 : 0)
+                        .padding(.leading, 14)
+                        .padding(.trailing, isHit ? 10 : 0)
+                        .background(alignment: .leading) {
+                            if isHit {
+                                ZStack(alignment: .leading) {
+                                    RoundedRectangle(cornerRadius: LampMetrics.tileRadius, style: .continuous)
+                                        .fill(Color.lampTileFill)
+                                    RoundedRectangle(cornerRadius: 1.5)
+                                        .fill(.tint)
+                                        .frame(width: 3)
+                                        .padding(.vertical, 6)
+                                }
+                            }
+                        }
+                    }
+                }
+                .textSelection(.enabled)
+            }
+        }
+        .task(id: "\(reference)|\(translationID)|\(context)") { await load() }
+    }
+
+    private func load() async {
+        let parts = LampBibleReferenceFormatter.components(of: reference)
+        do {
+            let chapter = try await model.library.chapter(
+                moduleID: translationID,
+                bookNumber: parts.book,
+                chapterNumber: parts.chapter
+            )
+            guard !Task.isCancelled else { return }
+            // Clamped to the chapter, as the popover is.
+            verses = chapter.verses.filter { abs($0.number - parts.verse) <= context }
+            errorMessage = verses.isEmpty ? "That verse is not in this translation." : nil
+        } catch {
+            guard !Task.isCancelled else { return }
+            errorMessage = error.localizedDescription
+        }
+        isLoading = false
+    }
+}
+
+private extension View {
+    /// One search filter: a soft capsule on the card ground, the same height
+    /// for a menu as for a field, so a row of them reads as one family.
+    func filterChip() -> some View {
+        padding(.horizontal, 10)
+            .frame(height: 26)
+            .background(Capsule().fill(Color.lampTileFill))
+            .overlay(Capsule().strokeBorder(Color.lampCardStroke))
     }
 }

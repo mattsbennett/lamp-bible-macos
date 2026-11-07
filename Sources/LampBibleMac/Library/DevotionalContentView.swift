@@ -197,14 +197,20 @@ struct DevotionalContentView: View {
     private func nestedListBlock(
         _ items: [RenderedListLine], numbered: Bool
     ) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: DevotionalListRow.spacing) {
             ForEach(items.indices, id: \.self) { index in
                 let item = items[index]
                 HStack(alignment: .firstTextBaseline, spacing: 9) {
-                    Text(numbered ? "\(listOrdinal(at: index, in: items))." : "•")
-                        .foregroundStyle(.secondary)
+                    // A nested item's bullet is hollow and in the readable
+                    // grey, so it shows the level rather than vanishing.
+                    Text(numbered ? "\(listOrdinal(at: index, in: items))." : (item.depth > 0 ? "◦" : "•"))
+                        .foregroundStyle(Color.lampSecondaryText)
                         .monospacedDigit()
+                    // Leaded as a paragraph is: a nested item runs to several
+                    // lines as often as a top-level one, and set solid it
+                    // read as a denser kind of text than the prose around it.
                     renderedText(item.text)
+                        .lineSpacing(lineSpacing)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .font(.system(size: fontSize, design: typeface.design))
@@ -309,7 +315,7 @@ struct DevotionalPreviewBlockAnchor: Hashable {
 /// One item of a list as the writing sets it: the marker in a column of its
 /// own, and the item's lines aligned beside it rather than under the marker.
 private struct DevotionalListRow: View {
-    static let spacing = 7.0
+    static let spacing = 9.0
 
     let marker: String
     let item: RenderedProseItem
@@ -321,7 +327,7 @@ private struct DevotionalListRow: View {
         HStack(alignment: .firstTextBaseline, spacing: 9) {
             Text(marker)
                 .font(.system(size: fontSize, design: typeface.design))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.lampSecondaryText)
                 .monospacedDigit()
             RenderedText(item: item)
                 .font(.system(size: fontSize, design: typeface.design))

@@ -215,7 +215,7 @@ struct AddToLibraryView: View {
         pathPane(
             title: "Install a .lamp Module",
             systemImage: "shippingbox.and.arrow.backward",
-            description: "Open a finished .lamp package to install ready-to-use library content. A module can contain a Bible translation, reading plan, devotional, quiz, dictionary, commentary, or book.",
+            description: "Open a finished .lamp package to install ready-to-use library content. A module can contain a Bible translation, reading plan, writing, quiz, dictionary, commentary, or book.",
             distinction: "Input: a finished .lamp content module. This adds reference content to your library; it does not restore or alter personal notes and highlights.",
             steps: [
                 ("Choose one or more finished .lamp modules.", "Lamp validates each package before adding it to your library. A Bible in another format chosen here is read by Import a Bible instead."),

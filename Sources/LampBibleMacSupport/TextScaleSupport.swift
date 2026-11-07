@@ -37,12 +37,15 @@ public extension LampTextScale {
     )
 
     /// Commentary is prose about the text rather than the text itself, and it sits
-    /// in a narrow panel, so it starts near the system body size.
+    /// in a narrow panel, but it is still read at length beside scripture. It
+    /// starts a little above the system body size: at 13 it was set at about
+    /// half the reader's size, and reading the two side by side meant
+    /// refocusing at every glance across.
     static let commentaryText = LampTextScale(
         minimum: 11,
         maximum: 26,
         step: 1,
-        defaultValue: 13
+        defaultValue: 15
     )
 
     /// Commentary runs to dense paragraphs of it; the default is deliberately

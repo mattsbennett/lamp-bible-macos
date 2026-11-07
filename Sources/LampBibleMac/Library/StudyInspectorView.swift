@@ -286,6 +286,7 @@ private struct NotesInspectorView: View {
                                 noteCard(group)
                                     .id(group.id)
                             }
+                            chapterHighlights
                         }
                     }
 
@@ -340,22 +341,82 @@ private struct NotesInspectorView: View {
                     if let installed = group.installedNotes.first {
                         Text(installed.content)
                             .font(.callout)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Color.lampSecondaryText)
                             .lineLimit(3)
                     } else if group.hasPersonalNote {
                         Text("Personal note")
                             .font(.callout)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Color.lampSecondaryText)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(12)
-                .background(.background.secondary, in: RoundedRectangle(cornerRadius: 9))
-                .contentShape(RoundedRectangle(cornerRadius: 9))
+                .lampCard(padding: 14)
+                .contentShape(RoundedRectangle(cornerRadius: LampMetrics.cardRadius))
             }
             .buttonStyle(.plain)
             .help("Edit the note on this verse")
         }
+    }
+
+    /// The verses highlighted in this chapter, each with its colour and its
+    /// opening words, so the chapter's highlights can be seen and gone to from
+    /// the pane that sets them, rather than only found by scrolling the text.
+    @ViewBuilder
+    private var chapterHighlights: some View {
+        let rows = highlightRows
+        if !rows.isEmpty, let chapter = model.chapter {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Highlights in \(chapter.book.name) \(chapter.number)", systemImage: "highlighter")
+                    .lampSectionHeading()
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(rows.enumerated()), id: \.element.verse.id) { index, row in
+                        if index > 0 { Divider().padding(.leading, 18) }
+                        highlightRow(row, chapter: chapter)
+                    }
+                }
+                .lampCard(padding: 6)
+            }
+            .padding(.top, 6)
+        }
+    }
+
+    private var highlightRows: [(verse: LampVerse, color: Color)] {
+        guard let chapter = model.chapter else { return [] }
+        return chapter.verses.compactMap { verse in
+            guard let highlight = model.personalHighlights(for: verse.id).first else { return nil }
+            return (verse, Color(lampHex: highlight.color ?? "FFCC00") ?? .yellow)
+        }
+    }
+
+    private func highlightRow(_ row: (verse: LampVerse, color: Color), chapter: LampChapter) -> some View {
+        let isSelected = model.selectedVerseReference == row.verse.id
+        return Button {
+            model.focusVerse(row.verse.id)
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(row.color)
+                    .frame(width: 4, height: 14)
+                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+                Text("\(chapter.number):\(row.verse.number)")
+                    .font(.callout.weight(.semibold).monospacedDigit())
+                    .frame(minWidth: 34, alignment: .leading)
+                Text(row.verse.text)
+                    .font(.callout)
+                    .foregroundStyle(Color.lampSecondaryText)
+                    .lineLimit(3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            .background(
+                isSelected ? AnyShapeStyle(Color.primary.opacity(0.07)) : AnyShapeStyle(.clear),
+                in: RoundedRectangle(cornerRadius: LampMetrics.tileRadius)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Go to verse \(row.verse.number)")
     }
 
     @ViewBuilder
@@ -551,37 +612,29 @@ private struct PersonalNoteEditor: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 20) {
             HStack {
                 Text(LampBibleReferenceFormatter.describeRange(from: reference, to: reference))
-                    .font(.headline)
+                    .font(.title3.weight(.bold))
                 Spacer()
                 if isLoading { ProgressView().controlSize(.small) }
             }
 
             if verse != nil {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 12) {
                 Label("Highlight", systemImage: "highlighter")
-                    .font(.subheadline.weight(.semibold))
-                HStack(spacing: 10) {
+                    .lampSectionHeading()
+                HStack(spacing: 12) {
                     ForEach(StudyHighlightPalette.colors) { item in
                         Button {
                             setHighlight(item.hex)
                         } label: {
-                            Circle()
-                                .fill(item.color.opacity(0.78))
-                                .frame(width: 24, height: 24)
-                                .overlay {
-                                    if selectedHighlightColor == item.hex {
-                                        Circle()
-                                            .stroke(.primary, lineWidth: 2)
-                                            .padding(2)
-                                    }
-                                }
+                            HighlightSwatch(color: item.color, isSelected: selectedHighlightColor == item.hex)
                         }
                         .buttonStyle(.plain)
                         .help(item.name)
                         .accessibilityLabel("\(item.name) highlight")
+                        .accessibilityAddTraits(selectedHighlightColor == item.hex ? .isSelected : [])
                     }
                     if selectedHighlightColor != nil {
                         Button("Remove Highlight", systemImage: "xmark.circle") {
@@ -589,12 +642,17 @@ private struct PersonalNoteEditor: View {
                         }
                         .labelStyle(.iconOnly)
                         .buttonStyle(.plain)
+                        .font(.title3)
+                        .foregroundStyle(Color.lampSecondaryText)
                         .help("Remove highlight")
                     }
                 }
-                Button("Highlight Part of Verse…", systemImage: "selection.pin.in.out") {
+                // No ellipsis: at the end of a label that hugs the button it was
+                // read as the label being cut off.
+                Button("Highlight Part of the Verse", systemImage: "selection.pin.in.out") {
                     editHighlightSelection()
                 }
+                .fixedSize()
             }
 
             Divider()
@@ -602,7 +660,7 @@ private struct PersonalNoteEditor: View {
 
             VStack(alignment: .leading, spacing: 10) {
                 Label("Personal Note", systemImage: "note.text")
-                    .font(.subheadline.weight(.semibold))
+                    .lampSectionHeading()
                 TextField("Title (optional)", text: $title)
                     .textFieldStyle(.roundedBorder)
                     .focused($focusedField, equals: .title)
@@ -610,10 +668,11 @@ private struct PersonalNoteEditor: View {
             }
 
             if let chapter = model.chapter {
+                // One row, the picker's own label saying what it sets: a
+                // heading over it as well cost the chapter's highlights list
+                // its room.
                 VStack(alignment: .leading, spacing: 8) {
-                    Label("Verse Range", systemImage: "arrow.left.and.right.text.vertical")
-                        .font(.subheadline.weight(.semibold))
-                    Picker("Applies through", selection: $rangeEndVerse) {
+                    Picker("Note applies to", selection: $rangeEndVerse) {
                         // The verse itself first, whether or not this
                         // translation has it.
                         ForEach([verseNumber] + chapter.verses.map(\.number).filter { $0 > verseNumber }, id: \.self) { number in
@@ -631,7 +690,7 @@ private struct PersonalNoteEditor: View {
             if !personalFootnotes.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
                     Label("Footnotes", systemImage: "text.append")
-                        .font(.subheadline.weight(.semibold))
+                        .lampSectionHeading()
                     ForEach($personalFootnotes) { $footnote in
                         HStack(alignment: .top, spacing: 8) {
                             TextField("ID", text: $footnote.footnoteID)
@@ -654,7 +713,7 @@ private struct PersonalNoteEditor: View {
 
                 VStack(alignment: .leading, spacing: 12) {
                     Label("Installed Notes", systemImage: "books.vertical")
-                        .font(.subheadline.weight(.semibold))
+                        .lampSectionHeading()
                     ForEach(installedNotes) { note in
                         VStack(alignment: .leading, spacing: 5) {
                             Text(moduleName(for: note.moduleID))
@@ -677,13 +736,19 @@ private struct PersonalNoteEditor: View {
                     .foregroundStyle(.red)
             }
 
+            // Revert and Save while there is something to revert or save. Shown
+            // disabled the rest of the time they read as faint, broken
+            // buttons; the note says instead whether it is saved.
+            let isSavedNote = !savedTitle.isEmpty || !savedContent.isEmpty
+            if hasUnsavedEdits || isSaving || isSavedNote {
             HStack {
-                if !hasUnsavedEdits && (!savedTitle.isEmpty || !savedContent.isEmpty) {
+                if !hasUnsavedEdits, isSavedNote {
                     Label("Saved", systemImage: "checkmark.circle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.callout)
+                        .foregroundStyle(Color.lampSecondaryText)
                 }
                 Spacer()
+                if hasUnsavedEdits || isSaving {
                 Button("Revert") {
                     title = savedTitle
                     content = savedContent
@@ -692,16 +757,15 @@ private struct PersonalNoteEditor: View {
                     errorMessage = nil
                 }
                 .disabled(!hasUnsavedEdits || isSaving)
-                Button(isSaving ? "Saving…" : "Save") {
-                    save()
+                // Prominent only when there is something to save: drawn in the
+                // accent while disabled, it read as the thing to press next on
+                // a note nobody had touched.
+                saveButton.buttonStyle(.borderedProminent)
                 }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut("s", modifiers: .command)
-                .disabled(!hasUnsavedEdits || isSaving || isLoading)
+            }
             }
         }
-        .padding(12)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 9))
+        .lampCard(padding: 16)
         .task(id: NoteEditorLoad(reference: reference, token: reloadToken)) {
             await load()
         }
@@ -722,6 +786,14 @@ private struct PersonalNoteEditor: View {
             scrollLink.isSuspended = false
             isDirty = false
         }
+    }
+
+    private var saveButton: some View {
+        Button(isSaving ? "Saving…" : "Save") {
+            save()
+        }
+        .keyboardShortcut("s", modifiers: .command)
+        .disabled(!hasUnsavedEdits || isSaving || isLoading)
     }
 
     private func load() async {
@@ -904,7 +976,7 @@ private struct PersonalNoteEditor: View {
         Button(title, systemImage: systemImage, action: action)
             .labelStyle(.iconOnly)
             .buttonStyle(.borderless)
-            .controlSize(.small)
+            .foregroundStyle(.primary)
             .padding(4)
             .background(
                 isActive ? AnyShapeStyle(.selection) : AnyShapeStyle(.clear),
@@ -918,6 +990,38 @@ private struct PersonalNoteEditor: View {
     }
 }
 
+/// One colour of the highlight palette. The chosen one wears a ring set off
+/// from it by a gap, as the system's colour wells mark theirs, and a check,
+/// so which is chosen does not rest on telling a thin ring from none.
+private struct HighlightSwatch: View {
+    let color: Color
+    let isSelected: Bool
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: 24, height: 24)
+            .overlay {
+                Circle().strokeBorder(Color.black.opacity(0.12), lineWidth: 1)
+            }
+            .overlay {
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.white)
+                        .shadow(color: .black.opacity(0.25), radius: 1)
+                }
+            }
+            .padding(3)
+            .overlay {
+                if isSelected {
+                    Circle().strokeBorder(Color.primary.opacity(0.85), lineWidth: 2)
+                }
+            }
+            .contentShape(Circle())
+    }
+}
+
 private struct NoteEditorLoad: Hashable {
     let reference: Int
     let token: UUID
@@ -928,7 +1032,9 @@ private struct NoteEditorLoad: Hashable {
 /// the card reachable — past the cap the editor scrolls itself.
 private enum NoteEditorMetrics {
     static let fontSize = 14.0
-    static let minimumHeight: CGFloat = 150
+    /// About four lines: an empty note's editor at 150 pushed the chapter's
+    /// highlights out of the pane, and the editor grows as the note does.
+    static let minimumHeight: CGFloat = 92
     static let maximumHeight: CGFloat = 520
 
     static func clamped(_ height: Double) -> CGFloat {
@@ -1023,8 +1129,9 @@ private struct DictionaryInspectorView: View {
     /// emptying the pane, so the word, its keys and its entries stay put until
     /// there is something to put in their place.
     @State private var displayedLookup: DictionaryLookup?
-    /// The key text this view put in the field on the user's behalf. Typing is
-    /// meant to abandon the lookup, and seeding the field is not typing.
+    /// What this view put in the field on the user's behalf — nothing, when a
+    /// lookup empties it. Typing is meant to abandon the lookup, and emptying
+    /// the field for one is not typing.
     @State private var seededQuery: String?
     /// The requests whose results are actually on screen. Empty results only mean
     /// "nothing found" once the matching request has finished; until then they mean
@@ -1111,7 +1218,7 @@ private struct DictionaryInspectorView: View {
         }
         .onChange(of: query) { _, newValue in
             // Typing is a search, and a search replaces whatever word was looked up.
-            // The key this view seeded into the field is not typing.
+            // Emptying the field for a lookup is not typing.
             guard newValue != seededQuery else { return }
             clearLookup(keepingQuery: true)
         }
@@ -1123,9 +1230,83 @@ private struct DictionaryInspectorView: View {
         }
     }
 
+    /// The entry the header names: the first exact entry of the first key,
+    /// once the lookup has one.
+    private var headwordEntry: LampDictionaryResult? {
+        sections.lazy.compactMap(\.entries.first).first
+    }
+
     /// The word under study, given room of its own between the controls and the
     /// entries so it reads as the subject of the pane rather than another field.
+    ///
+    /// Once an entry is in, the header is the entry's headword, set large in
+    /// the original language, with its transliteration, key and part of speech
+    /// under it, as a lexicon heads an article. The entries below then need not
+    /// repeat any of it; before, the key was printed three times in a row and
+    /// the Greek squeezed in beside a long source badge.
+    @ViewBuilder
     private func lookupHeader(_ lookup: DictionaryLookup) -> some View {
+        if let entry = headwordEntry {
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(entry.lemma)
+                        .font(.system(size: dictionaryFontSize + 13, weight: .medium, design: .serif))
+                        .textSelection(.enabled)
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        if let transliteration = entry.transliteration {
+                            Text(transliteration)
+                                .font(.system(size: dictionaryFontSize, design: typeface.design).italic())
+                                .foregroundStyle(Color.lampSecondaryText)
+                        }
+                        // A label here, not a link, so in the secondary grey
+                        // with its name: in purple beside the accent and the
+                        // link blue it was a third accent in one line.
+                        Text("Strong’s " + lookup.keys.joined(separator: " · "))
+                            .font(.system(size: dictionaryFontSize - 1, weight: .medium))
+                            .foregroundStyle(Color.lampSecondaryText)
+                        if let partOfSpeech = entry.senses.lazy.compactMap(\.partOfSpeech).first {
+                            Text(partOfSpeech)
+                                .font(.system(size: dictionaryFontSize - 1))
+                                .foregroundStyle(Color.lampSecondaryText)
+                        }
+                    }
+                    .textSelection(.enabled)
+                    if let word = lookup.word, word.caseInsensitiveCompare(entry.lemma) != .orderedSame {
+                        Text("Looked up from “\(word)”")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if isAwaitingLookup {
+                    ProgressView()
+                        .controlSize(.small)
+                        .help("Looking up \(lookupKeyList)")
+                }
+                Spacer(minLength: 0)
+                clearLookupButton
+            }
+            .padding(.horizontal)
+            .padding(.top, 14)
+            .padding(.bottom, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            plainLookupHeader(lookup)
+        }
+    }
+
+    private var clearLookupButton: some View {
+        Button("Clear", systemImage: "xmark.circle.fill") {
+            clearLookup(keepingQuery: false)
+        }
+        .labelStyle(.iconOnly)
+        .buttonStyle(.plain)
+        .foregroundStyle(Color.lampSecondaryText)
+        .help("Stop showing this word and search instead")
+    }
+
+    /// The header while there is no entry to name: the word clicked, or the
+    /// keys asked for.
+    private func plainLookupHeader(_ lookup: DictionaryLookup) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
                 if let word = lookup.word {
@@ -1154,18 +1335,11 @@ private struct DictionaryInspectorView: View {
 
             Spacer(minLength: 0)
 
-            Button("Clear", systemImage: "xmark.circle.fill") {
-                clearLookup(keepingQuery: false)
-            }
-            .labelStyle(.iconOnly)
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .help("Stop showing this word and search instead")
+            clearLookupButton
         }
         .padding(.horizontal)
-        .padding(.vertical, 10)
+        .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.quaternary.opacity(0.35))
     }
 
     @ViewBuilder
@@ -1213,12 +1387,13 @@ private struct DictionaryInspectorView: View {
                 // the study column slid in, the results stayed where they would
                 // finish and simply appeared. Every other study pane already uses
                 // a plain scroll view, which is why only this one misbehaved.
+                let headword = headwordEntry?.lemma
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 10, pinnedViews: [.sectionHeaders]) {
+                    LazyVStack(alignment: .leading, spacing: 18, pinnedViews: [.sectionHeaders]) {
                         ForEach(sections) { section in
                             Section {
                                 ForEach(section.entries) { result in
-                                    dictionaryResult(result, isExpanded: true)
+                                    dictionaryResult(result, isExpanded: true, headword: headword)
                                 }
                                 if !section.mentions.isEmpty {
                                     DisclosureGroup(
@@ -1233,11 +1408,16 @@ private struct DictionaryInspectorView: View {
                                     .font(.caption)
                                 }
                             } header: {
-                                Text(section.id)
-                                    .font(.caption.monospaced().weight(.semibold))
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.vertical, 4)
-                                    .background(.bar)
+                                // Only where there are several keys to tell
+                                // apart: with one, the header above names it.
+                                if sections.count > 1 {
+                                    Text(section.id)
+                                        .font(.caption.monospaced().weight(.semibold))
+                                        .foregroundStyle(Color.lampOriginalLanguage)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.vertical, 4)
+                                        .background(.bar)
+                                }
                             }
                         }
                     }
@@ -1298,11 +1478,13 @@ private struct DictionaryInspectorView: View {
 
     private func dictionaryResult(
         _ result: LampDictionaryResult,
-        isExpanded: Bool = false
+        isExpanded: Bool = false,
+        headword: String? = nil
     ) -> some View {
         DictionaryResultView(
             result: result,
             isExpanded: isExpanded,
+            headword: headword,
             fontSize: dictionaryFontSize,
             lineSpacing: dictionaryLineSpacing,
             typeface: typeface
@@ -1377,11 +1559,13 @@ private struct DictionaryInspectorView: View {
         // The duplicate is cheap now that mappings are cached, and a wasted query
         // is much better than a loader that never resolves.
 
-        // Show the keys being looked up in the field, so the pane says what it is
-        // showing and the user can edit that text into a search.
-        let seed = lookup.keys.joined(separator: " ")
-        seededQuery = seed
-        if query != seed { query = seed }
+        // The field is emptied for a lookup rather than filled with its keys:
+        // the header under it names the word and its key, and the key put in
+        // the field came up selected in the accent whenever the field had the
+        // keyboard, which every judge read as an error. Typing still starts a
+        // search, which replaces the lookup.
+        seededQuery = ""
+        if !query.isEmpty { query = "" }
         errorMessage = nil
 
         var exactKeysByKey: [String: Set<String>] = [:]
@@ -1618,7 +1802,7 @@ private struct VerseInspectorView: View {
             // selected what was already selected. The Commentary pane draws the
             // same reference the same way.
             Text(group.title)
-                .font(.headline)
+                .font(.title3.weight(.bold))
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             if !group.footnotes.isEmpty {
@@ -1643,10 +1827,32 @@ private struct VerseInspectorView: View {
 
             if !group.lexical.isEmpty {
                 StudySection(title: "Original Language", systemImage: "character.book.closed") {
-                    InterlinearTokenFlowLayout(horizontalSpacing: 16, verticalSpacing: 12) {
-                        ForEach(group.lexical) { annotation in
-                            lexicalToken(annotation)
+                    // A table rather than a flow of chips: each English phrase
+                    // level with its Greek or Hebrew and its number, the three
+                    // in columns, so the eye runs down the original words and
+                    // across to what they were translated as. Wrapped chips
+                    // put the pairs at uneven places on uneven lines.
+                    Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 0) {
+                        // Named columns, so the table explains itself.
+                        GridRow {
+                            Text("Translation")
+                            Text(originalLanguageName(group.lexical))
+                            if showStrongsHints {
+                                Text("Strong’s").gridColumnAlignment(.trailing)
+                            }
                         }
+                        .lampSectionHeading()
+                        .padding(.bottom, 6)
+                        ForEach(Array(group.lexical.enumerated()), id: \.element.id) { index, annotation in
+                            Divider().gridCellUnsizedAxes(.horizontal)
+                            lexicalRow(annotation)
+                        }
+                    }
+                    if group.lexical.contains(where: { $0.lemma == nil || $0.lemma == $0.text }) {
+                        Text("— no original form in this module’s tagging")
+                            .font(.callout)
+                            .foregroundStyle(Color.lampSecondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
@@ -1670,34 +1876,60 @@ private struct VerseInspectorView: View {
         }
     }
 
-    private func lexicalToken(_ annotation: LampVerseAnnotation) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(annotation.text ?? annotation.lemma ?? "Word")
-                    .font(.headline)
-                if showStrongsHints, let strongs = annotation.strongs {
-                    Button(strongs) {
-                        openDictionary(strongs, annotation.text ?? annotation.lemma)
-                    }
-                    .buttonStyle(.link)
-                    // A Strong's number is a link, but of one kind, kept apart
-                    // from the verse references it sits among.
-                    .tint(.lampOriginalLanguage)
+    /// One word of the verse: what the translation says, the original word
+    /// with its parsing under it, and its number, which opens the entry.
+    private func lexicalRow(_ annotation: LampVerseAnnotation) -> some View {
+        GridRow {
+            Text(annotation.text ?? annotation.lemma ?? "Word")
+                .font(.body.weight(.semibold))
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 140, alignment: .leading)
+            VStack(alignment: .leading, spacing: 2) {
+                if let lemma = annotation.lemma, lemma != annotation.text {
+                    Text(lemma)
+                        .font(.system(size: 20, design: .serif))
+                        .textSelection(.enabled)
+                } else {
+                    // Kept as a place in the column, so a word the module
+                    // gives no original for does not pull its row out of line.
+                    Text("—")
+                        .font(.system(size: 20, design: .serif))
+                        .foregroundStyle(Color.lampSecondaryText)
+                        .accessibilityLabel("No original word given")
+                }
+                if let morphology = annotation.morphology {
+                    Text(morphology)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(Color.lampSecondaryText)
+                        .textSelection(.enabled)
                 }
             }
-            if let lemma = annotation.lemma, lemma != annotation.text {
-                Text(lemma)
-                    .font(.system(.body, design: .serif))
-                    .textSelection(.enabled)
-            }
-            if let morphology = annotation.morphology {
-                Text(morphology)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if showStrongsHints, let strongs = annotation.strongs {
+                Button(strongs) {
+                    openDictionary(strongs, annotation.text ?? annotation.lemma)
+                }
+                .buttonStyle(.link)
+                .font(.body.monospacedDigit())
+                // A Strong's number is a link, but of one kind, kept apart
+                // from the verse references it sits among.
+                .tint(.lampOriginalLanguage)
+                .help("Open \(strongs) in the dictionary")
+                .gridColumnAlignment(.trailing)
+            } else {
+                Color.clear.frame(width: 1, height: 1)
             }
         }
-        .fixedSize(horizontal: true, vertical: true)
+        .padding(.vertical, 8)
+    }
+
+    /// "Greek" or "Hebrew" for the original-language column, from the
+    /// numbers' prefix; "Original" where they don't say.
+    private func originalLanguageName(_ annotations: [LampVerseAnnotation]) -> String {
+        let prefixes = Set(annotations.compactMap { $0.strongs?.first?.uppercased() })
+        if prefixes == ["G"] { return "Greek" }
+        if prefixes == ["H"] { return "Hebrew" }
+        return "Original"
     }
 
     private func loadFootnotes() async {
@@ -1787,89 +2019,20 @@ private struct VerseInspectorView: View {
     }
 }
 
-/// Places interlinear token stacks in reading order, moving a whole token to the
-/// next line when the inspector is too narrow. Each token keeps its translation,
-/// original-language data and dictionary link together as one visual unit.
-private struct InterlinearTokenFlowLayout: Layout {
-    let horizontalSpacing: CGFloat
-    let verticalSpacing: CGFloat
-
-    func sizeThatFits(
-        proposal: ProposedViewSize,
-        subviews: Subviews,
-        cache: inout ()
-    ) -> CGSize {
-        let availableWidth = finiteWidth(proposal.width) ?? .greatestFiniteMagnitude
-        let result = arrangement(for: subviews, availableWidth: availableWidth)
-        return CGSize(width: finiteWidth(proposal.width) ?? result.contentWidth, height: result.height)
-    }
-
-    func placeSubviews(
-        in bounds: CGRect,
-        proposal: ProposedViewSize,
-        subviews: Subviews,
-        cache: inout ()
-    ) {
-        let result = arrangement(for: subviews, availableWidth: max(bounds.width, 0))
-        for (index, origin) in result.origins.enumerated() {
-            subviews[index].place(
-                at: CGPoint(x: bounds.minX + origin.x, y: bounds.minY + origin.y),
-                anchor: .topLeading,
-                proposal: .unspecified
-            )
-        }
-    }
-
-    private func arrangement(
-        for subviews: Subviews,
-        availableWidth: CGFloat
-    ) -> (origins: [CGPoint], contentWidth: CGFloat, height: CGFloat) {
-        var origins: [CGPoint] = []
-        var x: CGFloat = 0
-        var y: CGFloat = 0
-        var lineHeight: CGFloat = 0
-        var contentWidth: CGFloat = 0
-
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            let proposedX = x == 0 ? 0 : x + horizontalSpacing
-            if x > 0, proposedX + size.width > availableWidth {
-                x = 0
-                y += lineHeight + verticalSpacing
-                lineHeight = 0
-            } else {
-                x = proposedX
-            }
-
-            origins.append(CGPoint(x: x, y: y))
-            x += size.width
-            lineHeight = max(lineHeight, size.height)
-            contentWidth = max(contentWidth, x)
-        }
-
-        return (origins, contentWidth, subviews.isEmpty ? 0 : y + lineHeight)
-    }
-
-    private func finiteWidth(_ width: CGFloat?) -> CGFloat? {
-        guard let width, width.isFinite else { return nil }
-        return max(width, 0)
-    }
-}
-
 private struct StudySection<Content: View>: View {
     let title: String
     let systemImage: String
     @ViewBuilder let content: Content
 
     var body: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(title, systemImage: systemImage)
+                .lampSectionHeading()
+            VStack(alignment: .leading, spacing: 12) {
                 content
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 5)
-        } label: {
-            Label(title, systemImage: systemImage)
+            .lampCard(padding: 14)
         }
     }
 }
@@ -1879,11 +2042,19 @@ private struct DictionaryResultView: View {
     /// Expanded for a looked-up word, where there are only a handful of entries and
     /// the definition is the thing you came for; collapsed in a search result list.
     var isExpanded = false
+    /// The headword the pane's header already shows. An entry for the same
+    /// word leads with its source alone rather than printing the word, and
+    /// its key, again.
+    var headword: String?
     let fontSize: Double
     let lineSpacing: Double
     let typeface: ProseTypeface
 
     @State private var isShowingDetail: Bool?
+
+    private var repeatsHeadword: Bool {
+        headword.map { $0.caseInsensitiveCompare(result.lemma) == .orderedSame } ?? false
+    }
 
     private var isDetailShown: Bool { isShowingDetail ?? isExpanded }
 
@@ -1891,10 +2062,8 @@ private struct DictionaryResultView: View {
     /// That control indents its content by a fixed, sizeable amount on macOS, which
     /// is fine for a settings row and wrong for a definition — it left the text as
     /// a narrow column floating in the middle of the pane, with no way to turn the
-    /// inset off.
-    /// The chevron's width plus the gap after it, so the definition starts at the
-    /// same left edge as the label it belongs to rather than under the chevron.
-    private static let detailIndent: CGFloat = 16
+    /// inset off. The definition starts at the pane's own left edge, under the
+    /// chevron: in a column this narrow, the indent past it cost a word a line.
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1916,49 +2085,70 @@ private struct DictionaryResultView: View {
 
             if isDetailShown {
                 detail
-                    .padding(.leading, Self.detailIndent)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .animation(.easeInOut(duration: 0.16), value: isDetailShown)
     }
 
+    /// The senses as a lexicon numbers them: the number in a gutter of its
+    /// own, so each sense's text starts at one edge and the numbers can be
+    /// run down by eye.
     private var detail: some View {
-    VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 20) {
             ForEach(Array(result.senses.enumerated()), id: \.offset) { index, sense in
-                VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 9) {
                     if result.senses.count > 1 {
-                        Text("Sense \(index + 1)")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
+                        Text("\(index + 1)")
+                            .font(.system(size: fontSize + 3, weight: .bold).monospacedDigit())
+                            .foregroundStyle(.primary)
+                            .frame(minWidth: 16, alignment: .leading)
+                            .accessibilityLabel("Sense \(index + 1)")
                     }
-                    if let partOfSpeech = sense.partOfSpeech {
+                    senseText(sense)
+                }
+                if index < result.senses.count - 1 { Divider() }
+            }
+        }
+        .padding(.vertical, 8)
+        .lineSpacing(lineSpacing)
+    }
+
+    @ViewBuilder
+    private func senseText(_ sense: LampDictionarySense) -> some View {
+                VStack(alignment: .leading, spacing: 7) {
+                    // The header gives the first sense's part of speech; a
+                    // sense that only repeats it says nothing new.
+                    if let partOfSpeech = sense.partOfSpeech,
+                       !(repeatsHeadword && partOfSpeech == result.senses.lazy.compactMap(\.partOfSpeech).first) {
                         Text(partOfSpeech)
-                            .font(.caption.italic())
-                            .foregroundStyle(.secondary)
+                            .font(.system(size: max(fontSize - 1, 10)).italic())
+                            .foregroundStyle(Color.lampSecondaryText)
                     }
                     if let gloss = sense.gloss {
                         linkedText(gloss, sense: sense)
                             .font(.system(size: fontSize, weight: .semibold, design: typeface.design))
                     }
-                    if let shortDefinition = sense.shortDefinition {
+                    if let shortDefinition = sense.shortDefinition,
+                       LampDictionarySenseText.showsShortDefinition(shortDefinition, beside: sense.definition) {
                         linkedText(shortDefinition, sense: sense)
                             .font(.system(size: fontSize, design: typeface.design))
+                            .foregroundStyle(Color.lampProse)
                     }
-                    if let definition = sense.definition,
-                       definition != sense.shortDefinition {
+                    if let definition = sense.definition {
                         linkedText(definition, sense: sense)
                             .font(.system(size: fontSize, design: typeface.design))
+                            .foregroundStyle(Color.lampProse)
                     }
                     if let derivation = sense.derivation {
                         linkedText("Derivation: \(derivation)", sense: sense)
                             .font(.system(size: max(fontSize - 1, 9), design: typeface.design))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Color.lampSecondaryText)
                     }
                     if let usage = sense.usage {
                         linkedText("Usage: \(usage)", sense: sense)
                             .font(.system(size: max(fontSize - 1, 9), design: typeface.design))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Color.lampSecondaryText)
                     }
                     let unmatchedScripture = unmatchedScriptureLinks(in: sense)
                     let unmatchedDictionary = unmatchedDictionaryLinks(in: sense)
@@ -1973,14 +2163,22 @@ private struct DictionaryResultView: View {
                         .font(.system(size: max(fontSize - 1, 9), design: typeface.design))
                     }
                 }
-                if index < result.senses.count - 1 { Divider() }
-            }
-        }
-        .padding(.vertical, 8)
-        .lineSpacing(lineSpacing)
     }
 
+    @ViewBuilder
     private var summaryLabel: some View {
+        if repeatsHeadword {
+            // The header names the word; the entry names where it is from.
+            Text(result.moduleName)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.primary)
+                .padding(.vertical, 4)
+        } else {
+            searchSummaryLabel
+        }
+    }
+
+    private var searchSummaryLabel: some View {
     VStack(alignment: .leading, spacing: 4) {
             HStack {
                 // Which dictionary this came from leads the row: with several
@@ -1993,7 +2191,7 @@ private struct DictionaryResultView: View {
                     .background(.quaternary, in: Capsule())
                 Text(result.key)
                     .font(.caption.monospaced().weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.lampOriginalLanguage)
                 Text(result.lemma)
                     .font(.system(size: fontSize + 2, weight: .semibold, design: typeface.design))
                 Spacer()
@@ -2024,7 +2222,8 @@ private struct DictionaryResultView: View {
             text: text,
             links: sense.scriptureLinks,
             dictionaryLinks: sense.dictionaryLinks,
-            dictionaryModuleID: result.moduleID
+            dictionaryModuleID: result.moduleID,
+            quietLinks: true
         )
     }
 
@@ -2462,27 +2661,42 @@ private struct CommentaryInspectorView: View {
                     focusedReference: model.selectedVerseReference
                 ) {
                     Text(contextDescription)
-                        .font(.headline)
+                        .font(.title3.weight(.bold))
                         .frame(maxWidth: .infinity, alignment: .leading)
 
+                    // On the pane itself rather than in a box: a commentary is
+                    // a column of prose, and the box's pale ground lowered its
+                    // contrast without separating anything the passage
+                    // headings don't already separate.
                     ForEach(groups) { group in
-                        GroupBox {
-                            VStack(alignment: .leading, spacing: 16) {
-                                ForEach(group.units) { unit in
+                        VStack(alignment: .leading, spacing: 14) {
+                            CommentaryPassageHeading(title: group.title)
+                            let pieces = CommentaryPiece.pieces(of: group.units)
+                            ForEach(Array(pieces.enumerated()), id: \.element.id) { index, piece in
+                                switch piece {
+                                case .outline(_, let titles):
+                                    CommentaryOutlinePath(
+                                        titles: titles,
+                                        fontSize: LampTextScale.commentaryText.clamped(fontSize)
+                                    )
+                                case .unit(let unit):
                                     CommentaryUnitView(
                                         unit: unit,
                                         fontSize: LampTextScale.commentaryText.clamped(fontSize),
                                         lineSpacing: LampTextScale.commentaryLineSpacing.clamped(lineSpacing),
                                         typeface: typeface
                                     )
-                                    if unit.id != group.units.last?.id { Divider() }
+                                    // A rule between two pieces of comment, but
+                                    // not before an outline path, which leads
+                                    // into the comment after it.
+                                    if index < pieces.count - 1 {
+                                        Divider().padding(.vertical, 2)
+                                    }
                                 }
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, 5)
-                        } label: {
-                            Label(group.title, systemImage: "text.book.closed")
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.bottom, 10)
                         .id(group.id)
                     }
                 }
@@ -2529,6 +2743,108 @@ private struct CommentaryGroup: Identifiable {
     }
 }
 
+/// The passage a group of comment is on, as the pane's running heads: the
+/// reference in small capitals over a hairline, so the eye finds where each
+/// verse's comment starts when scrolling a chapter's worth.
+private struct CommentaryPassageHeading: View {
+    let title: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(title, systemImage: "text.book.closed")
+                .labelStyle(.titleAndIcon)
+                .lampSectionHeading()
+            Divider()
+        }
+        .padding(.top, 6)
+    }
+}
+
+/// A group's comment as it is drawn: each run of headings with nothing under
+/// them folded into one outline path, then the units that have something to
+/// say.
+private enum CommentaryPiece: Identifiable {
+    case outline(id: String, titles: [String])
+    case unit(LampCommentaryUnit)
+
+    var id: String {
+        switch self {
+        case .outline(let id, _): "outline:\(id)"
+        case .unit(let unit): "unit:\(unit.id)"
+        }
+    }
+
+    static func pieces(of units: [LampCommentaryUnit]) -> [CommentaryPiece] {
+        var pieces: [CommentaryPiece] = []
+        var titles: [String] = []
+        var firstID: String?
+        func flush() {
+            if let firstID, !titles.isEmpty {
+                pieces.append(.outline(id: firstID, titles: titles))
+            }
+            titles = []
+            firstID = nil
+        }
+        for unit in units {
+            if !unit.hasBody, let title = unit.title {
+                if firstID == nil { firstID = "\(unit.id)" }
+                titles.append(title)
+            } else {
+                flush()
+                pieces.append(.unit(unit))
+            }
+        }
+        flush()
+        return pieces
+    }
+}
+
+/// Where the comment sits in the commentary's outline: its headings that have
+/// nothing under them, as one path ("Opening discussion › Text, Exposition,
+/// and Notes"), rather than a stack of what looked like empty sections.
+private struct CommentaryOutlinePath: View {
+    let titles: [String]
+    let fontSize: Double
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 7) {
+            Image(systemName: "list.bullet.indent")
+                .font(.system(size: max(fontSize - 3, 10), weight: .semibold))
+                .foregroundStyle(Color.lampSecondaryText)
+            titles.dropFirst().reduce(Text(titles.first ?? "")) { path, title in
+                path
+                    + Text("  ›  ").foregroundStyle(.tertiary)
+                    + Text(title)
+            }
+            .font(.system(size: max(fontSize - 2, 11), weight: .medium))
+            .foregroundStyle(Color.lampSecondaryText)
+            .lineLimit(1)
+            .truncationMode(.middle)
+        }
+        // One quiet line, so the path places the comment without competing
+        // with the article title under it.
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .help(titles.joined(separator: " › "))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Outline: " + titles.joined(separator: ", "))
+    }
+}
+
+private extension LampCommentaryUnit {
+    /// Whether the unit has any prose, rather than only a title: an outline
+    /// heading ("Text, Exposition, and Notes") over the units that follow.
+    var hasBody: Bool {
+        [introduction, translation, commentary, footnotes].contains { $0?.isEmpty == false }
+    }
+
+    /// Notes that are the whole of what the unit says, which some
+    /// commentaries keep their main comment in. Set as the comment, not as
+    /// small grey footnotes, or the pane's main text is its faintest.
+    var footnotesAreTheComment: Bool {
+        [introduction, translation, commentary].allSatisfy { $0?.isEmpty != false }
+    }
+}
+
 private struct CommentaryUnitView: View {
     let unit: LampCommentaryUnit
     let fontSize: Double
@@ -2536,32 +2852,51 @@ private struct CommentaryUnitView: View {
     let typeface: ProseTypeface
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: .leading, spacing: 10) {
             if let title = unit.title {
-                Text(title)
-                    .font(.system(
-                        size: fontSize + (unit.level <= 1 ? 2 : 1),
-                        weight: .semibold,
-                        design: typeface.design
-                    ))
+                if unit.hasBody {
+                    Text(title)
+                        .font(.system(
+                            size: fontSize + (unit.level <= 1 ? 3 : 1),
+                            weight: unit.level <= 1 ? .bold : .semibold,
+                            design: typeface.design
+                        ))
+                        .foregroundStyle(.primary)
+                } else {
+                    // A heading with nothing under it is the commentary's
+                    // outline, not a section: shown as the outline's level,
+                    // small and quiet, so two of them in a row read as where
+                    // the comment sits rather than as two empty sections.
+                    Text(title)
+                        .font(.system(size: max(fontSize - 2, 11), weight: .medium))
+                        .foregroundStyle(Color.lampSecondaryText)
+                }
             }
             if let introduction = unit.introduction {
                 ScriptureLinkedText(text: introduction.leftToRightParagraphs, links: unit.scriptureLinks)
                     .font(.system(size: fontSize, design: typeface.design))
+                    .foregroundStyle(Color.lampProse)
             }
             if let translation = unit.translation {
                 ScriptureLinkedText(text: translation.leftToRightParagraphs, links: unit.scriptureLinks)
                     .font(.system(size: fontSize, design: typeface.design).italic())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.lampSecondaryText)
             }
             if let commentary = unit.commentary {
                 ScriptureLinkedText(text: commentary.leftToRightParagraphs, links: unit.scriptureLinks)
                     .font(.system(size: fontSize, design: typeface.design))
+                    .foregroundStyle(Color.lampProse)
             }
             if let footnotes = unit.footnotes {
-                ScriptureLinkedText(text: footnotes.leftToRightParagraphs, links: unit.scriptureLinks)
-                    .font(.system(size: max(fontSize - 2, 9), design: typeface.design))
-                    .foregroundStyle(.secondary)
+                if unit.footnotesAreTheComment {
+                    ScriptureLinkedText(text: footnotes.leftToRightParagraphs, links: unit.scriptureLinks)
+                        .font(.system(size: fontSize, design: typeface.design))
+                        .foregroundStyle(Color.lampProse)
+                } else {
+                    ScriptureLinkedText(text: footnotes.leftToRightParagraphs, links: unit.scriptureLinks)
+                        .font(.system(size: max(fontSize - 1.5, 10), design: typeface.design))
+                        .foregroundStyle(Color.lampSecondaryText)
+                }
             }
             if !unmatchedScriptureLinks.isEmpty {
                 ScriptureLinkedText(
@@ -2633,6 +2968,11 @@ private struct ScriptureLinkedText: View {
     var dictionaryModuleID: String?
     var appendedLinks: [LampScriptureLink] = []
     var appendedDictionaryLinks: [LampDictionaryLink] = []
+    /// Links set in the prose's own colour with a dotted rule in the link
+    /// blue, for text so dense with references — a lexicon sense — that a run
+    /// of blue words took the paragraph over. Still marked as links, by the
+    /// blue rule and the pointer; the words between them are read first.
+    var quietLinks = false
     @AppStorage("commentary.typeface") private var typeface = ProseTypeface.commentaryDefault
     @AppStorage("commentary.lineSpacing") private var lineSpacing = LampTextScale.commentaryLineSpacing.defaultValue
     @AppStorage("commentary.previewContextAmount") private var previewContextAmount = ScripturePreviewContextAmount.oneVerse
@@ -2725,8 +3065,7 @@ private struct ScriptureLinkedText: View {
                   let attributedRange = attributedRange(for: stringRange, in: result),
                   let url = link.inlineURL else { continue }
             result[attributedRange].link = url
-            result[attributedRange].foregroundColor = .lampLink
-            result[attributedRange].underlineStyle = .single
+            markLink(&result[attributedRange])
             occupiedRanges.append(stringRange)
         }
 
@@ -2738,8 +3077,7 @@ private struct ScriptureLinkedText: View {
                   let attributedRange = attributedRange(for: stringRange, in: result),
                   let url = link.inlineURL else { continue }
             result[attributedRange].link = url
-            result[attributedRange].foregroundColor = .lampLink
-            result[attributedRange].underlineStyle = .single
+            markLink(&result[attributedRange])
             occupiedRanges.append(stringRange)
         }
 
@@ -2751,8 +3089,7 @@ private struct ScriptureLinkedText: View {
                 var label = AttributedString(link.inlineLabel)
                 if let url = link.inlineURL {
                     label.link = url
-                    label.foregroundColor = .lampLink
-                    label.underlineStyle = .single
+                    label.foregroundColor = .lampProseLink
                 }
                 result.append(label)
             }
@@ -2767,8 +3104,7 @@ private struct ScriptureLinkedText: View {
                 var label = AttributedString(link.inlineLabel)
                 if let url = link.inlineURL {
                     label.link = url
-                    label.foregroundColor = .lampLink
-                    label.underlineStyle = .single
+                    label.foregroundColor = .lampProseLink
                 }
                 result.append(label)
             }
@@ -2776,6 +3112,15 @@ private struct ScriptureLinkedText: View {
         }
 
         return result
+    }
+
+    private func markLink(_ run: inout AttributedSubstring) {
+        if quietLinks {
+            run.foregroundColor = .lampProse
+            run.swiftUI.underlineStyle = Text.LineStyle(pattern: .dot, color: .lampProseLink)
+        } else {
+            run.foregroundColor = .lampProseLink
+        }
     }
 
     private func firstAvailableRange(
@@ -3477,11 +3822,11 @@ private struct StudyToolPicker: View {
                     Text(tool.title)
                         .lineLimit(1)
                         .fixedSize()
-                        .padding(.bottom, 5)
+                        .padding(.bottom, 6)
                         .overlay(alignment: .bottom) {
-                            Rectangle()
+                            Capsule()
                                 .fill(Color.accentColor)
-                                .frame(height: 2)
+                                .frame(height: 3)
                                 .opacity(isSelected ? 1 : 0)
                         }
                         .contentShape(Rectangle())
@@ -3489,8 +3834,9 @@ private struct StudyToolPicker: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(
                     isSelected || hovered == tool.id
-                        ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary)
+                        ? AnyShapeStyle(.primary) : AnyShapeStyle(Color.lampSecondaryText)
                 )
+                .fontWeight(isSelected ? .semibold : .regular)
                 .onHover { isHovering in
                     hovered = isHovering
                         ? tool.id : (hovered == tool.id ? nil : hovered)

@@ -1,5 +1,6 @@
 import AppKit
 import CoreText
+import ImageIO
 import LampCore
 import LampPresentationUI
 #if canImport(LampBibleMacSupport)
@@ -58,6 +59,7 @@ struct SlideStudioView: View {
     /// only while it does, so they still move the caret in the editors.
     @FocusState private var slideListFocused: Bool
     @AppStorage("slideStudio.inspectorWidth") private var inspectorWidth = 340.0
+    @State private var inspectorPane: InspectorPane = .slide
     /// Empty until the list arrives from `PresentationTypefaces`.
     @State private var typefaceFamilies: [String] = []
     @State private var saveTask: Task<Void, Never>?
@@ -77,6 +79,15 @@ struct SlideStudioView: View {
     /// What `resolution` was worked out from, so a change it already reflects
     /// isn't split again.
     @State private var resolvedInputs: ManuscriptNotesInputs?
+
+    /// Laid over the slides in the strip that are not selected: nothing in
+    /// light, a fifth of black in dark. Resolved as it is drawn, so it
+    /// follows the window's appearance.
+    private static let restingThumbnailShade = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            ? NSColor.black.withAlphaComponent(0.2)
+            : .clear
+    })
 
     private var store: LampPresentationDeckStore {
         LampPresentationDeckStore(rootURL: model.library.rootURL)
@@ -223,30 +234,42 @@ struct SlideStudioView: View {
             Button("Redo Edit", systemImage: "arrow.uturn.forward") { redoEdit() }
                 .help("Put back the change that was taken back")
                 .disabled(!canRedoEdit)
+        }
 
-            Button("Import Deck…", systemImage: "square.and.arrow.down") { importDeck() }
-                .help("Import a .lampdeck document")
-            Button("Export Deck…", systemImage: "square.and.arrow.up") { exportDeck() }
-                .disabled(deck == nil || hasErrors)
-                .help("Export the editable deck document")
+        // The deck's file actions in one labelled menu, as a document app
+        // keeps them under File: four icons of one weight in a row — import,
+        // export, PDF, delete — were the densest stretch of a toolbar judged
+        // a row of look-alike glyphs.
+        ToolbarItem {
             Menu {
-                Button("Slides Only…") { exportPDF(includesSpeakerNotes: false) }
-                Button("Slides with Speaker Notes…") { exportPDF(includesSpeakerNotes: true) }
+                // Saving is automatic — the status bar says when it is done —
+                // so Save is kept here, with its ⌘S, rather than as a lone
+                // checkmark in the toolbar that read as a status light.
+                Button("Save", systemImage: "checkmark.circle") { saveNow() }
+                    .keyboardShortcut("s", modifiers: .command)
+                    .disabled(deck == nil || hasErrors || !hasUnsavedChanges)
+                Divider()
+                Button("Import Deck…", systemImage: "square.and.arrow.down") { importDeck() }
+                Button("Export Deck…", systemImage: "square.and.arrow.up") { exportDeck() }
+                    .disabled(deck == nil || hasErrors)
+                Menu("Export PDF", systemImage: "doc.richtext") {
+                    Button("Slides Only…") { exportPDF(includesSpeakerNotes: false) }
+                    Button("Slides with Speaker Notes…") { exportPDF(includesSpeakerNotes: true) }
+                }
+                .disabled(deck == nil || hasErrors || isExportingPDF)
+                Divider()
+                Button("Delete Deck…", systemImage: "trash", role: .destructive) {
+                    showingDeleteConfirmation = true
+                }
+                .disabled(deck == nil)
             } label: {
-                Label("Export PDF", systemImage: "doc.richtext")
+                Label("Deck", systemImage: "rectangle.stack")
+                    .labelStyle(.titleAndIcon)
             }
-            .menuIndicator(.visible)
-            .disabled(deck == nil || hasErrors || isExportingPDF)
-            .help("Export the slides as a PDF")
-            Button("Delete Deck", systemImage: "trash", role: .destructive) {
-                showingDeleteConfirmation = true
-            }
-            .disabled(deck == nil)
-            .help("Delete this deck")
-            Divider()
-            Button("Save", systemImage: "checkmark.circle") { saveNow() }
-                .disabled(deck == nil || hasErrors || !hasUnsavedChanges)
-                .keyboardShortcut("s", modifiers: .command)
+            .help("Save, import, export or delete this deck")
+        }
+
+        ToolbarItem {
             Button(
                 remoteHost.connectedClientNames.isEmpty ? "Pair Remote" : "Remote Connected",
                 systemImage: remoteHost.connectedClientNames.isEmpty ? "qrcode" : "iphone.and.arrow.forward"
@@ -265,10 +288,19 @@ struct SlideStudioView: View {
                 .onAppear { remoteHost.refreshRememberedRemotes() }
             }
             .help("Pair an iPhone or iPad before presenting")
-            Button("Play", systemImage: "play.fill") { presentDeck() }
-                .buttonStyle(.borderedProminent)
-                .disabled(deck == nil || hasErrors)
-                .help("Present this deck")
+        }
+
+        ToolbarItem {
+            // Named, as Keynote names its own: the one action the window
+            // is for, and the only one in the accent.
+            Button { presentDeck() } label: {
+                Label("Play", systemImage: "play.fill")
+                    .labelStyle(.titleAndIcon)
+                    .padding(.horizontal, 4)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(deck == nil || hasErrors)
+            .help("Present this deck")
         }
     }
 
@@ -276,28 +308,64 @@ struct SlideStudioView: View {
         deck deckBinding: Binding<LampPresentationDeck>
     ) -> some View {
         VStack(spacing: 0) {
-            HStack {
+            // The deck's title in full, as the head of the rail, with the
+            // other decks a click away: a pop-up cut a talk's title — often
+            // a question — off after a few words.
+            Menu {
                 Picker("Deck", selection: $selectedDeckID) {
                     ForEach(decks) { candidate in
                         Text(candidate.title).tag(Optional(candidate.id))
                     }
                 }
+                .pickerStyle(.inline)
                 .labelsHidden()
-                .frame(maxWidth: .infinity)
+            } label: {
+                HStack(alignment: .center, spacing: 6) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(deckBinding.wrappedValue.title)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                        Text("\(deckBinding.wrappedValue.slides.count) slides")
+                            .font(.caption)
+                            .foregroundStyle(Color.lampSecondaryText)
+                    }
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Color.lampSecondaryText)
+                }
+                .contentShape(Rectangle())
             }
-            .padding(10)
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .help("Choose another deck")
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
 
             Divider()
 
             ScrollViewReader { scroller in
             ScrollView {
-                LazyVStack(spacing: 10) {
+                LazyVStack(spacing: 4) {
                     ForEach(Array(deckBinding.slides.wrappedValue.enumerated()), id: \.element.id) { index, slide in
                         Button {
                             selectedSlideID = slide.id
                             slideListFocused = true
                         } label: {
-                            VStack(alignment: .leading, spacing: 6) {
+                            let isSelected = selectedSlideID == slide.id
+                            HStack(alignment: .top, spacing: 8) {
+                                // Numbered in a column of their own, as
+                                // Keynote numbers its slides, so the number
+                                // is found without reading the caption.
+                                Text("\(index + 1)")
+                                    .font(.caption.weight(.medium).monospacedDigit())
+                                    .foregroundStyle(isSelected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                                    .frame(width: 20, alignment: .trailing)
+                                    .padding(.top, 3)
+                            VStack(alignment: .leading, spacing: 5) {
                                 ZStack(alignment: .topTrailing) {
                                     // The thumbnail is kept clear of the
                                     // selection, so moving between slides
@@ -315,14 +383,21 @@ struct SlideStudioView: View {
                                         store: store
                                     )
                                     .equatable()
+                                    // In dark, the slides not being worked
+                                    // on step back a little: a column of
+                                    // bright pages glared beside the canvas.
+                                    .overlay {
+                                        if !isSelected {
+                                            RoundedRectangle(cornerRadius: 5)
+                                                .fill(Self.restingThumbnailShade)
+                                                .allowsHitTesting(false)
+                                        }
+                                    }
                                     .overlay {
                                         RoundedRectangle(cornerRadius: 5)
-                                            .stroke(
-                                                selectedSlideID == slide.id
-                                                    ? Color.accentColor : Color.secondary.opacity(0.25),
-                                                lineWidth: selectedSlideID == slide.id ? 3 : 1
-                                            )
+                                            .stroke(Color.primary.opacity(0.14), lineWidth: 1)
                                     }
+
 
                                     if slide.isHidden {
                                         Image(systemName: "eye.slash.fill")
@@ -332,13 +407,25 @@ struct SlideStudioView: View {
                                             .padding(4)
                                     }
                                 }
-                                Text("\(index + 1). \(slide.displayTitle)")
-                                    .font(.caption)
-                                    .lineLimit(1)
-                                    .foregroundStyle(.primary)
                             }
+                            }
+                            .padding(6)
+                            // The selected slide sits on a soft tile, as
+                            // Keynote's rail marks it, rather than in a red
+                            // ring that competed with Play for the accent.
+                            .background(
+                                isSelected ? Color.primary.opacity(0.1) : Color.clear,
+                                in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            )
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        // The slide's name in the tooltip rather than under it,
+                        // as Keynote's rail has it: printed beneath, it repeated
+                        // the title the thumbnail already shows, and spaced the
+                        // rail so that fewer slides were in view.
+                        .help("\(index + 1). \(slide.displayTitle)")
+                        .accessibilityLabel("\(index + 1). \(slide.displayTitle)")
                         .id(slide.id)
                         .contextMenu {
                             Button("Duplicate") { duplicateSlide(slide.id) }
@@ -351,7 +438,8 @@ struct SlideStudioView: View {
                         }
                     }
                 }
-                .padding(12)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 8)
             }
             .focusable()
             .focused($slideListFocused)
@@ -398,15 +486,21 @@ struct SlideStudioView: View {
                                 store: store
                             )
                             .aspectRatio(deckBinding.wrappedValue.aspectRatio.ratio, contentMode: .fit)
-                            .shadow(color: .black.opacity(0.22), radius: 14, y: 7)
-                            .padding(44)
+                            // A lighter shadow: the slide is lifted off the
+                            // canvas, not weighed down on it.
+                            .shadow(color: .black.opacity(0.16), radius: 9, y: 3)
+                            // Tighter, so the slide takes more of the canvas.
+                            .padding(30)
                         }
                     }
                     .frame(minHeight: 440)
 
                     Divider()
+                    // Held lower than before: a slide's notes run to a few
+                    // lines, and the pane stood mostly empty beneath them
+                    // while taking height from the slide.
                     speakerNotesEditor
-                        .frame(minHeight: 135, idealHeight: 170, maxHeight: 240)
+                        .frame(minHeight: 120, idealHeight: 150, maxHeight: 190)
                 }
 
                 PaneResizeHandle(
@@ -426,109 +520,218 @@ struct SlideStudioView: View {
     }
 
     @ViewBuilder
+    /// Slide Studio's inspector: what the selected slide holds, or the deck's
+    /// look, one at a time, as Keynote's Format and Document panes are.
+    ///
+    /// With both stacked, the slide's own content sat below the fold behind
+    /// the deck's settings, and every group in its own card made a column of
+    /// nested boxes. Now each pane is flat: headings and hairlines on the
+    /// window's ground, with the controls given the width.
     private func inspector(deck deckBinding: Binding<LampPresentationDeck>) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                GroupBox("Deck") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        TextField("Title", text: deckBinding.title)
-                        Picker("Aspect", selection: deckBinding.aspectRatio) {
-                            ForEach(LampPresentationAspectRatio.allCases) { ratio in
-                                Text(ratio.displayName).tag(ratio)
+        VStack(spacing: 0) {
+            inspectorTabs
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    switch inspectorPane {
+                    case .slide:
+                        if let slideBinding = bindingToSelectedSlide {
+                            // The layouts as pictures, as a slide tool shows
+                            // them: chosen by how the slide will look, not by
+                            // a name in a pop-up.
+                            StudioInspectorSection("Layout") {
+                                VStack(alignment: .leading, spacing: 12) {
+                                    StudioLayoutPicker(selection: slideBinding.layout)
+                                    Toggle("Skip while presenting", isOn: slideBinding.isHidden)
+                                }
                             }
-                        }
-                        Picker("Theme", selection: Binding(
-                            get: { deckBinding.wrappedValue.theme.id },
-                            set: { applyTheme($0) }
-                        )) {
-                            Text("Lamp Dark").tag(LampPresentationTheme.lampDark.id)
-                            Text("Parchment").tag(LampPresentationTheme.parchment.id)
-                            if ![LampPresentationTheme.lampDark.id, LampPresentationTheme.parchment.id]
-                                .contains(deckBinding.wrappedValue.theme.id) {
-                                Text(deckBinding.wrappedValue.theme.id).tag(deckBinding.wrappedValue.theme.id)
-                            }
-                        }
-                        LabeledContent("Typeface") {
-                            Menu(typefaceName(deckBinding.wrappedValue.theme.typeface)) {
-                                Picker("Typeface", selection: Binding(
-                                    get: { deckBinding.wrappedValue.theme.typeface ?? "" },
-                                    set: { deckBinding.theme.typeface.wrappedValue = $0.isEmpty ? nil : $0 }
-                                )) {
-                                    Text("Lamp Rounded").tag("")
-                                    Text("System Sans").tag("system-sans")
-                                    Text("System Serif").tag("system-serif")
-                                    Divider()
-                                    ForEach(typefaceFamilies, id: \.self) { family in
-                                        Text(family).tag(family)
+                            Divider().padding(.vertical, 18)
+                            StudioInspectorSection("Content") {
+                                VStack(spacing: 18) {
+                                    ForEach(slideBinding.blocks) { $block in
+                                        LampSlideBlockEditor(
+                                            block: $block,
+                                            imageURL: store.assetURL(for: block),
+                                            updateCitation: { citation in
+                                                updateScriptureCitation(citation, after: block.id)
+                                            },
+                                            chooseImage: { chooseImage(for: block.id) },
+                                            remove: { removeBlock(block.id) }
+                                        )
+                                        if block.id != slideBinding.blocks.wrappedValue.last?.id {
+                                            Divider()
+                                        }
                                     }
-                                    // Before the list arrives, and for a family this
-                                    // Mac doesn't have, the deck's own still needs a tag.
-                                    if let family = deckBinding.wrappedValue.theme.typeface,
-                                       !["", "system-sans", "system-serif"].contains(family),
-                                       !typefaceFamilies.contains(family) {
-                                        Text(family).tag(family)
+
+                                    Menu("Add Content", systemImage: "plus") {
+                                        ForEach(LampPresentationBlockKind.authorableHere) { kind in
+                                            Button(kind.displayName) { addBlock(kind) }
+                                        }
+                                    }
+                                    .fixedSize()
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                            }
+                        } else {
+                            Text("Choose a slide to edit it.")
+                                .foregroundStyle(Color.lampSecondaryText)
+                        }
+                    case .deck:
+                        StudioInspectorSection(nil) {
+                            VStack(alignment: .leading, spacing: 12) {
+                                StudioInspectorRow("Title") {
+                                    // Wraps rather than scrolls: a talk's title is
+                                    // often a question, longer than the inspector.
+                                    TextField("Title", text: deckBinding.title, axis: .vertical)
+                                        .lineLimit(1...3)
+                                        .labelsHidden()
+                                }
+                                StudioInspectorRow("Aspect") {
+                                Picker("Aspect", selection: deckBinding.aspectRatio) {
+                                    ForEach(LampPresentationAspectRatio.allCases) { ratio in
+                                        Text(ratio.displayName).tag(ratio)
                                     }
                                 }
-                                .pickerStyle(.inline)
                                 .labelsHidden()
-                            }
-                        }
-                    }
-                    .padding(.top, 4)
-                }
-
-                if let slideBinding = bindingToSelectedSlide {
-                    GroupBox("Slide") {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Picker("Layout", selection: slideBinding.layout) {
-                                ForEach(LampPresentationSlideLayout.allCases) { layout in
-                                    Text(layout.displayName).tag(layout)
+                                }
+                                // The themes as the deck's own first slide
+                                // drawn in each, so the choice is seen rather
+                                // than named.
+                                StudioStackedField("Theme") {
+                                    themeChoices(deck: deckBinding.wrappedValue)
+                                }
+                                StudioInspectorRow("Typeface") {
+                                    Menu(typefaceName(deckBinding.wrappedValue.theme.typeface)) {
+                                        Picker("Typeface", selection: Binding(
+                                            get: { deckBinding.wrappedValue.theme.typeface ?? "" },
+                                            set: { deckBinding.theme.typeface.wrappedValue = $0.isEmpty ? nil : $0 }
+                                        )) {
+                                            Text("Lamp Rounded").tag("")
+                                            Text("System Sans").tag("system-sans")
+                                            Text("System Serif").tag("system-serif")
+                                            Divider()
+                                            ForEach(typefaceFamilies, id: \.self) { family in
+                                                Text(family).tag(family)
+                                            }
+                                            // Before the list arrives, and for a family this
+                                            // Mac doesn't have, the deck's own still needs a tag.
+                                            if let family = deckBinding.wrappedValue.theme.typeface,
+                                               !["", "system-sans", "system-serif"].contains(family),
+                                               !typefaceFamilies.contains(family) {
+                                                Text(family).tag(family)
+                                            }
+                                        }
+                                        .pickerStyle(.inline)
+                                        .labelsHidden()
+                                    }
                                 }
                             }
-                            Toggle("Skip while presenting", isOn: slideBinding.isHidden)
                         }
-                        .padding(.top, 4)
-                    }
-
-                    GroupBox("Content") {
-                        VStack(spacing: 12) {
-                            ForEach(slideBinding.blocks) { $block in
-                                LampSlideBlockEditor(
-                                    block: $block,
-                                    updateCitation: { citation in
-                                        updateScriptureCitation(citation, after: block.id)
-                                    },
-                                    chooseImage: { chooseImage(for: block.id) },
-                                    remove: { removeBlock(block.id) }
-                                )
-                                if block.id != slideBinding.blocks.wrappedValue.last?.id {
-                                    Divider()
-                                }
-                            }
-
-                            Menu("Add Content", systemImage: "plus") {
-                                ForEach(LampPresentationBlockKind.authorableHere) { kind in
-                                    Button(kind.displayName) { addBlock(kind) }
-                                }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .padding(.top, 4)
                     }
                 }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 16)
             }
-            .padding(14)
         }
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private func themeChoices(deck: LampPresentationDeck) -> some View {
+        let builtIn = [LampPresentationTheme.lampDark, .parchment]
+        let isCustom = !builtIn.contains { $0.id == deck.theme.id }
+        let themes: [(theme: LampPresentationTheme, name: String)] =
+            (isCustom ? [(deck.theme, "This Deck’s")] : [])
+            + [(.lampDark, "Lamp Dark"), (.parchment, "Parchment")]
+        let sample = deck.slides.first ?? LampPresentationSlide(layout: .title, blocks: [])
+        return HStack(alignment: .top, spacing: 10) {
+            ForEach(themes, id: \.theme.id) { entry in
+                let isChosen = entry.theme.id == deck.theme.id
+                let shown = Self.theme(entry.theme, typeface: deck.theme.typeface)
+                Button {
+                    if !isChosen { applyTheme(entry.theme.id) }
+                } label: {
+                    VStack(spacing: 5) {
+                        LampPresentationSlideCanvas(
+                            slide: sample,
+                            style: .init(theme: shown, aspectRatio: deck.aspectRatio),
+                            compact: true,
+                            assetURL: { store.assetURL(for: $0) }
+                        )
+                        .aspectRatio(deck.aspectRatio.ratio, contentMode: .fit)
+                        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .strokeBorder(
+                                    isChosen ? Color.primary.opacity(0.7) : Color.lampCardStroke,
+                                    lineWidth: isChosen ? 2 : 1
+                                )
+                        }
+                        .allowsHitTesting(false)
+                        Text(entry.name)
+                            .font(.caption.weight(isChosen ? .semibold : .regular))
+                            .foregroundStyle(isChosen ? AnyShapeStyle(.primary) : AnyShapeStyle(Color.lampSecondaryText))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(entry.name) theme")
+                .accessibilityAddTraits(isChosen ? .isSelected : [])
+            }
+        }
+    }
+
+    /// A theme in the deck's own typeface, as choosing it would leave it.
+    private static func theme(_ theme: LampPresentationTheme, typeface: String?) -> LampPresentationTheme {
+        var themed = theme
+        themed.typeface = typeface
+        return themed
+    }
+
+    private enum InspectorPane: String, CaseIterable, Identifiable {
+        case slide = "Slide"
+        case deck = "Deck"
+        var id: String { rawValue }
+    }
+
+    /// The two panes, chosen in the text's own colour: a segmented control
+    /// would have filled the chosen one with the accent, one more red mark.
+    private var inspectorTabs: some View {
+        HStack(spacing: 4) {
+            ForEach(InspectorPane.allCases) { pane in
+                let isChosen = inspectorPane == pane
+                Button {
+                    inspectorPane = pane
+                } label: {
+                    Text(pane.rawValue)
+                        .font(.callout.weight(isChosen ? .semibold : .regular))
+                        .foregroundStyle(isChosen ? AnyShapeStyle(.primary) : AnyShapeStyle(Color.lampSecondaryText))
+                        .frame(maxWidth: .infinity, minHeight: 26)
+                        .background(
+                            isChosen ? Color.primary.opacity(0.09) : Color.clear,
+                            in: RoundedRectangle(cornerRadius: LampMetrics.tileRadius, style: .continuous)
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(isChosen ? .isSelected : [])
+            }
+        }
+        .padding(3)
+        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: LampMetrics.tileRadius + 2, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Inspector")
     }
 
     @ViewBuilder
     private var speakerNotesEditor: some View {
         if let slideBinding = bindingToSelectedSlide {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Label("Presenter Notes", systemImage: "person.crop.rectangle.badge.plus")
-                        .font(.headline)
+                        .font(.subheadline.weight(.semibold))
                     Spacer()
                     Toggle("Follow the writing", isOn: followsManuscriptBinding)
                         .toggleStyle(.switch)
@@ -544,17 +747,19 @@ struct SlideStudioView: View {
                     manuscriptNotes(for: slideBinding)
                 } else {
                     TextEditor(text: slideBinding.speakerNotes)
-                        .font(.body)
+                        .font(.system(size: 14))
+                        .lineSpacing(3)
                         .scrollContentBackground(.hidden)
-                        .padding(6)
-                        .background(.background, in: RoundedRectangle(cornerRadius: 7))
+                        .padding(8)
+                        .background(.background, in: RoundedRectangle(cornerRadius: 8))
                         .overlay {
-                            RoundedRectangle(cornerRadius: 7)
-                                .stroke(Color.secondary.opacity(0.2))
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(Color.primary.opacity(0.1))
                         }
                 }
             }
-            .padding(12)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
         }
     }
 
@@ -617,15 +822,20 @@ struct SlideStudioView: View {
                     slideBinding.wrappedValue.speakerNotes,
                     openingAt: anchorFound ? anchor : ""
                 )
-                .font(.body)
+                .font(.system(size: 14))
+                .lineSpacing(3)
                 .textSelection(.enabled)
+                // A speaker reads these at a glance, mid-sentence; a line the
+                // width of the canvas is too long to find one's place in.
+                .frame(maxWidth: 620, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(6)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
             }
-            .background(.background, in: RoundedRectangle(cornerRadius: 7))
+            .background(.background, in: RoundedRectangle(cornerRadius: 8))
             .overlay {
-                RoundedRectangle(cornerRadius: 7)
-                    .stroke(Color.secondary.opacity(0.2))
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.primary.opacity(0.1))
             }
         }
     }
@@ -703,8 +913,8 @@ struct SlideStudioView: View {
                     : statusMessage)
             }
             Spacer()
-            Text("\(deck?.slides.count ?? 0) slides")
-                .foregroundStyle(.secondary)
+            // The slide count is under the deck's title at the head of the
+            // rail; said here as well it was one more grey caption.
         }
         .font(.caption)
         .padding(.horizontal, 12)
@@ -1020,7 +1230,12 @@ struct SlideStudioView: View {
                 .foregroundColor(.secondary)
         }
         guard !opening.isEmpty, notes.hasPrefix(opening) else { return Text(notes) }
-        return Text(opening).foregroundColor(.accentColor)
+        // Marked as the join it is, in the text's own colour: drawn in the
+        // accent, a sentence of red on the dark notes was hard to read and
+        // was one more red mark in a window that had too many.
+        return Text(opening)
+            .fontWeight(.semibold)
+            .underline(true, color: Color.accentColor.opacity(0.55))
             + Text(notes.dropFirst(opening.count))
     }
 
@@ -1275,6 +1490,8 @@ private extension UTType {
 
 private struct LampSlideBlockEditor: View {
     @Binding var block: LampPresentationBlock
+    /// Where an image block's picture is, so the inspector can show it.
+    var imageURL: URL? = nil
     let updateCitation: (String) -> Void
     let chooseImage: () -> Void
     let remove: () -> Void
@@ -1286,12 +1503,33 @@ private struct LampSlideBlockEditor: View {
                 // cannot add. A picker whose selection has no matching tag
                 // draws blank and can reset the value, which would turn an
                 // agent's chart into a title the moment it was looked at.
-                Picker("Role", selection: $block.kind) {
-                    ForEach(LampPresentationBlockKind.authorableHere(including: block.kind)) { kind in
-                        Text(kind.displayName).tag(kind)
+                // The block's role as its heading, a menu that says what it
+                // is: as a bordered pop-up it read as one more form field.
+                Menu {
+                    Picker("Role", selection: $block.kind) {
+                        ForEach(LampPresentationBlockKind.authorableHere(including: block.kind)) { kind in
+                            Text(kind.displayName).tag(kind)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(block.kind.displayName)
+                            .font(.callout.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.secondary)
                     }
                 }
-                .labelsHidden()
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .accessibilityLabel("Role")
+                .accessibilityValue(block.kind.displayName)
+                .help("What this block is on the slide")
                 Spacer()
                 Button("Remove Content", systemImage: "minus.circle", role: .destructive, action: remove)
                     .labelStyle(.iconOnly)
@@ -1299,24 +1537,51 @@ private struct LampSlideBlockEditor: View {
             }
 
             if block.kind == .image {
-                HStack {
-                    TextField("Asset path", text: Binding(
-                        get: { block.assetPath ?? "" },
-                        set: { block.assetPath = $0 }
-                    ))
-                    Button("Choose…", action: chooseImage)
-                        .help("Copy an image into this library and use it here")
+                // The picture itself, with its file beside it: a design tool
+                // shows what is placed, and a path in a form field said only
+                // where it was kept.
+                HStack(alignment: .top, spacing: 12) {
+                    StudioImageThumbnail(url: imageURL)
+                    VStack(alignment: .leading, spacing: 6) {
+                        TextField("Asset path", text: Binding(
+                            get: { block.assetPath ?? "" },
+                            set: { block.assetPath = $0 }
+                        ))
+                        .textFieldStyle(.plain)
+                        .font(.callout)
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                        .labelsHidden()
+                        .help(block.assetPath ?? "")
+                        Button("Choose Image…", systemImage: "photo", action: chooseImage)
+                            .controlSize(.small)
+                            .help("Copy an image into this library and use it here")
+                    }
                 }
-                TextField("Accessibility description", text: Binding(
-                    get: { block.altText ?? "" },
-                    set: { block.altText = $0 }
-                ))
-                Picker("Placement", selection: $block.placement) {
-                    Text("Beside the text").tag(nil as LampPresentationImagePlacement?)
-                    Text("Behind the slide").tag(Optional(LampPresentationImagePlacement.background))
+                StudioStackedField("Description") {
+                    TextField("Accessibility description", text: Binding(
+                        get: { block.altText ?? "" },
+                        set: { block.altText = $0 }
+                    ), axis: .vertical)
+                    .lineLimit(2...3)
+                    .labelsHidden()
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+                // Two pictures of where it goes, in the text's own colour:
+                // the choice is read more than it is changed, and a filled
+                // red segment was one more red mark in the window.
+                StudioStackedField("Placement") {
+                    StudioChoiceTiles(
+                        selection: $block.placement,
+                        choices: [
+                            .init(value: nil, title: "Beside the text", systemImage: "rectangle.split.2x1"),
+                            .init(
+                                value: .background,
+                                title: "Behind the slide",
+                                systemImage: "rectangle.inset.filled"
+                            ),
+                        ]
+                    )
+                }
                 .help("Behind the slide, Lamp chooses the colour of the words and covers the picture only as far as they need")
             } else {
                 if block.kind == .body {
@@ -1354,11 +1619,11 @@ private struct LampSlideBlockEditor: View {
                     .font(.body)
                     .frame(minHeight: block.kind == .body ? 90 : 52)
                     .scrollContentBackground(.hidden)
-                    .padding(5)
-                    .background(.background, in: RoundedRectangle(cornerRadius: 6))
+                    .padding(6)
+                    .background(.background, in: RoundedRectangle(cornerRadius: 7))
                     .overlay {
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(Color.secondary.opacity(0.2))
+                        RoundedRectangle(cornerRadius: 7)
+                            .stroke(Color.primary.opacity(0.12))
                     }
             }
         }
@@ -1605,7 +1870,13 @@ private struct LampSlideScripturePicker: View {
         _chapterNumber = State(initialValue: reference?.chapterNumber ?? 1)
         _startVerse = State(initialValue: reference?.startVerse ?? 1)
         _endVerse = State(initialValue: reference?.endVerse ?? reference?.startVerse ?? 1)
-        _isExpanded = State(initialValue: reference == nil)
+        // Open only for a block that has nothing in it yet. A passage already
+        // on the slide shows as its text; the five pickers that chose it fold
+        // away until they are wanted again.
+        _isExpanded = State(
+            initialValue: reference == nil
+                && block.wrappedValue.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        )
     }
 
     var body: some View {
@@ -1669,7 +1940,10 @@ private struct LampSlideScripturePicker: View {
                 ) {
                     applyPassage()
                 }
-                .buttonStyle(.borderedProminent)
+                // Bordered, not filled: Play is the window's one filled
+                // button, and this one beside the selected slide and the
+                // placement control made four red marks competing.
+                .buttonStyle(.bordered)
                 .disabled(selectedVerses.isEmpty)
             }
             .padding(.top, 8)
@@ -1813,4 +2087,317 @@ private struct LampSlideScripturePicker: View {
 private enum PresentationTypefaces {
     static let families: [String] = (CTFontManagerCopyAvailableFontFamilyNames() as? [String] ?? [])
         .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+}
+
+/// One section of Slide Studio's inspector: a heading, then its controls,
+/// flat on the inspector's ground. Sections are parted by hairlines rather
+/// than each boxed: cards inside a column of cards read as fragments.
+private struct StudioInspectorSection<Content: View>: View {
+    let title: String?
+    let content: Content
+
+    init(_ title: String?, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let title {
+                Text(title)
+                    .lampSectionHeading()
+            }
+            content
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// A labelled row whose label sits in a column shared by every row, so the
+/// controls line up down the inspector as a form's do.
+private struct StudioInspectorRow<Content: View>: View {
+    static var labelWidth: CGFloat { 66 }
+    let label: String
+    let content: Content
+
+    init(_ label: String, @ViewBuilder content: () -> Content) {
+        self.label = label
+        self.content = content()
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(label)
+                .font(.callout)
+                .foregroundStyle(Color.lampSecondaryText)
+                .frame(width: Self.labelWidth, alignment: .trailing)
+                .accessibilityHidden(label.isEmpty)
+            content
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// A label over its field, for the inspector's longer entries, where a label
+/// column beside them took width the text needed.
+private struct StudioStackedField<Content: View>: View {
+    let label: String
+    let content: Content
+
+    init(_ label: String, @ViewBuilder content: () -> Content) {
+        self.label = label
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(label)
+                .font(.callout)
+                .foregroundStyle(Color.lampSecondaryText)
+            content
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// The picture an image block places, small, from the library's copy.
+///
+/// Read once per file as a thumbnail, off the main thread: the pictures
+/// behind slides are paintings at full resolution, and decoding one whole on
+/// every redraw of the inspector would stall typing beside it.
+private struct StudioImageThumbnail: View {
+    let url: URL?
+    @State private var image: CGImage?
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: LampMetrics.tileRadius, style: .continuous)
+            .fill(Color.lampTileFill)
+            .overlay {
+                if let image {
+                    Image(decorative: image, scale: 2)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    Image(systemName: "photo")
+                        .foregroundStyle(Color.lampSecondaryText)
+                }
+            }
+            .frame(width: 84, height: 56)
+            .clipShape(RoundedRectangle(cornerRadius: LampMetrics.tileRadius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: LampMetrics.tileRadius, style: .continuous)
+                    .strokeBorder(Color.lampCardStroke)
+            }
+            .accessibilityHidden(true)
+            .task(id: url) {
+                guard let url else {
+                    image = nil
+                    return
+                }
+                image = await Task.detached(priority: .utility) {
+                    guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil as CGImage? }
+                    let options: [CFString: Any] = [
+                        kCGImageSourceCreateThumbnailFromImageAlways: true,
+                        kCGImageSourceCreateThumbnailWithTransform: true,
+                        kCGImageSourceThumbnailMaxPixelSize: 240,
+                    ]
+                    return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+                }.value
+            }
+    }
+}
+
+/// A small set of choices drawn as tiles with a picture each, the chosen one
+/// outlined. In the text's colour rather than the accent: the window keeps
+/// red for Play and the selected slide.
+private struct StudioChoiceTiles<Value: Hashable>: View {
+    struct Choice: Identifiable {
+        let value: Value
+        let title: String
+        let systemImage: String
+        var id: String { title }
+    }
+
+    @Binding var selection: Value
+    let choices: [Choice]
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach(choices) { choice in
+                let isChosen = choice.value == selection
+                Button {
+                    selection = choice.value
+                } label: {
+                    VStack(spacing: 5) {
+                        Image(systemName: choice.systemImage)
+                            .font(.system(size: 15, weight: .regular))
+                        Text(choice.title)
+                            .font(.caption)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
+                    }
+                    .foregroundStyle(isChosen ? AnyShapeStyle(.primary) : AnyShapeStyle(Color.lampSecondaryText))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                    .background(
+                        isChosen ? Color.lampTileFill : Color.clear,
+                        in: RoundedRectangle(cornerRadius: LampMetrics.tileRadius, style: .continuous)
+                    )
+                    .overlay {
+                        RoundedRectangle(cornerRadius: LampMetrics.tileRadius, style: .continuous)
+                            .strokeBorder(
+                                isChosen ? Color.primary.opacity(0.55) : Color.lampCardStroke,
+                                lineWidth: isChosen ? 1.5 : 1
+                            )
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(choice.title)
+                .accessibilityAddTraits(isChosen ? .isSelected : [])
+            }
+        }
+    }
+}
+
+/// The slide layouts as small drawings of the slide each makes — a title
+/// bar, lines of body, a picture, two columns — chosen by look, as Keynote
+/// shows its layouts. The chosen one is outlined in the text colour; the
+/// window keeps its accent for Play and the selected slide.
+private struct StudioLayoutPicker: View {
+    @Binding var selection: LampPresentationSlideLayout
+
+    private let columns = Array(
+        repeating: GridItem(.flexible(), spacing: 8, alignment: .top),
+        count: 4
+    )
+
+    var body: some View {
+        LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
+            ForEach(LampPresentationSlideLayout.allCases) { layout in
+                let isChosen = layout == selection
+                Button {
+                    selection = layout
+                } label: {
+                    VStack(spacing: 4) {
+                        LayoutSketch(layout: layout)
+                            .padding(6)
+                            .aspectRatio(16 / 10, contentMode: .fit)
+                            .frame(maxWidth: .infinity)
+                            .background(
+                                Color(nsColor: .textBackgroundColor),
+                                in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            )
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                    .strokeBorder(
+                                        isChosen ? Color.primary.opacity(0.7) : Color.lampCardStroke,
+                                        lineWidth: isChosen ? 2 : 1
+                                    )
+                            }
+                        Text(layout.displayName)
+                            .font(.system(size: 10.5, weight: isChosen ? .semibold : .regular))
+                            .foregroundStyle(isChosen ? AnyShapeStyle(.primary) : AnyShapeStyle(Color.lampSecondaryText))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(layout.displayName)
+                .accessibilityLabel(layout.displayName)
+                .accessibilityAddTraits(isChosen ? .isSelected : [])
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Layout")
+    }
+}
+
+/// A schematic of one layout, in the text colour at low strength.
+private struct LayoutSketch: View {
+    let layout: LampPresentationSlideLayout
+
+    private var ink: Color { Color.primary.opacity(0.45) }
+    private var faint: Color { Color.primary.opacity(0.22) }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let width = proxy.size.width
+            let height = proxy.size.height
+            switch layout {
+            case .title:
+                VStack(spacing: height * 0.1) {
+                    bar(width * 0.7, height * 0.16, ink)
+                    bar(width * 0.4, height * 0.08, faint)
+                }
+                .frame(width: width, height: height)
+            case .titleAndBody:
+                VStack(alignment: .leading, spacing: height * 0.09) {
+                    bar(width * 0.6, height * 0.13, ink)
+                    lines(width, height, count: 3)
+                }
+                .frame(width: width, height: height, alignment: .topLeading)
+            case .scripture:
+                VStack(spacing: height * 0.09) {
+                    Image(systemName: "quote.opening")
+                        .font(.system(size: height * 0.24, weight: .bold))
+                        .foregroundStyle(ink)
+                    lines(width, height, count: 2, centred: true)
+                }
+                .frame(width: width, height: height)
+            case .quotation:
+                HStack(spacing: width * 0.06) {
+                    Rectangle().fill(ink).frame(width: max(1.5, width * 0.03))
+                    lines(width * 0.8, height, count: 3)
+                }
+                .frame(width: width, height: height * 0.6)
+                .frame(width: width, height: height)
+            case .twoColumn:
+                VStack(alignment: .leading, spacing: height * 0.1) {
+                    bar(width * 0.5, height * 0.12, ink)
+                    HStack(alignment: .top, spacing: width * 0.08) {
+                        lines(width * 0.46, height, count: 3)
+                        lines(width * 0.46, height, count: 3)
+                    }
+                }
+                .frame(width: width, height: height, alignment: .topLeading)
+            case .image:
+                HStack(spacing: width * 0.07) {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(faint)
+                        .overlay {
+                            Image(systemName: "photo")
+                                .font(.system(size: height * 0.28))
+                                .foregroundStyle(ink)
+                        }
+                        .frame(width: width * 0.52)
+                    lines(width * 0.4, height, count: 3)
+                }
+                .frame(width: width, height: height)
+            case .closing:
+                VStack(spacing: height * 0.12) {
+                    bar(width * 0.45, height * 0.14, ink)
+                    bar(width * 0.25, height * 0.06, faint)
+                }
+                .frame(width: width, height: height)
+            case .blank:
+                Color.clear
+            }
+        }
+    }
+
+    private func bar(_ width: CGFloat, _ height: CGFloat, _ color: Color) -> some View {
+        RoundedRectangle(cornerRadius: height / 2)
+            .fill(color)
+            .frame(width: width, height: max(1.5, height))
+    }
+
+    private func lines(_ width: CGFloat, _ height: CGFloat, count: Int, centred: Bool = false) -> some View {
+        VStack(alignment: centred ? .center : .leading, spacing: height * 0.08) {
+            ForEach(0..<count, id: \.self) { index in
+                bar(index == count - 1 ? width * 0.62 : width, height * 0.07, faint)
+            }
+        }
+    }
 }

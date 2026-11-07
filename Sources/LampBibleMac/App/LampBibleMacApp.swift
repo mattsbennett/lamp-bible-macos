@@ -285,23 +285,29 @@ private struct ReaderSettingsView: View {
     var body: some View {
         NavigationSplitView {
             List(selection: $selectedSettingsSection) {
-                Section("Reading") {
+                Section {
                     settingsLink(.reader)
                     settingsLink(.books)
                     settingsLink(.studySidebar)
                     settingsLink(.readingPlans)
+                } header: {
+                    sidebarHeading("Reading")
                 }
 
-                Section("Content") {
+                Section {
                     settingsLink(.modules)
-                    settingsLink(.devotionalsAndQuizzes)
                     settingsLink(.writing)
+                    settingsLink(.devotionalsAndQuizzes)
+                } header: {
+                    sidebarHeading("Content")
                 }
 
-                Section("Services") {
+                Section {
                     settingsLink(.aiAndAgents)
                     settingsLink(.sync)
                     settingsLink(.updates)
+                } header: {
+                    sidebarHeading("Services")
                 }
             }
             .navigationTitle("Settings")
@@ -312,8 +318,8 @@ private struct ReaderSettingsView: View {
             //
             // The frame is not belt and braces. Removing the toggle costs
             // the column its stated width — measured at 144pt against the
-            // 205 it took before, which truncated "Study Sidebar" and
-            // "Devotionals & Quizzes" — and neither
+            // 205 it took before, which truncated "Study Sidebar" and the
+            // longest section name of the time — and neither
             // `navigationSplitViewColumnWidth`, in either form, nor a
             // constant `columnVisibility` wins it back. A frame does.
             .frame(width: 205)
@@ -323,42 +329,66 @@ private struct ReaderSettingsView: View {
             Form {
                 switch selectedSettingsSection {
                 case .reader:
-                    Section("Reader") {
+                    // In groups that say what they hold, rather than one
+                    // card headed "Reader" under a window already titled
+                    // "Reader".
+                    Section {
+                        ReaderTypePreview(
+                            fontSize: fontSize,
+                            lineSpacing: lineSpacing,
+                            typeface: typeface
+                        )
+                    }
+                    Section("Text") {
                         Picker("Typeface", selection: $typeface) {
                             ForEach(ProseTypeface.allCases) { option in
                                 Text(option.title).tag(option)
                             }
                         }
-                        metricSlider("Text Size", value: $fontSize, scale: .readerText)
+                        metricSlider("Text Size", value: $fontSize, scale: .readerText, sizeGlyphs: true)
                         metricSlider("Line Spacing", value: $lineSpacing, scale: .readerLineSpacing)
-                        Picker("Read Aloud Voice", selection: $readAloudVoice) {
+                    }
+                    Section("Read Aloud") {
+                        Picker("Voice", selection: $readAloudVoice) {
                             Text("System Default").tag("")
                             ForEach(voices, id: \.identifier) { voice in
                                 Text("\(voice.name) — \(voice.language)").tag(voice.identifier)
                             }
                         }
-                        LabeledContent("Read Aloud Speed") {
-                            HStack {
-                                Slider(value: $readAloudRate, in: 0.3...0.65, step: 0.025)
-                                    .frame(width: 220)
-                                Text(readAloudRate.formatted(.number.precision(.fractionLength(2))))
-                                    .monospacedDigit()
-                                    .frame(width: 36, alignment: .trailing)
-                            }
+                        LabeledContent("Speed") {
+                            // As a multiple of the normal pace, which the
+                            // voice's raw rate (0.50) never said.
+                            sliderRow(
+                                value: $readAloudRate,
+                                range: 0.3...0.65,
+                                step: 0.025,
+                                low: "tortoise",
+                                high: "hare",
+                                readout: readAloudSpeedDescription
+                            )
                         }
                         Toggle("Follow the spoken verse", isOn: $followReadAloud)
+                    }
+                    Section {
                         Toggle("Show Strong’s number hints", isOn: $showStrongsHints)
                         Toggle("Sort cross-references canonically", isOn: $canonicalCrossReferenceOrder)
-                        Button("Restore Reader Defaults") {
-                            fontSize = LampTextScale.readerText.defaultValue
-                            lineSpacing = LampTextScale.readerLineSpacing.defaultValue
-                            typeface = .readerDefault
-                            readAloudVoice = ""
-                            readAloudRate = 0.5
-                            followReadAloud = true
-                            showStrongsHints = true
-                            canonicalCrossReferenceOrder = false
+                    } header: {
+                        Text("Study Aids")
+                    } footer: {
+                        HStack {
+                            Spacer()
+                            Button("Restore Reader Defaults") {
+                                fontSize = LampTextScale.readerText.defaultValue
+                                lineSpacing = LampTextScale.readerLineSpacing.defaultValue
+                                typeface = .readerDefault
+                                readAloudVoice = ""
+                                readAloudRate = 0.5
+                                followReadAloud = true
+                                showStrongsHints = true
+                                canonicalCrossReferenceOrder = false
+                            }
                         }
+                        .padding(.top, 4)
                     }
 
                 case .studySidebar:
@@ -368,7 +398,7 @@ private struct ReaderSettingsView: View {
                                 Text(option.title).tag(option)
                             }
                         }
-                        metricSlider("Text Size", value: $commentaryFontSize, scale: .commentaryText)
+                        metricSlider("Text Size", value: $commentaryFontSize, scale: .commentaryText, sizeGlyphs: true)
                         metricSlider(
                             "Line Spacing", value: $commentaryLineSpacing, scale: .commentaryLineSpacing)
                         Button("Restore Sidebar Defaults") {
@@ -385,7 +415,7 @@ private struct ReaderSettingsView: View {
                                 Text(option.title).tag(option)
                             }
                         }
-                        metricSlider("Text Size", value: $bookFontSize, scale: .bookText)
+                        metricSlider("Text Size", value: $bookFontSize, scale: .bookText, sizeGlyphs: true)
                         metricSlider(
                             "Line Spacing",
                             value: $bookLineSpacing,
@@ -485,32 +515,41 @@ private struct ReaderSettingsView: View {
                     }
 
                 case .devotionalsAndQuizzes:
-                    Section("Devotionals & Quizzes") {
+                    Section("Quizzes") {
+                        TextField("Preferred age-group ID", text: $defaultQuizAgeGroup)
+                    }
+
+                case .writing:
+                    Section("Editor") {
                         metricSlider(
-                            "Devotional Text Size",
-                            value: $devotionalFontSize,
-                            scale: .writingReadingText
+                            "Text Size",
+                            value: $writingEditorFontSize,
+                            scale: .writingEditorText,
+                            sizeGlyphs: true
                         )
-                        metricSlider(
-                            "Devotional Line Spacing",
-                            value: $devotionalLineSpacing,
-                            scale: .writingReadingLineSpacing
-                        )
-                        Picker("Devotional Typeface", selection: $devotionalTypeface) {
+                    }
+                    // How a finished writing is set when it is read rather
+                    // than edited. These were under "Devotionals & Quizzes",
+                    // apart from the rest of Writing.
+                    Section("Reading") {
+                        Picker("Typeface", selection: $devotionalTypeface) {
                             ForEach(ProseTypeface.allCases) { option in
                                 Text(option.title).tag(option)
                             }
                         }
-                        TextField("Preferred quiz age-group ID", text: $defaultQuizAgeGroup)
-                    }
-
-                case .writing:
-                    Section("Writing") {
                         metricSlider(
-                            "Editor Text Size",
-                            value: $writingEditorFontSize,
-                            scale: .writingEditorText
+                            "Text Size",
+                            value: $devotionalFontSize,
+                            scale: .writingReadingText,
+                            sizeGlyphs: true
                         )
+                        metricSlider(
+                            "Line Spacing",
+                            value: $devotionalLineSpacing,
+                            scale: .writingReadingLineSpacing
+                        )
+                    }
+                    Section {
                         // A talk is written to be spoken and a devotional to be
                         // read, and the same words take half as long again out
                         // loud — so each pace keeps its own rate. Which of the
@@ -527,11 +566,18 @@ private struct ReaderSettingsView: View {
                             in: 60...300,
                             step: 5
                         )
-                        Button("Restore Writing Defaults") {
-                            writingEditorFontSize = LampTextScale.writingEditorText.defaultValue
-                            silentWordsPerMinute = LampReadingMode.silent.defaultWordsPerMinute
-                            aloudWordsPerMinute = LampReadingMode.aloud.defaultWordsPerMinute
+                    } header: {
+                        Text("Reading Time")
+                    } footer: {
+                        HStack {
+                            Spacer()
+                            Button("Restore Writing Defaults") {
+                                writingEditorFontSize = LampTextScale.writingEditorText.defaultValue
+                                silentWordsPerMinute = LampReadingMode.silent.defaultWordsPerMinute
+                                aloudWordsPerMinute = LampReadingMode.aloud.defaultWordsPerMinute
+                            }
                         }
+                        .padding(.top, 4)
                     }
 
                 case .aiAndAgents:
@@ -865,6 +911,13 @@ private struct ReaderSettingsView: View {
         return "\(version) (\(build))"
     }
 
+    /// A sidebar group's name in the readable secondary grey. The sidebar's
+    /// own heading grey faded almost to nothing on the dark window.
+    private func sidebarHeading(_ title: String) -> some View {
+        Text(title)
+            .foregroundStyle(Color.lampSecondaryText)
+    }
+
     private func settingsLink(_ section: ReaderSettingsSection) -> some View {
         Label(section.title, systemImage: section.systemImage)
             .tag(section)
@@ -872,20 +925,60 @@ private struct ReaderSettingsView: View {
 
     /// The same bounds the `aA` menus step through, so a size set in Settings and a
     /// size set while reading are the same setting rather than two that disagree.
+    ///
+    /// The value carries its unit, points, which the bare "20" and "7" left
+    /// to be guessed; a size slider has a small and a large letter at its
+    /// ends, as the system's own do.
     private func metricSlider(
         _ title: String,
         value: Binding<Double>,
-        scale: LampTextScale
+        scale: LampTextScale,
+        sizeGlyphs: Bool = false
     ) -> some View {
         LabeledContent(title) {
-            HStack {
-                Slider(value: value, in: scale.range, step: scale.step)
-                    .frame(width: 220)
-                Text(value.wrappedValue.formatted(.number.precision(.fractionLength(0))))
-                    .monospacedDigit()
-                    .frame(width: 28, alignment: .trailing)
-            }
+            sliderRow(
+                value: value,
+                range: scale.range,
+                step: scale.step,
+                low: sizeGlyphs ? "textformat.size.smaller" : "arrow.down.and.line.horizontal.and.arrow.up",
+                high: sizeGlyphs ? "textformat.size.larger" : "arrow.up.and.line.horizontal.and.arrow.down",
+                readout: "\(value.wrappedValue.formatted(.number.precision(.fractionLength(0)))) pt"
+            )
         }
+    }
+
+    /// One slider's controls: an end glyph, the track, the other end glyph
+    /// and its value — each in a slot of fixed width, so every slider on a
+    /// page starts and ends at the same place. The glyphs differed in width
+    /// from slider to slider, and the tracks wandered with them.
+    private func sliderRow(
+        value: Binding<Double>,
+        range: ClosedRange<Double>,
+        step: Double,
+        low: String,
+        high: String,
+        readout: String
+    ) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: low)
+                .foregroundStyle(Color.lampSecondaryText)
+                .frame(width: 20)
+                .accessibilityHidden(true)
+            Slider(value: value, in: range, step: step)
+                .frame(width: 230)
+            Image(systemName: high)
+                .foregroundStyle(Color.lampSecondaryText)
+                .frame(width: 20)
+                .accessibilityHidden(true)
+            Text(readout)
+                .monospacedDigit()
+                .frame(width: 46, alignment: .trailing)
+        }
+    }
+
+    /// The read-aloud rate as a multiple of the voice's normal pace, 0.5.
+    private var readAloudSpeedDescription: String {
+        "\((readAloudRate / 0.5).formatted(.number.precision(.fractionLength(1))))×"
     }
 
     private var reminderDate: Date {
@@ -1187,7 +1280,9 @@ private enum ReaderSettingsSection: String, CaseIterable, Identifiable {
         case .books: "Books"
         case .studySidebar: "Study Sidebar"
         case .modules: "Modules"
-        case .devotionalsAndQuizzes: "Devotionals & Quizzes"
+        // The case keeps its stored name; on screen the app says
+        // "writing", and the writing settings live under Writing.
+        case .devotionalsAndQuizzes: "Quizzes"
         case .writing: "Writing"
         case .aiAndAgents: "AI & Agents"
         case .readingPlans: "Reading Plans"
@@ -1202,7 +1297,7 @@ private enum ReaderSettingsSection: String, CaseIterable, Identifiable {
         case .books: "books.vertical"
         case .studySidebar: "sidebar.right"
         case .modules: "shippingbox"
-        case .devotionalsAndQuizzes: "heart.text.square"
+        case .devotionalsAndQuizzes: "questionmark.bubble"
         case .writing: "square.and.pencil"
         case .aiAndAgents: "sparkles"
         case .readingPlans: "calendar"
@@ -1229,5 +1324,43 @@ private struct ExternalAppSetupFailure: Error, LocalizedError {
         detail.isEmpty
             ? "The Claude Desktop bundle could not be built."
             : "The Claude Desktop bundle could not be built: \(detail)"
+    }
+}
+
+/// A few verses set the way the reader will set them, so a change to the
+/// typeface, size or spacing is seen as it is made rather than taken on trust
+/// until the next chapter is opened.
+private struct ReaderTypePreview: View {
+    let fontSize: Double
+    let lineSpacing: Double
+    let typeface: ProseTypeface
+
+    /// John 1:1–2 in the Berean Standard Bible, which is in the public domain.
+    private let verses: [(number: Int, text: String)] = [
+        (1, "In the beginning was the Word, and the Word was with God, and the Word was God."),
+        (2, "He was with God in the beginning."),
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            verses.reduce(Text("")) { text, verse in
+                text
+                    + Text("\(verse.number)")
+                        .font(.system(size: max(9, fontSize * 0.6), weight: .semibold, design: typeface.design))
+                        .foregroundStyle(Color.lampVerseNumber)
+                        .baselineOffset(fontSize * 0.3)
+                    + Text("\u{2009}\(verse.text) ")
+            }
+            .font(.system(size: fontSize, design: typeface.design))
+            .lineSpacing(lineSpacing)
+            .lineLimit(3)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Preview of the reader text")
+        .animation(.easeOut(duration: 0.15), value: fontSize)
+        .animation(.easeOut(duration: 0.15), value: lineSpacing)
     }
 }

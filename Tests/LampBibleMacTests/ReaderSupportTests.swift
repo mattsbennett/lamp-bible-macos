@@ -1065,3 +1065,34 @@ struct ReaderTextMarksTests {
         #expect(ReaderTextMarks.passage(in: text, range: NSRange(location: 2, length: 0)) == nil)
     }
 }
+
+/// The word study showed each sense's opening twice: a preview cut off with
+/// an ellipsis, then the full definition beginning with the same words.
+struct DictionarySenseTextTests {
+    @Test func previewOfTheDefinitionIsNotShownBesideIt() {
+        #expect(!LampDictionarySenseText.showsShortDefinition(
+            "Generally, love as in 1 Cor. 4:21, “Shall I come unto you with a rod, or in love,” means full of...",
+            beside: "Generally, love as in 1 Cor. 4:21, “Shall I come unto you with a rod, or in love,” means full of love, all love."
+        ))
+        #expect(!LampDictionarySenseText.showsShortDefinition(
+            "Hē agápē toú Theoú, specifically “the love of God.” Here the…",
+            beside: "Hē agápē toú Theoú, specifically “the love of God.” Here the gen. is sometimes subj."
+        ))
+    }
+
+    @Test func identicalTextIsShownOnce() {
+        #expect(!LampDictionarySenseText.showsShortDefinition("love", beside: "love"))
+        #expect(!LampDictionarySenseText.showsShortDefinition("love,  affection", beside: "love, affection"))
+    }
+
+    @Test func aSummaryThatSaysSomethingElseStays() {
+        #expect(LampDictionarySenseText.showsShortDefinition("love, goodwill", beside: "From agapáō; affection or benevolence."))
+        #expect(LampDictionarySenseText.showsShortDefinition("love", beside: nil))
+    }
+
+    @Test func nothingToShowIsNotShown() {
+        #expect(!LampDictionarySenseText.showsShortDefinition(nil, beside: "love"))
+        #expect(!LampDictionarySenseText.showsShortDefinition("  ", beside: "love"))
+        #expect(!LampDictionarySenseText.showsShortDefinition("…", beside: "love"))
+    }
+}

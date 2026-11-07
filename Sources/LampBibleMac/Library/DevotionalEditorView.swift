@@ -268,17 +268,64 @@ private struct DevotionalToolbarScrollState: Equatable {
     var canScrollForward: Bool { maximumOffset - offset > 2 }
 }
 
+/// A format bar control: a quiet glyph that lights on hover and press, and
+/// takes the accent while what it sets is in force at the caret.
+///
+/// Bordered buttons drew every control as a grey lozenge, and a row of
+/// sixteen lozenges read as a form above the writing rather than as tools
+/// beside it.
+struct FormatBarButtonStyle: ButtonStyle {
+    var isActive = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        FormatBarButtonBody(configuration: configuration, isActive: isActive)
+    }
+}
+
+private struct FormatBarButtonBody: View {
+    let configuration: ButtonStyleConfiguration
+    let isActive: Bool
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var isHovered = false
+
+    /// On is a filled, neutral key, as the format controls in Pages and
+    /// Notes show it: a faint red tint was both too quiet to find and the
+    /// only colour in the bar, so it looked arbitrary.
+    private var fill: Color {
+        if isActive { return Color.primary.opacity(configuration.isPressed ? 0.2 : 0.14) }
+        if configuration.isPressed { return Color.primary.opacity(0.14) }
+        if isHovered, isEnabled { return Color.primary.opacity(0.07) }
+        return .clear
+    }
+
+    var body: some View {
+        configuration.label
+            .font(.system(size: 15, weight: isActive ? .semibold : .regular))
+            .foregroundStyle(Color.primary.opacity(isEnabled ? 1 : 0.3))
+            .padding(.horizontal, 7)
+            .frame(minWidth: 30, minHeight: 28)
+            .background(fill, in: RoundedRectangle(cornerRadius: 6))
+            .contentShape(RoundedRectangle(cornerRadius: 6))
+            .onHover { isHovered = $0 }
+    }
+}
+
 private struct DevotionalEditorToolbarScrollView<Content: View>: View {
     @ViewBuilder let content: Content
     @State private var scrollState = DevotionalToolbarScrollState()
     @State private var scrollPosition = ScrollPosition(x: 0)
+    @State private var containerWidth: CGFloat = 0
 
     private let scrollStep: CGFloat = 240
 
     var body: some View {
         ScrollView(.horizontal) {
+            // Centred over the writing while there is room, as the column of
+            // text below it is; scrolled only when the window is too narrow.
             content
+                .frame(minWidth: containerWidth, alignment: .center)
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { containerWidth = $0 }
         .scrollIndicators(.hidden)
         .scrollPosition($scrollPosition)
         .onScrollGeometryChange(for: DevotionalToolbarScrollState.self) { geometry in
@@ -351,6 +398,9 @@ struct DevotionalEditorView: View {
     @EnvironmentObject private var model: LibraryModel
     @AppStorage("devotional.editor.fontSize")
     private var editorFontSize = LampTextScale.writingEditorText.defaultValue
+    /// The face the writing is read in, from the Writing section's text menu,
+    /// so the visual editor sets it as the preview does.
+    @AppStorage("devotional.typeface") private var writingTypeface = ProseTypeface.readerDefault
     @AppStorage("devotional.editor.showsDetails") private var showsDetails = true
     @AppStorage("devotional.editor.detailsWidth") private var detailsWidth = 320.0
     @AppStorage("devotional.editor.agentWidth") private var agentWidth = 480.0
@@ -409,6 +459,9 @@ struct DevotionalEditorView: View {
     /// whose note is kept there can put the writer on that line.
     @State private var footnotesSelection = NSRange(location: 0, length: 0)
     @State private var footnotesRevealToken = 0
+    /// Inspector groups the writer has opened or closed by hand. A group
+    /// left alone is open while it holds something and folded while empty.
+    @State private var foldedOpen: [String: Bool] = [:]
     @State private var tipTapCoordinator: TipTapEditorCoordinator?
     @State private var tipTapSelection = TipTapSelectionState()
     /// The text selected in the visual editor, read from the page a moment
@@ -637,8 +690,10 @@ struct DevotionalEditorView: View {
             .clipped()
         }
         .frame(minWidth: 640, minHeight: 540)
+        // The save state is said once, in the status bar beneath the
+        // writing, where its conflict buttons sit. The title bar carried it
+        // too, so a quiet document said "Up to date" twice.
         .navigationTitle(title.isEmpty ? "New Writing" : title)
-        .navigationSubtitle(activeSaveStateDescription)
         .toolbar { editorToolbar }
         .task(id: request) {
             editorMode = .visual
@@ -706,8 +761,14 @@ struct DevotionalEditorView: View {
     /// this, since they are about the document rather than part of it.
     private var contentColumn: some View {
         VStack(spacing: 0) {
-            documentTabBar
-            Divider()
+            // Only once there is more than the writing itself to move
+            // between. With the prose alone, a rank holding one tab was a
+            // third band of chrome over the page; making, opening and
+            // revealing workspace files are in the toolbar's Workspace menu.
+            if !workspaceDocuments.isEmpty {
+                documentTabBar
+                Divider()
+            }
 
             editorPane
 
@@ -999,6 +1060,7 @@ struct DevotionalEditorView: View {
                 // Footnotes field isn't on the page for it to open, so the
                 // page reports the click and `revealFootnote` answers it.
                 footnoteClicks: .popover,
+                proseTypeface: writingTypeface,
                 onCoordinatorReady: { coordinator in
                     tipTapCoordinator = coordinator
                     visualEditorIsReady = true
@@ -1031,7 +1093,7 @@ struct DevotionalEditorView: View {
 
     private var visualFormattingToolbar: some View {
         DevotionalEditorToolbarScrollView {
-            HStack(alignment: .bottom, spacing: 14) {
+            HStack(alignment: .center, spacing: 10) {
                 editorControlGroup("Style") {
                     Menu {
                         Button("Paragraph") { tipTapCoordinator?.applyStyle(.paragraph) }
@@ -1040,10 +1102,22 @@ struct DevotionalEditorView: View {
                         Button("Heading 2") { tipTapCoordinator?.applyStyle(.heading2) }
                         Button("Heading 3") { tipTapCoordinator?.applyStyle(.heading3) }
                     } label: {
-                        Label(visualStyleLabel, systemImage: "textformat.size")
+                        HStack(spacing: 4) {
+                            Text(visualStyleLabel)
+                                .frame(minWidth: 56, alignment: .leading)
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                        }
                     }
+                    .menuStyle(.button)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .accessibilityLabel("Paragraph Style")
                     .help("Paragraph and heading style")
                 }
+
+                formatBarSeparator
 
                 editorControlGroup("Text") {
                     visualCommandButton(
@@ -1065,6 +1139,8 @@ struct DevotionalEditorView: View {
                     }
                 }
 
+                formatBarSeparator
+
                 editorControlGroup("Lists") {
                     visualCommandButton(
                         "Bulleted List",
@@ -1084,6 +1160,8 @@ struct DevotionalEditorView: View {
                     }
                 }
 
+                formatBarSeparator
+
                 editorControlGroup("Blocks") {
                     visualCommandButton(
                         "Quote",
@@ -1100,47 +1178,89 @@ struct DevotionalEditorView: View {
                     } label: {
                         toolbarIcon("tablecells")
                     }
+                    .menuStyle(.button)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
                     .accessibilityLabel("Table")
                     .help("Insert table")
                 }
 
-                Divider()
-                    .frame(height: 38)
+                formatBarSeparator
 
                 editorControlGroup("Insert") {
-                    Button("Scripture", systemImage: "book") { insertScriptureLink() }
-                        .disabled(model.selectedVerseReference == nil)
-                        .help(model.selectedVerseReference == nil
-                            ? "Open a verse in the reader to link it"
-                            : "Link selected text, or insert the verse reference")
-                    Button("Footnote", systemImage: "text.badge.plus") { insertFootnote() }
-                        .help("Add a footnote here, and write the note in it")
-                    Button("Media", systemImage: "paperclip") { attachMedia() }
-                        .help("Attach an image or audio file")
-                    Button("Record", systemImage: "mic") { showingAudioRecorder = true }
-                        .help("Record audio into this writing")
+                    insertMenu(includesFootnote: true)
                 }
+
+                formatBarSeparator
 
                 editorTextSizeControls
             }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
+            .buttonStyle(FormatBarButtonStyle())
             .disabled(!visualEditorIsReady)
-            .padding(.horizontal, 12)
-                .padding(.vertical, 9)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 7)
         }
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    /// What can be put into the writing, under one labelled menu. As four
+    /// labelled buttons beside a row of glyphs, the bar mixed two kinds of
+    /// control and ran long; and a greyed "Scripture" button said nothing of
+    /// why. In the menu it says so.
+    private func insertMenu(includesFootnote: Bool) -> some View {
+        Menu {
+            Button(
+                model.selectedVerseReference == nil
+                    ? "Scripture Link (open a verse in the reader first)"
+                    : "Scripture Link",
+                systemImage: "book"
+            ) { insertScriptureLink() }
+                .disabled(model.selectedVerseReference == nil)
+            if includesFootnote {
+                Button("Footnote", systemImage: "text.badge.plus") { insertFootnote() }
+            }
+            Divider()
+            Button("Image or Audio File…", systemImage: "paperclip") { attachMedia() }
+            Button("Record Audio…", systemImage: "mic") { showingAudioRecorder = true }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "plus")
+                    .font(.system(size: 12, weight: .semibold))
+                Text("Insert")
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .accessibilityLabel("Insert")
+        .help(includesFootnote
+            ? "Insert a scripture link, a footnote, media or a recording"
+            : "Insert a scripture link, media or a recording")
+    }
+
+    /// The hairline between groups of the format bar: groups read by their
+    /// spacing and this, rather than by a caption over each one.
+    private var formatBarSeparator: some View {
+        Rectangle()
+            .fill(.separator)
+            .frame(width: 1, height: 16)
+            .accessibilityHidden(true)
     }
 
     private var markdownEditorPane: some View {
         VStack(spacing: 0) {
             DevotionalEditorToolbarScrollView {
-                HStack(alignment: .bottom, spacing: 14) {
+                HStack(alignment: .center, spacing: 10) {
                     editorControlGroup("Text") {
                         ForEach([MarkdownCommand.bold, .italic]) { command in
                             markdownCommandButton(command)
                         }
                     }
+
+                    formatBarSeparator
 
                     editorControlGroup("Blocks") {
                         ForEach([MarkdownCommand.heading, .quote]) { command in
@@ -1148,35 +1268,29 @@ struct DevotionalEditorView: View {
                         }
                     }
 
+                    formatBarSeparator
+
                     editorControlGroup("Lists") {
                         ForEach([MarkdownCommand.bulletList, .numberedList]) { command in
                             markdownCommandButton(command)
                         }
                     }
 
-                    Divider()
-                        .frame(height: 38)
+                    formatBarSeparator
 
                     editorControlGroup("Insert") {
-                        Button("Scripture", systemImage: "book") { insertScriptureLink() }
-                            .disabled(model.selectedVerseReference == nil)
-                            .help(model.selectedVerseReference == nil
-                                ? "Open a verse in the reader to link it"
-                                : "Insert the verse selected in the reader")
-                        Button("Media", systemImage: "paperclip") { attachMedia() }
-                            .help("Attach an image or audio file")
-                        Button("Record", systemImage: "mic") { showingAudioRecorder = true }
-                            .help("Record audio into this writing")
+                        insertMenu(includesFootnote: false)
                     }
+
+                    formatBarSeparator
 
                     editorTextSizeControls
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                .padding(.horizontal, 12)
-                    .padding(.vertical, 9)
+                .buttonStyle(FormatBarButtonStyle())
+                .padding(.horizontal, 16)
+                .padding(.vertical, 7)
             }
-            .background(Color(nsColor: .controlBackgroundColor))
+            .background(Color(nsColor: .windowBackgroundColor))
 
             Divider()
 
@@ -1184,7 +1298,8 @@ struct DevotionalEditorView: View {
                 text: activeTextBinding,
                 selection: activeSelectionBinding,
                 fontSize: editorFontSize,
-                finder: markdownFinder
+                finder: markdownFinder,
+                measure: 76
             )
             // The text view draws no background of its own, so without this it
             // shows whatever happens to be behind the window — which is close to
@@ -1198,7 +1313,7 @@ struct DevotionalEditorView: View {
         let statistics = WritingStatistics.measuring(markdown: activeText)
         return HStack(spacing: 10) {
             Text(activeSaveStateDescription)
-                .foregroundStyle(activeSaveStateIsProblem ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+                .foregroundStyle(activeSaveStateIsProblem ? AnyShapeStyle(.red) : AnyShapeStyle(Color.lampSecondaryText))
 
             if let document = activeWorkspaceDocument, document.hasExternalConflict {
                 Button(document.wasRemovedExternally ? "Close Tab" : "Use Agent Version") {
@@ -1219,12 +1334,12 @@ struct DevotionalEditorView: View {
                 .foregroundStyle(.tertiary)
             ReadingTimeMenu(statistics: statistics)
         }
-        .font(.caption)
-        .foregroundStyle(.secondary)
+        .font(.subheadline)
+        .foregroundStyle(Color.primary.opacity(0.72))
         .lineLimit(1)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 5)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     private var activeSaveStateIsProblem: Bool {
@@ -1235,78 +1350,231 @@ struct DevotionalEditorView: View {
         return false
     }
 
+    /// The writing's details, as a writing tool's inspector rather than a
+    /// settings form: each field under its own small label, in a bordered
+    /// box that says it can be typed in, at the inspector's full width. The
+    /// grouped form set values right-aligned on unbordered rows, which read
+    /// as settings and gave the eye no edge to an editable value.
+    ///
+    /// Series, Key Scripture, Summary and Footnotes fold away while empty,
+    /// so a writing with none of them is not faced with four empty boxes;
+    /// each opens with a click on its heading, and opens by itself once it
+    /// holds something.
     private var detailsPane: some View {
-        Form {
-            Section("Details") {
-                TextField("Title", text: $title)
-                TextField("Subtitle", text: $subtitle)
-                TextField("Author", text: $author)
-                StoredCalendarDateField(title: "Date", storedValue: $date)
-                TextField("Tags (comma separated)", text: $tags)
-                WritingCategoryField(
-                    title: "Category",
-                    storedValue: $category,
-                    held: model.devotionals.map(\.category)
-                )
-            }
-
-            Section("Series") {
-                TextField("Series", text: $seriesName)
-                Stepper("Order: \(seriesOrder)", value: $seriesOrder, in: 0...10_000)
-                    .disabled(seriesName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-
-            Section("Key Scripture") {
-                if keyScriptures.isEmpty {
-                    Text("No key scripture added")
-                        .foregroundStyle(.secondary)
-                }
-                ForEach(keyScriptures) { scripture in
-                    HStack {
-                        Text(scripture.displayDescription)
-                        Spacer()
-                        Button("Remove", systemImage: "minus.circle", role: .destructive) {
-                            keyScriptures.removeAll { $0.id == scripture.id }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                inspectorGroup("Details") {
+                    inspectorField("Title") {
+                        TextField("Title", text: $title, prompt: Text("Untitled"))
+                            .modifier(InspectorFieldBox())
+                    }
+                    inspectorField("Subtitle") {
+                        TextField("Subtitle", text: $subtitle, prompt: Text("None"))
+                            .modifier(InspectorFieldBox())
+                    }
+                    inspectorField("Author") {
+                        TextField("Author", text: $author, prompt: Text("None"))
+                            .modifier(InspectorFieldBox())
+                    }
+                    HStack(alignment: .top, spacing: 12) {
+                        inspectorField("Date") {
+                            WritingDateField(storedValue: $date)
                         }
-                        .labelStyle(.iconOnly)
-                        .buttonStyle(.borderless)
+                        inspectorField("Category") {
+                            WritingCategoryField(
+                                title: "Category",
+                                storedValue: $category,
+                                held: model.devotionals.map(\.category)
+                            )
+                            .labelsHidden()
+                            .modifier(InspectorFieldBox(trailingInset: 4))
+                        }
+                    }
+                    inspectorField("Tags") {
+                        TextField("Tags", text: $tags, prompt: Text("Comma separated"))
+                            .modifier(InspectorFieldBox())
                     }
                 }
-                if let reference = model.selectedVerseReference {
-                    Button(
-                        "Add \(LampBibleReferenceFormatter.describeRange(from: reference, to: reference))",
-                        systemImage: "book"
-                    ) {
-                        guard !keyScriptures.contains(where: { $0.startReference == reference }) else { return }
-                        keyScriptures.append(LampScriptureLink(startReference: reference))
+
+                Divider()
+
+                foldingGroup("Series", holdsContent: !seriesName.isEmpty) {
+                    inspectorField("Series") {
+                        TextField("Series", text: $seriesName, prompt: Text("None"))
+                            .modifier(InspectorFieldBox())
                     }
-                } else {
-                    Text("Select a verse in the reader to add it here.")
+                    Stepper("Order: \(seriesOrder)", value: $seriesOrder, in: 0...10_000)
+                        .disabled(seriesName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+
+                Divider()
+
+                foldingGroup("Key Scripture", holdsContent: !keyScriptures.isEmpty) {
+                    if keyScriptures.isEmpty {
+                        Text("No key scripture added")
+                            .foregroundStyle(Color.lampSecondaryText)
+                    }
+                    ForEach(keyScriptures) { scripture in
+                        HStack {
+                            Text(scripture.displayDescription)
+                            Spacer()
+                            Button("Remove", systemImage: "minus.circle", role: .destructive) {
+                                keyScriptures.removeAll { $0.id == scripture.id }
+                            }
+                            .labelStyle(.iconOnly)
+                            .buttonStyle(.borderless)
+                        }
+                    }
+                    if let reference = model.selectedVerseReference {
+                        Button(
+                            "Add \(LampBibleReferenceFormatter.describeRange(from: reference, to: reference))",
+                            systemImage: "book"
+                        ) {
+                            guard !keyScriptures.contains(where: { $0.startReference == reference }) else { return }
+                            keyScriptures.append(LampScriptureLink(startReference: reference))
+                        }
+                    } else {
+                        Text("Select a verse in the reader to add it here.")
+                            .font(.callout)
+                            .foregroundStyle(Color.lampSecondaryText)
+                    }
+                }
+
+                Divider()
+
+                foldingGroup("Summary", holdsContent: !summary.isEmpty) {
+                    TextEditor(text: $summary)
+                        .font(.body)
+                        .scrollContentBackground(.hidden)
+                        .padding(4)
+                        .frame(minHeight: 80)
+                        .modifier(InspectorTextBox())
+                        .overlay(alignment: .topLeading) {
+                            if summary.isEmpty {
+                                fieldPlaceholder("A sentence or two on what this writing is about")
+                                    .padding(.leading, 9)
+                                    .padding(.top, 4)
+                            }
+                        }
+                }
+
+                Divider()
+
+                foldingGroup("Footnotes", holdsContent: !footnotes.isEmpty) {
+                    // A text view rather than `TextEditor`, which has no selection
+                    // to move: clicking a marker in the writing puts the caret on
+                    // that note's line here.
+                    MarkdownTextEditor(
+                        text: $footnotes,
+                        selection: $footnotesSelection,
+                        fontSize: 13,
+                        revealToken: footnotesRevealToken,
+                        monospaced: false
+                    )
+                    .frame(minHeight: 100)
+                    .modifier(InspectorTextBox())
+                    .overlay(alignment: .topLeading) {
+                        if footnotes.isEmpty {
+                            fieldPlaceholder("Notes kept apart from the writing, in Markdown, as [^1]: …")
+                                .font(.system(size: 13))
+                                .padding(.leading, 12)
+                                .padding(.top, 14)
+                        }
+                    }
+                    Text("Notes written in the prose with Insert › Footnote stay there; these are kept beside it.")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color.lampSecondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            .textFieldStyle(.plain)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 18)
+        }
+        // A ground of its own, a step off the page in either appearance, so
+        // the inspector reads as beside the writing rather than part of it:
+        // on the same dark as the page, the two ran together.
+        .background(Self.inspectorGround)
+        // A footnote marker clicked in the writing whose note is kept here
+        // opens the section, so the caret has somewhere visible to go.
+        .onChange(of: footnotesRevealToken) { foldedOpen["Footnotes"] = true }
+    }
 
-            Section("Summary") {
-                TextEditor(text: $summary)
-                    .font(.body)
-                    .frame(minHeight: 70)
+    /// A titled group of the inspector, always open.
+    private func inspectorGroup<Content: View>(
+        _ title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title).lampSectionHeading()
+            content()
+        }
+    }
+
+    /// A group that folds away while it holds nothing, and opens on a click
+    /// on its heading or as soon as something is put in it.
+    private func foldingGroup<Content: View>(
+        _ title: String,
+        holdsContent: Bool,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        let isOpen = foldedOpen[title] ?? holdsContent
+        return VStack(alignment: .leading, spacing: 12) {
+            Button {
+                withAnimation(.easeOut(duration: 0.15)) { foldedOpen[title] = !isOpen }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(isOpen ? 90 : 0))
+                    Text(title).lampSectionHeading()
+                    Spacer()
+                    if !isOpen && !holdsContent {
+                        Text("Empty")
+                            .font(.caption)
+                            .foregroundStyle(Color.lampSecondaryText)
+                    }
+                }
+                .contentShape(Rectangle())
             }
-
-            Section("Footnotes (Markdown)") {
-                // A text view rather than `TextEditor`, which has no selection
-                // to move: clicking a marker in the writing puts the caret on
-                // that note's line here.
-                MarkdownTextEditor(
-                    text: $footnotes,
-                    selection: $footnotesSelection,
-                    fontSize: 12,
-                    revealToken: footnotesRevealToken
-                )
-                .frame(minHeight: 90)
+            .buttonStyle(.plain)
+            .accessibilityLabel(title)
+            .accessibilityValue(isOpen ? "Expanded" : "Collapsed")
+            .help(isOpen ? "Hide \(title.lowercased())" : "Show \(title.lowercased())")
+            if isOpen {
+                content()
             }
         }
-        .formStyle(.grouped)
+    }
+
+    /// One field of the inspector, under its own small label.
+    private func inspectorField<Content: View>(
+        _ label: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label)
+                .font(.callout.weight(.medium))
+                .foregroundStyle(Color.lampSecondaryText)
+            content()
+                .labelsHidden()
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private static let inspectorGround = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            ? NSColor(white: 0.105, alpha: 1)
+            : NSColor(srgbRed: 0.955, green: 0.955, blue: 0.962, alpha: 1)
+    })
+
+    /// What an empty field is for, in the place its text will go.
+    private func fieldPlaceholder(_ text: String) -> some View {
+        Text(text)
+            .foregroundStyle(Color.lampSecondaryText)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 
     @ToolbarContentBuilder
@@ -1330,6 +1598,24 @@ struct DevotionalEditorView: View {
             .help(activeRevisionDocumentPath == nil
                 ? "Revision history is available for Markdown workspace files"
                 : "Review or restore revisions for this Markdown file")
+        }
+
+        ToolbarItem(placement: .navigation) {
+            Menu("Workspace", systemImage: "folder") {
+                Button("New Markdown File…", systemImage: "doc.badge.plus") {
+                    showingNewWorkspaceDocument = true
+                }
+                Button("Open Workspace File…", systemImage: "folder.badge.plus") {
+                    openWorkspaceFile()
+                }
+                .disabled(!workspaceIsAvailable)
+                Divider()
+                Button("Reveal Workspace in Finder", systemImage: "folder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([workspaceURL])
+                }
+                .disabled(!workspaceIsAvailable)
+            }
+            .help("Companion files in this writing's workspace")
         }
 
         ToolbarItem {
@@ -1357,6 +1643,10 @@ struct DevotionalEditorView: View {
             )) {
                 Label("Details", systemImage: "info.circle")
             }
+            // Shown on as a neutral pressed state, as Pages and Notes show
+            // their inspectors, not in the accent: a red disc in the title
+            // bar outshouted the writing beneath it.
+            .tint(.secondary)
             .help(showsDetails ? "Hide details" : "Show details")
         }
 
@@ -1370,6 +1660,7 @@ struct DevotionalEditorView: View {
             )) {
                 Label("Agent", systemImage: "sparkles")
             }
+            .tint(.secondary)
             .help(showingAgentWorkspace ? "Hide agent workspace" : "Show agent workspace")
         }
 
@@ -1554,23 +1845,28 @@ struct DevotionalEditorView: View {
         }
     }
 
+    /// One group of the format bar. The group's name is spoken rather than
+    /// printed: captions over every group doubled the bar's height and
+    /// crowded it, and each control already says what it does in its tooltip.
     private func editorControlGroup<Content: View>(
         _ title: String,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(title.uppercased())
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
-            HStack(spacing: 5) {
-                content()
-            }
+        HStack(spacing: 2) {
+            content()
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(title)
     }
 
     private var editorTextSizeControls: some View {
         let scale = LampTextScale.writingEditorText
         return editorControlGroup("Text Size") {
+            Image(systemName: "textformat.size")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .padding(.trailing, 2)
+                .accessibilityHidden(true)
             Button {
                 editorFontSize = scale.stepped(editorFontSize, by: -1)
             } label: {
@@ -1581,7 +1877,8 @@ struct DevotionalEditorView: View {
             .help("Decrease editor text size")
 
             Text("\(editorFontSize.formatted(.number.precision(.fractionLength(0)))) pt")
-                .monospacedDigit()
+                .font(.system(size: 12, weight: .medium).monospacedDigit())
+                .foregroundStyle(Color.primary.opacity(0.8))
                 .frame(minWidth: 36)
 
             Button {
@@ -1597,16 +1894,11 @@ struct DevotionalEditorView: View {
 
     /// A toolbar button's icon, in a box of its own.
     ///
-    /// A symbol's own height is what decides a bordered button's height, and
+    /// A symbol's own height is what would decide a button's height, and
     /// the symbols here are nothing like each other: `minus` drew a button
     /// 15.5pt tall where `link` drew one of 28.5, with four more heights in
     /// between and no two of the rest matching. Boxing every icon the same
     /// makes every button the same.
-    ///
-    /// 16pt, because a bordered menu is 28pt tall whatever is in it and the
-    /// style and table controls are menus: at 14pt the buttons agreed with
-    /// each other at 26 and still sat below those two. At 16 the whole row is
-    /// one height.
     private func toolbarIcon(_ systemImage: String) -> some View {
         Image(systemName: systemImage)
             .frame(width: 16, height: 16)
@@ -1619,12 +1911,9 @@ struct DevotionalEditorView: View {
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) { toolbarIcon(systemImage) }
+            .buttonStyle(FormatBarButtonStyle(isActive: isActive))
             .accessibilityLabel(title)
-            .frame(minWidth: 24)
-            .background(
-                isActive ? Color.accentColor.opacity(0.22) : Color.clear,
-                in: RoundedRectangle(cornerRadius: 6)
-            )
+            .accessibilityAddTraits(isActive ? .isSelected : [])
             .help(title)
     }
 
@@ -1635,7 +1924,6 @@ struct DevotionalEditorView: View {
             toolbarIcon(command.systemImage)
         }
         .accessibilityLabel(command.title)
-        .frame(minWidth: 24)
         .help(command.title)
     }
 
@@ -2674,4 +2962,105 @@ struct DevotionalEditorView: View {
 private struct AutosaveTrigger: Equatable {
     let fields: [String]
     let canSave: Bool
+}
+
+/// The box around an inspector's text area: the system's text ground with a
+/// hairline, as a bordered text field is drawn, so it reads as somewhere to
+/// type and not as an empty panel.
+private struct InspectorTextBox: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.14))
+            }
+    }
+}
+
+/// A field of the writing inspector: the system's text ground and a hairline
+/// strong enough to hold its edge on the dark inspector, where the bordered
+/// field's own outline all but vanished.
+private struct InspectorFieldBox: ViewModifier {
+    var trailingInset: CGFloat = 8
+
+    func body(content: Content) -> some View {
+        content
+            .font(.body)
+            .padding(.leading, 8)
+            .padding(.trailing, trailingInset)
+            .frame(minHeight: 28)
+            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.18))
+            }
+    }
+}
+
+/// The writing's date: the day, which opens a calendar when clicked, and one
+/// menu for the rest. Three icon buttons beside a field (calendar, today,
+/// remove) read as a busy cluster of look-alike glyphs.
+private struct WritingDateField: View {
+    @Binding var storedValue: String
+    @State private var showingCalendar = false
+
+    private var trimmed: String { storedValue.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var parsed: Date? { LampCalendarDate.date(from: trimmed) }
+
+    private var selection: Binding<Date> {
+        Binding(
+            get: { parsed ?? Calendar.current.startOfDay(for: Date()) },
+            set: { storedValue = LampCalendarDate.storedString(from: $0) }
+        )
+    }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if parsed != nil {
+                DatePicker("Date", selection: selection, displayedComponents: .date)
+                    .datePickerStyle(.compact)
+                    .labelsHidden()
+                Menu {
+                    Button("Choose from Calendar…", systemImage: "calendar") {
+                        showingCalendar = true
+                    }
+                    Button("Today", systemImage: "calendar.badge.clock") {
+                        storedValue = LampCalendarDate.today()
+                    }
+                    .disabled(parsed.map(Calendar.current.isDateInToday) ?? false)
+                    Button("Remove Date", systemImage: "xmark.circle", role: .destructive) {
+                        storedValue = ""
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .accessibilityLabel("Date Options")
+                .help("Choose from a calendar, use today, or remove the date")
+            } else {
+                if !trimmed.isEmpty {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                        .help("Unrecognized date: \(storedValue)")
+                }
+                Button(trimmed.isEmpty ? "Add Date" : "Choose Date", systemImage: "calendar.badge.plus") {
+                    storedValue = LampCalendarDate.today()
+                }
+            }
+        }
+        .frame(minHeight: 28)
+        .popover(isPresented: $showingCalendar, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Choose Date")
+                    .font(.headline)
+                DatePicker("Date", selection: selection, displayedComponents: .date)
+                    .datePickerStyle(.graphical)
+                    .labelsHidden()
+            }
+            .padding()
+        }
+    }
 }

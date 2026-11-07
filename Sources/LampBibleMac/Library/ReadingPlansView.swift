@@ -5,12 +5,6 @@ import LampBibleMacSupport
 import LampCore
 import SwiftUI
 
-private struct PlanDayRequest: Hashable {
-    let day: Int
-    let year: Int
-    let planIDs: [String]
-}
-
 struct PlanReadingMode: Equatable {
     let planID: String
     let planName: String
@@ -21,137 +15,6 @@ struct PlanReadingMode: Equatable {
 
     var activeReading: LampPlanReading? {
         readings.first { $0.id == activeReadingID }
-    }
-}
-
-struct TodayPlansView: View {
-    @EnvironmentObject private var model: LibraryModel
-    @State private var date = Date()
-    @State private var daysByPlanID: [String: LampReadingPlanDay] = [:]
-    @State private var isLoading = false
-    @State private var isMakingPlan = false
-
-    let showImporter: () -> Void
-    let showPlans: () -> Void
-    let openReading: (PlanReadingMode) -> Void
-    let openAllReadings: (PlanReadingMode) -> Void
-
-    private var dayNumber: Int {
-        LampPlanCalendar.dayNumber(for: date)
-    }
-
-    private var year: Int {
-        LampPlanCalendar.year(for: date)
-    }
-
-    private var selectedPlans: [LampReadingPlan] {
-        model.plans.filter { model.selectedPlanIDs.contains($0.id) }
-    }
-
-    private var request: PlanDayRequest {
-        PlanDayRequest(
-            day: dayNumber,
-            year: year,
-            planIDs: selectedPlans.map(\.id).sorted()
-        )
-    }
-
-    var body: some View {
-        Group {
-            if model.plans.isEmpty {
-                ContentUnavailableView {
-                    Label("No Reading Plans Installed", systemImage: "calendar.badge.plus")
-                } description: {
-                    Text("Make a plan from the passages you want to read, or install a plan .lamp module.")
-                } actions: {
-                    Button("New Plan…") { isMakingPlan = true }
-                        .buttonStyle(.borderedProminent)
-                    Button("Install Module…", action: showImporter)
-                }
-            } else if selectedPlans.isEmpty {
-                ContentUnavailableView {
-                    Label("Choose a Reading Plan", systemImage: "checklist")
-                } description: {
-                    Text("Select one or more installed plans to include in Today.")
-                } actions: {
-                    Button("Choose Plans", action: showPlans)
-                        .buttonStyle(.borderedProminent)
-                }
-            } else if isLoading && daysByPlanID.isEmpty {
-                ProgressView("Loading Today’s Readings…")
-            } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 22) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(date.formatted(date: .complete, time: .omitted))
-                                .font(.largeTitle.bold())
-                            Text("Plan day \(dayNumber)")
-                                .font(.title3)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        AddedPlanNotice()
-
-                        ForEach(selectedPlans) { plan in
-                            if let day = daysByPlanID[plan.id] {
-                                PlanDayCard(
-                                    plan: plan,
-                                    day: day,
-                                    year: year,
-                                    openReading: openReading,
-                                    openAllReadings: openAllReadings
-                                )
-                            } else {
-                                GroupBox(plan.name) {
-                                    ContentUnavailableView(
-                                        "No Reading for This Date",
-                                        systemImage: "calendar",
-                                        description: Text("This plan does not contain day \(dayNumber).")
-                                    )
-                                    .frame(maxWidth: .infinity)
-                                }
-                            }
-                        }
-                    }
-                    .frame(maxWidth: 880, alignment: .leading)
-                    .padding(36)
-                    .frame(maxWidth: .infinity)
-                }
-            }
-        }
-        .navigationTitle("Today")
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                CalendarDateField(title: "Reading Date", selection: $date)
-            }
-        }
-        .sheet(isPresented: $isMakingPlan) { NewReadingPlanSheet() }
-        // A plan asked for in another app is installed by Lamp, not by the
-        // helper that was asked; here is where someone will look for it.
-        .task { await model.takeInRequestedReadingPlans() }
-        .task(id: request) {
-            await loadDays()
-        }
-    }
-
-    private func loadDays() async {
-        isLoading = true
-        await model.loadPlanProgress(year: year)
-        var loaded: [String: LampReadingPlanDay] = [:]
-        do {
-            for plan in selectedPlans {
-                if let day = try await model.library.readingPlanDay(moduleID: plan.id, day: dayNumber) {
-                    loaded[plan.id] = day
-                }
-            }
-            guard !Task.isCancelled else { return }
-            daysByPlanID = loaded
-        } catch {
-            guard !Task.isCancelled else { return }
-            model.errorMessage = error.localizedDescription
-            daysByPlanID = [:]
-        }
-        isLoading = false
     }
 }
 
@@ -207,14 +70,20 @@ struct ReadingPlansView: View {
         _ systemImage: String,
         _ caption: String
     ) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Label(title, systemImage: systemImage)
-                .font(.title.bold())
+        VStack(alignment: .leading, spacing: 4) {
+            Label {
+                Text(title)
+            } icon: {
+                Image(systemName: systemImage)
+                    .foregroundStyle(.tint)
+            }
+            .font(.title2.weight(.bold))
             Text(caption)
                 .font(.callout)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.lampSecondaryText)
         }
-        .padding(.top, 14)
+        .padding(.top, 8)
+        .accessibilityAddTraits(.isHeader)
     }
 
     /// The last thing under "Your Plans", so that making one reads as the way
@@ -236,12 +105,12 @@ struct ReadingPlansView: View {
                 }
                 Spacer(minLength: 0)
             }
-            .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .lampCard()
     }
 
     private func cards(_ plans: [LampReadingPlan]) -> some View {
@@ -272,13 +141,13 @@ struct ReadingPlansView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 18) {
-                            VStack(alignment: .leading, spacing: 5) {
+                            VStack(alignment: .leading, spacing: 4) {
                                 Text("Reading Plans")
                                     .font(.largeTitle.bold())
                                 Text("Choose which plans appear in Today and preview the current assignments.")
-                                    .foregroundStyle(.secondary)
+                                    .font(.title3)
+                                    .foregroundStyle(Color.lampSecondaryText)
                             }
-                            .padding(.bottom, 8)
 
                             AddedPlanNotice()
 
@@ -295,8 +164,12 @@ struct ReadingPlansView: View {
                             cards(groups.yours)
                             newPlanRow
                         }
-                        .frame(maxWidth: 880, alignment: .leading)
-                        .padding(36)
+                        // Wider, and the intro tighter, so a plan's card and
+                        // the next one's title both fit on the first screen.
+                        .frame(maxWidth: 960, alignment: .leading)
+                        .padding(.horizontal, 40)
+                        .padding(.top, 24)
+                        .padding(.bottom, 36)
                         .frame(maxWidth: .infinity)
                     }
                     .onAppear { showRequestedPlan(with: proxy) }
@@ -323,7 +196,8 @@ struct ReadingPlansView: View {
 ///
 /// The asking happened in another app; this is the only place the reader finds
 /// out that their library has a plan in it that they did not install here.
-private struct AddedPlanNotice: View {
+/// Shown in Today too (TodayView.swift).
+struct AddedPlanNotice: View {
     @EnvironmentObject private var model: LibraryModel
 
     var body: some View {
@@ -374,16 +248,17 @@ private struct ReadingPlanCard: View {
     }
 
     var body: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack(alignment: .firstTextBaseline) {
+        VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .firstTextBaseline, spacing: 14) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(plan.name).font(.title2.weight(.semibold))
+                        Text(plan.name)
+                            .font(.title2.weight(.semibold))
+                            .fixedSize(horizontal: false, vertical: true)
                         if let author = plan.author, !author.isEmpty {
-                            Text(author).foregroundStyle(.secondary)
+                            Text(author).foregroundStyle(Color.lampSecondaryText)
                         }
                     }
-                    Spacer()
+                    Spacer(minLength: 12)
                     Toggle(
                         "Include in Today",
                         isOn: Binding(
@@ -405,7 +280,12 @@ private struct ReadingPlanCard: View {
                 }
 
                 if let description = plan.description, !description.isEmpty {
+                    // A reading measure, not the card's full width: the
+                    // description ran the width of the window.
                     Text(description)
+                        .lineSpacing(2)
+                        .frame(maxWidth: 600, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 HStack(spacing: 18) {
@@ -415,10 +295,11 @@ private struct ReadingPlanCard: View {
                     }
                 }
                 .font(.callout)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.lampSecondaryText)
 
                 if let day {
                     Divider()
+                        .padding(.top, 2)
                     PlanDayReadings(
                         plan: plan,
                         day: day,
@@ -429,15 +310,22 @@ private struct ReadingPlanCard: View {
                 }
 
                 if let fullDescription = plan.fullDescription, !fullDescription.isEmpty {
-                    DisclosureGroup("About This Plan") {
+                    DisclosureGroup {
                         Text(fullDescription)
+                            .lineSpacing(2)
+                            .foregroundStyle(Color.lampProse)
+                            .frame(maxWidth: 600, alignment: .leading)
                             .textSelection(.enabled)
                             .padding(.top, 8)
+                    } label: {
+                        Text("About This Plan")
+                            .font(.callout.weight(.medium))
+                            .foregroundStyle(Color.lampSecondaryText)
                     }
                 }
-            }
-            .padding(8)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .lampCard(padding: 20)
         .contextMenu { deletePlanButton }
         .confirmationDialog(
             "Delete “\(plan.name)”?",
@@ -466,36 +354,6 @@ private struct ReadingPlanCard: View {
     }
 }
 
-private struct PlanDayCard: View {
-    let plan: LampReadingPlan
-    let day: LampReadingPlanDay
-    let year: Int
-    let openReading: (PlanReadingMode) -> Void
-    let openAllReadings: (PlanReadingMode) -> Void
-
-    var body: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 14) {
-                if let description = plan.description, !description.isEmpty {
-                    Text(description)
-                        .foregroundStyle(.secondary)
-                }
-                PlanDayReadings(
-                    plan: plan,
-                    day: day,
-                    year: year,
-                    openReading: openReading,
-                    openAllReadings: openAllReadings
-                )
-            }
-            .padding(8)
-        } label: {
-            Label(plan.name, systemImage: "checklist")
-                .font(.headline)
-        }
-    }
-}
-
 private struct PlanDayReadings: View {
     @EnvironmentObject private var model: LibraryModel
     @AppStorage("plans.wordsPerMinute") private var wordsPerMinute = 225
@@ -508,14 +366,32 @@ private struct PlanDayReadings: View {
     let openAllReadings: (PlanReadingMode) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Day \(day.day)")
-                    .font(.headline)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                // Where today falls in the plan, said in words beside the
+                // day, so it cannot be mistaken for the ring, which counts
+                // the readings done.
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("Day \(day.day)")
+                        .font(.headline)
+                    if let position = calendarPosition {
+                        Text(position)
+                            .font(.callout)
+                            .foregroundStyle(Color.lampSecondaryText)
+                            .monospacedDigit()
+                    }
+                }
                 Spacer()
-                Text("\(completedCount) of \(day.readings.count) complete")
+                // How far through today's readings, drawn as well as said: the
+                // count alone gave the eye nothing to see at a glance.
+                PlanDayProgressRing(
+                    fraction: day.readings.isEmpty
+                        ? 0 : Double(completedCount) / Double(day.readings.count)
+                )
+                Text("\(completedCount) of \(day.readings.count) read")
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.lampSecondaryText)
+                    .monospacedDigit()
                 Button("Open", systemImage: "book") {
                     guard let first = day.readings.first else { return }
                     openReading(readingMode(activeReadingID: first.id))
@@ -529,81 +405,72 @@ private struct PlanDayReadings: View {
                         openAllReadings(readingMode(activeReadingID: first.id))
                     }
                     .disabled(day.readings.isEmpty)
-                }
-                .labelStyle(.iconOnly)
-                .menuStyle(.borderlessButton)
-                .help("More plan actions")
-            }
-
-            ForEach(day.readings) { reading in
-                HStack(spacing: 10) {
-                    Button {
-                        model.toggleReading(
-                            planID: plan.id,
-                            day: day.day,
-                            readingIndex: reading.id,
-                            year: year
-                        )
-                    } label: {
-                        Image(systemName: isCompleted(reading) ? "checkmark.circle.fill" : "circle")
-                            .font(.title3)
-                            .foregroundStyle(isCompleted(reading) ? Color.accentColor : .secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .help(isCompleted(reading) ? "Mark incomplete" : "Mark complete")
-
-                    Button {
-                        openReading(readingMode(activeReadingID: reading.id))
-                    } label: {
-                        Text(reading.displayDescription)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-
-                    Button("Open", systemImage: "arrow.right") {
-                        openReading(readingMode(activeReadingID: reading.id))
-                    }
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.borderless)
-                    .help("Open in Reader")
-
-                    if let wordCount = wordCounts[reading.id] {
-                        Text(ReadingTimeEstimator.description(
-                            wordCount: wordCount,
-                            wordsPerMinute: wordsPerMinute
-                        ))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .help("Estimated at \(wordsPerMinute) words per minute")
-                    }
-
-                    // Nothing to offer is the ordinary case: most readers
-                    // have no other Bible app at all, and a button that opens
-                    // an empty menu is worse than no button.
+                    // Here and on each reading's context menu, rather than as
+                    // a second small icon on every row beside its chevron,
+                    // where the two read as one ambiguous cluster.
                     if !ExternalBibleApplication.openableOnThisMac.isEmpty {
-                        Menu("Open in External Bible", systemImage: "arrow.up.right.square") {
-                            if let preferredApplication {
-                                Button("Open in \(preferredApplication.rawValue)") {
-                                    openExternally(reading, using: preferredApplication)
-                                }
-                                Divider()
-                            }
-                            ForEach(ExternalBibleApplication.openableOnThisMac) { application in
-                                Button(application.rawValue) {
-                                    openExternally(reading, using: application)
+                        Divider()
+                        ForEach(ExternalBibleApplication.openableOnThisMac) { application in
+                            Menu("Open in \(application.rawValue)") {
+                                ForEach(day.readings) { reading in
+                                    Button(reading.displayDescription) {
+                                        openExternally(reading, using: application)
+                                    }
                                 }
                             }
                         }
-                        .labelStyle(.iconOnly)
-                        .menuStyle(.borderlessButton)
-                        .help("Open in another Bible app")
                     }
                 }
-                .padding(.vertical, 3)
+                .labelStyle(.iconOnly)
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("More plan actions")
+            }
+
+            VStack(spacing: 0) {
+                ForEach(Array(day.readings.enumerated()), id: \.element.id) { index, reading in
+                    if index > 0 {
+                        Divider().padding(.leading, 40)
+                    }
+                    PlanReadingRow(
+                        reading: reading,
+                        isCompleted: isCompleted(reading),
+                        readingTime: wordCounts[reading.id].map {
+                            ReadingTimeEstimator.description(
+                                wordCount: $0,
+                                wordsPerMinute: wordsPerMinute
+                            )
+                        },
+                        wordsPerMinute: wordsPerMinute,
+                        preferredApplication: preferredApplication,
+                        toggle: {
+                            model.toggleReading(
+                                planID: plan.id,
+                                day: day.day,
+                                readingIndex: reading.id,
+                                year: year
+                            )
+                        },
+                        open: { openReading(readingMode(activeReadingID: reading.id)) },
+                        openExternally: { openExternally(reading, using: $0) }
+                    )
+                }
             }
         }
         .task(id: wordCountRequest) { await loadWordCounts() }
+    }
+
+    /// "85% through the year" for a year plan; "of 22" for a shorter one.
+    private var calendarPosition: String? {
+        guard plan.duration > 1, day.day <= plan.duration else { return nil }
+        // A year plan keeps a slot for 29 February, so its length is 366; a
+        // share of the year says the useful thing without that arithmetic.
+        if plan.duration >= 365 {
+            let percent = Int((Double(day.day) / Double(plan.duration) * 100).rounded())
+            return "· \(percent)% through the year"
+        }
+        return "of \(plan.duration)"
     }
 
     private var completedCount: Int {
@@ -664,5 +531,117 @@ private struct PlanDayReadings: View {
             endReference: reading.endReference
         ) else { return }
         NSWorkspace.shared.open(url)
+    }
+}
+
+/// One reading in a day: its checkbox, its passage and how long it takes,
+/// and a chevron to open it. Another Bible app is offered from the row's
+/// context menu and the day's More menu.
+///
+/// The time sits beside the passage rather than at the far edge of the card,
+/// where it had drifted away from the reading it belonged to among a cluster
+/// of small controls. The whole row opens the reading, and says so on hover.
+private struct PlanReadingRow: View {
+    let reading: LampPlanReading
+    let isCompleted: Bool
+    let readingTime: String?
+    let wordsPerMinute: Int
+    let preferredApplication: ExternalBibleApplication?
+    let toggle: () -> Void
+    let open: () -> Void
+    let openExternally: (ExternalBibleApplication) -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button(action: toggle) {
+                Image(systemName: isCompleted ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 19, weight: .regular))
+                    .foregroundStyle(isCompleted ? Color.accentColor : Color.lampSecondaryText)
+                    .contentTransition(.symbolEffect(.replace))
+            }
+            .buttonStyle(.plain)
+            .help(isCompleted ? "Mark incomplete" : "Mark complete")
+            .accessibilityLabel(isCompleted ? "Mark \(reading.displayDescription) incomplete" : "Mark \(reading.displayDescription) complete")
+
+            Button(action: open) {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(reading.displayDescription)
+                        .font(.system(size: 14.5))
+                        .foregroundStyle(isCompleted ? .secondary : .primary)
+                    if let readingTime {
+                        Text(readingTime)
+                            .font(.callout.monospacedDigit())
+                            .foregroundStyle(Color.lampSecondaryText)
+                            .help("Estimated at \(wordsPerMinute) words per minute")
+                    }
+                    Spacer(minLength: 8)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            // Shown with the row's hover: the whole row opens the reading, and
+            // a chevron on every row at rest, beside the day's Open button,
+            // blurred what was clickable.
+            Button("Open", systemImage: "chevron.right", action: open)
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+                .foregroundStyle(Color.lampSecondaryText)
+                .fontWeight(.semibold)
+                .help("Open in Reader")
+                .opacity(isHovering ? 1 : 0)
+        }
+        .contextMenu {
+            Button("Open in Reader", systemImage: "book", action: open)
+            Button(isCompleted ? "Mark Incomplete" : "Mark Complete", action: toggle)
+            // Nothing to offer is the ordinary case: most readers have no
+            // other Bible app at all.
+            if !ExternalBibleApplication.openableOnThisMac.isEmpty {
+                Divider()
+                if let preferredApplication {
+                    Button("Open in \(preferredApplication.rawValue)") {
+                        openExternally(preferredApplication)
+                    }
+                    Divider()
+                }
+                ForEach(ExternalBibleApplication.openableOnThisMac) { application in
+                    Button("Open in \(application.rawValue)") {
+                        openExternally(application)
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 9)
+        .padding(.horizontal, 8)
+        .background(
+            isHovering ? Color.lampTileFill : .clear,
+            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+        )
+        .padding(.horizontal, -8)
+        .onHover { isHovering = $0 }
+    }
+}
+
+/// A small ring that fills as the day's readings are ticked off.
+private struct PlanDayProgressRing: View {
+    let fraction: Double
+
+    var body: some View {
+        ZStack {
+            // An accent track, faint, so the ring reads as progress waiting to
+            // fill rather than as a control that is switched off.
+            Circle()
+                .stroke(Color.accentColor.opacity(0.22), lineWidth: 3.5)
+            Circle()
+                .trim(from: 0, to: max(0, min(1, fraction)))
+                .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 3.5, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+        }
+        .frame(width: 18, height: 18)
+        .animation(.easeOut(duration: 0.25), value: fraction)
+        .accessibilityHidden(true)
     }
 }

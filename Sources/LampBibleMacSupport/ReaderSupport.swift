@@ -1727,3 +1727,33 @@ public enum ReaderTextMarks {
         )
     }
 }
+
+/// What a dictionary sense shows of its two definitions.
+///
+/// Many lexicon modules carry a `shortDefinition` that is only the long
+/// definition's opening, cut off with an ellipsis, as a preview for lists.
+/// Shown over the full definition it printed the same words twice, once
+/// trailing off and once in full.
+public enum LampDictionarySenseText {
+    /// Whether `short` says something `definition` doesn't already open with.
+    public static func showsShortDefinition(_ short: String?, beside definition: String?) -> Bool {
+        guard let short = short.map(normalized), !short.isEmpty else { return false }
+        guard let definition = definition.map(normalized), !definition.isEmpty else { return true }
+        if short == definition { return false }
+        let opening = trimmingEllipsis(short)
+        guard !opening.isEmpty else { return false }
+        return !definition.hasPrefix(opening)
+    }
+
+    private static func normalized(_ text: String) -> String {
+        text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
+    private static func trimmingEllipsis(_ text: String) -> String {
+        var result = Substring(text)
+        while let last = result.last, last == "…" || last == "." || last == " " {
+            result = result.dropLast()
+        }
+        return String(result)
+    }
+}

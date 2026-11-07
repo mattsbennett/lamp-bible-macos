@@ -212,34 +212,41 @@ struct ReaderChatSidebarView: View {
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Label("Reader Chat", systemImage: "bubble.left.and.bubble.right")
+                HStack(spacing: 7) {
+                    Image(systemName: "bubble.left.and.bubble.right")
+                        .foregroundStyle(.secondary)
+                    Text("Reader Chat")
                         .font(.headline)
                     Spacer()
                     Button("Close Chat", systemImage: "xmark", action: close)
                         .labelStyle(.iconOnly)
-                        .buttonStyle(.plain)
+                        .buttonStyle(ChatControlButtonStyle())
                         .help("Close reader chat")
                 }
 
-                HStack {
-                    Picker("Provider", selection: providerSelection) {
-                        ForEach(AIProviderCLI.allCases) { provider in
-                            Text(provider.shortName).tag(provider.rawValue)
+                // Who answers, with what, in one quiet row of menus that each
+                // say their whole choice. Bordered pop-ups side by side in a
+                // pane this narrow cut "Default model" to "Defa…model".
+                HStack(spacing: 2) {
+                    Menu {
+                        Picker("Provider", selection: providerSelection) {
+                            ForEach(AIProviderCLI.allCases) { provider in
+                                Text(provider.shortName).tag(provider.rawValue)
+                            }
                         }
+                        .pickerStyle(.inline)
+                        .labelsHidden()
+                    } label: {
+                        ChatControlMenuLabel(title: provider.shortName, systemImage: provider.systemImage)
                     }
-                    .labelsHidden()
-                    .frame(maxWidth: 160)
-                    Spacer()
-                    Label("Read-only", systemImage: "lock")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                    .menuStyle(.button)
+                    .menuIndicator(.hidden)
+                    .buttonStyle(ChatControlButtonStyle())
+                    .fixedSize()
+                    .accessibilityLabel("Provider")
+                    .accessibilityValue(provider.shortName)
+                    .help("Which AI answers in this chat")
 
-                // On their own line: this pane is as narrow as 364pt, and a
-                // qualified model name beside the provider and the badge left
-                // all three of them truncated to their first few letters.
-                HStack {
                     AgentChatProviderChoice(
                         kind: .model, provider: provider, workspace: workspace,
                         chatChoices: $chatChoices
@@ -248,43 +255,15 @@ struct ReaderChatSidebarView: View {
                         kind: .effort, provider: provider, workspace: workspace,
                         chatChoices: $chatChoices
                     )
-                    Spacer()
+                    Spacer(minLength: 0)
                 }
+                .padding(.leading, -6)
 
-                if let capture = capture() {
-                    Label(capture.reference, systemImage: "book")
-                        .font(.subheadline.weight(.medium))
-                    Text(capture.translationName)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .help(capture.translationName)
-                    ReaderChatAttachmentsLine(
-                        selection: libraryModel.readerTextSelection,
-                        selectedVerse: capture.selectedVerse,
-                        personalStudy: capture.sharesPersonalStudy
-                            ? .shared(
-                                notedVerses: capture.noteReferences.count,
-                                highlights: capture.highlights.count
-                            )
-                            : .notShared
-                    )
-                } else {
-                    Text("Choose a chapter in the reader to begin.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                HStack(alignment: .firstTextBaseline) {
-                    Text(moduleAccessDescription)
-                    Spacer(minLength: 4)
-                    SettingsLink { Image(systemName: "gearshape") }
-                        .help("AI provider and module access settings")
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                contextCard
             }
-            .padding(12)
+            .padding(.horizontal, 14)
+            .padding(.top, 12)
+            .padding(.bottom, 12)
             Divider()
 
             if let configuration {
@@ -331,6 +310,66 @@ struct ReaderChatSidebarView: View {
                 preparationError = error.localizedDescription
                 configuration = nil
             }
+        }
+    }
+
+    /// What each message is sent with, gathered in one card: the passage and
+    /// translation, what else rides along, and what the chat may read. It
+    /// was four loose lines of grey, which read as debugging output.
+    @ViewBuilder
+    private var contextCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let capture = capture() {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: "book")
+                        .foregroundStyle(.secondary)
+                    Text(capture.reference)
+                        .fontWeight(.semibold)
+                    Text(capture.translationName)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .help(capture.translationName)
+                    Spacer(minLength: 0)
+                }
+                .font(.subheadline)
+                ReaderChatAttachmentsLine(
+                    selection: libraryModel.readerTextSelection,
+                    selectedVerse: capture.selectedVerse,
+                    personalStudy: capture.sharesPersonalStudy
+                        ? .shared(
+                            notedVerses: capture.noteReferences.count,
+                            highlights: capture.highlights.count
+                        )
+                        : .notShared
+                )
+            } else {
+                Text("Choose a chapter in the reader to begin.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Label("Read-only", systemImage: "lock")
+                Text("·").foregroundStyle(.tertiary)
+                Text(moduleAccessDescription)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .help(moduleAccessDescription)
+                Spacer(minLength: 4)
+                SettingsLink { Image(systemName: "gearshape") }
+                    .buttonStyle(.borderless)
+                    .help("AI provider and module access settings")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background(Color.lampCardFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color.lampCardStroke)
         }
     }
 

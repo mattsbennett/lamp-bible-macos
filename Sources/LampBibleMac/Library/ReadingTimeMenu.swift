@@ -59,7 +59,11 @@ struct ReadingTimeMenu: View {
                     .monospacedDigit()
             }
         }
-        .menuStyle(.borderlessButton)
+        // Drawn as plain SwiftUI so its title takes the font and colour of
+        // the line it sits in. A borderless pop-up drew its own system-size
+        // title, a size above the word count and byline beside it.
+        .menuStyle(.button)
+        .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
         .help(mode.explanation)

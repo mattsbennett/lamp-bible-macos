@@ -41,6 +41,18 @@ private struct SelectableProseView: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
+    /// A reply is read at length, so it is set a point above the system's
+    /// 13 with a little leading, as Claude and ChatGPT set theirs: at 13 and
+    /// solid, a long answer in a narrow pane read as a wall of small print.
+    private static let style: AgentProseText.Style = {
+        var style = AgentProseText.Style()
+        style.fontSize = 14
+        style.lineSpacing = 3
+        style.blockSpacing = 12
+        style.listItemSpacing = 6
+        return style
+    }()
+
     func makeNSView(context: Context) -> NSTextView {
         // TextKit 1: quotes and tables are text blocks, which TextKit 2 doesn't draw.
         let textView = ProseTextView(usingTextLayoutManager: false)
@@ -67,15 +79,17 @@ private struct SelectableProseView: NSViewRepresentable {
         context.coordinator.openURL = context.environment.openURL
         guard context.coordinator.blocks != blocks else { return }
         context.coordinator.blocks = blocks
-        textView.textStorage?.setAttributedString(AgentProseText.attributedString(for: blocks))
+        textView.textStorage?.setAttributedString(
+            AgentProseText.attributedString(for: blocks, style: Self.style)
+        )
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView textView: NSTextView, context: Context) -> CGSize? {
         guard let container = textView.textContainer,
               let layoutManager = textView.layoutManager
         else { return nil }
-        // Without a width on offer, the bubble's own limit, less its padding.
-        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? 596
+        // Without a width on offer, the reply's own limit.
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? 640
         // Measuring lays the text out at the width on offer; afterwards it goes
         // back to the view's own width, which may not change to match.
         defer {

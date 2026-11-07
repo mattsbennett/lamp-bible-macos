@@ -230,6 +230,28 @@ struct BookModulesView: View {
     }
 
     private var booksList: some View {
+        // Held a point below the toolbar. A list whose top meets the
+        // window's top is drawn up under the toolbar's glass, so the books
+        // above the one being read — and the list opens scrolled to it, often
+        // far down — showed blurred behind the window's title.
+        VStack(alignment: .leading, spacing: 0) {
+            Color.clear.frame(height: 1)
+            // A fixed heading rather than a pinned section header: rows
+            // scrolled under a pinned header showed through its glass.
+            if continueReading.count <= 1 {
+                Text("Books")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.lampSecondaryText)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 10)
+                    .padding(.bottom, 6)
+                Divider().padding(.horizontal, 12)
+            }
+            booksListContent
+        }
+    }
+
+    private var booksListContent: some View {
         List(selection: $selectedBookID) {
             // The list below is alphabetical, which is how you find a book you
             // mean to open and no help at all in finding the one you were in
@@ -244,15 +266,16 @@ struct BookModulesView: View {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(entry.book.title)
                                     .font(.subheadline.weight(.medium))
-                                    .lineLimit(1)
+                                    .lineLimit(2)
                                 Label(
                                     entry.sectionTitle ?? "Resume reading",
                                     systemImage: "bookmark"
                                 )
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(Color.lampSecondaryText)
                                 .lineLimit(1)
                             }
+                            .padding(.vertical, 2)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(.rect)
                         }
@@ -264,27 +287,42 @@ struct BookModulesView: View {
                 bookRows
             }
         }
-        .listStyle(.sidebar)
+        // Inset, not sidebar: a sidebar list draws under the toolbar, so the
+        // window's title was painted over the first book, half of which
+        // showed through beneath it. Inset keeps below the toolbar, and its
+        // ground matches the contents column beside it.
+        .listStyle(.inset)
     }
 
     private var bookRows: some View {
         ForEach(books) { book in
-            VStack(alignment: .leading, spacing: 4) {
-                Text(book.title).font(.headline)
+            // Title and author only: at this column's width a cover would be
+            // a letter tile, too small to tell one book from another and
+            // heavy beside the page.
+            VStack(alignment: .leading, spacing: 3) {
+                // Two lines rather than one: in a column this narrow one
+                // line cut most titles off before the words that tell
+                // them apart ("Rome, the Greek World,…" twice).
+                Text(book.title)
+                    .font(.system(size: 13, weight: .medium))
+                    .lineLimit(2)
                 if let author = book.author, !author.isEmpty {
-                    Text(author).font(.caption).foregroundStyle(.secondary)
+                    Text(author)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Color.lampSecondaryText)
+                        .lineLimit(1)
                 }
                 if let position = readingState.position(for: book.id) {
                     let sectionTitle = book.id == selectedBookID
                         ? sections.first(where: { $0.id == position.sectionID })?.title
                         : nil
                     Label(sectionTitle ?? "Resume reading", systemImage: "bookmark")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .font(.caption)
+                        .foregroundStyle(Color.lampSecondaryText)
                         .lineLimit(1)
                 }
             }
-            .padding(.vertical, 4)
+            .padding(.vertical, 5)
             .tag(Optional(book.id))
         }
     }
@@ -328,17 +366,29 @@ struct BookModulesView: View {
         .listStyle(.inset)
     }
 
+    /// A contents entry: its number in a column of its own, so wrapped
+    /// titles hang clear of it and the numbers line up down the list.
+    ///
+    /// The type's icon is kept for entries with no number — the front and
+    /// back matter, appendices, parts — where it is what says what they are.
+    /// On every numbered chapter it was the same faint page, row after row.
     private func sectionRow(_ section: LampBookSection, showsDepth: Bool) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: sectionIcon(section.type))
-                .foregroundStyle(.secondary)
-                .frame(width: 16)
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Group {
+                if let number = section.number, !number.isEmpty {
+                    Text(number)
+                        .monospacedDigit()
+                } else {
+                    Image(systemName: sectionIcon(section.type))
+                        .imageScale(.small)
+                }
+            }
+            .foregroundStyle(Color.lampSecondaryText)
+            .frame(width: 22, alignment: .trailing)
             VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 5) {
-                    if let number = section.number, !number.isEmpty {
-                        Text(number).foregroundStyle(.secondary)
-                    }
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Text(section.title)
+                        .fixedSize(horizontal: false, vertical: true)
                     if bookmarkIDs.contains(section.id) {
                         Image(systemName: "bookmark.fill")
                             .font(.caption2)
@@ -353,7 +403,9 @@ struct BookModulesView: View {
                 }
             }
         }
+        .padding(.vertical, 3)
         .padding(.leading, showsDepth ? CGFloat(section.depth) * 10 : 0)
+        .listRowSeparator(.hidden)
         .tag(Optional(section.id))
     }
 
@@ -470,11 +522,11 @@ private struct BookReaderResizableLayout<
     let tableOfContents: TableOfContents
     let reader: Reader
 
-    @State private var preferredBookListWidth = 200.0
+    @State private var preferredBookListWidth = 235.0
     @State private var preferredTableOfContentsWidth = 250.0
 
-    private let minimumBookListWidth: CGFloat = 140
-    private let maximumBookListWidth: CGFloat = 220
+    private let minimumBookListWidth: CGFloat = 160
+    private let maximumBookListWidth: CGFloat = 280
     private let minimumTableOfContentsWidth: CGFloat = 160
     private let maximumTableOfContentsWidth: CGFloat = 270
 
@@ -998,9 +1050,20 @@ private struct BookSectionReaderView: View {
                     chapterNavigation
                 }
                 .scrollTargetLayout()
-                .frame(maxWidth: 760, alignment: .leading)
-                .padding(32)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
+                // The long-form reading colour: a hair softer than label
+                // colour, which glared on charcoal over a whole chapter.
+                // Links and original-language words keep their own colours.
+                .foregroundStyle(Color.lampProse)
+                // A reading measure that follows the type: about 65 to 70
+                // characters a line at any size. A fixed 760pt was 95 to
+                // 100 characters at the default size, long enough that the
+                // eye lost its place on the return sweep. Centred in the
+                // pane, as a page is.
+                .frame(maxWidth: readingMeasure, alignment: .leading)
+                .padding(.horizontal, 40)
+                .padding(.bottom, 48)
+                // Centred in the pane, as a page is.
+                .frame(maxWidth: .infinity, alignment: .top)
                 // A selection scope around the complete lazy document makes
                 // SwiftUI's macOS SelectionOverlay repeatedly invalidate every
                 // attributed-text row while scrolling. Sections containing
@@ -1030,7 +1093,7 @@ private struct BookSectionReaderView: View {
     }
 
     private var readerToolbar: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 14) {
             Button("Previous Section", systemImage: "chevron.left") {
                 if let previousSection { selectSection(previousSection) }
             }
@@ -1077,19 +1140,44 @@ private struct BookSectionReaderView: View {
                 .labelStyle(.iconOnly)
         }
         .buttonStyle(.borderless)
-        .padding(.horizontal, 12)
+        // A size up and a shade darker than borderless buttons draw by
+        // default, which left these small and faint enough to miss.
+        .font(.system(size: 14.5))
+        .foregroundStyle(.primary.opacity(0.78))
+        .padding(.horizontal, 14)
         .frame(height: 42)
+    }
+
+    /// About 32 ems: 60 to 70 characters of a book face.
+    private var readingMeasure: CGFloat {
+        CGFloat(min(max(fontSize * 32, 440), 800))
+    }
+
+    /// "Chapter 2" over the title, rather than a bare "2" that read as a
+    /// stray page number.
+    private var sectionEyebrow: String? {
+        guard let number = section.number?.trimmingCharacters(in: .whitespaces),
+              !number.isEmpty else { return nil }
+        let isNumeral = number.allSatisfy { $0.isNumber }
+        switch section.type {
+        case "chapter" where isNumeral: return "Chapter \(number)"
+        case "part" where isNumeral: return "Part \(number)"
+        case "appendix": return "Appendix \(number)"
+        default: return number
+        }
     }
 
     private var sectionHeader: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if let number = section.number, !number.isEmpty {
-                Text(number.uppercased())
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+            if let sectionEyebrow {
+                Text(sectionEyebrow.uppercased())
+                    .font(.system(size: 12, weight: .semibold))
+                    .tracking(1.4)
+                    .foregroundStyle(Color.lampSecondaryText)
             }
             Text(section.title)
                 .font(.system(size: max(fontSize * 1.8, 30), weight: .bold, design: typeface.design))
+                .fixedSize(horizontal: false, vertical: true)
             if let subtitle = section.subtitle, !subtitle.isEmpty {
                 Text(subtitle)
                     .font(.system(size: max(fontSize * 1.15, 18), design: typeface.design))
@@ -1111,6 +1199,11 @@ private struct BookSectionReaderView: View {
                 .padding(.top, 3)
             }
         }
+        // Inside the header rather than round the column: opening a section
+        // scrolls the header to the top, and space outside it was scrolled
+        // away, which left the title jammed under the toolbar.
+        .padding(.top, 36)
+        .padding(.bottom, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -1208,7 +1301,7 @@ private struct BookContentBlockView: View {
             // colour and merely step down a point.
             HStack(alignment: .top, spacing: 12) {
                 RoundedRectangle(cornerRadius: 1.5)
-                    .fill(.tint.opacity(0.55))
+                    .fill(.tint.opacity(0.7))
                     .frame(width: 3)
                 prose(block.content)
                     .font(.system(size: fontSize - 1, design: typeface.design))
@@ -2146,12 +2239,8 @@ private struct BookInformationView: View {
                 .frame(width: 180, height: 250)
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
         } else {
-            Image(systemName: "book.closed.fill")
-                .font(.system(size: 58))
-                .foregroundStyle(.secondary)
-                .frame(width: 180, height: 250)
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
-                .accessibilityLabel("No book cover")
+            // The same cloth the book wears on the shelf and in the list.
+            LibraryCover(monogram: nil, title: book.title, seed: book.id, width: 180)
         }
     }
 

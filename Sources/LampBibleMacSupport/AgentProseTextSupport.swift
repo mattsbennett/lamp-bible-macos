@@ -36,6 +36,11 @@ public enum AgentProseText {
         public var foreground: NSColor = .labelColor
         /// Between blocks, as the reply's paragraphs were spaced before.
         public var blockSpacing: CGFloat = 10
+        /// Extra leading between the lines of a paragraph. None by default,
+        /// as before; a reply read at length wants a little.
+        public var lineSpacing: CGFloat = 0
+        /// Between the items of a list.
+        public var listItemSpacing: CGFloat = 4
 
         public init() {}
     }
@@ -73,6 +78,9 @@ public enum AgentProseText {
         // Each paragraph ends in a newline; the reply's last one needs none.
         if result.string.hasSuffix("\n") {
             result.deleteCharacters(in: NSRange(location: result.length - 1, length: 1))
+        }
+        if style.lineSpacing > 0 {
+            applyLineSpacing(style.lineSpacing, to: result)
         }
         return result
     }
@@ -250,7 +258,7 @@ public enum AgentProseText {
             // Wrapped lines align with the text, not the marker.
             paragraphStyle.headIndent = indent + 20
             paragraphStyle.tabStops = [NSTextTab(textAlignment: .left, location: indent + 20)]
-            paragraphStyle.paragraphSpacing = 4
+            paragraphStyle.paragraphSpacing = style.listItemSpacing
             let line = NSMutableAttributedString(string: item.marker + "\t", attributes: [
                 .font: body.monospacedDigitFont,
                 .foregroundColor: translucent(style.foreground, 0.7),
@@ -348,6 +356,19 @@ public enum AgentProseText {
               let cell = style.textBlocks.last as? NSTextTableBlock
         else { return false }
         return cell.startingColumn + cell.columnSpan < cell.table.numberOfColumns
+    }
+
+    /// Leads every paragraph but a table's cells, whose rows are already
+    /// spaced by their padding.
+    private static func applyLineSpacing(_ spacing: CGFloat, to text: NSMutableAttributedString) {
+        let whole = NSRange(location: 0, length: text.length)
+        text.enumerateAttribute(.paragraphStyle, in: whole) { value, range, _ in
+            let current = (value as? NSParagraphStyle) ?? NSParagraphStyle()
+            guard !(current.textBlocks.last is NSTextTableBlock) else { return }
+            let updated = current.mutableCopy() as! NSMutableParagraphStyle
+            updated.lineSpacing = spacing
+            text.addAttribute(.paragraphStyle, value: updated, range: range)
+        }
     }
 
     private static func paragraphRange(containing location: Int, in text: NSAttributedString) -> NSRange {
