@@ -5146,20 +5146,24 @@ private struct TranslationReaderView: View, Equatable {
         stacksCompanion: Bool = false
     ) -> some View {
         let headingsByVerse = Dictionary(grouping: chapter.headings, by: \.beforeVerse)
-        // The book in the reader's own face, as a printed Bible opens one, and
-        // the chapter beneath it in small tracked capitals: one title, read
-        // as a title, rather than two lines of chrome at different sizes.
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Chapter \(chapter.number)")
+        // The book in small tracked capitals and the chapter beneath it as a
+        // large numeral in the reader's own face, as a printed Bible and the
+        // iPhone reader set it: the chapter is what changes as the page is
+        // read, so it is the one the eye should find.
+        VStack(alignment: .leading, spacing: 2) {
+            Text(chapter.book.name)
                 .font(.system(size: 12, weight: .semibold))
                 .textCase(.uppercase)
                 .tracking(1.4)
                 .foregroundStyle(Color.lampVerseNumber)
                 .textSelection(.enabled)
-            Text(chapter.book.name)
-                .font(.system(size: max(fontSize * 1.7, 30), weight: .bold, design: typeface.design))
+            Text("\(chapter.number)")
+                .font(.system(size: max(fontSize * 2.4, 42), weight: .medium, design: typeface.design))
+                .monospacedDigit()
                 .textSelection(.enabled)
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(chapter.book.name), chapter \(chapter.number)")
         // Level with the text and the headings, which the rows set in by
         // their own padding.
         .padding(.horizontal, ReaderTextInset.horizontal)
