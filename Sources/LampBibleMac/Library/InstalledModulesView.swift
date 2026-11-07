@@ -382,8 +382,9 @@ struct InstalledModulesView: View {
 /// One module on the shelf: its cover, its name, and a line of detail with
 /// the module's actions beside it, as a bookshop app puts them.
 ///
-/// A module's actions — export, remove — show with the pointer and on the
-/// context menu, so at rest every card ends the same way.
+/// A module's actions — export, remove — are on a menu button that is always
+/// drawn, and on the context menu. Shown only under the pointer, they left the
+/// shelf looking like a wall of tiles that did nothing.
 private struct ModuleShelfCard<Actions: View>: View {
     let name: String
     let detail: Text
@@ -409,11 +410,9 @@ private struct ModuleShelfCard<Actions: View>: View {
                         .foregroundStyle(Color.lampSecondaryText)
                         .lineLimit(1)
                     Spacer(minLength: 0)
-                    // With the pointer, as Finder and Photos show an item's
-                    // actions, and always on its context menu. A button
-                    // drawn on some cards and not others — a built-in module
-                    // has nothing to export or remove — made the shelf's
-                    // lower edge ragged; the detail line says "Built In".
+                    // Quiet at rest and full strength under the pointer. A
+                    // built-in module has nothing to export or remove, so it
+                    // has no button; its detail line says "Built In".
                     if !isBuiltIn {
                         Menu {
                             actions()
@@ -426,10 +425,9 @@ private struct ModuleShelfCard<Actions: View>: View {
                         .menuStyle(.borderlessButton)
                         .menuIndicator(.hidden)
                         .fixedSize()
-                        .foregroundStyle(Color.lampSecondaryText)
-                        .help("Actions for \(name)")
+                        .foregroundStyle(isHovering ? Color.primary : Color.lampSecondaryText)
+                        .help("Export or remove \(name)")
                         .accessibilityLabel("Actions for \(name)")
-                        .opacity(isHovering ? 1 : 0)
                     }
                 }
             }
