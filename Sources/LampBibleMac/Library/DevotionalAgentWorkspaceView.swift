@@ -1016,53 +1016,76 @@ struct DevotionalAgentWorkspaceView: View {
         }
     }
 
+    /// One row where the pane is wide enough, two where it is not. The model
+    /// and effort menus keep their own widths so their titles stay whole, and
+    /// in a narrow pane one row of everything ran off the right edge and
+    /// squeezed the provider picker down to its arrows.
     private var agentToolbar: some View {
-        HStack(spacing: 8) {
-            Picker("Provider", selection: providerSelection) {
-                ForEach(AIProviderCLI.allCases, id: \.rawValue) { provider in
-                    Text(provider.shortName).tag(provider.rawValue)
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                agentChoiceControls
+                agentSessionControls
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    agentChoiceControls
+                }
+                HStack(spacing: 8) {
+                    agentSessionControls
                 }
             }
-            .labelsHidden()
-            .frame(maxWidth: 150)
-            AgentChatProviderChoice(
-                kind: .model, provider: selectedProvider, workspace: workspaceURL,
-                chatChoices: $chatChoices
-            )
-            AgentChatProviderChoice(
-                kind: .effort, provider: selectedProvider, workspace: workspaceURL,
-                chatChoices: $chatChoices
-            )
-
-            Picker("Session interface", selection: $sessionModeID) {
-                ForEach(AgentSessionDisplayMode.allCases) { mode in
-                    Label(mode.title, systemImage: mode.systemImage).tag(mode.rawValue)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
-
-            if sessionMode == .terminal {
-                Button(activeProvider == nil ? "Launch" : "Restart", systemImage: "play.fill") {
-                    launch(selectedProvider)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(workspaceURL == nil)
-            }
-
-            Spacer()
-            if sessionMode == .terminal, let terminalExitCode {
-                Text(terminalExitCode == 0 ? "Exited" : "Exit \(terminalExitCode)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Button("Reveal Workspace", systemImage: "folder") { revealWorkspace() }
-                .labelStyle(.iconOnly)
-                .disabled(workspaceURL == nil)
-                .help("Reveal agent workspace in Finder")
         }
         .padding(10)
+    }
+
+    @ViewBuilder
+    private var agentChoiceControls: some View {
+        Picker("Provider", selection: providerSelection) {
+            ForEach(AIProviderCLI.allCases, id: \.rawValue) { provider in
+                Text(provider.shortName).tag(provider.rawValue)
+            }
+        }
+        .labelsHidden()
+        .fixedSize()
+        AgentChatProviderChoice(
+            kind: .model, provider: selectedProvider, workspace: workspaceURL,
+            chatChoices: $chatChoices
+        )
+        AgentChatProviderChoice(
+            kind: .effort, provider: selectedProvider, workspace: workspaceURL,
+            chatChoices: $chatChoices
+        )
+    }
+
+    @ViewBuilder
+    private var agentSessionControls: some View {
+        Picker("Session interface", selection: $sessionModeID) {
+            ForEach(AgentSessionDisplayMode.allCases) { mode in
+                Label(mode.title, systemImage: mode.systemImage).tag(mode.rawValue)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
+
+        if sessionMode == .terminal {
+            Button(activeProvider == nil ? "Launch" : "Restart", systemImage: "play.fill") {
+                launch(selectedProvider)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(workspaceURL == nil)
+        }
+
+        Spacer()
+        if sessionMode == .terminal, let terminalExitCode {
+            Text(terminalExitCode == 0 ? "Exited" : "Exit \(terminalExitCode)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        Button("Reveal Workspace", systemImage: "folder") { revealWorkspace() }
+            .labelStyle(.iconOnly)
+            .disabled(workspaceURL == nil)
+            .help("Reveal agent workspace in Finder")
     }
 
     private var draftSection: some View {

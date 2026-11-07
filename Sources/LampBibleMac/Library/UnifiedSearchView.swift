@@ -206,6 +206,10 @@ struct UnifiedSearchView: View {
                 }
             }
         }
+        // The landing and the empty states are only as tall as their text, so
+        // without this the stack was centred in the pane and the filter bar
+        // above them sat halfway down the window.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("Search")
         // Short enough to stay whole once the Strong's key field joins the
         // toolbar: the longer "Search Bibles and modules" was cut to
