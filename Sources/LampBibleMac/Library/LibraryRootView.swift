@@ -4954,6 +4954,38 @@ private struct TranslationReaderView: View, Equatable {
         workspace.openReference(readingPlace(in: chapter), translationID: id)
     }
 
+    /// A quiet way into reading side by side from the page itself, beside each
+    /// chapter's opening; the toolbar's toggle and the View menu do the same.
+    /// Side by side has its own add button over the column titles, so this
+    /// shows only on a single column.
+    @ViewBuilder
+    private func parallelTranslationOffer(reading chapter: LampChapter) -> some View {
+        let others = model.translations.filter { $0.id != chapter.translationID }
+        if readerLayoutMode != .sideBySide, !others.isEmpty {
+            Menu {
+                Section("Read Beside \(translationName(chapter.translationID))") {
+                    ForEach(others) { translation in
+                        Button(translation.name) {
+                            chooseCompanions([translation.id])
+                            readsSideBySide.wrappedValue = true
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 12, weight: .semibold))
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .foregroundStyle(Color.lampVerseNumber)
+            .help("Read another translation beside this one")
+            .accessibilityLabel("Add a Parallel Translation")
+        }
+    }
+
     /// Adds a column for the first installed translation not yet read here.
     private func addCompanion(reading chapter: LampChapter) {
         var ids = companionTranslations(beside: chapter.translationID).map(\.id)
@@ -5150,20 +5182,24 @@ private struct TranslationReaderView: View, Equatable {
         // large numeral in the reader's own face, as a printed Bible and the
         // iPhone reader set it: the chapter is what changes as the page is
         // read, so it is the one the eye should find.
-        VStack(alignment: .leading, spacing: 2) {
-            Text(chapter.book.name)
-                .font(.system(size: 12, weight: .semibold))
-                .textCase(.uppercase)
-                .tracking(1.4)
-                .foregroundStyle(Color.lampVerseNumber)
-                .textSelection(.enabled)
-            Text("\(chapter.number)")
-                .font(.system(size: max(fontSize * 2.4, 42), weight: .medium, design: typeface.design))
-                .monospacedDigit()
-                .textSelection(.enabled)
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(chapter.book.name)
+                    .font(.system(size: 12, weight: .semibold))
+                    .textCase(.uppercase)
+                    .tracking(1.4)
+                    .foregroundStyle(Color.lampVerseNumber)
+                    .textSelection(.enabled)
+                Text("\(chapter.number)")
+                    .font(.system(size: max(fontSize * 2.4, 42), weight: .medium, design: typeface.design))
+                    .monospacedDigit()
+                    .textSelection(.enabled)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(chapter.book.name), chapter \(chapter.number)")
+            Spacer(minLength: 0)
+            parallelTranslationOffer(reading: chapter)
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(chapter.book.name), chapter \(chapter.number)")
         // Level with the text and the headings, which the rows set in by
         // their own padding.
         .padding(.horizontal, ReaderTextInset.horizontal)
