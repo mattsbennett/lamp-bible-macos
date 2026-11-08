@@ -837,6 +837,12 @@ struct UnifiedSearchView: View {
                     openDictionaryEntry(key, result.title)
                 }
             }
+            if let key = analysableKey(of: result) {
+                Button("Analyse \(key)") {
+                    saveSearch()
+                    analyse(key)
+                }
+            }
             Button("Copy Result") { copy(result) }
         }
     }
@@ -894,6 +900,10 @@ struct UnifiedSearchView: View {
                     detailByline(result)
                 }
 
+                if result.kind == .dictionary {
+                    detailActions(result)
+                }
+
                 Divider()
 
                 if let translationID = previewTranslation(of: result),
@@ -906,6 +916,14 @@ struct UnifiedSearchView: View {
                         context: previewContext
                     )
                     .id("\(result.id)|\(previewContext)")
+                } else if result.kind == .dictionary, let key = lexiconKey(of: result) {
+                    SearchDictionaryEntry(key: key, moduleID: result.moduleID) {
+                        snippetText(result.snippet)
+                            .font(.system(size: detailFontSize - 1, design: detailDesign(for: result.kind)))
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .id(result.id)
                 } else {
                     snippetText(result.snippet)
                         .font(.system(size: detailFontSize - 1, design: detailDesign(for: result.kind)))
@@ -914,49 +932,67 @@ struct UnifiedSearchView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                HStack(spacing: 8) {
-                    if let reference = result.startReference {
-                        Button("Open in Reader", systemImage: "book") {
-                            saveSearch()
-                            openReference(reference, translationID(of: result))
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-                    if result.kind == .book {
-                        Button("Open Book", systemImage: "book.closed") {
-                            saveSearch()
-                            openBook(result)
-                        }
-                        .buttonStyle(.borderedProminent)
-                    } else if result.kind == .dictionary, let key = lexiconKey(of: result) {
-                        Button("Look Up", systemImage: "character.book.closed") {
-                            saveSearch()
-                            openDictionaryEntry(key, result.title)
-                        }
-                        .buttonStyle(.bordered)
-                    } else if [.devotional, .plan, .quiz].contains(result.kind) {
-                        Button("Open \(result.kind.displayName)", systemImage: icon(for: result.kind)) {
-                            saveSearch()
-                            openKind(result)
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-                    if previewTranslation(of: result) != nil {
-                        Button("Preview in Context", systemImage: "text.magnifyingglass") {
-                            previewedResult = result
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                    Button("Copy", systemImage: "doc.on.doc") { copy(result) }
-                        .buttonStyle(.bordered)
+                // Below whatever is shown, except an entry: a lexicon's
+                // article can run to pages, and the way on from it — analyse
+                // the word, or look it up beside the reader — belongs where
+                // the reader starts, not where they would have to scroll to.
+                if result.kind != .dictionary {
+                    detailActions(result)
                 }
-                .controlSize(.large)
             }
             .frame(maxWidth: 640, alignment: .leading)
             .padding(.horizontal, 40)
             .padding(.vertical, 34)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
+    }
+
+    /// What can be done with the selected result.
+    private func detailActions(_ result: LampModuleSearchResult) -> some View {
+        HStack(spacing: 8) {
+            if let reference = result.startReference {
+                Button("Open in Reader", systemImage: "book") {
+                    saveSearch()
+                    openReference(reference, translationID(of: result))
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            if result.kind == .book {
+                Button("Open Book", systemImage: "book.closed") {
+                    saveSearch()
+                    openBook(result)
+                }
+                .buttonStyle(.borderedProminent)
+            } else if result.kind == .dictionary, let key = lexiconKey(of: result) {
+                if let analysable = analysableKey(of: result) {
+                    Button("Analyse \(analysable)", systemImage: "chart.bar.xaxis") {
+                        saveSearch()
+                        analyse(analysable)
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                Button("Look Up", systemImage: "character.book.closed") {
+                    saveSearch()
+                    openDictionaryEntry(key, result.title)
+                }
+                .buttonStyle(.bordered)
+            } else if [.devotional, .plan, .quiz].contains(result.kind) {
+                Button("Open \(result.kind.displayName)", systemImage: icon(for: result.kind)) {
+                    saveSearch()
+                    openKind(result)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            if previewTranslation(of: result) != nil {
+                Button("Preview in Context", systemImage: "text.magnifyingglass") {
+                    previewedResult = result
+                }
+                .buttonStyle(.bordered)
+            }
+            Button("Copy", systemImage: "doc.on.doc") { copy(result) }
+                .buttonStyle(.bordered)
+        }
+        .controlSize(.large)
     }
 
     /// Where the result came from, said once: the module, and the passage a
@@ -1213,16 +1249,23 @@ struct UnifiedSearchView: View {
         return translationID(of: result)
     }
 
-    /// The lexicon key a dictionary result stands for.
+    /// The lexicon key a dictionary result stands for, as core names it.
     ///
-    /// Core identifies the entry as `dictionary:<module>:<entry>`, and for a
-    /// Strong's lexicon that entry is the key. Read off the id rather than
-    /// the title, which is the lemma — the Greek or Hebrew word, not
-    /// something the dictionary pane can look up.
+    /// Not the title, which is the lemma — the Greek or Hebrew word, not
+    /// something the dictionary pane can look up — and not the entry part of
+    /// the id, which is the row's own id: a number for a bundled dictionary,
+    /// so a lookup by it found nothing.
     private func lexiconKey(of result: LampModuleSearchResult) -> String? {
-        LampSearchResultIdentity.entryID(
-            in: result.id, kind: "dictionary", moduleID: result.moduleID
-        )
+        guard result.kind == .dictionary else { return nil }
+        return result.entryKey
+    }
+
+    /// The Strong's key a dictionary hit is the entry for, when it has one:
+    /// the way from a word found by its meaning ("propitiation") to where it
+    /// stands in scripture and how it is rendered. An entry keyed some other
+    /// way, as BDB's are, has no analysis to open.
+    private func analysableKey(of result: LampModuleSearchResult) -> String? {
+        lexiconKey(of: result).flatMap(LampStrongsKey.typedKey)
     }
 
     /// The translation a result should open in.
@@ -1657,5 +1700,47 @@ private extension View {
             .frame(height: 26)
             .background(Capsule().fill(Color.lampTileFill))
             .overlay(Capsule().strokeBorder(Color.lampCardStroke))
+    }
+}
+
+/// A dictionary hit's whole entry, in the search's detail pane.
+///
+/// The hit itself carries only a snippet cut around the match, which read as
+/// the entry broken off mid-sentence. The entry is read again by its key
+/// from the hit's own dictionary, and shown the way the study pane shows it;
+/// until it arrives, or if it cannot be found, the snippet stands in.
+private struct SearchDictionaryEntry<Fallback: View>: View {
+    let key: String
+    let moduleID: String
+    @ViewBuilder let fallback: () -> Fallback
+
+    @EnvironmentObject private var model: LibraryModel
+    @AppStorage("commentary.fontSize") private var fontSize = LampTextScale.commentaryText.defaultValue
+    @AppStorage("commentary.lineSpacing") private var lineSpacing = LampTextScale.commentaryLineSpacing.defaultValue
+    @AppStorage("commentary.typeface") private var typeface = ProseTypeface.commentaryDefault
+    @State private var entries: [LampDictionaryResult] = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            if entries.isEmpty {
+                fallback()
+            } else {
+                ForEach(entries) { entry in
+                    DictionaryResultView(
+                        result: entry,
+                        isExpanded: true,
+                        // The pane's heading already names the word; only
+                        // several entries under one key need telling apart.
+                        showsSummary: entries.count > 1,
+                        fontSize: LampTextScale.commentaryText.clamped(fontSize),
+                        lineSpacing: LampTextScale.commentaryLineSpacing.clamped(lineSpacing),
+                        typeface: typeface
+                    )
+                }
+            }
+        }
+        .task(id: "\(moduleID)|\(key)") {
+            entries = (try? await model.library.dictionaryEntries(keys: [key], moduleIDs: [moduleID])) ?? []
+        }
     }
 }

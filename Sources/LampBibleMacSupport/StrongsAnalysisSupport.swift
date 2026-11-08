@@ -692,8 +692,9 @@ public enum LampSearchSnippet {
 /// Reading the item out of a search result's identifier.
 ///
 /// Core builds these as `<kind>:<module>:<entry>`, which is the only place a
-/// result says *which* writing or lexicon entry it is — the module alone
-/// names the collection, not the item. Parsed in one place, and pinned by
+/// writing's result says *which* writing it is — the module alone names the
+/// collection, not the item. A dictionary hit's entry part is its row's id;
+/// its key comes in `entryKey`. Parsed in one place, and pinned by
 /// tests, because the shape is core's rather than ours.
 public enum LampSearchResultIdentity {
     public static func entryID(

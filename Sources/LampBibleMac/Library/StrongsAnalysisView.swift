@@ -284,7 +284,9 @@ struct StrongsAnalysisPane: View {
     /// rate is per tagged *word*, not per verse.
     private func countSummary(_ analysis: LampStrongsAnalysis) -> String {
         let rate = (analysis.ratePerThousandWords * 100).rounded() / 100
-        return "\(analysis.occurrenceCount) occurrences in \(analysis.verseCount) verses · "
+        let occurrences = analysis.occurrenceCount == 1 ? "occurrence" : "occurrences"
+        let verses = analysis.verseCount == 1 ? "verse" : "verses"
+        return "\(analysis.occurrenceCount) \(occurrences) in \(analysis.verseCount) \(verses) · "
             + "\(rate) per 1,000 tagged words · \(analysis.translationAbbreviation ?? analysis.translationName)"
     }
 

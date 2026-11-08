@@ -799,16 +799,10 @@ struct SearchResultIdentityTests {
                 kind: "devotional", moduleID: "personal-devotionals"
             ) == "living-hope"
         )
-        #expect(
-            LampSearchResultIdentity.entryID(
-                in: "dictionary:strongs-greek:G26",
-                kind: "dictionary", moduleID: "strongs-greek"
-            ) == "G26"
-        )
     }
 
-    /// An entry id may itself contain colons — a writing named by a path, a
-    /// lexicon key with a suffix — so only the first two segments are the
+    /// An entry id may itself contain colons — a writing named by a path —
+    /// so only the first two segments are the
     /// prefix and the rest is the entry, whole.
     @Test func anentryKeepsItsOwnColons() {
         #expect(
