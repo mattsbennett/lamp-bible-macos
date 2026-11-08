@@ -269,6 +269,16 @@ public enum ReaderChatWorkspaceStore {
 
         public static let standard = Retention.twoMonths
 
+        /// Where the reader's choice is kept. Not synced: these chats are a
+        /// Mac's own, and the phone has no pane to keep any in.
+        public static let settingKey = "reader.chat.retention"
+
+        /// The reader's choice, or two months where nothing has been chosen
+        /// or the name saved is one this build does not know.
+        public static func chosen(in defaults: UserDefaults = .standard) -> Retention {
+            defaults.string(forKey: settingKey).flatMap(Retention.init(rawValue:)) ?? .standard
+        }
+
         /// Days to keep a conversation for, or nil to keep it for ever.
         public var days: Int? {
             switch self {
@@ -292,6 +302,9 @@ public enum ReaderChatWorkspaceStore {
             }
         }
     }
+
+    /// Where the chat retention setting is kept; see `Retention.settingKey`.
+    public static let retentionKey = Retention.settingKey
 
     /// Where every reader chat's workspace sits.
     public static func directory(libraryRootURL: URL) -> URL {

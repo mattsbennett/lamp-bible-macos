@@ -267,6 +267,8 @@ private struct ReaderSettingsView: View {
     @AppStorage(AgentModuleAccessPreferences.allowsExternalReadingPlansKey)
     private var agentAllowsExternalReadingPlans = false
     @AppStorage("agent.moduleAccess.personal") private var agentPersonalContentEnabled = false
+    @AppStorage(ReaderChatWorkspaceStore.retentionKey)
+    private var readerChatRetention = ReaderChatWorkspaceStore.Retention.standard.rawValue
     @State private var agentModuleAccessStatus: String?
     @AppStorage("sync.automatic") private var automaticSync = true
     @State private var webDAVEndpoint = ""
@@ -619,6 +621,25 @@ private struct ReaderSettingsView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
+                    }
+
+                    Section("Reader Chats") {
+                        Picker("Keep chats for", selection: $readerChatRetention) {
+                            ForEach(ReaderChatWorkspaceStore.Retention.allCases, id: \.rawValue) {
+                                Text($0.title).tag($0.rawValue)
+                            }
+                        }
+                        Text(
+                            """
+                            Each reader tab keeps its own chat, and the pane \
+                            lists the ones you can go back to. A chat nothing \
+                            was said in is not kept, and the rest are let go \
+                            of when Lamp next opens, once they are older than \
+                            this.
+                            """
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     }
 
                     Section("Use Lamp in Other Apps") {

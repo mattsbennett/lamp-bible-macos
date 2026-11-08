@@ -557,6 +557,30 @@ enum OpenReaderChats {
     }
 }
 
+/// The letting go of old chats, which belongs to the launch rather than to a
+/// window.
+///
+/// Done once, by whichever window reads the library first, and never again
+/// while the app runs: a chat removed mid-run could be one a tab is about to
+/// take up from its saved identifier, or one being read in a window that has
+/// not finished opening. Nothing is lost by waiting for the next launch.
+@MainActor
+enum ReaderChatHousekeeping {
+    private static var done = false
+
+    /// - Returns: the chats that went, for a caller that wants to say so.
+    @discardableResult
+    static func letGoOfOldChats(libraryRootURL: URL) -> [UUID] {
+        guard !done else { return [] }
+        done = true
+        return ReaderChatWorkspaceStore.scrub(
+            libraryRootURL: libraryRootURL,
+            retention: ReaderChatWorkspaceStore.Retention.chosen(),
+            heldBy: OpenReaderChats.inUse
+        )
+    }
+}
+
 /// Which tab session each open window is on.
 ///
 /// The window's tabs are kept under it, and it is taken up again at the next

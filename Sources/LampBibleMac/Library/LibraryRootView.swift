@@ -172,6 +172,9 @@ struct LibraryRootView: View {
         }
         .onChange(of: model.hasReadLibrary, initial: true) { _, read in
             guard read else { return }
+            // Before the tabs take up the chats they remember, so one that has
+            // outstayed the reader's retention is let go of rather than opened.
+            ReaderChatHousekeeping.letGoOfOldChats(libraryRootURL: model.library.rootURL)
             // Before the tabs, which are kept under the session taken up here.
             if readerSession == nil {
                 let claimed = OpenReaderWindows.claim()

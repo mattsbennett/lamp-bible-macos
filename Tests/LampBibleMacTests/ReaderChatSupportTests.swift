@@ -468,6 +468,27 @@ struct ReaderChatSupportTests {
         #expect(listed.opening == nil, "nothing is left in it to name it by")
     }
 
+    @Test func theRetentionSettingReadsBackAndFallsBackToTwoMonths() throws {
+        let suite = "reader-chat-retention-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        // Nothing chosen yet: the default the user asked for.
+        #expect(ReaderChatWorkspaceStore.Retention.chosen(in: defaults) == .twoMonths)
+        #expect(ReaderChatWorkspaceStore.Retention.twoMonths.days == 60)
+
+        defaults.set(
+            ReaderChatWorkspaceStore.Retention.sixMonths.rawValue,
+            forKey: ReaderChatWorkspaceStore.Retention.settingKey
+        )
+        #expect(ReaderChatWorkspaceStore.Retention.chosen(in: defaults) == .sixMonths)
+
+        // A name this build does not know — written by a later one — reads as
+        // the default rather than keeping nothing or everything by accident.
+        defaults.set("fortnightly", forKey: ReaderChatWorkspaceStore.Retention.settingKey)
+        #expect(ReaderChatWorkspaceStore.Retention.chosen(in: defaults) == .twoMonths)
+    }
+
     @Test func aChatNothingWasSaidInIsNotKept() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
