@@ -1868,3 +1868,65 @@ public enum LampDictionarySenseText {
         return String(result)
     }
 }
+
+/// A dictionary field's bold, italic and original-language stretches, set on
+/// the text drawn for it.
+public enum LampDictionaryStyling {
+    /// Sets bold and italic on `value`, adding to emphasis already there, and
+    /// returns the Greek and Hebrew stretches for the caller to colour.
+    /// `prefix` is how many scalars the drawn text puts before the field's
+    /// own, as "Derivation: " does; a style that would run past the text is
+    /// left off rather than cut.
+    @discardableResult
+    public static func apply(
+        _ styles: [LampDictionaryStyle],
+        after prefix: Int = 0,
+        to value: inout AttributedString
+    ) -> [Range<AttributedString.Index>] {
+        var originalLanguage: [Range<AttributedString.Index>] = []
+        let length = value.unicodeScalars.count
+        for style in styles {
+            let start = style.start + prefix
+            let end = style.end + prefix
+            guard start >= 0, end > start, end <= length else { continue }
+            let scalars = value.unicodeScalars
+            let range = scalars.index(scalars.startIndex, offsetBy: start)
+                ..< scalars.index(scalars.startIndex, offsetBy: end)
+            switch style.kind {
+            case .bold: add(.stronglyEmphasized, to: range, in: &value)
+            case .italic: add(.emphasized, to: range, in: &value)
+            case .greek, .hebrew: originalLanguage.append(range)
+            }
+        }
+        return originalLanguage
+    }
+
+    /// Holds a paragraph left to right when its first letter is Hebrew or
+    /// Arabic. A paragraph takes its direction from its first letter, so a
+    /// sense that opens on its Hebrew headword was laid out right to left and
+    /// its English came out in the wrong order. A left-to-right mark goes in
+    /// front, after any styles and links were placed, so their counts stand.
+    public static func holdLeftToRight(_ value: inout AttributedString) {
+        guard let first = value.unicodeScalars.first(where: { $0.properties.isAlphabetic }),
+              isRightToLeft(first) else { return }
+        value.insert(AttributedString("\u{200E}"), at: value.startIndex)
+    }
+
+    static func isRightToLeft(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x0590...0x08FF, 0xFB1D...0xFDFF, 0xFE70...0xFEFF: true
+        default: false
+        }
+    }
+
+    private static func add(
+        _ intent: InlinePresentationIntent,
+        to range: Range<AttributedString.Index>,
+        in value: inout AttributedString
+    ) {
+        let runs = value[range].runs.map { ($0.range, $0.inlinePresentationIntent ?? []) }
+        for (run, existing) in runs {
+            value[run].inlinePresentationIntent = existing.union(intent)
+        }
+    }
+}

@@ -2162,27 +2162,27 @@ struct DictionaryResultView: View {
                             .foregroundStyle(Color.lampSecondaryText)
                     }
                     if let gloss = sense.gloss {
-                        linkedText(gloss, sense: sense)
+                        linkedText(gloss, sense: sense, field: .gloss)
                             .font(.system(size: fontSize, weight: .semibold, design: typeface.design))
                     }
                     if let shortDefinition = sense.shortDefinition,
                        LampDictionarySenseText.showsShortDefinition(shortDefinition, beside: sense.definition) {
-                        linkedText(shortDefinition, sense: sense)
+                        linkedText(shortDefinition, sense: sense, field: .shortDefinition)
                             .font(.system(size: fontSize, design: typeface.design))
                             .foregroundStyle(Color.lampProse)
                     }
                     if let definition = sense.definition {
-                        linkedText(definition, sense: sense)
+                        linkedText(definition, sense: sense, field: .definition)
                             .font(.system(size: fontSize, design: typeface.design))
                             .foregroundStyle(Color.lampProse)
                     }
                     if let derivation = sense.derivation {
-                        linkedText("Derivation: \(derivation)", sense: sense)
+                        linkedText(derivation, sense: sense, field: .derivation, label: "Derivation: ")
                             .font(.system(size: max(fontSize - 1, 9), design: typeface.design))
                             .foregroundStyle(Color.lampSecondaryText)
                     }
                     if let usage = sense.usage {
-                        linkedText("Usage: \(usage)", sense: sense)
+                        linkedText(usage, sense: sense, field: .usage, label: "Usage: ")
                             .font(.system(size: max(fontSize - 1, 9), design: typeface.design))
                             .foregroundStyle(Color.lampSecondaryText)
                     }
@@ -2250,16 +2250,23 @@ struct DictionaryResultView: View {
         .lineSpacing(lineSpacing)
     }
 
+    /// One field of a sense, after its label if it has one, with the
+    /// field's own styles.
     private func linkedText(
         _ text: String,
-        sense: LampDictionarySense
+        sense: LampDictionarySense,
+        field: LampDictionaryStyle.Field,
+        label: String = ""
     ) -> some View {
         ScriptureLinkedText(
-            text: text,
+            text: label + text,
             links: sense.scriptureLinks,
             dictionaryLinks: sense.dictionaryLinks,
             dictionaryModuleID: result.moduleID,
-            quietLinks: true
+            quietLinks: true,
+            styles: sense.styles.filter { $0.field == field },
+            stylePrefix: label.unicodeScalars.count,
+            holdsLeftToRight: true
         )
     }
 
@@ -2761,6 +2768,12 @@ private struct ScriptureLinkedText: View {
     /// of blue words took the paragraph over. Still marked as links, by the
     /// blue rule and the pointer; the words between them are read first.
     var quietLinks = false
+    /// A dictionary field's bold, italic and Greek or Hebrew stretches,
+    /// counted from `stylePrefix` scalars into `text`.
+    var styles: [LampDictionaryStyle] = []
+    var stylePrefix = 0
+    /// For an English lexicon, whose senses can open on a Hebrew word.
+    var holdsLeftToRight = false
     @AppStorage("commentary.typeface") private var typeface = ProseTypeface.commentaryDefault
     @AppStorage("commentary.lineSpacing") private var lineSpacing = LampTextScale.commentaryLineSpacing.defaultValue
     @AppStorage("commentary.previewContextAmount") private var previewContextAmount = ScripturePreviewContextAmount.oneVerse
@@ -2843,6 +2856,10 @@ private struct ScriptureLinkedText: View {
 
     private var attributedText: AttributedString {
         var result = AttributedString(text)
+        // Before the links, which colour their own words over a style's.
+        for range in LampDictionaryStyling.apply(styles, after: stylePrefix, to: &result) {
+            result[range].foregroundColor = .lampOriginalLanguage
+        }
         var occupiedRanges: [Range<String.Index>] = []
 
         for link in links {
@@ -2899,6 +2916,7 @@ private struct ScriptureLinkedText: View {
             result.append(AttributedString(")"))
         }
 
+        if holdsLeftToRight { LampDictionaryStyling.holdLeftToRight(&result) }
         return result
     }
 
@@ -3528,15 +3546,15 @@ private struct DictionaryPopoverEntryView: View {
                             .foregroundStyle(.secondary)
                     }
                     if let shortDefinition = sense.shortDefinition {
-                        Text(shortDefinition)
+                        Text(styled(shortDefinition, sense, .shortDefinition))
                     }
                     if let definition = sense.definition,
                        definition != sense.shortDefinition {
-                        Text(definition)
+                        Text(styled(definition, sense, .definition))
                             .textSelection(.enabled)
                     }
                     if let derivation = sense.derivation {
-                        Text("Derivation: \(derivation)")
+                        Text(styled(derivation, sense, .derivation, label: "Derivation: "))
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     }
@@ -3547,6 +3565,22 @@ private struct DictionaryPopoverEntryView: View {
         .fontDesign(typeface.design)
         .lineSpacing(lineSpacing)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// A field with its styles, after its label if it has one.
+    private func styled(
+        _ text: String,
+        _ sense: LampDictionarySense,
+        _ field: LampDictionaryStyle.Field,
+        label: String = ""
+    ) -> AttributedString {
+        var value = AttributedString(label + text)
+        let styles = sense.styles.filter { $0.field == field }
+        for range in LampDictionaryStyling.apply(styles, after: label.unicodeScalars.count, to: &value) {
+            value[range].foregroundColor = .lampOriginalLanguage
+        }
+        LampDictionaryStyling.holdLeftToRight(&value)
+        return value
     }
 }
 

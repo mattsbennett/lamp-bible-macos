@@ -1244,3 +1244,38 @@ struct DictionarySenseTextTests {
         #expect(!LampDictionarySenseText.showsShortDefinition("…", beside: "love"))
     }
 }
+
+/// Dictionary styles counted from core's field text, drawn on a string that
+/// may put a label before it.
+struct LampDictionaryStylingTests {
+    @Test func stylesLandAfterTheLabelAndCombine() {
+        // "כָּפַר cover" — six scalars of pointed Hebrew, then the gloss.
+        let field = "כָּפַר cover"
+        var value = AttributedString("Derivation: " + field)
+        let prefix = "Derivation: ".unicodeScalars.count
+        let hebrew = LampDictionaryStyling.apply([
+            LampDictionaryStyle(field: .derivation, kind: .hebrew, start: 0, end: 6),
+            LampDictionaryStyle(field: .derivation, kind: .italic, start: 7, end: 12),
+            LampDictionaryStyle(field: .derivation, kind: .bold, start: 7, end: 12),
+            LampDictionaryStyle(field: .derivation, kind: .bold, start: 7, end: 40),
+        ], after: prefix, to: &value)
+
+        #expect(hebrew.map { String(value[$0].characters) } == ["כָּפַר"])
+        let cover = value.runs.filter { String(value[$0.range].characters) == "cover" }
+        #expect(cover.first?.inlinePresentationIntent == [.emphasized, .stronglyEmphasized])
+        let label = value.runs.first { String(value[$0.range].characters).hasPrefix("Derivation") }
+        #expect(label?.inlinePresentationIntent == nil, "a style past the text is left off, not cut")
+    }
+
+    /// Only a paragraph whose first letter is Hebrew or Arabic gets the mark;
+    /// leading digits and punctuation don't decide it.
+    @Test func aParagraphOpeningInHebrewIsHeldLeftToRight() {
+        var hebrew = AttributedString("1. כָּפַר verb: cover over")
+        LampDictionaryStyling.holdLeftToRight(&hebrew)
+        #expect(String(hebrew.characters).hasPrefix("\u{200E}1. כָּפַר"))
+
+        var english = AttributedString("verb: cover over, כָּפַר")
+        LampDictionaryStyling.holdLeftToRight(&english)
+        #expect(String(english.characters) == "verb: cover over, כָּפַר")
+    }
+}
