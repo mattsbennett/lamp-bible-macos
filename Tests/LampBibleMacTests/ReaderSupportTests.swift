@@ -549,6 +549,21 @@ struct ReaderSupportTests {
         #expect(restored.selectedTab?.location == john)
     }
 
+    @Test func aTabDoesNotLoseItsChapterToAReaderWithNoPlace() {
+        let john = ReaderLocation(translationID: "WEB", bookNumber: 43, chapterNumber: 3)
+        var tabs = ReaderTabCollection(initialLocation: john)
+
+        // What every caller hands this is whatever the reader has at that
+        // moment, and while it is opening — or between translations — it has
+        // nothing. That must not empty a tab that knows where it is.
+        tabs.updateSelected(location: nil)
+        #expect(tabs.selectedTab?.location == john)
+
+        let psalm = ReaderLocation(translationID: "WEB", bookNumber: 19, chapterNumber: 23)
+        tabs.updateSelected(location: psalm)
+        #expect(tabs.selectedTab?.location == psalm, "a real place still moves it")
+    }
+
     @Test func aTabKeepsItsOwnConversationAndACopyDoesNot() throws {
         let genesis = ReaderLocation(translationID: "WEB", bookNumber: 1, chapterNumber: 1)
         var tabs = ReaderTabCollection(initialLocation: genesis)

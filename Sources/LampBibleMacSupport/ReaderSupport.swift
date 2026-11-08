@@ -1519,8 +1519,17 @@ public struct ReaderTabCollection: Codable, Equatable, Sendable {
         tabs.first { $0.id == selectedID }
     }
 
+    /// Records where the open tab is.
+    ///
+    /// Nothing is not a place, and does not replace one. The reader has no
+    /// place while it is still opening, or between a translation going and
+    /// another being chosen, and every caller hands this whatever the reader
+    /// has at that moment — so taking nil literally let a tab with a chapter
+    /// in it be emptied by a passing moment, and the tab came back on
+    /// whatever the app was last reading instead of its own chapter.
     public mutating func updateSelected(location: ReaderLocation?) {
-        guard let index = tabs.firstIndex(where: { $0.id == selectedID }) else { return }
+        guard let location, let index = tabs.firstIndex(where: { $0.id == selectedID })
+        else { return }
         tabs[index].location = location
     }
 
