@@ -384,21 +384,6 @@ public enum ReaderChatWorkspaceStore {
         }
     }
 
-    /// Which chat a window opening now should take up, and nil for none — which
-    /// means start a new one.
-    ///
-    /// With no other window holding a chat, the most recent one: a relaunch
-    /// should hand back the conversation it interrupted, and so should closing
-    /// a window and opening another. Beside a window that already holds one,
-    /// only a chat nothing was said in: a second window is asking for a second
-    /// conversation, not for the one being read in the first, and not for an
-    /// older one it never asked to see.
-    public static func claiming(from chats: [Chat], heldBy held: Set<UUID>) -> UUID? {
-        let free = ordered(chats).filter { !held.contains($0.id) }
-        guard held.isEmpty else { return free.first { $0.lastSpoken == nil }?.id }
-        return free.first?.id
-    }
-
     /// The chats a scrub would remove: those nothing was ever said in, and
     /// those last spoken in longer ago than `retention` keeps them.
     ///

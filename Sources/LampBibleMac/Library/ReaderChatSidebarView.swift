@@ -22,7 +22,16 @@ struct ReaderChatSidebarView: View {
     /// Which chat this pane is on. Handed in by the window, which took it up
     /// from the library; see `OpenReaderChats`.
     let chatID: UUID
+    /// Puts this tab on another chat, or on a new one for nil. The window
+    /// owns the move, since it is the tab's chat that changes.
+    let resume: (UUID?) -> Void
     let close: () -> Void
+
+    /// The chats to choose from, read when the list is opened rather than
+    /// held: it is a directory of transcripts, and nothing should read it on
+    /// the way to drawing a pane.
+    @State private var chats: [ReaderChatWorkspaceStore.Chat] = []
+    @State private var isChoosingChat = false
 
     private var provider: AIProviderCLI {
         AIProviderCLI(
@@ -49,6 +58,72 @@ struct ReaderChatSidebarView: View {
         ReaderChatWorkspaceStore.workspaceURL(
             libraryRootURL: libraryModel.library.rootURL, chatID: chatID
         )
+    }
+
+    /// A new chat, and the conversations there are to go back to.
+    ///
+    /// A conversation open in another tab is shown and not offered: two panes
+    /// writing one transcript is worse than opening a second conversation.
+    @ViewBuilder private var chatChooser: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                isChoosingChat = false
+                resume(nil)
+            } label: {
+                Label("New Chat", systemImage: "plus.bubble")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+
+            if !chats.isEmpty {
+                Divider()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(chats, id: \.id) { chat in
+                            chatRow(chat)
+                            if chat.id != chats.last?.id { Divider().padding(.leading, 12) }
+                        }
+                    }
+                }
+            }
+        }
+        .frame(width: 320)
+        .frame(maxHeight: 400)
+    }
+
+    @ViewBuilder private func chatRow(_ chat: ReaderChatWorkspaceStore.Chat) -> some View {
+        let isThisTabs = chat.id == chatID
+        let elsewhere = !isThisTabs && OpenReaderChats.inUse.contains(chat.id)
+        Button {
+            isChoosingChat = false
+            resume(chat.id)
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(chat.opening ?? "Nothing said yet")
+                    .lineLimit(2)
+                    .foregroundStyle(chat.opening == nil ? .secondary : .primary)
+                HStack(spacing: 6) {
+                    if let lastSpoken = chat.lastSpoken {
+                        Text(lastSpoken.formatted(.relative(presentation: .named)))
+                    }
+                    if isThisTabs {
+                        Text("This tab")
+                    } else if elsewhere {
+                        Text("Open in another tab")
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .disabled(isThisTabs || elsewhere)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
     }
 
     private var accessPolicy: LampAgentAccessPolicy {
@@ -218,6 +293,18 @@ struct ReaderChatSidebarView: View {
                     Text("Reader Chat")
                         .font(.headline)
                     Spacer()
+                    Button("Chats", systemImage: "clock.arrow.circlepath") {
+                        chats = ReaderChatWorkspaceStore.chats(
+                            libraryRootURL: libraryModel.library.rootURL
+                        )
+                        isChoosingChat = true
+                    }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(ChatControlButtonStyle())
+                    .help("Start a new chat, or go back to one")
+                    .popover(isPresented: $isChoosingChat, arrowEdge: .bottom) {
+                        chatChooser
+                    }
                     Button("Close Chat", systemImage: "xmark", action: close)
                         .labelStyle(.iconOnly)
                         .buttonStyle(ChatControlButtonStyle())
@@ -419,35 +506,77 @@ struct ReaderChatSidebarView: View {
     }
 }
 
-/// Which chat each open window is on.
+/// Which chat each open tab is on.
 ///
-/// A reader chat lasts as long as its transcript, not as long as the window
-/// that opened it, so a window takes one up rather than making one. Held only
-/// for this run of the app: at launch nothing is held, and the first window to
-/// open takes up the most recent conversation in the library.
+/// A reader chat lasts as long as its transcript, not as long as the tab that
+/// opened it: a tab remembers the one it was on and takes it up again, and any
+/// other is chosen from the list. Held only for this run of the app, to keep
+/// two tabs off one conversation — two views of one transcript, each writing
+/// it, is worse than opening a new one.
 @MainActor
 enum OpenReaderChats {
     private static var held: Set<UUID> = []
 
-    /// - Returns: the chat this window is on, and whether it is picking up
-    ///   where the app left off — true when no other window held one, which is
-    ///   what a launch looks like, and a lone window being opened again. The
-    ///   window's tabs follow the same rule; see `ReaderTabSessionStore`.
-    static func claim(libraryRootURL: URL) -> (chat: UUID, resuming: Bool) {
-        let resuming = held.isEmpty
-        let id = ReaderChatWorkspaceStore.claiming(
-            from: ReaderChatWorkspaceStore.chats(libraryRootURL: libraryRootURL),
-            heldBy: held
-        ) ?? UUID()
+    /// The chats open in some tab right now, for a list to show as in use and
+    /// for a scrub to leave alone.
+    static var inUse: Set<UUID> { held }
+
+    /// Takes up a chat already in the library — remembered by a tab, or picked
+    /// from the list — and says whether it was free to take.
+    ///
+    /// A chat another tab holds is refused rather than shared, and a chat that
+    /// is no longer on disk is refused too: a scrub may have taken it while
+    /// the tab that remembered it sat closed.
+    static func take(_ id: UUID, libraryRootURL: URL) -> Bool {
+        guard !held.contains(id) else { return false }
+        let workspace = ReaderChatWorkspaceStore.workspaceURL(
+            libraryRootURL: libraryRootURL, chatID: id
+        )
+        guard FileManager.default.fileExists(atPath: workspace.path) else { return false }
         held.insert(id)
-        // The session is kept in the library, so the window can take it up
-        // again at the next launch — its tabs included — whether or not a word
-        // is ever said in its chat. Without this, a reader who never opens the
-        // chat pane has no session that outlives the run.
+        return true
+    }
+
+    /// A conversation of its own for a tab that has none, its workspace made
+    /// so there is somewhere for the chat to be.
+    ///
+    /// Called when the pane is opened, never when a tab is made: a tab nobody
+    /// chats in should leave nothing behind in the library.
+    static func start(libraryRootURL: URL) -> UUID {
+        let id = UUID()
+        held.insert(id)
         try? FileManager.default.createDirectory(
             at: ReaderChatWorkspaceStore.workspaceURL(libraryRootURL: libraryRootURL, chatID: id),
             withIntermediateDirectories: true
         )
+        return id
+    }
+
+    static func release(_ id: UUID) {
+        held.remove(id)
+    }
+}
+
+/// Which tab session each open window is on.
+///
+/// The window's tabs are kept under it, and it is taken up again at the next
+/// launch, which is how a window comes back to what it was reading. Separate
+/// from the chats since a chat belongs to a tab: one window holds one session
+/// and as many conversations as it has tabs with the pane opened.
+@MainActor
+enum OpenReaderWindows {
+    private static var held: Set<UUID> = []
+
+    /// - Returns: the session this window keeps its tabs under, and whether it
+    ///   is picking up where the app left off — true when no other window held
+    ///   one, which is what a launch looks like, and a lone window being
+    ///   opened again. Only then are the last window's tabs a fallback.
+    static func claim(defaults: UserDefaults = .standard) -> (session: UUID, resuming: Bool) {
+        let resuming = held.isEmpty
+        let id = ReaderTabSessionStore.claimingSession(
+            from: ReaderTabSessionStore.sessions(defaults: defaults), heldBy: held
+        ) ?? UUID()
+        held.insert(id)
         return (id, resuming)
     }
 

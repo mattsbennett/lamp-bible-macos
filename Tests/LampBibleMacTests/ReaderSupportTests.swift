@@ -549,6 +549,89 @@ struct ReaderSupportTests {
         #expect(restored.selectedTab?.location == john)
     }
 
+    @Test func aTabKeepsItsOwnConversationAndACopyDoesNot() throws {
+        let genesis = ReaderLocation(translationID: "WEB", bookNumber: 1, chapterNumber: 1)
+        var tabs = ReaderTabCollection(initialLocation: genesis)
+        let chat = UUID()
+        tabs.updateSelected(chatID: chat)
+        #expect(tabs.selectedTab?.chatID == chat)
+        #expect(tabs.chatIDs == [chat])
+
+        // A copy is a new tab: the conversation stays with the one it was had
+        // in, rather than two tabs arriving on one transcript.
+        tabs.duplicate(tabs.selectedID)
+        #expect(tabs.selectedTab?.chatID == nil)
+        #expect(tabs.chatIDs == [chat])
+
+        // And it survives being saved and read back.
+        let restored = try JSONDecoder().decode(
+            ReaderTabCollection.self, from: try JSONEncoder().encode(tabs)
+        )
+        #expect(restored == tabs)
+    }
+
+    @Test func aTabSavedBeforeChatsDecodesWithoutOne() throws {
+        let saved = """
+        {"selectedID":"11111111-1111-1111-1111-111111111111","tabs":[
+          {"id":"11111111-1111-1111-1111-111111111111",
+           "location":{"translationID":"WEB","bookNumber":1,"chapterNumber":1}}
+        ]}
+        """
+        let restored = try JSONDecoder().decode(
+            ReaderTabCollection.self, from: Data(saved.utf8)
+        )
+        #expect(restored.tabs.count == 1)
+        #expect(restored.tabs[0].chatID == nil)
+    }
+
+    @Test func aChatThatCannotBeReadCostsTheChatAndNotTheTab() throws {
+        let saved = """
+        {"selectedID":"11111111-1111-1111-1111-111111111111","tabs":[
+          {"id":"11111111-1111-1111-1111-111111111111",
+           "location":{"translationID":"WEB","bookNumber":1,"chapterNumber":1},
+           "chatID":"not a chat"}
+        ]}
+        """
+        let restored = try JSONDecoder().decode(
+            ReaderTabCollection.self, from: Data(saved.utf8)
+        )
+        #expect(restored.tabs.count == 1, "the tab is still there")
+        #expect(restored.tabs[0].chatID == nil, "and opens its pane on a new conversation")
+        #expect(restored.tabs[0].location?.bookNumber == 1)
+    }
+
+    @Test func aScrubbedConversationIsForgottenAndTheTabStays() throws {
+        let genesis = ReaderLocation(translationID: "WEB", bookNumber: 1, chapterNumber: 1)
+        let john = ReaderLocation(translationID: "WEB", bookNumber: 43, chapterNumber: 3)
+        var tabs = ReaderTabCollection(initialLocation: genesis)
+        let kept = UUID()
+        let gone = UUID()
+        tabs.updateSelected(chatID: kept)
+        tabs.add(location: john)
+        tabs.updateSelected(chatID: gone)
+
+        tabs.forgetChats([gone])
+        #expect(tabs.selectedTab?.chatID == nil)
+        #expect(tabs.selectedTab?.location == john, "the tab stays where it is")
+        #expect(tabs.chatIDs == [kept])
+    }
+
+    @Test func aWindowResumingTakesTheLastSessionAndASecondStartsItsOwn() {
+        let recent = UUID()
+        let older = UUID()
+        // Nothing held: a launch, so the window comes back to the session it
+        // was interrupted in.
+        #expect(
+            ReaderTabSessionStore.claimingSession(from: [recent, older], heldBy: []) == recent
+        )
+        // Beside a window that holds one: nil, which means a session of its
+        // own. A second window was opened to read something else.
+        #expect(
+            ReaderTabSessionStore.claimingSession(from: [recent, older], heldBy: [recent]) == nil
+        )
+        #expect(ReaderTabSessionStore.claimingSession(from: [], heldBy: []) == nil)
+    }
+
     @Test func twoWindowsKeepTheirOwnTabsAcrossARelaunch() throws {
         let suite = "reader-tabs-tests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))

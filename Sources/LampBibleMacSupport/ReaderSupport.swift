@@ -1425,20 +1425,30 @@ public struct ReaderTab: Codable, Identifiable, Equatable, Sendable {
     /// not the chapter you are at.
     public var name: String?
     public var sidebar: ReaderTabSidebar
+    /// The chat this tab is on, or nil until one is opened in it.
+    ///
+    /// Held rather than claimed on sight: a tab nobody chats in should leave
+    /// nothing behind in the library, so the chat is taken up the first time
+    /// its pane is opened and not when the tab is made. A copy of a tab does
+    /// not copy this — a copy is a new tab, and the conversation stays with
+    /// the tab it was had in.
+    public var chatID: UUID?
 
     public init(
         id: UUID = UUID(),
         location: ReaderLocation? = nil,
         name: String? = nil,
-        sidebar: ReaderTabSidebar = ReaderTabSidebar()
+        sidebar: ReaderTabSidebar = ReaderTabSidebar(),
+        chatID: UUID? = nil
     ) {
         self.id = id
         self.location = location
         self.name = name
         self.sidebar = sidebar
+        self.chatID = chatID
     }
 
-    private enum CodingKeys: String, CodingKey { case id, location, name, sidebar }
+    private enum CodingKeys: String, CodingKey { case id, location, name, sidebar, chatID }
 
     /// Tabs saved before they kept a column decode with it closed. A column
     /// that cannot be read is closed too, rather than failing the tab, which
@@ -1452,6 +1462,9 @@ public struct ReaderTab: Codable, Identifiable, Equatable, Sendable {
         name = try values.decodeIfPresent(String.self, forKey: .name)
         sidebar = ((try? values.decodeIfPresent(ReaderTabSidebar.self, forKey: .sidebar)) ?? nil)
             ?? ReaderTabSidebar()
+        // A chat that cannot be read is no chat: the tab opens its pane on a
+        // new conversation, and the old one is still in the list to go back to.
+        chatID = (try? values.decodeIfPresent(UUID.self, forKey: .chatID)) ?? nil
     }
 
     /// A name worth keeping, or nil. Blank is not a name, and a tab given one
@@ -1511,6 +1524,27 @@ public struct ReaderTabCollection: Codable, Equatable, Sendable {
         tabs[index].location = location
     }
 
+    /// Puts the open tab on a chat, or on none.
+    public mutating func updateSelected(chatID: UUID?) {
+        guard let index = tabs.firstIndex(where: { $0.id == selectedID }),
+              tabs[index].chatID != chatID else { return }
+        tabs[index].chatID = chatID
+    }
+
+    /// Every chat the tabs are on, for a window to hold and to release.
+    public var chatIDs: [UUID] { tabs.compactMap(\.chatID) }
+
+    /// Forgets a chat wherever the tabs are on it.
+    ///
+    /// For the chats a scrub took: the tab stays where it is and opens its
+    /// pane on a new conversation rather than on a workspace that has gone.
+    public mutating func forgetChats(_ gone: Set<UUID>) {
+        guard !gone.isEmpty else { return }
+        for index in tabs.indices where tabs[index].chatID.map(gone.contains) == true {
+            tabs[index].chatID = nil
+        }
+    }
+
     /// Records the open tab's column. Unlike its place, which the reader
     /// holds until it is written back, the column is written as it changes.
     public mutating func updateSelected(sidebar: ReaderTabSidebar) {
@@ -1551,6 +1585,8 @@ public struct ReaderTabCollection: Codable, Equatable, Sendable {
     @discardableResult
     public mutating func duplicate(_ id: UUID) -> ReaderLocation? {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return nil }
+        // Without the chat: a copy is a new tab, and the conversation stays
+        // with the tab it was had in.
         let copy = ReaderTab(
             location: tabs[index].location, name: tabs[index].name, sidebar: tabs[index].sidebar
         )
@@ -1594,6 +1630,29 @@ public enum ReaderTabSessionStore {
 
     static func key(for session: UUID) -> String {
         "reader.tabs.session.\(session.uuidString)"
+    }
+
+    /// The sessions tabs have been saved under, the most recently saved first.
+    public static func sessions(defaults: UserDefaults = .standard) -> [UUID] {
+        (defaults.stringArray(forKey: sessionsKey) ?? []).compactMap(UUID.init(uuidString:))
+    }
+
+    /// Which session a window opening now should take up, and nil for none —
+    /// which means start one.
+    ///
+    /// With no other window holding a session, the most recent: a relaunch
+    /// should hand a window back the tabs it was interrupted in, and so
+    /// should closing a window and opening another. Beside a window that
+    /// already holds one, a session of its own, because a second window was
+    /// opened to read something else and not to mirror the first.
+    ///
+    /// The same shape as the rule the chats used to need. Chats no longer
+    /// guess — a tab remembers the one it is on, and any other is chosen from
+    /// the list — but a window's tabs have nowhere else to be remembered, so
+    /// here the guess stands.
+    public static func claimingSession(from sessions: [UUID], heldBy held: Set<UUID>) -> UUID? {
+        guard held.isEmpty else { return nil }
+        return sessions.first { !held.contains($0) }
     }
 
     /// The tabs for `session`.

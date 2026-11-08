@@ -87,15 +87,15 @@ struct LibraryRootView: View {
     @State private var showingNewReaderTab = false
     @State private var readerSidebar: ReaderSidebar?
     @State private var lastReaderSidebar = ReaderSidebar.study
-    /// Which chat this window's reader chat pane is on, taken up once the
-    /// library has been read — which chats exist is read from it.
+    /// The session this window keeps its tabs under, taken up once the library
+    /// has been read. The chats are the tabs' own; see `ReaderTab.chatID`.
     ///
     /// This was `@SceneStorage`, which AppKit keeps in saved application state.
     /// That state is deleted on a clean quit unless the reader has turned off
     /// "Close windows when quitting an application", so on most Macs every
     /// launch invented an identifier, and with it an empty workspace, while the
     /// conversation from before sat in a folder nothing would ever open again.
-    @State private var readerChatID: UUID?
+    @State private var readerSession: UUID?
     @State private var requestedBookID: String?
     /// The item a search result asked for, handed to the section that shows
     /// it. Cleared by that view once taken, so returning later does not jump
@@ -163,16 +163,19 @@ struct LibraryRootView: View {
             model.start()
         }
         .onDisappear {
-            // The window is closing: the chat it held is free for the next one
-            // to take up, which is how opening a window again returns to it.
-            if let readerChatID { OpenReaderChats.release(readerChatID) }
+            // The window is closing: its session is free for the next one to
+            // take up, which is how opening a window again returns to what it
+            // was reading, and its tabs' conversations are free to be opened
+            // again — in this window or another.
+            if let readerSession { OpenReaderWindows.release(readerSession) }
+            for chat in readerTabs.chatIDs { OpenReaderChats.release(chat) }
         }
         .onChange(of: model.hasReadLibrary, initial: true) { _, read in
             guard read else { return }
             // Before the tabs, which are kept under the session taken up here.
-            if readerChatID == nil {
-                let claimed = OpenReaderChats.claim(libraryRootURL: model.library.rootURL)
-                readerChatID = claimed.chat
+            if readerSession == nil {
+                let claimed = OpenReaderWindows.claim()
+                readerSession = claimed.session
                 isResumingReaderSession = claimed.resuming
             }
             restoreReaderTabs()
@@ -187,9 +190,10 @@ struct LibraryRootView: View {
             if !refreshing { restoreReaderTabs() }
         }
         .onChange(of: readerTabs) { _, tabs in
-            guard hasRestoredReaderTabs, let readerChatID else { return }
-            ReaderTabSessionStore.save(tabs, session: readerChatID)
+            guard hasRestoredReaderTabs, let readerSession else { return }
+            ReaderTabSessionStore.save(tabs, session: readerSession)
         }
+        .onChange(of: readerSidebar) { _, _ in ensureSelectedTabHasChat() }
         .environmentObject(workspace)
         .task {
             // Read again only when a pass ran, since only then can anything
@@ -494,18 +498,20 @@ struct LibraryRootView: View {
     /// once the library has been read: which translations remain, for the
     /// tabs, and which note and highlight modules the chapter is read with.
     private func restoreReaderTabs() {
-        guard !hasRestoredReaderTabs, let readerChatID,
+        guard !hasRestoredReaderTabs, let readerSession,
               model.hasReadLibrary, !model.isRefreshing else { return }
         // A failed library load must not replace saved tabs with an empty session.
         guard model.errorMessage == nil || !model.modules.isEmpty else { return }
         readerTabs = ReaderTabSessionStore.load(
-            session: readerChatID,
+            session: readerSession,
             resumingLastSession: isResumingReaderSession,
             translationIDs: Set(model.translations.map(\.id)),
             fallbackLocation: model.readerLocation
         )
         hasRestoredReaderTabs = true
+        adoptRestoredChats()
         adoptTabSidebar()
+        ensureSelectedTabHasChat()
         // A place asked for while no reader was open goes in the chosen tab.
         workspace.start(
             model: model,
@@ -562,12 +568,71 @@ struct LibraryRootView: View {
     private func closeReaderTab(_ id: UUID) {
         guard readerTabs.tabs.count > 1 else { return }
         let wasSelected = readerTabs.selectedID == id
+        let chat = readerTabs.tabs.first { $0.id == id }?.chatID
         if wasSelected { readerTabs.updateSelected(location: workspace.currentLocation) }
         let destination = readerTabs.close(id)
+        if let chat { letGoOfChat(chat) }
         if wasSelected {
             adoptTabSidebar()
             if let destination { workspace.openTab(at: destination) }
         }
+    }
+
+    /// Frees a closed tab's conversation, and takes the workspace with it
+    /// where nothing was ever said in it.
+    ///
+    /// The transcript is what a conversation is, so one that was spoken in
+    /// stays in the library for the list to offer. One that was not is a
+    /// folder a pane was opened over, and is no more than that.
+    private func letGoOfChat(_ chat: UUID) {
+        OpenReaderChats.release(chat)
+        let workspace = ReaderChatWorkspaceStore.workspaceURL(
+            libraryRootURL: model.library.rootURL, chatID: chat
+        )
+        guard ReaderChatWorkspaceStore.lastSpoken(in: workspace) == nil else { return }
+        try? FileManager.default.removeItem(at: workspace)
+    }
+
+    /// Gives the open tab a conversation where its pane is on chat and it has
+    /// none, which is how a chat is taken up: on opening the pane, never on
+    /// making a tab, so a tab nobody chats in leaves nothing behind.
+    private func ensureSelectedTabHasChat() {
+        guard hasRestoredReaderTabs, readerSidebar == .chat,
+              readerTabs.selectedTab?.chatID == nil else { return }
+        readerTabs.updateSelected(
+            chatID: OpenReaderChats.start(libraryRootURL: model.library.rootURL)
+        )
+    }
+
+    /// Puts the open tab on another conversation, chosen from the list.
+    ///
+    /// The one it leaves is let go of, so another tab can take it up, and goes
+    /// from the library where nothing was ever said in it. Nil starts a new
+    /// conversation, which is the list's "New Chat".
+    private func resumeChat(_ chat: UUID?) {
+        let root = model.library.rootURL
+        let left = readerTabs.selectedTab?.chatID
+        guard chat != left else { return }
+        let taken = chat.map { OpenReaderChats.take($0, libraryRootURL: root) } ?? false
+        if let chat, !taken { return }
+        if let left { letGoOfChat(left) }
+        readerTabs.updateSelected(chatID: taken ? chat : OpenReaderChats.start(libraryRootURL: root))
+    }
+
+    /// Takes up the conversations the restored tabs remember, and forgets the
+    /// ones this window cannot have.
+    ///
+    /// A chat another window holds is one of them: the last window's tabs are
+    /// a fallback for a window resuming, so two windows can arrive holding the
+    /// same identifiers, and sharing one transcript between two panes is worse
+    /// than opening a new one. A chat a scrub has taken is the other.
+    private func adoptRestoredChats() {
+        let root = model.library.rootURL
+        var lost: Set<UUID> = []
+        for chat in readerTabs.chatIDs where !OpenReaderChats.take(chat, libraryRootURL: root) {
+            lost.insert(chat)
+        }
+        readerTabs.forgetChats(lost)
     }
 
     /// Writes the column as it stands into the open tab.
@@ -755,9 +820,10 @@ struct LibraryRootView: View {
                                 Color.clear
                             } else if isReaderSidebarContentReady {
                                 if (readerSidebar ?? lastReaderSidebar) == .chat,
-                                   let readerChatID {
+                                   let chat = readerTabs.selectedTab?.chatID {
                                     ReaderChatSidebarView(
-                                        chatID: readerChatID,
+                                        chatID: chat,
+                                        resume: resumeChat,
                                         close: { readerSidebar = nil }
                                     )
                                 } else {
