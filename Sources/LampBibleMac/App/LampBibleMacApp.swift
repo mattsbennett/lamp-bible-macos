@@ -247,6 +247,7 @@ private struct ReaderSettingsView: View {
     @AppStorage("studyInspector.hebrewDictionaryModuleID") private var defaultHebrewDictionaryID = ""
     @AppStorage("studyInspector.commentaryModuleID") private var defaultCommentaryID = ""
     @State private var selectedSettingsSection = ReaderSettingsSection.reader
+    private var settingsDestination: SettingsDestination { .shared }
     @State private var selectedModuleType = ConfigurableModuleType.translations
     @AppStorage("devotional.fontSize")
     private var devotionalFontSize = LampTextScale.writingReadingText.defaultValue
@@ -910,6 +911,8 @@ private struct ReaderSettingsView: View {
             }
             .formStyle(.grouped)
             .navigationTitle(selectedSettingsSection.title)
+            .onAppear { goToRequestedSection() }
+            .onChange(of: settingsDestination.section) { _, _ in goToRequestedSection() }
         }
         .navigationSplitViewStyle(.balanced)
         .frame(width: 880, height: 640)
@@ -937,6 +940,13 @@ private struct ReaderSettingsView: View {
     private func sidebarHeading(_ title: String) -> some View {
         Text(title)
             .foregroundStyle(Color.lampSecondaryText)
+    }
+
+    /// Moves to the section a button elsewhere asked for, once.
+    private func goToRequestedSection() {
+        guard let asked = settingsDestination.section else { return }
+        selectedSettingsSection = asked
+        settingsDestination.section = nil
     }
 
     private func settingsLink(_ section: ReaderSettingsSection) -> some View {
@@ -1281,7 +1291,23 @@ private struct ReaderSettingsView: View {
     }
 }
 
-private enum ReaderSettingsSection: String, CaseIterable, Identifiable {
+/// The section Settings should open on, for a button elsewhere that means a
+/// particular one.
+///
+/// Observed rather than read once: the window may already be open, in which
+/// case opening it again only brings it forward and nothing appears, so the
+/// view has to be told to move while it stands.
+@MainActor @Observable
+final class SettingsDestination {
+    static let shared = SettingsDestination()
+
+    /// Set by whoever opens Settings, cleared by Settings on arriving.
+    var section: ReaderSettingsSection?
+
+    private init() {}
+}
+
+enum ReaderSettingsSection: String, CaseIterable, Identifiable {
     case reader
     case books
     case studySidebar

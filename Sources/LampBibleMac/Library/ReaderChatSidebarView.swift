@@ -7,6 +7,7 @@ import SwiftUI
 
 struct ReaderChatSidebarView: View {
     @EnvironmentObject private var libraryModel: LibraryModel
+    @Environment(\.openSettings) private var openSettings
     @AppStorage("reader.chat.provider") private var providerID = AIProviderCLI.codex.rawValue
     @AppStorage("agent.moduleAccess.enabled") private var moduleAccessEnabled = true
     @AppStorage("agent.moduleAccess.scope")
@@ -444,9 +445,19 @@ struct ReaderChatSidebarView: View {
                     .truncationMode(.tail)
                     .help(moduleAccessDescription)
                 Spacer(minLength: 4)
-                SettingsLink { Image(systemName: "gearshape") }
-                    .buttonStyle(.borderless)
-                    .help("AI provider and module access settings")
+                // To AI & Agents, where this pane's settings are — the
+                // provider accounts, module access, and how long chats are
+                // kept. `SettingsLink` opens the window wherever it was last
+                // left, which from here is almost never where the reader
+                // meant to go.
+                Button {
+                    SettingsDestination.shared.section = .aiAndAgents
+                    openSettings()
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+                .buttonStyle(.borderless)
+                .help("AI provider, module access, and chat settings")
             }
             .font(.caption)
             .foregroundStyle(.secondary)
