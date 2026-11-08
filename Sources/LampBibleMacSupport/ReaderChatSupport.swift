@@ -252,11 +252,18 @@ public enum ReaderChatWorkspaceStore {
         /// chat, for a list to be read by rather than identifiers. Nil where
         /// nothing was said, or where only the agent has spoken.
         public let opening: String?
+        /// Whether the workspace holds a transcript at all, readable here or
+        /// not. A transcript this build cannot read is still a conversation:
+        /// it may be too old to keep, but it is not nothing.
+        public let holdsTranscript: Bool
 
-        public init(id: UUID, lastSpoken: Date?, opening: String? = nil) {
+        public init(
+            id: UUID, lastSpoken: Date?, opening: String? = nil, holdsTranscript: Bool = false
+        ) {
             self.id = id
             self.lastSpoken = lastSpoken
             self.opening = opening
+            self.holdsTranscript = lastSpoken != nil || holdsTranscript
         }
     }
 
@@ -328,7 +335,10 @@ public enum ReaderChatWorkspaceStore {
         return ordered(names.compactMap { name in
             guard let id = UUID(uuidString: name) else { return nil }
             let said = spoken(in: workspaceURL(libraryRootURL: libraryRootURL, chatID: id))
-            return Chat(id: id, lastSpoken: said.lastSpoken, opening: said.opening)
+            return Chat(
+                id: id, lastSpoken: said.lastSpoken, opening: said.opening,
+                holdsTranscript: said.holdsTranscript
+            )
         })
     }
 
@@ -348,11 +358,13 @@ public enum ReaderChatWorkspaceStore {
     /// provider carried it on. A conversation that was cleared has no
     /// messages and so no opening, only the date of the clear — there is
     /// nothing left in it to name it by.
-    static func spoken(in workspace: URL) -> (lastSpoken: Date?, opening: String?) {
+    static func spoken(
+        in workspace: URL
+    ) -> (lastSpoken: Date?, opening: String?, holdsTranscript: Bool) {
         let folder = AgentChatTranscriptStore.directory(in: workspace)
         let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
-        let transcripts = names
-            .filter(AgentChatTranscriptStore.isTranscriptFilename)
+        let files = names.filter(AgentChatTranscriptStore.isTranscriptFilename)
+        let transcripts = files
             .compactMap { name -> AgentChatTranscript? in
                 guard let data = try? Data(contentsOf: folder.appendingPathComponent(name)),
                       let transcript = try? AgentChatTranscriptStore.decode(data),
@@ -365,7 +377,7 @@ public enum ReaderChatWorkspaceStore {
             .filter { $0.role == .user && !label($0.text).isEmpty }
             .min { $0.date < $1.date }
             .map { label($0.text) }
-        return (transcripts.map(\.lastActivity).max(), opening)
+        return (transcripts.map(\.lastActivity).max(), opening, !files.isEmpty)
     }
 
     /// Something said, as a list shows it: one line, trimmed, and cut at a
@@ -411,7 +423,13 @@ public enum ReaderChatWorkspaceStore {
     ) -> [UUID] {
         chats.filter { chat in
             guard !held.contains(chat.id) else { return false }
-            guard let lastSpoken = chat.lastSpoken else { return true }
+            guard let lastSpoken = chat.lastSpoken else {
+                // Nothing readable in it. A workspace with no transcript at
+                // all is a folder a pane was opened over, and goes. One whose
+                // transcript this build cannot read is a conversation it
+                // cannot date, and the answer to not knowing is to keep it.
+                return !chat.holdsTranscript
+            }
             guard let days = retention.days else { return false }
             return now.timeIntervalSince(lastSpoken) > Double(days) * 24 * 60 * 60
         }

@@ -505,6 +505,36 @@ struct ReaderChatSupportTests {
         #expect(ReaderChatWorkspaceStore.chats(libraryRootURL: root).map(\.id) == [spokenIn])
     }
 
+    @Test func aTranscriptThisBuildCannotReadIsNotTakenForAnEmptyChat() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let unreadable = UUID()
+        let empty = UUID()
+        let workspace = ReaderChatWorkspaceStore.workspaceURL(
+            libraryRootURL: root, chatID: unreadable
+        )
+        let folder = AgentChatTranscriptStore.directory(in: workspace)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        // A transcript written by a later build, or half-written by a crash.
+        try Data("{\"shape\":\"this build does not know\"}".utf8)
+            .write(to: folder.appendingPathComponent("native-chat-codex.json"))
+        try prepareChat(in: root, chat: empty)
+
+        let chats = ReaderChatWorkspaceStore.chats(libraryRootURL: root)
+        #expect(chats.count == 2)
+        // Neither can be dated, so neither can be named; but one of them is
+        // somebody's conversation and the other is an empty folder.
+        let removed = ReaderChatWorkspaceStore.scrub(
+            libraryRootURL: root, retention: .twoWeeks,
+            now: Date(timeIntervalSince1970: 10 * 365 * 24 * 60 * 60)
+        )
+        #expect(removed == [empty])
+        #expect(
+            ReaderChatWorkspaceStore.chats(libraryRootURL: root).map(\.id) == [unreadable],
+            "kept, because not being able to read it is not the same as it being empty"
+        )
+    }
+
     @Test func aConversationOlderThanRetentionGoesAndARecentOneStays() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

@@ -28,10 +28,6 @@ struct ReaderChatSidebarView: View {
     let resume: (UUID?) -> Void
     let close: () -> Void
 
-    /// The chats to choose from, read when the list is opened rather than
-    /// held: it is a directory of transcripts, and nothing should read it on
-    /// the way to drawing a pane.
-    @State private var chats: [ReaderChatWorkspaceStore.Chat] = []
     @State private var isChoosingChat = false
 
     private var provider: AIProviderCLI {
@@ -59,72 +55,6 @@ struct ReaderChatSidebarView: View {
         ReaderChatWorkspaceStore.workspaceURL(
             libraryRootURL: libraryModel.library.rootURL, chatID: chatID
         )
-    }
-
-    /// A new chat, and the conversations there are to go back to.
-    ///
-    /// A conversation open in another tab is shown and not offered: two panes
-    /// writing one transcript is worse than opening a second conversation.
-    @ViewBuilder private var chatChooser: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button {
-                isChoosingChat = false
-                resume(nil)
-            } label: {
-                Label("New Chat", systemImage: "plus.bubble")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 9)
-
-            if !chats.isEmpty {
-                Divider()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(chats, id: \.id) { chat in
-                            chatRow(chat)
-                            if chat.id != chats.last?.id { Divider().padding(.leading, 12) }
-                        }
-                    }
-                }
-            }
-        }
-        .frame(width: 320)
-        .frame(maxHeight: 400)
-    }
-
-    @ViewBuilder private func chatRow(_ chat: ReaderChatWorkspaceStore.Chat) -> some View {
-        let isThisTabs = chat.id == chatID
-        let elsewhere = !isThisTabs && OpenReaderChats.inUse.contains(chat.id)
-        Button {
-            isChoosingChat = false
-            resume(chat.id)
-        } label: {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(chat.opening ?? "Nothing said yet")
-                    .lineLimit(2)
-                    .foregroundStyle(chat.opening == nil ? .secondary : .primary)
-                HStack(spacing: 6) {
-                    if let lastSpoken = chat.lastSpoken {
-                        Text(lastSpoken.formatted(.relative(presentation: .named)))
-                    }
-                    if isThisTabs {
-                        Text("This tab")
-                    } else if elsewhere {
-                        Text("Open in another tab")
-                    }
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .disabled(isThisTabs || elsewhere)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
     }
 
     private var accessPolicy: LampAgentAccessPolicy {
@@ -295,16 +225,27 @@ struct ReaderChatSidebarView: View {
                         .font(.headline)
                     Spacer()
                     Button("Chats", systemImage: "clock.arrow.circlepath") {
-                        chats = ReaderChatWorkspaceStore.chats(
-                            libraryRootURL: libraryModel.library.rootURL
-                        )
                         isChoosingChat = true
                     }
                     .labelStyle(.iconOnly)
                     .buttonStyle(ChatControlButtonStyle())
                     .help("Start a new chat, or go back to one")
                     .popover(isPresented: $isChoosingChat, arrowEdge: .bottom) {
-                        chatChooser
+                        // Built from a reading taken here, as the popover
+                        // opens, and handed in. Read from this view's own
+                        // `@State` instead and the list came up empty: the
+                        // content closure is called with a copy of the view
+                        // whose state is not the one the button wrote to, so
+                        // what it saw was the initial value.
+                        ReaderChatChooser(
+                            chats: ReaderChatWorkspaceStore
+                                .chats(libraryRootURL: libraryModel.library.rootURL)
+                                .filter { $0.id != chatID },
+                            inUse: OpenReaderChats.inUse
+                        ) { chosen in
+                            isChoosingChat = false
+                            resume(chosen)
+                        }
                     }
                     Button("Close Chat", systemImage: "xmark", action: close)
                         .labelStyle(.iconOnly)
@@ -452,6 +393,7 @@ struct ReaderChatSidebarView: View {
                 // meant to go.
                 Button {
                     SettingsDestination.shared.section = .aiAndAgents
+                    SettingsDestination.shared.anchor = .readerChats
                     openSettings()
                 } label: {
                     Image(systemName: "gearshape")
@@ -514,6 +456,95 @@ struct ReaderChatSidebarView: View {
         } catch {
             preparationError = error.localizedDescription
         }
+    }
+}
+
+/// A new chat, and the conversations there are to go back to.
+///
+/// Handed its list rather than reading one from state: see the popover that
+/// presents it. A conversation open in another tab is shown and not offered,
+/// since two panes writing one transcript is worse than starting a second.
+private struct ReaderChatChooser: View {
+    let chats: [ReaderChatWorkspaceStore.Chat]
+    let inUse: Set<UUID>
+    let pick: (UUID?) -> Void
+
+    /// What the list needs, so the popover can be that tall. A popover takes
+    /// its size from its content's *ideal* height and a `ScrollView` has none
+    /// to offer, so without this the list stood at nothing and the reader saw
+    /// a popover with only New Chat in it.
+    @State private var listHeight: CGFloat = 0
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button { pick(nil) } label: {
+                Label("New Chat", systemImage: "plus.bubble")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+
+            Divider()
+
+            if chats.isEmpty {
+                // Said rather than left blank, so the list looks the same
+                // whether or not there is anything in it yet.
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("No chats to go back to")
+                    Text(
+                        """
+                        Conversations you have here are kept, and listed \
+                        for as long as AI & Agents settings say.
+                        """
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(chats, id: \.id) { chat in
+                            row(chat)
+                            if chat.id != chats.last?.id { Divider().padding(.leading, 12) }
+                        }
+                    }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                        listHeight = height
+                    }
+                }
+                .frame(height: min(max(listHeight, 44), 360))
+            }
+        }
+        .frame(width: 320)
+    }
+
+    @ViewBuilder private func row(_ chat: ReaderChatWorkspaceStore.Chat) -> some View {
+        let elsewhere = inUse.contains(chat.id)
+        Button { pick(chat.id) } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(chat.opening ?? "Nothing said yet")
+                    .lineLimit(2)
+                    .foregroundStyle(chat.opening == nil ? .secondary : .primary)
+                HStack(spacing: 6) {
+                    if let lastSpoken = chat.lastSpoken {
+                        Text(lastSpoken.formatted(.relative(presentation: .named)))
+                    }
+                    if elsewhere { Text("Open in another tab") }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .disabled(elsewhere)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
     }
 }
 

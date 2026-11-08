@@ -329,6 +329,7 @@ private struct ReaderSettingsView: View {
             .navigationSplitViewColumnWidth(205)
             .toolbar(removing: .sidebarToggle)
         } detail: {
+            ScrollViewReader { form in
             Form {
                 switch selectedSettingsSection {
                 case .reader:
@@ -625,6 +626,7 @@ private struct ReaderSettingsView: View {
                     }
 
                     Section("Reader Chats") {
+                        // Arrived at from the chat pane's own gear.
                         Picker("Keep chats for", selection: $readerChatRetention) {
                             ForEach(ReaderChatWorkspaceStore.Retention.allCases, id: \.rawValue) {
                                 Text($0.title).tag($0.rawValue)
@@ -642,6 +644,7 @@ private struct ReaderSettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     }
+                    .id(SettingsAnchor.readerChats)
 
                     Section("Use Lamp in Other Apps") {
                         Toggle(
@@ -911,8 +914,9 @@ private struct ReaderSettingsView: View {
             }
             .formStyle(.grouped)
             .navigationTitle(selectedSettingsSection.title)
-            .onAppear { goToRequestedSection() }
-            .onChange(of: settingsDestination.section) { _, _ in goToRequestedSection() }
+            .onAppear { goToRequestedSection(in: form) }
+            .onChange(of: settingsDestination.section) { _, _ in goToRequestedSection(in: form) }
+            }
         }
         .navigationSplitViewStyle(.balanced)
         .frame(width: 880, height: 640)
@@ -942,11 +946,21 @@ private struct ReaderSettingsView: View {
             .foregroundStyle(Color.lampSecondaryText)
     }
 
-    /// Moves to the section a button elsewhere asked for, once.
-    private func goToRequestedSection() {
+    /// Moves to the section a button elsewhere asked for, and to the part of
+    /// it that was meant, once.
+    ///
+    /// The scroll waits a moment: the section's own form is built as the
+    /// selection changes, and nothing can be scrolled to before it is there.
+    private func goToRequestedSection(in form: ScrollViewProxy) {
         guard let asked = settingsDestination.section else { return }
         selectedSettingsSection = asked
         settingsDestination.section = nil
+        guard let anchor = settingsDestination.anchor else { return }
+        settingsDestination.anchor = nil
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(120))
+            withAnimation { form.scrollTo(anchor, anchor: .top) }
+        }
     }
 
     private func settingsLink(_ section: ReaderSettingsSection) -> some View {
@@ -1303,8 +1317,17 @@ final class SettingsDestination {
 
     /// Set by whoever opens Settings, cleared by Settings on arriving.
     var section: ReaderSettingsSection?
+    /// Which part of that section, where it matters. The section's own
+    /// settings are a page long, and a button that means one of them should
+    /// not leave the reader to find it.
+    var anchor: SettingsAnchor?
 
     private init() {}
+}
+
+/// A part of a settings section that something elsewhere can mean.
+enum SettingsAnchor: Hashable {
+    case readerChats
 }
 
 enum ReaderSettingsSection: String, CaseIterable, Identifiable {
