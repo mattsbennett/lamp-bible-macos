@@ -1135,9 +1135,20 @@ private struct ReaderTabBar: View {
         }
     }
 
+    /// Fades out toward the top, so the hairline rises out of the bar rather
+    /// than stopping short against the toolbar above it, which has no border
+    /// for it to meet. A gradient of the colour rather than a mask over
+    /// `.separator`: in dark mode the masked style drew nothing at all.
     private var separator: some View {
-        Rectangle()
-            .fill(.separator)
+        let line = Color(nsColor: .separatorColor)
+        return Rectangle()
+            .fill(
+                LinearGradient(
+                    stops: [.init(color: line.opacity(0), location: 0), .init(color: line, location: 0.75)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
             .frame(width: 1)
     }
 
