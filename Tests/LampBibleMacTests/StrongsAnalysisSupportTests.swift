@@ -184,6 +184,52 @@ struct StrongsAnalysisSupportTests {
         #expect(LampStrongsFilter.chapter(book: 43, number: 3).label == "John 3")
     }
 
+    /// The chip sits in the occurrence list's heading, after the count, so
+    /// it has to finish that sentence: "1 of 113 occurrences rendered
+    /// “beloved”".
+    @Test func everyFilterFinishesTheListsHeading() {
+        #expect(LampStrongsFilter.rendering(id: "word-1", text: "beloved").narrowing
+            == "rendered “beloved”")
+        #expect(LampStrongsFilter.form("λόγον").narrowing == "as λόγον")
+        #expect(LampStrongsFilter.grammar(feature: .tense, value: "Aorist").narrowing
+            == "Tense: Aorist")
+        #expect(LampStrongsFilter.book(number: 43).narrowing == "in John")
+        #expect(LampStrongsFilter.chapter(book: 43, number: 3).narrowing == "in John 3")
+    }
+
+    /// Unfiltered, the heading says the list is whole rather than leaving a
+    /// bare count that could be a page of a longer list.
+    @Test func theListsHeadingSaysWhetherItIsWhole() {
+        #expect(LampStrongsFilter.heading(shown: 113, total: 113, narrowed: false)
+            == "All 113 occurrences")
+        #expect(LampStrongsFilter.heading(shown: 1, total: 113, narrowed: true)
+            == "1 of 113 occurrences")
+        #expect(LampStrongsFilter.heading(shown: 1, total: 1, narrowed: false)
+            == "1 occurrence")
+        #expect(LampStrongsFilter.heading(shown: 1, total: 1, narrowed: true)
+            == "1 of 1 occurrence")
+    }
+
+    // MARK: - The definition
+
+    /// A menu choice outranks the default, and the default outranks order —
+    /// but a dictionary without an entry for the key is never the one shown.
+    @Test func theDefinitionComesFromADictionaryThatHasTheWord() {
+        let withEntries = ["strongs_greek", "dodson_greek", "wsd_greek"]
+        #expect(LampStrongsDefinitionChoice.shown(
+            among: withEntries, chosen: "wsd_greek", preferred: "dodson_greek"
+        ) == "wsd_greek")
+        #expect(LampStrongsDefinitionChoice.shown(
+            among: withEntries, chosen: nil, preferred: "dodson_greek"
+        ) == "dodson_greek")
+        #expect(LampStrongsDefinitionChoice.shown(
+            among: withEntries, chosen: "bdb", preferred: "abbott_smith"
+        ) == "strongs_greek")
+        #expect(LampStrongsDefinitionChoice.shown(
+            among: [], chosen: "wsd_greek", preferred: "dodson_greek"
+        ) == nil)
+    }
+
     // MARK: - The spread chart
 
     @Test func barsAreScaledAgainstTheLongestOne() {

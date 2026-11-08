@@ -346,17 +346,45 @@ struct UnifiedSearchView: View {
         let occurrences = analysis?.occurrences(matching: strongsFilter) ?? []
         return VStack(spacing: 0) {
             if let analysis {
+                // The list says what it holds, and what narrowed it, here
+                // rather than in the pane whose bar was clicked: the reader
+                // clicks over there and reads the effect over here. The row
+                // keeps one height with or without the chip, so the list
+                // under it doesn't move when a bar is chosen.
                 HStack(spacing: 6) {
-                    Text(strongsFilter == nil
-                        ? "\(occurrences.count) occurrences"
-                        : "\(occurrences.count) of \(analysis.occurrenceCount) occurrences")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
+                    Text(LampStrongsFilter.heading(
+                        shown: occurrences.count,
+                        total: analysis.occurrenceCount,
+                        narrowed: strongsFilter != nil
+                    ))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    if let strongsFilter {
+                        Button {
+                            self.strongsFilter = nil
+                        } label: {
+                            HStack(spacing: 5) {
+                                Text(strongsFilter.narrowing).lineLimit(1)
+                                Image(systemName: "xmark.circle.fill")
+                                    .imageScale(.small)
+                            }
+                            .font(.callout.weight(.medium))
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 3)
+                            .background(.tint.opacity(0.22), in: Capsule())
+                            .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .pointerStyle(.link)
+                        .help("Show every occurrence again")
+                    }
+                    Spacer(minLength: 6)
                     Text(analysis.translationAbbreviation ?? analysis.translationName)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                .frame(height: 24)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 Divider()
@@ -408,7 +436,10 @@ struct UnifiedSearchView: View {
                                 get: { previewedOccurrence == occurrence.reference },
                                 set: { if !$0 { previewedOccurrence = nil } }
                             ),
-                            arrowEdge: .trailing
+                            // Toward the analysis: the list is the right-hand
+                            // column, so a preview opened past its trailing
+                            // edge would have no room.
+                            arrowEdge: .leading
                         ) {
                             if let analysis {
                                 let translationID = analysis.translationID
@@ -486,7 +517,9 @@ struct UnifiedSearchView: View {
         return "\(LampBibleReferenceFormatter.bookName(parts.book)) \(parts.chapter):\(parts.verse)"
     }
 
-    /// The occurrence list beside the analysis.
+    /// The word on the left, its occurrences on the right: the word is what
+    /// was searched for, so it leads, and the list it narrows reads as the
+    /// result of choosing in it.
     ///
     /// Held apart from `body` because the view builder's type checking gives
     /// up once one expression carries this much: the error it reports lands
@@ -494,7 +527,6 @@ struct UnifiedSearchView: View {
     /// at fault.
     private var strongsAnalysis: some View {
         HSplitView {
-            strongsOccurrences
             StrongsAnalysisPane(
                 key: strongsRequest.key,
                 loader: strongsLoader,
@@ -503,6 +535,7 @@ struct UnifiedSearchView: View {
                 bookRange: bookScope.range,
                 fontSize: hitFontSize
             )
+            strongsOccurrences
         }
         .task(id: strongsRequest) {
             // A rendering or chapter chosen for the last key means nothing

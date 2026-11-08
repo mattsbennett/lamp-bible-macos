@@ -111,6 +111,27 @@ public enum LampStrongsShareHit {
 }
 
 extension LampStrongsFilter {
+    /// The filter as the tail of a sentence about the occurrence list:
+    /// "rendered “beloved”", "in John 3". The list's own heading carries it,
+    /// so what a click did is said where its effect is, not in the pane that
+    /// was clicked.
+    public var narrowing: String {
+        switch self {
+        case .rendering(_, let text): "rendered “\(text)”"
+        case .form(let text): "as \(text)"
+        case .grammar: label
+        case .book, .chapter: "in \(label)"
+        }
+    }
+
+    /// The occurrence list's heading: every occurrence, or how many of them
+    /// the filter leaves.
+    public static func heading(shown: Int, total: Int, narrowed: Bool) -> String {
+        let noun = total == 1 ? "occurrence" : "occurrences"
+        if !narrowed { return total == 1 ? "1 occurrence" : "All \(total) \(noun)" }
+        return "\(shown) of \(total) \(noun)"
+    }
+
     /// What is left when this filter is chosen a second time.
     ///
     /// Choosing the same thing again widens by one step rather than clearing
@@ -684,5 +705,22 @@ public enum LampSearchResultIdentity {
         guard identifier.hasPrefix(prefix) else { return nil }
         let entry = String(identifier.dropFirst(prefix.count))
         return entry.isEmpty ? nil : entry
+    }
+}
+
+/// Which dictionary's entry the Strong's pane's Definition shows.
+public enum LampStrongsDefinitionChoice {
+    /// The dictionary chosen from the menu, then the default for the key's
+    /// language, then the first that has an entry — and only ever one of
+    /// `withEntries`, so the pane never opens on a dictionary with nothing to
+    /// say about the word while another has an entry.
+    public static func shown(
+        among withEntries: [String],
+        chosen: String?,
+        preferred: String?
+    ) -> String? {
+        if let chosen, withEntries.contains(chosen) { return chosen }
+        if let preferred, withEntries.contains(preferred) { return preferred }
+        return withEntries.first
     }
 }

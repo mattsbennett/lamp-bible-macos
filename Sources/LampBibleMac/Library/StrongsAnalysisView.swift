@@ -163,6 +163,7 @@ final class StrongsAnalysisLoader {
 /// What a Strong's key does across the translations that tag it.
 struct StrongsAnalysisPane: View {
     enum Section: String, CaseIterable, Identifiable {
+        case definition = "Definition"
         case overview = "Overview"
         case spread = "Spread"
         case companions = "Companions"
@@ -183,7 +184,14 @@ struct StrongsAnalysisPane: View {
     /// rather than sitting at a fixed caption size.
     let fontSize: Double
 
-    @State private var section: Section = .overview
+    /// The definition first: it is what someone looking a word up came for,
+    /// and the figures are one click away.
+    @State private var section: Section = .definition
+    /// The dictionary chosen from the Definition's menu, held here rather
+    /// than in the tab, which is rebuilt each time it is shown. Kept across
+    /// keys, so someone reading one lexicon keeps reading it as they follow
+    /// a companion.
+    @State private var definitionDictionaryID: String?
     @State private var style: LampStrongsChartStyle = .bars
     @State private var measure: LampStrongsSpreadMeasure = .occurrences
     @State private var grouping: LampStrongsGrouping = .books
@@ -230,6 +238,8 @@ struct StrongsAnalysisPane: View {
                 Divider()
                 ScrollView {
                     switch section {
+                    case .definition:
+                        StrongsDefinitionView(key: analysis.key, chosenID: $definitionDictionaryID)
                     case .overview: overview(analysis)
                     case .spread: spread(analysis)
                     case .companions: companions(analysis)
@@ -261,47 +271,9 @@ struct StrongsAnalysisPane: View {
                     ProgressView().controlSize(.small)
                 }
             }
-            if let gloss = entry?.gloss, !gloss.isEmpty {
-                Text(gloss)
-                    .font(.system(size: fontSize))
-                    .foregroundStyle(.primary.opacity(0.78))
-                    .lineSpacing(2)
-            }
             Text(countSummary(analysis))
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            // Always here, empty or not. Appearing and disappearing with the
-            // filter moved the pane and the occurrence list beside it every
-            // time a bar was clicked — the one moment the reader is looking
-            // at something else.
-            HStack(spacing: 6) {
-                if let filter {
-                    Button {
-                        self.filter = nil
-                    } label: {
-                        HStack(spacing: 5) {
-                            Text(filter.label).lineLimit(1)
-                            Image(systemName: "xmark.circle.fill")
-                                .imageScale(.small)
-                        }
-                        .font(.callout.weight(.medium))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(.tint.opacity(0.22), in: Capsule())
-                        .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .chartClickable()
-                    .help("Show every occurrence again")
-                } else {
-                    Label("Choose a bar, a chapter or a rendering to narrow these.", systemImage: "hand.point.up.left")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 0)
-            }
-            .frame(height: 28)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
@@ -686,7 +658,8 @@ struct StrongsAnalysisPane: View {
                                     .buttonStyle(.plain)
                                     .chartClickable()
                                     .help("\(row.name) \(chapter.number): "
-                                        + "\(chapter.occurrenceCount)")
+                                        + "\(chapter.occurrenceCount)."
+                                        + Self.listsThese(chapter.occurrenceCount))
                                 }
                             }
                             Spacer(minLength: 0)
@@ -925,7 +898,8 @@ struct StrongsAnalysisPane: View {
                 }
                 .buttonStyle(.plain)
                 .chartClickable()
-                .help("Chapter \(chapter.number): \(chapter.occurrenceCount)")
+                .help("Chapter \(chapter.number): \(chapter.occurrenceCount)."
+            + Self.listsThese(chapter.occurrenceCount))
             }
             Spacer(minLength: 0)
         }
@@ -947,7 +921,8 @@ struct StrongsAnalysisPane: View {
         case .fewer: standing = " — fewer than chance would give"
         case .asExpected: standing = ""
         }
-        return "\(bar.name): \(bar.occurrenceCount) in \(bar.wordCount) tagged words\(standing)"
+        return "\(bar.name): \(bar.occurrenceCount) in \(bar.wordCount) tagged words\(standing)."
+            + Self.listsThese(bar.occurrenceCount)
     }
 
     private func fill(for expectation: LampStrongsAnalysis.Expectation) -> AnyShapeStyle {
@@ -1174,7 +1149,13 @@ struct StrongsAnalysisPane: View {
         }
         .buttonStyle(.plain)
         .chartClickable()
-        .help("\(title): \(count)")
+        .help("\(title): \(count)." + Self.listsThese(count))
+    }
+
+    /// What a click on a figure does, said in its help, since nothing else on
+    /// a chart says it can be clicked. A figure of nought has nothing to list.
+    private static func listsThese(_ count: Int) -> String {
+        count > 0 ? " Click to list only these." : ""
     }
 
     /// The empty length behind a bar, a step off the pane in either
@@ -1194,6 +1175,143 @@ struct StrongsAnalysisPane: View {
         // left the reader looking at a book's chapters while the list showed
         // every occurrence in the Bible.
         filter = next.widened
+    }
+}
+
+/// A key's whole entry, from one dictionary at a time.
+///
+/// Opens on the default dictionary for the key's language — the one Settings
+/// names and the study pane opens on — so a word reads the same here as it
+/// does beside the reader. The menu lists only dictionaries that hold an
+/// entry for the key: one with nothing to say about it is not a choice.
+struct StrongsDefinitionView: View {
+    let key: String
+    @Binding var chosenID: String?
+
+    @EnvironmentObject private var model: LibraryModel
+    @AppStorage("commentary.fontSize") private var fontSize = LampTextScale.commentaryText.defaultValue
+    @AppStorage("commentary.lineSpacing") private var lineSpacing = LampTextScale.commentaryLineSpacing.defaultValue
+    @AppStorage("commentary.typeface") private var typeface = ProseTypeface.commentaryDefault
+    @AppStorage("studyInspector.greekDictionaryModuleID") private var preferredGreekID = ""
+    @AppStorage("studyInspector.hebrewDictionaryModuleID") private var preferredHebrewID = ""
+    @State private var entries: [LampDictionaryResult] = []
+    /// The key `entries` answers, so an empty list reads as "no entry" only
+    /// once it has been asked, never while the lookup is still on its way.
+    @State private var answeredKey: String?
+    @State private var errorMessage: String?
+
+    private var language: BiblicalOriginalLanguage? { .inferred(from: key) }
+
+    /// The dictionaries for the key's language, or every one when it has
+    /// none, in the library's order.
+    private var candidates: [LampInstalledModule] {
+        let matching = model.dictionaries.filter { $0.biblicalOriginalLanguage == language }
+        return language == nil || matching.isEmpty ? model.dictionaries : matching
+    }
+
+    private var withEntries: [LampInstalledModule] {
+        candidates.filter { module in entries.contains { $0.moduleID == module.id } }
+    }
+
+    private var shownID: String? {
+        let preferred = switch language {
+        case .greek: preferredGreekID
+        case .hebrew: preferredHebrewID
+        case nil: ""
+        }
+        return LampStrongsDefinitionChoice.shown(
+            among: withEntries.map(\.id),
+            chosen: chosenID,
+            preferred: preferred.isEmpty ? nil : preferred
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let errorMessage {
+                ContentUnavailableView(
+                    "Lookup Failed",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text(errorMessage)
+                )
+            } else if answeredKey != key {
+                ProgressView()
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 30)
+            } else if let shownID {
+                dictionaryMenu(shownID)
+                let shown = entries.filter { $0.moduleID == shownID }
+                ForEach(shown) { entry in
+                    DictionaryResultView(
+                        result: entry,
+                        isExpanded: true,
+                        // One entry is simply the word, which the menu and
+                        // the pane's header already name. Several — a key
+                        // mapped onto more than one headword — each need
+                        // their own name to be told apart.
+                        showsSummary: shown.count > 1,
+                        fontSize: LampTextScale.commentaryText.clamped(fontSize),
+                        lineSpacing: LampTextScale.commentaryLineSpacing.clamped(lineSpacing),
+                        typeface: typeface
+                    )
+                }
+            } else {
+                ContentUnavailableView(
+                    "Not in Any Dictionary",
+                    systemImage: "character.book.closed",
+                    description: Text(model.dictionaries.isEmpty
+                        ? "Install a dictionary from Modules to read what \(key) means."
+                        : "No installed dictionary has an entry for \(key).")
+                )
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .task(id: key) { await load() }
+    }
+
+    @ViewBuilder
+    private func dictionaryMenu(_ shownID: String) -> some View {
+        if withEntries.count > 1 {
+            Picker("Dictionary", selection: Binding(
+                get: { shownID },
+                set: { chosenID = $0 }
+            )) {
+                ForEach(withEntries) { Text($0.name).tag($0.id) }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .fixedSize()
+            .help("Read this word in another dictionary")
+        } else if let name = withEntries.first?.name {
+            Text(name)
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// The key as given, as normalized, and as any bundled mapping names it
+    /// in another lexicon (Strong's Hebrew to BDB), the way the study pane
+    /// looks a word up.
+    private func load() async {
+        errorMessage = nil
+        do {
+            let mapped = try await model.lexiconMappings(sourceKey: key)
+            let found = try await model.library.dictionaryEntries(
+                keys: [key, StrongsKey.normalized(key)] + mapped,
+                moduleIDs: Set(candidates.map(\.id))
+            )
+            try Task.checkCancellation()
+            entries = found
+            answeredKey = key
+        } catch is CancellationError {
+            return
+        } catch {
+            errorMessage = error.localizedDescription
+            entries = []
+            answeredKey = key
+        }
     }
 }
 

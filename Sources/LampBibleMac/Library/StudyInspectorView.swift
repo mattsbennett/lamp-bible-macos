@@ -2067,7 +2067,7 @@ private struct StudySection<Content: View>: View {
     }
 }
 
-private struct DictionaryResultView: View {
+struct DictionaryResultView: View {
     let result: LampDictionaryResult
     /// Expanded for a looked-up word, where there are only a handful of entries and
     /// the definition is the thing you came for; collapsed in a search result list.
@@ -2076,6 +2076,10 @@ private struct DictionaryResultView: View {
     /// word leads with its source alone rather than printing the word, and
     /// its key, again.
     var headword: String?
+    /// False where something around the entry already names it, as the
+    /// Strong's pane's dictionary menu does: the entry is then only its
+    /// senses, always open, with nothing to fold it away by.
+    var showsSummary = true
     let fontSize: Double
     let lineSpacing: Double
     let typeface: ProseTypeface
@@ -2097,23 +2101,25 @@ private struct DictionaryResultView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Button {
-                isShowingDetail = !isDetailShown
-            } label: {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Image(systemName: "chevron.right")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .rotationEffect(.degrees(isDetailShown ? 90 : 0))
-                        .frame(width: 10)
-                    summaryLabel
+            if showsSummary {
+                Button {
+                    isShowingDetail = !isDetailShown
+                } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .rotationEffect(.degrees(isDetailShown ? 90 : 0))
+                            .frame(width: 10)
+                        summaryLabel
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
 
-            if isDetailShown {
+            if isDetailShown || !showsSummary {
                 detail
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
