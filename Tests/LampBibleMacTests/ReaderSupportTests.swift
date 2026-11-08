@@ -424,6 +424,80 @@ struct ReaderSupportTests {
         #expect(restored.tabs[0].location?.bookNumber == 1)
     }
 
+    /// Each tab keeps its own column, so one can be read plainly while another
+    /// keeps its commentary open, and moving between them does not drag the
+    /// column along.
+    @Test func eachTabKeepsItsOwnColumn() throws {
+        let genesis = ReaderLocation(translationID: "WEB", bookNumber: 1, chapterNumber: 1)
+        var tabs = ReaderTabCollection(initialLocation: genesis)
+        let studyID = tabs.selectedID
+        let open = ReaderTabSidebar(
+            pane: .study, studyTool: "dictionary",
+            dictionaryQuery: "logos", dictionaryKeys: ["G3056"], dictionaryWord: "Word"
+        )
+        tabs.updateSelected(sidebar: open)
+
+        let plainID = tabs.add(location: genesis)
+        #expect(tabs.selectedTab?.sidebar == ReaderTabSidebar(), "a new tab starts with its column shut")
+
+        tabs.select(studyID)
+        #expect(tabs.selectedTab?.sidebar == open)
+        tabs.select(plainID)
+        #expect(tabs.selectedTab?.sidebar.pane == nil)
+
+        tabs.duplicate(studyID)
+        #expect(tabs.selectedTab?.sidebar == open, "a copy keeps the column it was copied with")
+
+        let restored = try JSONDecoder().decode(
+            ReaderTabCollection.self, from: JSONEncoder().encode(tabs)
+        )
+        #expect(restored == tabs, "and the column is saved with the tab")
+    }
+
+    /// Tabs written by a Lamp that kept no column per tab open with it shut,
+    /// rather than failing and taking the whole session with them.
+    @Test func tabsWrittenBeforeColumnsExistedStillOpen() throws {
+        let json = Data(#"""
+            {"tabs":[{"id":"6B1E4B2E-0A5E-4F3E-9E62-9B1B2C3D4E5F","name":"Sunday Class",
+            "location":{"translationID":"WEB","bookNumber":1,"chapterNumber":1}}],
+            "selectedID":"6B1E4B2E-0A5E-4F3E-9E62-9B1B2C3D4E5F"}
+            """#.utf8)
+
+        let restored = try JSONDecoder().decode(ReaderTabCollection.self, from: json)
+
+        #expect(restored.tabs.count == 1)
+        #expect(restored.tabs[0].name == "Sunday Class")
+        #expect(restored.tabs[0].sidebar == ReaderTabSidebar())
+    }
+
+    /// A pane a later Lamp adds is unknown here: that tab opens with its column
+    /// shut, keeping whatever else it can read, and its neighbours are untouched.
+    /// A column that cannot be read at all costs only the column.
+    @Test func acolumnThisBuildCannotReadCostsOnlyTheColumn() throws {
+        let json = Data(#"""
+            {"tabs":[
+            {"id":"6B1E4B2E-0A5E-4F3E-9E62-9B1B2C3D4E5F",
+             "location":{"translationID":"WEB","bookNumber":1,"chapterNumber":1},
+             "sidebar":{"pane":"timeline","studyTool":"notes","dictionaryKeys":7}},
+            {"id":"7C2F5C3F-1B6F-4A4F-8F73-AC2C3D4E5F60",
+             "location":{"translationID":"WEB","bookNumber":43,"chapterNumber":1},
+             "sidebar":"not a column"},
+            {"id":"8D3A6D4A-2C7A-4B5A-9A84-BD3D4E5F6071",
+             "location":{"translationID":"WEB","bookNumber":45,"chapterNumber":8},
+             "sidebar":{"pane":"study","studyTool":"commentary"}}],
+            "selectedID":"6B1E4B2E-0A5E-4F3E-9E62-9B1B2C3D4E5F"}
+            """#.utf8)
+
+        let restored = try JSONDecoder().decode(ReaderTabCollection.self, from: json)
+
+        #expect(restored.tabs.count == 3)
+        #expect(restored.tabs[0].sidebar.pane == nil)
+        #expect(restored.tabs[0].sidebar.studyTool == "notes")
+        #expect(restored.tabs[0].sidebar.dictionaryKeys.isEmpty)
+        #expect(restored.tabs[1].sidebar == ReaderTabSidebar())
+        #expect(restored.tabs[2].sidebar.pane == .study)
+    }
+
     @Test func readerTabSessionSurvivesRelaunchAndSavesClosedTabs() throws {
         let suite = "reader-tabs-tests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))

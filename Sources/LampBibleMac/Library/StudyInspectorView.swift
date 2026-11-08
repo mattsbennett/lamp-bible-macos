@@ -42,26 +42,65 @@ extension EnvironmentValues {
     }
 }
 
+/// Where one window's study pane is: the tool showing and what the dictionary
+/// was asked. The window loads it from the tab being read and writes it back
+/// to that tab, so each tab keeps its own.
+///
+/// Observed per property, so a view that only sets the tool — the reader,
+/// opening a verse's notes — is not redrawn as the dictionary is typed into.
+@MainActor @Observable
+final class StudyPaneState {
+    var tool = "commentary"
+    var dictionaryQuery = ""
+    var dictionaryLookup: DictionaryLookup?
+
+    /// Takes up a tab's pane. A tab that has never chosen a tool starts on
+    /// `defaultTool`, and one saved with a tool since removed — the
+    /// translation tab, which side by side replaced — on the commentary.
+    func adopt(_ sidebar: ReaderTabSidebar, defaultTool: String) {
+        let chosen = sidebar.studyTool ?? defaultTool
+        tool = StudyToolPicker.toolIDs.contains(chosen) ? chosen : "commentary"
+        dictionaryQuery = sidebar.dictionaryQuery
+        dictionaryLookup = sidebar.dictionaryKeys.isEmpty
+            ? nil
+            : DictionaryLookup(keys: sidebar.dictionaryKeys, word: sidebar.dictionaryWord)
+    }
+
+    /// This pane as a tab keeps it, with the column showing `pane`.
+    func sidebar(pane: ReaderTabSidebar.Pane?) -> ReaderTabSidebar {
+        ReaderTabSidebar(
+            pane: pane,
+            studyTool: tool,
+            dictionaryQuery: dictionaryQuery,
+            dictionaryKeys: dictionaryLookup?.keys ?? [],
+            dictionaryWord: dictionaryLookup?.word
+        )
+    }
+}
+
 struct StudyInspectorView: View {
     @EnvironmentObject private var model: LibraryModel
     @EnvironmentObject private var scrollLink: ReaderScrollLink
+    @Environment(StudyPaneState.self) private var pane
     @Binding var isPresented: Bool
-    @AppStorage("studyInspector.tab") private var selectedTab = "commentary"
-    @State private var dictionaryQuery = ""
-    @State private var dictionaryLookup: DictionaryLookup?
+    /// Writes the pane back to its tab once typing in the dictionary has
+    /// paused. Called from here because only this view watches the field;
+    /// the window watching it would redraw at every keystroke.
+    let recordTypedQuery: () -> Void
 
     private static let scrollLinkButtonWidth: CGFloat = 16
 
     /// The dictionary answers a query, not a verse, so there is nothing for it to
     /// keep in step with the reader.
     private var tabSupportsScrollLink: Bool {
-        selectedTab != "dictionary"
+        pane.tool != "dictionary"
     }
 
     var body: some View {
+        @Bindable var pane = pane
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                StudyToolPicker(selection: $selectedTab)
+                StudyToolPicker(selection: $pane.tool)
 
                 Spacer(minLength: 8)
 
@@ -83,18 +122,18 @@ struct StudyInspectorView: View {
 
             Divider()
 
-            switch selectedTab {
+            switch pane.tool {
             case "dictionary":
                 DictionaryInspectorView(
-                    query: $dictionaryQuery,
-                    lookup: $dictionaryLookup
+                    query: $pane.dictionaryQuery,
+                    lookup: $pane.dictionaryLookup
                 )
             case "verse":
                 VerseInspectorView { key, word in
                     // The dictionary pane seeds the field from the lookup itself;
                     // clearing the query here would read as the user typing.
-                    dictionaryLookup = DictionaryLookup(keys: [key], word: word)
-                    selectedTab = "dictionary"
+                    pane.dictionaryLookup = DictionaryLookup(keys: [key], word: word)
+                    pane.tool = "dictionary"
                 }
             case "notes":
                 NotesInspectorView()
@@ -111,12 +150,11 @@ struct StudyInspectorView: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .task(id: pane.dictionaryQuery) {
+            do { try await Task.sleep(for: .milliseconds(800)) } catch { return }
+            recordTypedQuery()
+        }
         .onAppear {
-            // A tab saved before it was removed shows nothing selected; the
-            // translation tab went when side by side took over its job.
-            if !StudyToolPicker.toolIDs.contains(selectedTab) {
-                selectedTab = "commentary"
-            }
             // Inspector content can exist while its column is hidden. Leave the
             // request pending until the presented instance can retain the lookup.
             guard isPresented else { return }
@@ -143,8 +181,8 @@ struct StudyInspectorView: View {
 
     private func adoptDictionaryLookup(_ request: DictionaryLookupRequest?) {
         guard let request, !request.keys.isEmpty else { return }
-        dictionaryLookup = DictionaryLookup(keys: request.keys, word: request.word)
-        selectedTab = "dictionary"
+        pane.dictionaryLookup = DictionaryLookup(keys: request.keys, word: request.word)
+        pane.tool = "dictionary"
         model.consumeDictionaryLookupRequest(request)
     }
 }
@@ -1077,7 +1115,7 @@ private enum PersonalStudyExportFormat: Sendable {
 /// whole point — `searchDictionaries` matches the query against definition bodies
 /// too, and Strong's dictionaries cite each other constantly, so searching for
 /// `H7225` returns every entry that merely *mentions* it.
-private struct DictionaryLookup: Equatable {
+struct DictionaryLookup: Equatable {
     let keys: [String]
     let word: String?
 }
@@ -3521,7 +3559,7 @@ private struct DictionaryPopoverEntryView: View {
 /// with room over. Nothing reflows as the selection moves, since
 /// what marks it is the colour and the rule beneath rather than a heavier
 /// weight that would make the word wider.
-private struct StudyToolPicker: View {
+struct StudyToolPicker: View {
     @Binding var selection: String
     @State private var hovered: String?
 

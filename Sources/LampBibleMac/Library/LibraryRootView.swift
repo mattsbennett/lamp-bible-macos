@@ -117,7 +117,15 @@ struct LibraryRootView: View {
     // reader's selectable text hierarchy underneath the pointer.
     @State private var readerLexicalHoverStore = ReaderLexicalHoverStore()
     @AppStorage("studyInspector.width") private var studyInspectorWidth = StudyInspectorMetrics.defaultWidth
-    @AppStorage("studyInspector.tab") private var selectedStudyTab = "commentary"
+    /// The study tool last chosen in any tab, which a tab that has never
+    /// chosen one starts on. Each tab's own is kept with the tab.
+    @AppStorage("studyInspector.tab") private var lastStudyTool = "commentary"
+    /// The open tab's study pane, written back to the tab as it changes.
+    @State private var studyPane = StudyPaneState()
+    /// Set when moving to a tab whose column is open where this one's was
+    /// shut, or the reverse: the column is that tab's, so it is simply there
+    /// or not, rather than sliding in as if just asked for.
+    @State private var readerSidebarSwitchesInstantly = false
 
     private var showingStudyInspector: Binding<Bool> {
         Binding(
@@ -346,6 +354,14 @@ struct LibraryRootView: View {
         }
         .onChange(of: readerSidebar) { _, sidebar in
             if let sidebar { lastReaderSidebar = sidebar }
+            recordTabSidebar()
+        }
+        .onChange(of: studyPane.tool) { _, tool in
+            lastStudyTool = tool
+            recordTabSidebar()
+        }
+        .onChange(of: studyPane.dictionaryLookup) { _, _ in
+            recordTabSidebar()
         }
         .fileImporter(
             isPresented: $showingImporter,
@@ -457,7 +473,7 @@ struct LibraryRootView: View {
             }
         case .strongs(let key):
             model.requestDictionaryLookup(keys: [key])
-            selectedStudyTab = "dictionary"
+            studyPane.tool = "dictionary"
             readerSidebar = .study
             selection = .section(.reader)
         case .book(let moduleID, let sectionID):
@@ -489,6 +505,7 @@ struct LibraryRootView: View {
             fallbackLocation: model.readerLocation
         )
         hasRestoredReaderTabs = true
+        adoptTabSidebar()
         // A place asked for while no reader was open goes in the chosen tab.
         workspace.start(
             model: model,
@@ -510,7 +527,9 @@ struct LibraryRootView: View {
     /// are.
     private func duplicateReaderTab(_ id: UUID) {
         readerTabs.updateSelected(location: workspace.currentLocation)
+        recordTabSidebar()
         guard let location = readerTabs.duplicate(id) else { return }
+        adoptTabSidebar()
         workspace.openTab(at: location)
         selection = .section(.reader)
     }
@@ -521,7 +540,9 @@ struct LibraryRootView: View {
 
     private func openReaderTab(at location: ReaderLocation) {
         readerTabs.updateSelected(location: workspace.currentLocation)
+        recordTabSidebar()
         readerTabs.add(location: location)
+        adoptTabSidebar()
         workspace.openTab(at: location)
         selection = .section(.reader)
     }
@@ -529,7 +550,10 @@ struct LibraryRootView: View {
     private func selectReaderTab(_ id: UUID) {
         guard id != readerTabs.selectedID else { return }
         readerTabs.updateSelected(location: workspace.currentLocation)
-        if let location = readerTabs.select(id) {
+        recordTabSidebar()
+        let location = readerTabs.select(id)
+        adoptTabSidebar()
+        if let location {
             workspace.openTab(at: location)
         }
         selection = .section(.reader)
@@ -540,9 +564,26 @@ struct LibraryRootView: View {
         let wasSelected = readerTabs.selectedID == id
         if wasSelected { readerTabs.updateSelected(location: workspace.currentLocation) }
         let destination = readerTabs.close(id)
-        if wasSelected, let destination {
-            workspace.openTab(at: destination)
+        if wasSelected {
+            adoptTabSidebar()
+            if let destination { workspace.openTab(at: destination) }
         }
+    }
+
+    /// Writes the column as it stands into the open tab.
+    private func recordTabSidebar() {
+        guard hasRestoredReaderTabs else { return }
+        readerTabs.updateSelected(sidebar: studyPane.sidebar(pane: readerSidebar))
+    }
+
+    /// Shows the open tab's column: open or shut, on its pane and its tool.
+    private func adoptTabSidebar() {
+        let sidebar = readerTabs.selectedTab?.sidebar ?? ReaderTabSidebar()
+        studyPane.adopt(sidebar, defaultTool: lastStudyTool)
+        if (sidebar.pane != nil) != (readerSidebar != nil) {
+            readerSidebarSwitchesInstantly = true
+        }
+        readerSidebar = sidebar.pane
     }
 
     private func openReferenceInCurrentTab(_ reference: Int) {
@@ -614,6 +655,7 @@ struct LibraryRootView: View {
                 readerDetail(isShown: showsReader)
             }
             .equatable()
+            .environment(studyPane)
             .opacity(showsReader ? 1 : 0)
             // Never faded: opacity part way puts a window of text through an
             // offscreen buffer on every frame.
@@ -719,7 +761,10 @@ struct LibraryRootView: View {
                                         close: { readerSidebar = nil }
                                     )
                                 } else {
-                                    StudyInspectorView(isPresented: showingStudyInspector)
+                                    StudyInspectorView(
+                                        isPresented: showingStudyInspector,
+                                        recordTypedQuery: recordTabSidebar
+                                    )
                                         .environmentObject(model)
                                         .environmentObject(scrollLink)
                                 }
@@ -751,8 +796,13 @@ struct LibraryRootView: View {
                 // call site: the change happens inside an async `.task`, and a
                 // transaction opened there does not reliably reach the update
                 // that renders it.
+                // Only while the column is opening or closing. Otherwise the
+                // width is a resize being dragged, or a tab switch that shows
+                // that tab's column as it is, and both should simply land.
                 .animation(
-                    .smooth(duration: StudyInspectorMetrics.revealDuration),
+                    isReaderSidebarTransitioning
+                        ? .smooth(duration: StudyInspectorMetrics.revealDuration)
+                        : nil,
                     value: revealedWidth
                 )
                 .frame(width: geometry.size.width, height: geometry.size.height)
@@ -765,6 +815,15 @@ struct LibraryRootView: View {
                 // space without moving.
                 .task(id: readerSidebar != nil) {
                     let columnWidth = StudyInspectorMetrics.totalWidth(studyInspectorWidth)
+                    if readerSidebarSwitchesInstantly {
+                        readerSidebarSwitchesInstantly = false
+                        let isOpen = readerSidebar != nil
+                        isReaderSidebarTransitioning = false
+                        isReaderSidebarMounted = isOpen
+                        isReaderSidebarContentReady = isOpen
+                        readerSidebarRevealedWidth = isOpen ? columnWidth : 0
+                        return
+                    }
                     if readerSidebar == nil,
                        !isReaderSidebarMounted,
                        readerSidebarRevealedWidth == 0 {
@@ -939,8 +998,8 @@ struct LibraryRootView: View {
 
 }
 
-/// The column open beside the reader, when one is.
-private enum ReaderSidebar { case study, chat }
+/// The column open beside the reader, when one is. Kept with each tab.
+private typealias ReaderSidebar = ReaderTabSidebar.Pane
 
 /// Content that takes no updates while it is out of sight, and is brought up to
 /// date as it comes back into view. Without it the reader's tab bar and frame
@@ -3938,7 +3997,9 @@ private struct TranslationReaderView: View, Equatable {
     @AppStorage("reader.readAloud.voice") private var readAloudVoice = ""
     @AppStorage("reader.readAloud.rate") private var readAloudRate = 0.5
     @AppStorage("reader.readAloud.followAlong") private var followReadAloud = true
-    @AppStorage("studyInspector.tab") private var selectedStudyTab = "commentary"
+    /// Set, never read here, so typing in the dictionary does not redraw
+    /// the reader.
+    @Environment(StudyPaneState.self) private var studyPane
     @StateObject private var readAloud = ReadAloudController()
     @State private var showingPlanQuiz = false
     /// Mount and reveal are separate so the panel exists before it is asked to
@@ -5795,7 +5856,7 @@ private struct TranslationReaderView: View, Equatable {
         ) {
             prepareChapterForStudy(reference: verse.id)
             selectVerseFromReader(verse.id)
-            selectedStudyTab = "notes"
+            studyPane.tool = "notes"
             showingStudyInspector = true
         })
         entries.append(.action("Show Study Tools", systemImage: "sidebar.trailing") {
@@ -5902,9 +5963,9 @@ private struct TranslationReaderView: View, Equatable {
         prepareChapterForStudy(reference: verse.id)
         selectVerseFromReader(verse.id)
         if model.hasPersonalNote(for: verse.id) || model.hasInstalledNote(for: verse.id) {
-            selectedStudyTab = "notes"
+            studyPane.tool = "notes"
         } else if verse.hasFootnotes || verse.annotations.contains(where: { $0.strongs != nil }) {
-            selectedStudyTab = "verse"
+            studyPane.tool = "verse"
         }
         showingStudyInspector = true
     }
@@ -5918,7 +5979,7 @@ private struct TranslationReaderView: View, Equatable {
             // whichever translation holds it.
             prepareChapterForStudy(reference: reference)
             workspace.focusVerse(reference)
-            selectedStudyTab = model.hasPersonalNote(for: reference) || model.hasInstalledNote(for: reference)
+            studyPane.tool = model.hasPersonalNote(for: reference) || model.hasInstalledNote(for: reference)
                 ? "notes"
                 : "verse"
             showingStudyInspector = true
@@ -6237,7 +6298,7 @@ private struct TranslationReaderView: View, Equatable {
         // Queue the lookup before mounting the inspector. Its first rendered
         // instance can then adopt this exact request immediately on appearance.
         model.requestDictionaryLookup(keys: lookup.keys, word: lookup.word)
-        selectedStudyTab = "dictionary"
+        studyPane.tool = "dictionary"
         showingStudyInspector = true
     }
 

@@ -1359,6 +1359,63 @@ public struct ReaderLocation: Codable, Equatable, Hashable, Sendable {
     }
 }
 
+/// The column beside a tab's reader: whether it is open, on what, and where
+/// the study pane was left.
+///
+/// Kept with the tab, so one tab can be read plainly while another keeps its
+/// commentary open, and moving between them does not drag the column along.
+///
+/// Every field is read leniently. These are saved with the tabs, and a column
+/// that could not be read must cost the column, never the tabs: a pane this
+/// build does not know reads as closed, and anything else missing or
+/// malformed reads as unset.
+public struct ReaderTabSidebar: Codable, Equatable, Sendable {
+    public enum Pane: String, Codable, Sendable { case study, chat }
+
+    /// The pane open beside the reader, or nil when the column is closed.
+    public var pane: Pane?
+    /// The study pane's tool, or nil for whatever a new tab starts on.
+    public var studyTool: String?
+    /// What was typed into the dictionary's search field.
+    public var dictionaryQuery: String
+    /// The dictionary entry being read: the Strong's keys it was looked up
+    /// by, and the word that led there. Empty when nothing has been looked up.
+    public var dictionaryKeys: [String]
+    public var dictionaryWord: String?
+
+    public init(
+        pane: Pane? = nil,
+        studyTool: String? = nil,
+        dictionaryQuery: String = "",
+        dictionaryKeys: [String] = [],
+        dictionaryWord: String? = nil
+    ) {
+        self.pane = pane
+        self.studyTool = studyTool
+        self.dictionaryQuery = dictionaryQuery
+        self.dictionaryKeys = dictionaryKeys
+        self.dictionaryWord = dictionaryWord
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case pane, studyTool, dictionaryQuery, dictionaryKeys, dictionaryWord
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        func lenient<T: Decodable>(_ type: T.Type, _ key: CodingKeys) -> T? {
+            (try? values.decodeIfPresent(type, forKey: key)) ?? nil
+        }
+        // By name, so a pane added later is unknown here rather than a
+        // failure: a tab saved with it open opens here with the column shut.
+        pane = lenient(String.self, .pane).flatMap(Pane.init(rawValue:))
+        studyTool = lenient(String.self, .studyTool)
+        dictionaryQuery = lenient(String.self, .dictionaryQuery) ?? ""
+        dictionaryKeys = lenient([String].self, .dictionaryKeys) ?? []
+        dictionaryWord = lenient(String.self, .dictionaryWord)
+    }
+}
+
 public struct ReaderTab: Codable, Identifiable, Equatable, Sendable {
     public let id: UUID
     public var location: ReaderLocation?
@@ -1367,11 +1424,32 @@ public struct ReaderTab: Codable, Identifiable, Equatable, Sendable {
     /// which is the point of naming one: it is the place you are keeping,
     /// not the chapter you are at.
     public var name: String?
+    public var sidebar: ReaderTabSidebar
 
-    public init(id: UUID = UUID(), location: ReaderLocation? = nil, name: String? = nil) {
+    public init(
+        id: UUID = UUID(),
+        location: ReaderLocation? = nil,
+        name: String? = nil,
+        sidebar: ReaderTabSidebar = ReaderTabSidebar()
+    ) {
         self.id = id
         self.location = location
         self.name = name
+        self.sidebar = sidebar
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, location, name, sidebar }
+
+    /// Tabs saved before they kept a column decode with it closed. A column
+    /// that cannot be read is closed too, rather than failing the tab, which
+    /// would fail the whole session: the store falls back to a fresh one.
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        location = try values.decodeIfPresent(ReaderLocation.self, forKey: .location)
+        name = try values.decodeIfPresent(String.self, forKey: .name)
+        sidebar = ((try? values.decodeIfPresent(ReaderTabSidebar.self, forKey: .sidebar)) ?? nil)
+            ?? ReaderTabSidebar()
     }
 
     /// A name worth keeping, or nil. Blank is not a name, and a tab given one
@@ -1431,6 +1509,14 @@ public struct ReaderTabCollection: Codable, Equatable, Sendable {
         tabs[index].location = location
     }
 
+    /// Records the open tab's column. Unlike its place, which the reader
+    /// holds until it is written back, the column is written as it changes.
+    public mutating func updateSelected(sidebar: ReaderTabSidebar) {
+        guard let index = tabs.firstIndex(where: { $0.id == selectedID }),
+              tabs[index].sidebar != sidebar else { return }
+        tabs[index].sidebar = sidebar
+    }
+
     @discardableResult
     public mutating func add(location: ReaderLocation?) -> UUID {
         let tab = ReaderTab(location: location)
@@ -1454,8 +1540,8 @@ public struct ReaderTabCollection: Codable, Equatable, Sendable {
         tabs[index].name = ReaderTab.trimmedName(name)
     }
 
-    /// Opens a copy of `id` beside it, at the same place and under the same
-    /// name, and selects it.
+    /// Opens a copy of `id` beside it, at the same place, under the same name
+    /// and with the same column, and selects it.
     ///
     /// The copy goes next to the tab it came from rather than at the end,
     /// since "duplicate this one" means the one you right-clicked, and a copy
@@ -1463,7 +1549,9 @@ public struct ReaderTabCollection: Codable, Equatable, Sendable {
     @discardableResult
     public mutating func duplicate(_ id: UUID) -> ReaderLocation? {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return nil }
-        let copy = ReaderTab(location: tabs[index].location, name: tabs[index].name)
+        let copy = ReaderTab(
+            location: tabs[index].location, name: tabs[index].name, sidebar: tabs[index].sidebar
+        )
         tabs.insert(copy, at: index + 1)
         selectedID = copy.id
         return copy.location
