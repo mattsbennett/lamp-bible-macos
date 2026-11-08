@@ -248,10 +248,48 @@ public enum ReaderChatWorkspaceStore {
         /// provider carried it on. Nil when nothing was ever said — a workspace
         /// prepared for a window that was closed without a word in it.
         public let lastSpoken: Date?
+        /// The first thing the reader said in the conversation now in this
+        /// chat, for a list to be read by rather than identifiers. Nil where
+        /// nothing was said, or where only the agent has spoken.
+        public let opening: String?
 
-        public init(id: UUID, lastSpoken: Date?) {
+        public init(id: UUID, lastSpoken: Date?, opening: String? = nil) {
             self.id = id
             self.lastSpoken = lastSpoken
+            self.opening = opening
+        }
+    }
+
+    /// How long chats are kept before a launch scrubs them.
+    ///
+    /// A chat nothing was ever said in is not kept at all, whatever this says:
+    /// it is a workspace a pane was opened over and left, not a conversation.
+    public enum Retention: String, CaseIterable, Codable, Sendable {
+        case twoWeeks, oneMonth, twoMonths, sixMonths, oneYear, forever
+
+        public static let standard = Retention.twoMonths
+
+        /// Days to keep a conversation for, or nil to keep it for ever.
+        public var days: Int? {
+            switch self {
+            case .twoWeeks: 14
+            case .oneMonth: 30
+            case .twoMonths: 60
+            case .sixMonths: 182
+            case .oneYear: 365
+            case .forever: nil
+            }
+        }
+
+        public var title: String {
+            switch self {
+            case .twoWeeks: "Two weeks"
+            case .oneMonth: "One month"
+            case .twoMonths: "Two months"
+            case .sixMonths: "Six months"
+            case .oneYear: "One year"
+            case .forever: "For ever"
+            }
         }
     }
 
@@ -276,12 +314,8 @@ public enum ReaderChatWorkspaceStore {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
         return ordered(names.compactMap { name in
             guard let id = UUID(uuidString: name) else { return nil }
-            return Chat(
-                id: id,
-                lastSpoken: lastSpoken(
-                    in: workspaceURL(libraryRootURL: libraryRootURL, chatID: id)
-                )
-            )
+            let said = spoken(in: workspaceURL(libraryRootURL: libraryRootURL, chatID: id))
+            return Chat(id: id, lastSpoken: said.lastSpoken, opening: said.opening)
         })
     }
 
@@ -290,18 +324,48 @@ public enum ReaderChatWorkspaceStore {
     /// nobody spoke in has none; one that was cleared has an empty transcript
     /// dated by the clear, which is still something that happened in it.
     public static func lastSpoken(in workspace: URL) -> Date? {
+        spoken(in: workspace).lastSpoken
+    }
+
+    /// What a chat's transcripts say about it, from one reading of them: when
+    /// something was last said, and how the conversation opened.
+    ///
+    /// The opening is the earliest thing the reader said, over every
+    /// provider's transcript, since a chat is one conversation whichever
+    /// provider carried it on. A conversation that was cleared has no
+    /// messages and so no opening, only the date of the clear — there is
+    /// nothing left in it to name it by.
+    static func spoken(in workspace: URL) -> (lastSpoken: Date?, opening: String?) {
         let folder = AgentChatTranscriptStore.directory(in: workspace)
         let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
-        return names
+        let transcripts = names
             .filter(AgentChatTranscriptStore.isTranscriptFilename)
-            .compactMap { name -> Date? in
+            .compactMap { name -> AgentChatTranscript? in
                 guard let data = try? Data(contentsOf: folder.appendingPathComponent(name)),
                       let transcript = try? AgentChatTranscriptStore.decode(data),
                       !(transcript.messages.isEmpty && transcript.startedAt == nil)
                 else { return nil }
-                return transcript.lastActivity
+                return transcript
             }
-            .max()
+        let opening = transcripts
+            .flatMap(\.messages)
+            .filter { $0.role == .user && !label($0.text).isEmpty }
+            .min { $0.date < $1.date }
+            .map { label($0.text) }
+        return (transcripts.map(\.lastActivity).max(), opening)
+    }
+
+    /// Something said, as a list shows it: one line, trimmed, and cut at a
+    /// word where it is too long to read at a glance.
+    static func label(_ text: String, limit: Int = 80) -> String {
+        let line = text
+            .split(whereSeparator: \.isNewline)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespaces)
+        guard line.count > limit else { return line }
+        let cut = String(line.prefix(limit))
+        let atWord = cut.lastIndex(of: " ").map { String(cut[cut.startIndex..<$0]) } ?? cut
+        return atWord.trimmingCharacters(in: .whitespaces) + "…"
     }
 
     /// Most recently spoken in first, and the chats nothing was said in last.
@@ -333,6 +397,59 @@ public enum ReaderChatWorkspaceStore {
         let free = ordered(chats).filter { !held.contains($0.id) }
         guard held.isEmpty else { return free.first { $0.lastSpoken == nil }?.id }
         return free.first?.id
+    }
+
+    /// The chats a scrub would remove: those nothing was ever said in, and
+    /// those last spoken in longer ago than `retention` keeps them.
+    ///
+    /// Held chats are never offered, whatever their age. A chat open in a tab
+    /// is being read right now, and the clock is no reason to take it away
+    /// from under the reader.
+    ///
+    /// Worked out apart from the removing so a test can state the rule
+    /// without a file system, and so the caller can say what it did.
+    static func scrubbable(
+        from chats: [Chat], retention: Retention, heldBy held: Set<UUID>, now: Date
+    ) -> [UUID] {
+        chats.filter { chat in
+            guard !held.contains(chat.id) else { return false }
+            guard let lastSpoken = chat.lastSpoken else { return true }
+            guard let days = retention.days else { return false }
+            return now.timeIntervalSince(lastSpoken) > Double(days) * 24 * 60 * 60
+        }
+        .map(\.id)
+    }
+
+    /// Removes the chats a reader has no way back to, and returns what went.
+    ///
+    /// Meant for launch: a chat removed while the app runs could be one a tab
+    /// is about to take up from its saved identifier. At launch no tab holds
+    /// one yet, which is why `held` is empty there and need not be guessed.
+    ///
+    /// A directory that will not delete is left where it is and reported as
+    /// kept: the reader loses nothing by a chat outstaying its welcome, and a
+    /// launch must not fail over housekeeping.
+    @discardableResult
+    public static func scrub(
+        libraryRootURL: URL,
+        retention: Retention,
+        heldBy held: Set<UUID> = [],
+        now: Date = Date(),
+        fileManager: FileManager = .default
+    ) -> [UUID] {
+        scrubbable(
+            from: chats(libraryRootURL: libraryRootURL),
+            retention: retention, heldBy: held, now: now
+        )
+        .filter { id in
+            let workspace = workspaceURL(libraryRootURL: libraryRootURL, chatID: id)
+            do {
+                try fileManager.removeItem(at: workspace)
+                return true
+            } catch {
+                return false
+            }
+        }
     }
 
     /// The server a reader chat in `workspace` is given.

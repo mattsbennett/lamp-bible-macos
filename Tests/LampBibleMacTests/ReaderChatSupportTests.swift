@@ -323,14 +323,15 @@ struct ReaderChatSupportTests {
     /// Writes a transcript into a reader chat's workspace, as a sent message
     /// would, so what the app reads back is read from a real file.
     private func speak(
-        in root: URL, chat: UUID, provider: String = "codex", at date: Date
+        in root: URL, chat: UUID, provider: String = "codex", at date: Date,
+        saying said: String = "Who wrote Hebrews?"
     ) throws {
         let workspace = ReaderChatWorkspaceStore.workspaceURL(libraryRootURL: root, chatID: chat)
         let folder = AgentChatTranscriptStore.directory(in: workspace)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let transcript = AgentChatTranscript(
             startedAt: date,
-            messages: [.init(role: .user, text: "Who wrote Hebrews?", date: date)]
+            messages: [.init(role: .user, text: said, date: date)]
         )
         try AgentChatTranscriptStore.save(transcript, providerID: provider, in: workspace)
     }
@@ -430,6 +431,143 @@ struct ReaderChatSupportTests {
             providerID: "codex", in: workspace
         )
         #expect(ReaderChatWorkspaceStore.lastSpoken(in: workspace) == when)
+    }
+
+    @Test func aChatIsNamedByHowItsConversationOpened() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let chat = UUID()
+        try speak(
+            in: root, chat: chat, at: Date(timeIntervalSince1970: 2_000),
+            saying: "Why does Hebrews call Melchizedek a priest for ever?"
+        )
+        // An earlier word in another provider's transcript: one conversation,
+        // so the list names it by how it opened, not by which tool took it on.
+        try speak(
+            in: root, chat: chat, provider: "claude", at: Date(timeIntervalSince1970: 1_000),
+            saying: "Who wrote Hebrews?"
+        )
+
+        let listed = try #require(ReaderChatWorkspaceStore.chats(libraryRootURL: root).first)
+        #expect(listed.opening == "Who wrote Hebrews?")
+    }
+
+    @Test func aLongOpeningIsCutAtAWordRatherThanMidWay() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let chat = UUID()
+        let asked = "Why does the writer of Hebrews quote Psalm 110 so often, and what "
+            + "does that say about how the first readers understood the psalm?"
+        try speak(in: root, chat: chat, at: Date(timeIntervalSince1970: 1_000), saying: asked)
+
+        let opening = try #require(
+            ReaderChatWorkspaceStore.chats(libraryRootURL: root).first?.opening
+        )
+        #expect(opening.hasSuffix("…"))
+        #expect(opening.count <= 81)
+        // Said as far as it goes, and cut where a word ends: what follows it
+        // in the question is a space, never the middle of a word.
+        let said = String(opening.dropLast())
+        #expect(asked.hasPrefix(said))
+        #expect(asked.dropFirst(said.count).first == " ")
+    }
+
+    @Test func aClearedConversationHasNoOpeningLeftToNameItBy() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let chat = UUID()
+        let workspace = ReaderChatWorkspaceStore.workspaceURL(libraryRootURL: root, chatID: chat)
+        try FileManager.default.createDirectory(
+            at: AgentChatTranscriptStore.directory(in: workspace), withIntermediateDirectories: true
+        )
+        try AgentChatTranscriptStore.save(
+            AgentChatTranscript(
+                conversationID: UUID(), startedAt: Date(timeIntervalSince1970: 5_000), messages: []
+            ),
+            providerID: "codex", in: workspace
+        )
+
+        let listed = try #require(ReaderChatWorkspaceStore.chats(libraryRootURL: root).first)
+        #expect(listed.lastSpoken == Date(timeIntervalSince1970: 5_000))
+        #expect(listed.opening == nil, "nothing is left in it to name it by")
+    }
+
+    @Test func aChatNothingWasSaidInIsNotKept() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let spokenIn = UUID()
+        let opened = UUID()
+        try speak(in: root, chat: spokenIn, at: Date(timeIntervalSince1970: 1_000))
+        try prepareChat(in: root, chat: opened)
+
+        let removed = ReaderChatWorkspaceStore.scrub(
+            libraryRootURL: root, retention: .forever,
+            now: Date(timeIntervalSince1970: 2_000)
+        )
+        #expect(removed == [opened])
+        #expect(ReaderChatWorkspaceStore.chats(libraryRootURL: root).map(\.id) == [spokenIn])
+    }
+
+    @Test func aConversationOlderThanRetentionGoesAndARecentOneStays() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let now = Date(timeIntervalSince1970: 100 * 24 * 60 * 60)
+        let old = UUID()
+        let recent = UUID()
+        try speak(in: root, chat: old, at: now.addingTimeInterval(-61 * 24 * 60 * 60))
+        try speak(in: root, chat: recent, at: now.addingTimeInterval(-59 * 24 * 60 * 60))
+
+        let removed = ReaderChatWorkspaceStore.scrub(
+            libraryRootURL: root, retention: .twoMonths, now: now
+        )
+        #expect(removed == [old])
+        #expect(ReaderChatWorkspaceStore.chats(libraryRootURL: root).map(\.id) == [recent])
+    }
+
+    @Test func keepingChatsForEverStillLeavesAConversationAlone() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let ancient = UUID()
+        try speak(in: root, chat: ancient, at: Date(timeIntervalSince1970: 1_000))
+
+        let removed = ReaderChatWorkspaceStore.scrub(
+            libraryRootURL: root, retention: .forever,
+            now: Date(timeIntervalSince1970: 10 * 365 * 24 * 60 * 60)
+        )
+        #expect(removed.isEmpty)
+        #expect(ReaderChatWorkspaceStore.chats(libraryRootURL: root).map(\.id) == [ancient])
+    }
+
+    @Test func aChatBeingReadIsNotTakenAwayByTheClock() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let now = Date(timeIntervalSince1970: 100 * 24 * 60 * 60)
+        let held = UUID()
+        let emptyButHeld = UUID()
+        try speak(in: root, chat: held, at: Date(timeIntervalSince1970: 1_000))
+        try prepareChat(in: root, chat: emptyButHeld)
+
+        let removed = ReaderChatWorkspaceStore.scrub(
+            libraryRootURL: root, retention: .twoWeeks,
+            heldBy: [held, emptyButHeld], now: now
+        )
+        #expect(removed.isEmpty, "a tab has them open; the clock is no reason to take them")
+        #expect(ReaderChatWorkspaceStore.chats(libraryRootURL: root).count == 2)
+    }
+
+    @Test func whatIsNotAChatIsLeftWhereItIs() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = ReaderChatWorkspaceStore.directory(libraryRootURL: root)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let stray = folder.appendingPathComponent("notes-to-self.txt")
+        try "mine".write(to: stray, atomically: true, encoding: .utf8)
+
+        ReaderChatWorkspaceStore.scrub(
+            libraryRootURL: root, retention: .twoWeeks,
+            now: Date(timeIntervalSince1970: 10 * 365 * 24 * 60 * 60)
+        )
+        #expect(FileManager.default.fileExists(atPath: stray.path))
     }
 
     @Test func whatIsNotAChatIsNotOfferedAsOne() throws {
