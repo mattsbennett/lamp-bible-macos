@@ -51,6 +51,117 @@ struct LampSyncBundleSettingsTests {
         #expect(defaults.string(forKey: "reader.typeface") == "Iowan Old Style")
     }
 
+    /// A setting changed here is this Mac's own news, and a pass must not undo
+    /// it with the copy this Mac itself published before the change.
+    ///
+    /// `macSettings` is written by no one but a Mac, so a bundle that differs
+    /// from the live settings is usually this Mac's own older copy, not another
+    /// device's newer one. Applied over the top, the person's choice goes back
+    /// to what it was a few seconds after they made it, and `contribute` then
+    /// finds nothing to publish — so the old value is pinned for good.
+    @Test func aSettingChosenHereSurvivesThisMacsOwnOlderCopy() throws {
+        let (defaults, domain) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let library = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: library) }
+        let key = "studyInspector.hebrewDictionaryModuleID"
+        let settings = LampSyncBundleSettings(
+            defaults: defaults, libraryRoot: library, source: source, domainName: domain
+        )
+
+        // A pass that publishes what this Mac has.
+        defaults.set("strongs_hebrew", forKey: key)
+        var bundle = LampSyncSettingsBundle()
+        let published = try settings.receive(bundle)
+        try settings.contribute(published, to: &bundle)
+        try settings.remember(published)
+        #expect(
+            try LampPortableSettingsCodec.decode(#require(bundle.macSettings))[key] as? String
+                == "strongs_hebrew"
+        )
+
+        // The person chooses another dictionary.
+        defaults.set("bdb_hebrew", forKey: key)
+
+        // The next pass reads the bundle as this Mac left it.
+        let next = try settings.receive(bundle)
+        #expect(
+            defaults.string(forKey: key) == "bdb_hebrew",
+            "the choice just made is newer than the bundle's copy of it"
+        )
+        try settings.contribute(next, to: &bundle)
+        #expect(
+            try LampPortableSettingsCodec.decode(#require(bundle.macSettings))[key] as? String
+                == "bdb_hebrew",
+            "and it goes up, rather than being left behind"
+        )
+    }
+
+    /// And the base must not turn into "this Mac always wins": a value this
+    /// Mac has not touched since it last published still takes the bundle's
+    /// copy, which is how another device's change arrives.
+    @Test func anotherDevicesChangeStillArrivesOnceABaseIsKept() throws {
+        let (defaults, domain) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let library = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: library) }
+        let settings = LampSyncBundleSettings(
+            defaults: defaults, libraryRoot: library, source: source, domainName: domain
+        )
+
+        // A pass that agrees with the server on Charter.
+        defaults.set("Charter", forKey: "reader.typeface")
+        var bundle = LampSyncSettingsBundle()
+        let published = try settings.receive(bundle)
+        try settings.contribute(published, to: &bundle)
+        try settings.remember(published)
+
+        // The other Mac sets Palatino. Nothing was touched here.
+        bundle.macSettings = try self.settings(["reader.typeface": "Palatino"])
+        let next = try settings.receive(bundle)
+        #expect(defaults.string(forKey: "reader.typeface") == "Palatino")
+
+        // And what arrived becomes the base, so it is not sent back as news.
+        try settings.remember(next)
+        try settings.contribute(next, to: &bundle)
+        #expect(
+            try LampPortableSettingsCodec.decode(#require(bundle.macSettings))["reader.typeface"]
+                as? String == "Palatino"
+        )
+    }
+
+    /// Two Macs changing the same setting between passes: the one the person
+    /// is sitting at keeps what they chose, rather than the file winning.
+    @Test func bothChangedLeavesTheChoiceMadeHere() throws {
+        let (defaults, domain) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let library = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: library) }
+        let key = "studyInspector.commentaryModuleID"
+        let settings = LampSyncBundleSettings(
+            defaults: defaults, libraryRoot: library, source: source, domainName: domain
+        )
+
+        defaults.set("tske", forKey: key)
+        var bundle = LampSyncSettingsBundle()
+        let published = try settings.receive(bundle)
+        try settings.contribute(published, to: &bundle)
+        try settings.remember(published)
+
+        // Both move away from the base, differently.
+        defaults.set("mhc", forKey: key)
+        bundle.macSettings = try self.settings([key: "jfb"])
+
+        let next = try settings.receive(bundle)
+        #expect(defaults.string(forKey: key) == "mhc")
+        try settings.contribute(next, to: &bundle)
+        #expect(
+            try LampPortableSettingsCodec.decode(#require(bundle.macSettings))[key] as? String
+                == "mhc",
+            "and it is published, so the other Mac takes it as news"
+        )
+    }
+
     /// The plist's copy of a shared key must not undo the ledger's merge.
     /// The ledger exists precisely so these keys are decided field by field;
     /// if the plist were applied over the top, a value this Mac had

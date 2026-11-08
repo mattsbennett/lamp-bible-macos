@@ -37,6 +37,14 @@ public struct LampSyncBundleSettings {
         public let merge: LampSharedPreferenceLedger.Merge
         let baseline: [String: Any]
         let planned: [String: Any]
+        /// What this Mac and the server last agreed these settings were, or
+        /// nil where no pass has published any yet. Without it a change made
+        /// here and a change arriving from elsewhere look exactly alike.
+        let base: [String: Any]?
+        /// Filled in by `contribute` and read by `remember`: the settings as
+        /// published, which is what the next pass judges against. A reference
+        /// because `contribute` is handed the plan by value.
+        let published = PublishedSettings()
 
         /// Shared preferences the two devices disagree about. Not an error:
         /// everything else syncs, neither value is published, and it stays
@@ -46,6 +54,11 @@ public struct LampSyncBundleSettings {
     }
 
     public typealias Received = Planned
+
+    /// See `Planned.published`.
+    final class PublishedSettings {
+        var values: [String: Any]?
+    }
 
     public enum SettingsError: LocalizedError {
         case couldNotStage
@@ -60,6 +73,7 @@ public struct LampSyncBundleSettings {
     }
 
     private static let preferenceLedgerStateKey = "sync.sharedPreferences.bases"
+    private static let macSettingsStateKey = "sync.macSettings.bases"
 
     private let defaults: UserDefaults
     private let libraryRoot: URL
@@ -103,12 +117,37 @@ public struct LampSyncBundleSettings {
 
         let base = cachedLedger()
         let sharedInUse = !bundle.preferences.fields.isEmpty || base != nil
+        let settingsBase = cachedMacSettings()
         if let macSettings = bundle.macSettings {
-            try LampPortableSettingsCodec.apply(
-                macSettings,
-                to: scratch,
-                excluding: sharedInUse ? LampSharedPreferenceLedger.sharedKeys : []
-            )
+            let excluded: Set<String> = sharedInUse
+                ? LampSharedPreferenceLedger.sharedKeys
+                : []
+            if let settingsBase {
+                // No one but a Mac writes `macSettings`, so a copy that
+                // differs from the live settings is as likely to be this Mac's
+                // own — published before the person changed something — as it
+                // is another device's news. The base tells the two apart: where
+                // the live value has moved away from it the change was made
+                // here, and stands, for `contribute` to publish; where it has
+                // not, the bundle's copy is the newer one and arrives.
+                //
+                // Both moved, differently, leaves the person's own choice where
+                // they made it: this Mac publishes it, and the other device
+                // takes it as news on its next pass, as it would any change.
+                //
+                // A key the bundle does not carry is no news either way. An
+                // older Mac publishes only the keys its build knew, so absence
+                // must never read as a deletion.
+                for (key, value) in try LampPortableSettingsCodec.decode(macSettings)
+                where !excluded.contains(key) {
+                    guard Self.sameValue(baseline[key], settingsBase[key]) else { continue }
+                    scratch.set(value, forKey: key)
+                }
+            } else {
+                try LampPortableSettingsCodec.apply(
+                    macSettings, to: scratch, excluding: excluded
+                )
+            }
         }
 
         let merge = try LampSharedPreferenceLedger.merge(
@@ -125,7 +164,8 @@ public struct LampSyncBundleSettings {
         return Planned(
             merge: merge,
             baseline: baseline,
-            planned: scratch.persistentDomain(forName: scratchName) ?? [:]
+            planned: scratch.persistentDomain(forName: scratchName) ?? [:],
+            base: settingsBase
         )
     }
 
@@ -196,6 +236,12 @@ public struct LampSyncBundleSettings {
         if !settingsMatch(bundle.macSettings, encoded) {
             bundle.macSettings = encoded
         }
+        // Left alone or written, these are the values the bundle now carries,
+        // and so what the next pass judges a change against. Recorded here
+        // rather than read back in `remember`: a setting changed between the
+        // two would otherwise be remembered as published when it never was,
+        // and the pass after that would take the server's copy over it.
+        received.published.values = try LampPortableSettingsCodec.decode(encoded)
         bundle.preferences = received.merge.publishable
     }
 
@@ -219,6 +265,42 @@ public struct LampSyncBundleSettings {
             in: defaults,
             key: Self.preferenceLedgerStateKey
         )
+        // Only what `contribute` actually put in the bundle: as with the
+        // ledger's base, remembering a publish that never happened would make
+        // this Mac's own unsent change look like the other device's.
+        if let published = received.published.values {
+            try rememberMacSettings(published)
+        }
+    }
+
+    /// These settings as this Mac last published them to `source`.
+    private func cachedMacSettings() -> [String: Any]? {
+        guard let states = defaults.dictionary(forKey: Self.macSettingsStateKey),
+              let data = states[source] as? Data,
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
+              let settings = plist as? [String: Any]
+        else { return nil }
+        return settings.filter { LampPortableSettingsCodec.syncedKeys.contains($0.key) }
+    }
+
+    private func rememberMacSettings(_ settings: [String: Any]) throws {
+        guard PropertyListSerialization.propertyList(settings, isValidFor: .binary) else {
+            throw SettingsError.couldNotStage
+        }
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: settings, format: .binary, options: 0
+        )
+        var states = defaults.dictionary(forKey: Self.macSettingsStateKey) ?? [:]
+        states[source] = data
+        defaults.set(states, forKey: Self.macSettingsStateKey)
+    }
+
+    private static func sameValue(_ lhs: Any?, _ rhs: Any?) -> Bool {
+        switch (lhs, rhs) {
+        case (nil, nil): true
+        case (let left?, let right?): (left as? NSObject)?.isEqual(right) == true
+        default: false
+        }
     }
 
     private func cachedLedger() -> LampSharedPreferenceLedger? {
