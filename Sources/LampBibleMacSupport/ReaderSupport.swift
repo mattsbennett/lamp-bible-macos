@@ -1443,10 +1443,12 @@ public struct ReaderTab: Codable, Identifiable, Equatable, Sendable {
     /// Tabs saved before they kept a column decode with it closed. A column
     /// that cannot be read is closed too, rather than failing the tab, which
     /// would fail the whole session: the store falls back to a fresh one.
+    /// A place that cannot be read is no place, for the same reason; the
+    /// collection then drops that tab as it does one whose translation went.
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         id = try values.decode(UUID.self, forKey: .id)
-        location = try values.decodeIfPresent(ReaderLocation.self, forKey: .location)
+        location = (try? values.decodeIfPresent(ReaderLocation.self, forKey: .location)) ?? nil
         name = try values.decodeIfPresent(String.self, forKey: .name)
         sidebar = ((try? values.decodeIfPresent(ReaderTabSidebar.self, forKey: .sidebar)) ?? nil)
             ?? ReaderTabSidebar()

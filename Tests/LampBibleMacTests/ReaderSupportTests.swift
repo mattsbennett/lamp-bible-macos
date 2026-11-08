@@ -498,6 +498,34 @@ struct ReaderSupportTests {
         #expect(restored.tabs[2].sidebar.pane == .study)
     }
 
+    /// A place that cannot be read costs that tab, not the window's tabs: the
+    /// store would otherwise fall back to a fresh session and lose them all.
+    @Test func atabWhosePlaceCannotBeReadCostsOnlyThatTab() throws {
+        let suite = "reader-tabs-tests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let session = UUID()
+        let json = Data(#"""
+            {"tabs":[
+            {"id":"6B1E4B2E-0A5E-4F3E-9E62-9B1B2C3D4E5F","location":{"translationID":"WEB","bookNumber":"one"}},
+            {"id":"7C2F5C3F-1B6F-4A4F-8F73-AC2C3D4E5F60","name":"Sunday Class",
+             "location":{"translationID":"WEB","bookNumber":43,"chapterNumber":3}}],
+            "selectedID":"6B1E4B2E-0A5E-4F3E-9E62-9B1B2C3D4E5F"}
+            """#.utf8)
+        defaults.set(json, forKey: ReaderTabSessionStore.key(for: session))
+
+        let restored = ReaderTabSessionStore.load(
+            session: session,
+            resumingLastSession: false,
+            defaults: defaults,
+            translationIDs: ["WEB"],
+            fallbackLocation: ReaderLocation(translationID: "WEB", bookNumber: 1, chapterNumber: 1)
+        )
+
+        #expect(restored.tabs.map(\.name) == ["Sunday Class"])
+        #expect(restored.selectedTab?.location?.bookNumber == 43)
+    }
+
     @Test func readerTabSessionSurvivesRelaunchAndSavesClosedTabs() throws {
         let suite = "reader-tabs-tests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
