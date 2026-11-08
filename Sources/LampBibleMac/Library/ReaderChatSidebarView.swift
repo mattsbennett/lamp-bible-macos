@@ -469,11 +469,8 @@ private struct ReaderChatChooser: View {
     let inUse: Set<UUID>
     let pick: (UUID?) -> Void
 
-    /// What the list needs, so the popover can be that tall. A popover takes
-    /// its size from its content's *ideal* height and a `ScrollView` has none
-    /// to offer, so without this the list stood at nothing and the reader saw
-    /// a popover with only New Chat in it.
-    @State private var listHeight: CGFloat = 0
+    /// Beyond this many, the list scrolls rather than growing the popover.
+    private static let shownWhole = 6
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -504,22 +501,27 @@ private struct ReaderChatChooser: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
+            } else if chats.count <= Self.shownWhole {
+                // Laid out plainly, so the popover takes its height from the
+                // rows themselves. A `ScrollView` has no ideal height to
+                // offer, and one here stood at nothing until it had been
+                // measured — which is after the popover has taken its size.
+                rows
             } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(chats, id: \.id) { chat in
-                            row(chat)
-                            if chat.id != chats.last?.id { Divider().padding(.leading, 12) }
-                        }
-                    }
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
-                        listHeight = height
-                    }
-                }
-                .frame(height: min(max(listHeight, 44), 360))
+                ScrollView { rows }
+                    .frame(height: 360)
             }
         }
         .frame(width: 320)
+    }
+
+    private var rows: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(chats, id: \.id) { chat in
+                row(chat)
+                if chat.id != chats.last?.id { Divider().padding(.leading, 12) }
+            }
+        }
     }
 
     @ViewBuilder private func row(_ chat: ReaderChatWorkspaceStore.Chat) -> some View {
