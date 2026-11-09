@@ -530,6 +530,7 @@ struct StrongsAnalysisPane: View {
                 if let transliteration = entry?.transliteration, !transliteration.isEmpty {
                     Text(transliteration).font(.callout).foregroundStyle(.secondary)
                 }
+                PronounceButton(key: analysis.key)
                 Spacer()
                 if loader.isFillingRest {
                     ProgressView().controlSize(.small)

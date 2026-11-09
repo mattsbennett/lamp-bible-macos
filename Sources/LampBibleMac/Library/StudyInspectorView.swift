@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import LampCore
 #if canImport(LampBibleMacSupport)
 import LampBibleMacSupport
@@ -1310,9 +1311,14 @@ private struct DictionaryInspectorView: View {
         if let entry = headwordEntry {
             HStack(alignment: .top, spacing: 8) {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(entry.lemma)
-                        .font(.system(size: dictionaryFontSize + 13, weight: .medium, design: .serif))
-                        .textSelection(.enabled)
+                    HStack(alignment: .center, spacing: 8) {
+                        Text(entry.lemma)
+                            .font(.system(size: dictionaryFontSize + 13, weight: .medium, design: .serif))
+                            .textSelection(.enabled)
+                        if let key = lookup.keys.first(where: { LampStrongsKey.typedKey($0) != nil }) {
+                            PronounceButton(key: key)
+                        }
+                    }
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         if let transliteration = entry.transliteration {
                             Text(transliteration)
@@ -2143,6 +2149,62 @@ private struct StudySection<Content: View>: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .lampCard(padding: 14)
         }
+    }
+}
+
+/// Says a Strong's word aloud.
+///
+/// Not from its spelling: an English voice reads "agápē" as the English
+/// "agape", and the Greek and Hebrew voices read the modern languages. Core
+/// gives the word in IPA, which a voice says as written. The voice is the
+/// reader's Read Aloud voice when that one is English — the IPA keeps to
+/// English sounds — and otherwise the system's English one. Shown only once
+/// there is something to say.
+struct PronounceButton: View {
+    let key: String
+
+    @EnvironmentObject private var model: LibraryModel
+    @AppStorage("reader.readAloud.voice") private var readAloudVoice = ""
+    @State private var spoken: (word: String, ipa: String)?
+
+    var body: some View {
+        Group {
+            if let spoken {
+                Button {
+                    WordSpeaker.shared.say(spoken.word, ipa: spoken.ipa, voiceIdentifier: readAloudVoice)
+                } label: {
+                    Image(systemName: "speaker.wave.2")
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .help("Say \(spoken.word) aloud")
+                .accessibilityLabel("Say \(spoken.word) aloud")
+            }
+        }
+        .task(id: key) {
+            spoken = nil
+            guard let entries = try? await model.library.dictionaryEntries(keys: [key]),
+                  let ipa = LampPronunciation.ipa(forKey: key, entries: entries) else { return }
+            spoken = (entries.first?.lemma ?? key, ipa)
+        }
+    }
+}
+
+/// One voice for every word said, so a second click stops the first word
+/// rather than talking over it.
+@MainActor
+final class WordSpeaker {
+    static let shared = WordSpeaker()
+    private let synthesizer = AVSpeechSynthesizer()
+
+    func say(_ word: String, ipa: String, voiceIdentifier: String) {
+        synthesizer.stopSpeaking(at: .immediate)
+        let utterance = AVSpeechUtterance(attributedString: LampPronunciation.spoken(word, ipa: ipa))
+        let chosen = AVSpeechSynthesisVoice(identifier: voiceIdentifier)
+        utterance.voice = chosen?.language.hasPrefix("en") == true
+            ? chosen
+            : AVSpeechSynthesisVoice(language: "en-US")
+        synthesizer.speak(utterance)
     }
 }
 
