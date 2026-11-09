@@ -170,13 +170,40 @@ final class SeptuagintLoader {
         var id: String { "\(hebrew.text)|\(hebrew.strongs ?? "")" }
     }
 
-    struct Verse: Identifiable {
+    struct Verse: Identifiable, Equatable {
+        /// The Greek beside one verse.
+        ///
+        /// Three states rather than an optional string, because "not read yet"
+        /// and "read, and this text hasn't got it" are different things to
+        /// say, and an optional said both. It said them in the same words: the
+        /// rows go up the moment a word is opened so the references are there
+        /// to read, and every one of them claimed the verse was missing from
+        /// the Greek until the chapters came back.
+        enum Greek: Equatable {
+            case pending
+            case absent
+            case text(String)
+        }
+
         let reference: Int
         /// The Septuagint's Greek for the verse, where it has that verse: the
         /// numbering does not always line up, and some books it does not carry.
-        let greek: String?
+        let greek: Greek
 
         var id: Int { reference }
+    }
+
+    /// What a word's verses have to show: the rows, or why there are none.
+    ///
+    /// The two bare cases are facts about the library, not about any verse,
+    /// and each is said once in place of the rows rather than against all
+    /// twenty-five of them.
+    enum Verses: Equatable {
+        case rows([Verse])
+        /// Nothing installed numbers its verses the Septuagint's way.
+        case withoutSeptuagint
+        /// The texts are installed, and the library could not be read.
+        case unreadable
     }
 
     /// The most verses listed for one Hebrew word. דָּבָר stands in some 1,400
@@ -185,9 +212,9 @@ final class SeptuagintLoader {
     static let shownVerses = 25
 
     private(set) var words: [Word] = []
-    /// The verses read for a word, by its id. A present empty list means asked
-    /// and nothing came back, which must not read as "not asked yet".
-    private(set) var verses: [String: [Verse]] = [:]
+    /// What each word's verses have to show, by its id. A present value means
+    /// asked, and must never read as "not asked yet".
+    private(set) var verses: [String: Verses] = [:]
     private(set) var errorMessage: String?
     /// The name of the Greek text the verses were read from, for saying which
     /// text is missing a verse rather than blaming the whole tradition.
@@ -252,19 +279,31 @@ final class SeptuagintLoader {
     /// The first `shownVerses` of a word's verses, each with the Septuagint's
     /// Greek where the two numberings meet.
     func loadVerses(for word: Word, model: LibraryModel) async {
+        // A read that failed is worth trying again when the word is opened
+        // again. The other outcomes are settled: the verses are read, or the
+        // library hasn't got a Septuagint to read them from.
+        if verses[word.id] == .unreadable { verses[word.id] = nil }
         guard verses[word.id] == nil, let references = word.references,
               !references.isEmpty, let hebrewText = hebrewText(model)
         else { return }
         let shown = Array(references.prefix(Self.shownVerses))
-        verses[word.id] = shown.map { Verse(reference: $0, greek: nil) }
-        guard let septuagint = await septuagintText(model) else { return }
+        // The references first, each still waiting for its Greek, so they are
+        // there to read while the chapters are being read.
+        verses[word.id] = .rows(shown.map { Verse(reference: $0, greek: .pending) })
+        guard let septuagint = await septuagintText(model) else {
+            verses[word.id] = .withoutSeptuagint
+            return
+        }
         septuagintName = septuagint.name
         guard
             let hebrewNumbering = try? await model.library
                   .versification(moduleID: hebrewText.id),
             let greekNumbering = try? await model.library
                   .versification(moduleID: septuagint.id)
-        else { return }
+        else {
+            verses[word.id] = .unreadable
+            return
+        }
         let library = model.library
         let greek: [Int: String]
         do {
@@ -291,8 +330,11 @@ final class SeptuagintLoader {
             verses[word.id] = nil
             return
         }
-        guard verses[word.id]?.count == shown.count else { return }
-        verses[word.id] = shown.map { Verse(reference: $0, greek: greek[$0]) }
+        guard case .rows(let pending) = verses[word.id], pending.count == shown.count
+        else { return }
+        verses[word.id] = .rows(shown.map {
+            Verse(reference: $0, greek: greek[$0].map(Verse.Greek.text) ?? .absent)
+        })
     }
 
     /// The Hebrew Old Testament, by its language rather than by its name.
@@ -1511,23 +1553,30 @@ private struct SeptuagintWordGroup: View {
     @EnvironmentObject private var model: LibraryModel
     @State private var isExpanded = false
 
-    private var listed: [SeptuagintLoader.Verse]? { loader.verses[word.id] }
+    private var listed: SeptuagintLoader.Verses? { loader.verses[word.id] }
 
     var body: some View {
         DisclosureGroup(isExpanded: $isExpanded) {
             VStack(alignment: .leading, spacing: 10) {
                 if let listed {
-                    ForEach(listed) { verse in
-                        row(verse)
-                    }
-                    if references.count > listed.count, let strongs = word.hebrew.strongs {
-                        Button("All \(references.count) verses in \(strongs)") {
-                            analyse(strongs)
+                    switch listed {
+                    case .rows(let rows):
+                        ForEach(rows) { verse in
+                            row(verse)
                         }
-                        .buttonStyle(.link)
-                        .font(.caption)
-                        .chartClickable()
-                        .padding(.top, 2)
+                        // One spinner for the list, not one per row: the Greek
+                        // arrives for every verse at once, when the last
+                        // chapter has been read.
+                        if rows.contains(where: { $0.greek == .pending }) {
+                            ProgressView().controlSize(.small)
+                        }
+                        allVerses(beyond: rows.count)
+                    case .withoutSeptuagint:
+                        note(LampSeptuagintSection.withoutSeptuagint)
+                        allVerses(beyond: 0)
+                    case .unreadable:
+                        note(LampSeptuagintSection.unreadable(loader.septuagintName))
+                        allVerses(beyond: 0)
                     }
                 } else {
                     ProgressView().controlSize(.small)
@@ -1546,19 +1595,48 @@ private struct SeptuagintWordGroup: View {
         }
     }
 
+    /// The way to the word's whole list, where more of it stands than is shown
+    /// here. Shown for the bare outcomes too: there the verses are all
+    /// elsewhere, and the Hebrew word's own analysis is where they are.
+    @ViewBuilder
+    private func allVerses(beyond shown: Int) -> some View {
+        if references.count > shown, let strongs = word.hebrew.strongs {
+            Button("All \(references.count) verses in \(strongs)") {
+                analyse(strongs)
+            }
+            .buttonStyle(.link)
+            .font(.caption)
+            .chartClickable()
+            .padding(.top, 2)
+        }
+    }
+
+    /// Said once, in place of the verses.
+    private func note(_ text: String) -> some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
     private func row(_ verse: SeptuagintLoader.Verse) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(reference(verse.reference))
                 .font(.caption.weight(.semibold))
-            if let greek = verse.greek {
+            switch verse.greek {
+            case .text(let greek):
                 Text(greek)
                     .font(.system(size: fontSize))
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
-            } else {
+            case .absent:
                 Text(LampSeptuagintSection.missingVerse(in: loader.septuagintName))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            case .pending:
+                // Nothing yet. The reference is worth reading on its own, and
+                // anything said about the Greek here would be a guess.
+                EmptyView()
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
