@@ -1853,7 +1853,9 @@ private struct SeptuagintWordGroup: View {
         }
         .buttonStyle(.plain)
         .chartClickable()
-        .help("Open \(name) in the reader")
+        // Silent until the click would work: before its English is read the
+        // number may be the Hebrew one, and the click is refused.
+        .help(isKnown ? "Open \(name) in the reader" : "")
         .contextMenu {
             if isKnown {
                 Button("Open \(name)") { referenceActions.openInCurrent(opens) }
