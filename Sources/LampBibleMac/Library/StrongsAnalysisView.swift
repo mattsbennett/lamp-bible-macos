@@ -366,25 +366,31 @@ final class SeptuagintLoader {
         // The English, from the translation the analysis is of. A read cut
         // short forgets the word's verses, as the Greek's does below, rather
         // than settle every verse as untagged.
+        //
+        // The numbers need only the two numberings, so every verse is numbered
+        // the English way even for a word with no Strong's number to mark it
+        // by; only the mark needs the analysis. Without this a key-less word's
+        // verses kept the Hebrew numbers, and opened at them.
         var english: [Int: LampSeptuagintSection.English] = [:]
-        if let englishID, englishID != hebrewText.id, let strongs = word.hebrew.strongs {
+        if let englishID, englishID != hebrewText.id {
             do {
-                let analysis = try await library.strongsAnalyses(
-                    key: strongs, moduleIDs: [englishID], includingVerseText: true
-                ).first
+                var analysis: LampStrongsAnalysis?
+                if let strongs = word.hebrew.strongs {
+                    analysis = try await library.strongsAnalyses(
+                        key: strongs, moduleIDs: [englishID], includingVerseText: true
+                    ).first
+                }
                 let numbering = try await library.versification(moduleID: englishID)
                 if Task.isCancelled {
                     verses[word.id] = nil
                     return
                 }
-                if let analysis {
-                    english = LampSeptuagintSection.english(
-                        for: shown,
-                        hebrewNumbering: hebrewNumbering,
-                        englishNumbering: numbering,
-                        analysis: analysis
-                    )
-                }
+                english = LampSeptuagintSection.english(
+                    for: shown,
+                    hebrewNumbering: hebrewNumbering,
+                    englishNumbering: numbering,
+                    analysis: analysis
+                )
             } catch {
                 if Task.isCancelled {
                     verses[word.id] = nil
@@ -1833,7 +1839,13 @@ private struct SeptuagintWordGroup: View {
             opens = verse.reference
         }
         let name = reference(opens)
+        // Not before its English is read: until then its number may be the
+        // Hebrew one, and the reader would open on the wrong verse. Refused in
+        // the action rather than disabled, which would dim every row while
+        // the list loads.
+        let isKnown = verse.english != .pending
         return Button {
+            guard isKnown else { return }
             referenceActions.openInCurrent(opens)
         } label: {
             rowContent(verse)
@@ -1843,8 +1855,10 @@ private struct SeptuagintWordGroup: View {
         .chartClickable()
         .help("Open \(name) in the reader")
         .contextMenu {
-            Button("Open \(name)") { referenceActions.openInCurrent(opens) }
-            if referenceActions.opensTabs {
+            if isKnown {
+                Button("Open \(name)") { referenceActions.openInCurrent(opens) }
+            }
+            if isKnown, referenceActions.opensTabs {
                 Button("Open in New Tab", systemImage: "plus.square.on.square") {
                     referenceActions.openInNewTab(opens)
                 }
