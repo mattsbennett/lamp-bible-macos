@@ -1711,12 +1711,15 @@ struct StrongsAnalysisPane: View {
     }
 
     /// A form's line under its spelling: what it does, and the English it
-    /// became, as "“of …” · here “of love”".
+    /// became, as "“of …” · here “of love”". A Greek or Hebrew text has no
+    /// English of its own, so it names the translation it borrows from:
+    /// "in BSB “of love”".
     private func formLine(_ reading: LampStrongsFormReading?) -> String? {
         guard let reading else { return nil }
         let english = reading.renderedAs.isEmpty
             ? nil
-            : "here " + reading.renderedAs.map { "“\($0)”" }.joined(separator: ", ")
+            : (reading.renderedIn.map { "in \($0) " } ?? "here ")
+                + reading.renderedAs.map { "“\($0)”" }.joined(separator: ", ")
         let parts = [reading.role, english].compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
