@@ -36,7 +36,12 @@ struct StudySkillDeliveryTests {
         let installed = LampMCPToolHandler(
             library: LampAgentLibrary(libraryRootURL: workspace), skillsURL: workspace
         )
-        let skill = catalog.appendingPathComponent(name)
+        // Resolved, because the enumerator below resolves whatever it is
+        // given. With the checkout under /tmp — which every install build is,
+        // being made in a worktree in the scratchpad — the catalog is /tmp/…
+        // and the files come back /private/tmp/…, and a relative path taken
+        // by character count is then short by exactly those eight characters.
+        let skill = catalog.appendingPathComponent(name).resolvingSymlinksInPath()
         let files = try #require(FileManager.default.enumerator(
             at: skill, includingPropertiesForKeys: nil
         )).compactMap { ($0 as? URL) }.filter { $0.pathExtension == "md" }
@@ -44,7 +49,9 @@ struct StudySkillDeliveryTests {
         let prompt = try studyPromptText(name)
         #expect(prompt.hasPrefix(entrypoint))
         for file in files {
-            let relative = String(file.path.dropFirst(skill.path.count + 1))
+            let relative = String(
+                file.resolvingSymlinksInPath().path.dropFirst(skill.path.count + 1)
+            )
             let canonical = try String(contentsOf: file, encoding: .utf8)
             for handler in [external, installed] {
                 let result = try await handler.call(name: "read_skill", arguments: [
