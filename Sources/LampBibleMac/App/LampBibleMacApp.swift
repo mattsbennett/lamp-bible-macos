@@ -286,6 +286,21 @@ private struct ReaderSettingsView: View {
             }
     }
 
+    /// The voice Automatic resolves to, named so the setting does not hide
+    /// which one speaks.
+    private var automaticVoice: AVSpeechSynthesisVoice? {
+        SpeechVoices.voice(language: SpeechVoices.english, stored: nil)
+    }
+
+    private func voiceTitle(_ voice: AVSpeechSynthesisVoice) -> String {
+        let quality = switch voice.quality {
+        case .premium: " · Premium"
+        case .enhanced: " · Enhanced"
+        default: ""
+        }
+        return "\(voice.name) — \(voice.language)\(quality)"
+    }
+
     var body: some View {
         NavigationSplitView {
             List(selection: $selectedSettingsSection) {
@@ -354,10 +369,19 @@ private struct ReaderSettingsView: View {
                         metricSlider("Line Spacing", value: $lineSpacing, scale: .readerLineSpacing)
                     }
                     Section("Read Aloud") {
-                        Picker("Voice", selection: $readAloudVoice) {
-                            Text("System Default").tag("")
-                            ForEach(voices, id: \.identifier) { voice in
-                                Text("\(voice.name) — \(voice.language)").tag(voice.identifier)
+                        LabeledContent {
+                            Picker("Voice", selection: $readAloudVoice) {
+                                Text(automaticVoice.map { "Automatic (\($0.name))" } ?? "Automatic").tag("")
+                                ForEach(voices, id: \.identifier) { voice in
+                                    Text(voiceTitle(voice)).tag(voice.identifier)
+                                }
+                            }
+                            .labelsHidden()
+                        } label: {
+                            Text("Voice")
+                            if let inUse = SpeechVoices.voice(language: SpeechVoices.english, stored: readAloudVoice),
+                               SpeechVoices.describe(inUse).isBasic {
+                                Text("\(inUse.name) is a basic voice, so words can sound slow and choppy. Better voices are free in System Settings › Accessibility › Spoken Content › System Voice › Manage Voices: choose a named voice marked Enhanced or Premium. Siri’s voices can’t be used by other apps.")
                             }
                         }
                         LabeledContent("Speed") {

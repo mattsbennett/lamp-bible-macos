@@ -2226,16 +2226,13 @@ final class WordSpeaker {
         AVSpeechSynthesisVoice(language: LampPronunciation.greekVoiceLanguage) != nil
     }
 
-    /// IPA goes to the reader's Read Aloud voice when that one is English —
-    /// the IPA keeps to English sounds — and otherwise to the system's
-    /// English one; a modern reading goes to a Greek voice.
+    /// The reader's Read Aloud voice says IPA when it is English — the IPA
+    /// keeps to English sounds — and otherwise the best installed English
+    /// voice does; a modern reading goes to the best Greek one.
     func say(_ spoken: LampPronunciation.Utterance, voiceIdentifier: String) {
         synthesizer.stopSpeaking(at: .immediate)
         let utterance = AVSpeechUtterance(attributedString: spoken.text)
-        let chosen = AVSpeechSynthesisVoice(identifier: voiceIdentifier)
-        utterance.voice = spoken.ipa != nil && chosen?.language.hasPrefix("en") == true
-            ? chosen
-            : AVSpeechSynthesisVoice(language: spoken.voiceLanguage)
+        utterance.voice = SpeechVoices.voice(language: spoken.voiceLanguage, stored: voiceIdentifier)
         synthesizer.speak(utterance)
     }
 }

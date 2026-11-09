@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import LampCore
 #if canImport(LampBibleMacSupport)
 import LampBibleMacSupport
 #endif
@@ -48,8 +49,7 @@ final class ReadAloudController: NSObject, ObservableObject {
     ) {
         stop()
         let queue = ReadAloudQueue(items: items, startingAt: reference)
-        let voice = AVSpeechSynthesisVoice(identifier: voiceIdentifier)
-            ?? AVSpeechSynthesisVoice(language: "en-US")
+        let voice = SpeechVoices.voice(language: SpeechVoices.english, stored: voiceIdentifier)
 
         for item in queue.remainingItems {
             let utterance = AVSpeechUtterance(string: "Verse \(item.verseNumber). \(item.text)")
@@ -178,8 +178,7 @@ final class QuizReadAloudController: NSObject, ObservableObject {
     ) {
         stop()
         let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = AVSpeechSynthesisVoice(identifier: voiceIdentifier)
-            ?? AVSpeechSynthesisVoice(language: "en-US")
+        utterance.voice = SpeechVoices.voice(language: SpeechVoices.english, stored: voiceIdentifier)
         utterance.rate = Float(min(max(rate, 0.3), 0.65))
         activeUtteranceID = ObjectIdentifier(utterance)
         currentQuestionID = questionID
@@ -220,5 +219,41 @@ extension QuizReadAloudController: AVSpeechSynthesizerDelegate {
             currentQuestionID = nil
             state = .stopped
         }
+    }
+}
+
+/// The installed voices, and which one speaks: the reader's Read Aloud
+/// choice when it speaks the language, and otherwise the best installed, by
+/// core's rule, so the phone chooses alike.
+enum SpeechVoices {
+    /// The language verses and questions are read in, and the IPA spoken.
+    static let english = "en-US"
+
+    static func installed() -> [LampSpeechVoice] {
+        AVSpeechSynthesisVoice.speechVoices().map(describe)
+    }
+
+    static func describe(_ voice: AVSpeechSynthesisVoice) -> LampSpeechVoice {
+        LampSpeechVoice(
+            identifier: voice.identifier,
+            name: voice.name,
+            language: voice.language,
+            quality: voice.quality.rawValue,
+            isNovelty: voice.voiceTraits.contains(.isNoveltyVoice),
+            isPersonal: voice.voiceTraits.contains(.isPersonalVoice)
+        )
+    }
+
+    static func voice(language: String, stored: String?) -> AVSpeechSynthesisVoice? {
+        let preferred = AVSpeechSynthesisVoice.currentLanguageCode()
+        let chosen = LampSpeechVoice.choose(
+            language: language,
+            stored: stored,
+            among: installed(),
+            preferredLanguage: preferred,
+            systemDefaults: Set([language, preferred].compactMap { AVSpeechSynthesisVoice(language: $0)?.identifier })
+        )
+        return chosen.flatMap { AVSpeechSynthesisVoice(identifier: $0.identifier) }
+            ?? AVSpeechSynthesisVoice(language: language)
     }
 }
