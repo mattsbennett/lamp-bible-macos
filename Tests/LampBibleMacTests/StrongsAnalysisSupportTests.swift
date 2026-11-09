@@ -230,6 +230,28 @@ struct StrongsAnalysisSupportTests {
         ) == nil)
     }
 
+    /// What the panes actually compose: the candidates are ordered by the
+    /// language's preference before `shown` takes the first with an entry, so a
+    /// reader who has chosen nothing gets Strong's — not Dodson, which merely
+    /// sorts first by name, and not TBESG, whose entries assume Greek.
+    @Test func theGreekDefaultIsStrongsEvenThoughDodsonSortsFirst() {
+        let byName = ["dodson_greek", "strongs_greek", "tbesg"]
+        let ordered = LampModuleSelection.ordered(
+            byName, preferredIDs: LampModuleSelection.preferredGreekDictionaryIDs, id: { $0 }
+        )
+        #expect(LampStrongsDefinitionChoice.shown(
+            among: ordered, chosen: nil, preferred: nil
+        ) == "strongs_greek")
+        // An explicit choice still outranks the preference.
+        #expect(LampStrongsDefinitionChoice.shown(
+            among: ordered, chosen: "dodson_greek", preferred: nil
+        ) == "dodson_greek")
+        // Strong's absent from the key's entries: TBESG, then the rest by name.
+        #expect(LampStrongsDefinitionChoice.shown(
+            among: ordered.filter { $0 != "strongs_greek" }, chosen: nil, preferred: nil
+        ) == "tbesg")
+    }
+
     // MARK: - The spread chart
 
     @Test func barsAreScaledAgainstTheLongestOne() {

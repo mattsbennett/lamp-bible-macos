@@ -30,6 +30,16 @@ enum BiblicalOriginalLanguage: String, CaseIterable {
         default: return nil
         }
     }
+
+    /// The dictionaries this language falls back to when the reader has chosen
+    /// none, ahead of the library's by-name order. Shared with iOS through core
+    /// so the two apps cannot drift apart on which dictionary a default means.
+    var preferredDictionaryIDs: [String] {
+        switch self {
+        case .greek: LampModuleSelection.preferredGreekDictionaryIDs
+        case .hebrew: []
+        }
+    }
 }
 
 extension LampInstalledModule {

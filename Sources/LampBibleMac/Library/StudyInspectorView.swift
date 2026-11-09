@@ -1555,7 +1555,9 @@ private struct DictionaryInspectorView: View {
         }
         return compatibleModules.contains(where: { $0.id == preferredID })
             ? preferredID
-            : compatibleModules.first?.id
+            : LampModuleSelection.ordered(
+                compatibleModules, preferredIDs: language.preferredDictionaryIDs, id: \.id
+            ).first?.id
     }
 
     /// Drops the lookup without letting `onChange(of: query)` mistake the seeded

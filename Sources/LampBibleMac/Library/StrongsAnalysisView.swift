@@ -1205,10 +1205,17 @@ struct StrongsDefinitionView: View {
     private var language: BiblicalOriginalLanguage? { .inferred(from: key) }
 
     /// The dictionaries for the key's language, or every one when it has
-    /// none, in the library's order.
+    /// none — the language's preferred ones first, then the library's order.
+    ///
+    /// The order decides the default, since `shownID` falls back to the first
+    /// of these that has an entry. Leaving it to the alphabet made Dodson the
+    /// default Greek dictionary for anyone who had not chosen one.
     private var candidates: [LampInstalledModule] {
         let matching = model.dictionaries.filter { $0.biblicalOriginalLanguage == language }
-        return language == nil || matching.isEmpty ? model.dictionaries : matching
+        guard let language, !matching.isEmpty else { return model.dictionaries }
+        return LampModuleSelection.ordered(
+            matching, preferredIDs: language.preferredDictionaryIDs, id: \.id
+        )
     }
 
     private var withEntries: [LampInstalledModule] {

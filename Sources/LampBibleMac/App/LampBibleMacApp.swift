@@ -475,7 +475,7 @@ private struct ReaderSettingsView: View {
                                     modules: enabledGreekDictionaryModules
                                 )
                             ) {
-                                Text("First Enabled").tag("")
+                                Text("Automatic").tag("")
                                 ForEach(enabledGreekDictionaryModules) { dictionary in
                                     Text(dictionary.name).tag(dictionary.id)
                                 }
@@ -487,7 +487,7 @@ private struct ReaderSettingsView: View {
                                     modules: enabledHebrewDictionaryModules
                                 )
                             ) {
-                                Text("First Enabled").tag("")
+                                Text("Automatic").tag("")
                                 ForEach(enabledHebrewDictionaryModules) { dictionary in
                                     Text(dictionary.name).tag(dictionary.id)
                                 }
