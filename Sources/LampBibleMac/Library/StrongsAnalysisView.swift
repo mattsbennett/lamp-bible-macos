@@ -695,6 +695,9 @@ struct StrongsAnalysisPane: View {
                         .background(Color.lampTileFill, in: Capsule())
                     PronounceButton(key: analysis.key)
                     Spacer(minLength: 0)
+                    addToDeck(analysis, [deckChart(
+                        analysis, name: "Headword Card", by: .book, style: .card, title: nil
+                    )])
                     if loader.isFillingRest {
                         ProgressView()
                             .controlSize(.small)
@@ -918,7 +921,12 @@ struct StrongsAnalysisPane: View {
                 group(
                     "Rendered As",
                     note: "What translators reached for, not what the word means.",
-                    asRing: $renderingsAsRing
+                    asRing: $renderingsAsRing,
+                    deck: addToDeck(analysis, [deckChart(
+                        analysis, name: "Rendered As", by: .rendering,
+                        style: renderingsAsRing ? .share : .bars,
+                        title: "How \(translationName(analysis)) renders \(headword(analysis))"
+                    )])
                 ) {
                     if renderingsAsRing {
                         ShareRing(
@@ -934,7 +942,15 @@ struct StrongsAnalysisPane: View {
                 }
             }
             if !analysis.forms.isEmpty {
-                group("Forms", asRing: $formsAsRing) {
+                group(
+                    "Forms",
+                    asRing: $formsAsRing,
+                    deck: addToDeck(analysis, [deckChart(
+                        analysis, name: "Forms", by: .form,
+                        style: formsAsRing ? .share : .bars,
+                        title: "The forms of \(headword(analysis))"
+                    )])
+                ) {
                     if formsAsRing {
                         ShareRing(
                             divisions: LampStrongsGrouping.forms.divisions(of: analysis),
@@ -956,7 +972,17 @@ struct StrongsAnalysisPane: View {
                 }
             }
             if !analysis.grammar.isEmpty {
-                group("Grammar") {
+                group("Grammar", deck: addToDeck(
+                    analysis,
+                    LampGrammarFeature.allCases
+                        .filter { feature in analysis.grammar.contains { $0.feature == feature } }
+                        .map { feature in
+                            deckChart(
+                                analysis, name: feature.title, by: .grammar, feature: feature,
+                                title: "\(headword(analysis)) by \(feature.title.lowercased())"
+                            )
+                        }
+                )) {
                     ForEach(LampGrammarFeature.allCases, id: \.self) { feature in
                         let values = analysis.grammar.filter { $0.feature == feature }
                         let most = values.map(\.count).max() ?? 0
@@ -1218,6 +1244,7 @@ struct StrongsAnalysisPane: View {
                     .help("What to count")
                 }
                 Spacer(minLength: 0)
+                addToDeck(analysis, [spreadDeckChart(analysis)])
             }
 
             if spreadGrouping == .chapters {
@@ -1522,6 +1549,15 @@ struct StrongsAnalysisPane: View {
 
     private func companions(_ analysis: LampStrongsAnalysis) -> some View {
         VStack(alignment: .leading, spacing: 12) {
+            if !analysis.companions.isEmpty {
+                HStack {
+                    Spacer(minLength: 0)
+                    addToDeck(analysis, [deckChart(
+                        analysis, name: "Companions", by: .companion,
+                        title: "Words found with \(headword(analysis))"
+                    )])
+                }
+            }
             if analysis.companions.isEmpty {
                 Text("No other key shares enough verses with this one.")
                     .font(.caption)
@@ -1581,6 +1617,16 @@ struct StrongsAnalysisPane: View {
 
     private var compare: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if let analysis {
+                HStack {
+                    Spacer(minLength: 0)
+                    addToDeck(analysis, [deckChart(
+                        analysis, name: "Compare", by: .translation,
+                        title: "\(headword(analysis)) across translations",
+                        caption: "Counts depend on how each translation was tagged"
+                    )])
+                }
+            }
             ForEach(loader.analyses, id: \.translationID) { analysis in
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
@@ -1617,6 +1663,81 @@ struct StrongsAnalysisPane: View {
         .padding(.vertical, 12)
     }
 
+    // MARK: - Deck charts
+
+    /// The word as a title names it.
+    private func headword(_ analysis: LampStrongsAnalysis) -> String {
+        entry?.lemma.flatMap { $0.isEmpty ? nil : $0 } ?? analysis.key
+    }
+
+    private func translationName(_ analysis: LampStrongsAnalysis) -> String {
+        analysis.translationAbbreviation ?? analysis.translationName
+    }
+
+    /// The pane's books as a deck chart's range: "Romans", "Matthew-John".
+    private var deckRange: String? {
+        guard let bookRange else { return nil }
+        let first = LampBibleReferenceFormatter.bookName(bookRange.lowerBound)
+        guard bookRange.count > 1 else { return first }
+        return "\(first)-\(LampBibleReferenceFormatter.bookName(bookRange.upperBound))"
+    }
+
+    private func deckChart(
+        _ analysis: LampStrongsAnalysis,
+        name: String,
+        by grouping: LampPresentationChart.Grouping,
+        feature: LampGrammarFeature? = nil,
+        measure: LampPresentationChart.Measure = .occurrences,
+        style: LampPresentationChart.Style? = nil,
+        title: String?,
+        caption: String? = nil
+    ) -> AnalysisDeckChart {
+        AnalysisDeckChart(
+            name: name,
+            chart: LampPresentationChart(
+                source: .init(
+                    strongs: analysis.key,
+                    translationID: grouping == .translation ? "" : analysis.translationID,
+                    range: deckRange
+                ),
+                by: grouping,
+                feature: feature,
+                measure: measure,
+                style: style
+            ),
+            title: title,
+            caption: caption ?? ([translationName(analysis), deckRange] as [String?])
+                .compactMap { $0 }.joined(separator: " · ")
+        )
+    }
+
+    /// The Spread as it is drawn: books or sections as bars, measured as
+    /// chosen, or chapters as a grid.
+    private func spreadDeckChart(_ analysis: LampStrongsAnalysis) -> AnalysisDeckChart {
+        let title = "Where \(headword(analysis)) is found"
+        return switch spreadGrouping {
+        case .books:
+            deckChart(analysis, name: "Spread", by: .book, measure: deckMeasure, title: title)
+        case .sections:
+            deckChart(analysis, name: "Spread", by: .section, measure: deckMeasure, title: title)
+        case .chapters:
+            deckChart(analysis, name: "Spread", by: .book, style: .grid, title: title)
+        }
+    }
+
+    private var deckMeasure: LampPresentationChart.Measure {
+        measure == .perThousandWords ? .perThousandWords : .occurrences
+    }
+
+    private func addToDeck(_ analysis: LampStrongsAnalysis, _ charts: [AnalysisDeckChart]) -> AddToDeckMenu {
+        AddToDeckMenu(
+            charts: charts,
+            filter: filter,
+            deckTitle: headword(analysis),
+            deckSubtitle: entry?.shortGloss.flatMap { $0.isEmpty ? nil : $0 }
+        )
+    }
+
     // MARK: - Pieces
 
     /// A section of the overview: the shared section heading, with what the
@@ -1627,6 +1748,7 @@ struct StrongsAnalysisPane: View {
         _ title: String,
         note: String? = nil,
         asRing: Binding<Bool>? = nil,
+        deck: AddToDeckMenu? = nil,
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -1634,6 +1756,7 @@ struct StrongsAnalysisPane: View {
                 Text(title)
                     .lampSectionHeading()
                 Spacer(minLength: 8)
+                if let deck { deck }
                 if let asRing {
                     Picker("Show \(title) as", selection: asRing) {
                         Text("List").tag(false)
@@ -2488,6 +2611,164 @@ struct StudyAnalysisView: View {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString("\(reference) \(verse)", forType: .string)
             }
+        }
+    }
+}
+
+// MARK: - Add to Deck
+
+/// A figure of the analysis as a deck chart: what to chart, and the slide's
+/// title and caption.
+struct AnalysisDeckChart {
+    /// What the menu calls it where a figure offers several: "Case".
+    var name: String
+    var chart: LampPresentationChart
+    var title: String?
+    var caption: String
+}
+
+/// Puts a figure of the analysis on a slide: at the end of a chosen deck, or
+/// in a new one, then opens it in Slide Studio.
+///
+/// The slide names what to chart and Lamp works the values out from the
+/// library as it is added, as a deck from an agent is built, so nothing on it
+/// is copied from the pane: a figure still loading cannot freeze on a slide.
+/// The pane's filter narrows only its verse list, and the figures above it
+/// count every occurrence; so a chart counts every occurrence too, unless
+/// "Only occurrences…" is ticked.
+struct AddToDeckMenu: View {
+    let charts: [AnalysisDeckChart]
+    /// The pane's filter, offered as "Only occurrences rendered “love”".
+    let filter: LampStrongsFilter?
+    /// The new deck's title and subtitle.
+    let deckTitle: String
+    let deckSubtitle: String?
+
+    @EnvironmentObject private var model: LibraryModel
+    @Environment(\.openWindow) private var openWindow
+    @ObservedObject private var inbox = SlideStudioInbox.shared
+    @State private var onlyFiltered = false
+
+    var body: some View {
+        Menu {
+            if let narrowing {
+                Toggle("Only Occurrences \(narrowing.label)", isOn: $onlyFiltered)
+                Divider()
+            }
+            if charts.count == 1, let chart = charts.first {
+                destinations(for: chart)
+            } else {
+                ForEach(charts.indices, id: \.self) { index in
+                    Menu(charts[index].name) { destinations(for: charts[index]) }
+                }
+            }
+        } label: {
+            // A Label, not a bare image: a label set on the menu itself did
+            // not reach VoiceOver, which read the symbol's own name.
+            Label("Add to Deck", systemImage: "rectangle.stack.badge.plus")
+                .labelStyle(.iconOnly)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Add to a slide deck")
+        .task { await loadDecks() }
+    }
+
+    @ViewBuilder
+    private func destinations(for chart: AnalysisDeckChart) -> some View {
+        Section("Add to Deck") {
+            ForEach(inbox.decks) { deck in
+                Button(deck.title) { Task { await add(chart, to: deck.id) } }
+            }
+        }
+        Divider()
+        Button("New Deck") { Task { await add(chart, to: nil) } }
+    }
+
+    /// The filter as a deck can carry it, with what the toggle calls it. A
+    /// chapter has no deck equivalent: a chart's range is whole books.
+    private typealias Narrowing = (label: String, filter: LampPresentationChart.Filter?, range: String?)
+
+    private var narrowing: Narrowing? {
+        switch filter {
+        case .rendering(_, let text) where !text.isEmpty:
+            return ("Rendered “\(text)”", LampPresentationChart.Filter(rendering: text), nil)
+        case .form(let text):
+            return ("As \(text)", LampPresentationChart.Filter(form: text), nil)
+        case .grammar(let feature, let value):
+            return (
+                "\(feature.title): \(value)",
+                LampPresentationChart.Filter(grammar: .init(feature: feature, value: value)),
+                nil
+            )
+        case .book(let number):
+            let name = LampBibleReferenceFormatter.bookName(number)
+            return ("in \(name)", nil, name)
+        default:
+            return nil
+        }
+    }
+
+    private func loadDecks() async {
+        let store = LampPresentationDeckStore(rootURL: model.library.rootURL)
+        let found = await Task.detached(priority: .utility) {
+            (try? store.decks()) ?? []
+        }.value
+        inbox.note(found)
+    }
+
+    private func add(_ figure: AnalysisDeckChart, to deckID: String?) async {
+        var chart = figure.chart
+        var caption = figure.caption
+        if onlyFiltered, let narrowing {
+            if let filter = narrowing.filter { chart.source.filter = filter }
+            if let range = narrowing.range { chart.source.range = range }
+            caption += " · only occurrences \(narrowing.label.prefix(1).lowercased() + narrowing.label.dropFirst())"
+        }
+        // Worked out now, so the slide draws in the deck's thumbnails and a
+        // presentation at once. If the library cannot, the slide still goes
+        // in, and Slide Studio says why when it is opened.
+        if let worked = try? await model.library.workedOut(chart) { chart = worked }
+
+        var blocks: [LampPresentationBlock] = []
+        if let title = figure.title { blocks.append(.init(kind: .title, text: title)) }
+        blocks.append(.init(kind: .chart, text: "", chart: chart))
+        blocks.append(.init(kind: .caption, text: caption))
+        let slide = LampPresentationSlide(layout: .image, blocks: blocks)
+
+        let inbox = SlideStudioInbox.shared
+        let store = LampPresentationDeckStore(rootURL: model.library.rootURL)
+        do {
+            if let deckID, let request = inbox.window(showing: deckID) {
+                inbox.send(slide, to: deckID)
+                // Bringing that window forward. One opened without a request
+                // cannot be named, and a new window on the same deck would
+                // be a second editor of it, so it is left where it is.
+                if request.deckID == deckID {
+                    openWindow(id: "slide-studio", value: request)
+                }
+                return
+            }
+            var deck: LampPresentationDeck
+            if let deckID {
+                guard let stored = try store.deck(id: deckID) else {
+                    model.errorMessage = "That deck is no longer in the library."
+                    return
+                }
+                deck = stored
+                deck.slides.append(slide)
+            } else {
+                let starter = LampPresentationDeck.starter(title: deckTitle, subtitle: deckSubtitle)
+                deck = starter
+                deck.slides = Array(starter.slides.prefix(1)) + [slide]
+            }
+            try store.save(deck)
+            inbox.select(slide.id, in: deck.id)
+            openWindow(id: "slide-studio", value: SlideStudioRequest(deckID: deck.id))
+            await loadDecks()
+        } catch {
+            model.errorMessage = error.localizedDescription
         }
     }
 }

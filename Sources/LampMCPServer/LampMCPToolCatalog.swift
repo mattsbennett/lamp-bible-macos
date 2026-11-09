@@ -116,6 +116,12 @@ public enum LampMCPToolCatalog {
             fairness of a rendering at one verse. Rendering, form and parsing \
             lists contain at most 20 entries each; references are sampled and \
             referencesOmitted counts those not returned.
+
+            A deck can chart any of this (see the deck format's Charts \
+            section): spread, renderings, forms, grammar, companions, a \
+            comparison of translations, or the headword card. A chart's \
+            filter and grammar feature take the rendering, form and grammar \
+            names exactly as this returns them.
             """,
             properties: [
                 "key": string("A Strong's key such as G3056 or H7225."),
@@ -288,8 +294,10 @@ public enum LampMCPToolCatalog {
             """
             Derive what a deck can derive and return the filled-in deck with a \
             report: speaker notes taken from the manuscript for each slide's \
-            notesAnchor, and identifiers for anything newly added. Running it \
-            twice changes nothing. The report's `resolved` is false when an \
+            notesAnchor, identifiers for anything newly added, and each \
+            chart's values (and a card's headword) worked out from the \
+            library, which a deck never writes itself. Running it twice \
+            changes nothing. The report's `resolved` is false when an \
             anchor is no longer in the manuscript, and names the slide.
             """,
             properties: [

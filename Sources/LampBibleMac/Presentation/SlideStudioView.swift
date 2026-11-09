@@ -28,6 +28,65 @@ struct SlideStudioRequest: Codable, Hashable {
     }
 }
 
+/// Slides sent to a deck from elsewhere in the app — a chart from the
+/// Strong's analysis — and the Slide Studio windows that would receive them.
+///
+/// A window holding a deck takes a sent slide into the deck it has on screen,
+/// as an edit of its own, rather than finding it on disk: a window with
+/// unsaved edits, or an unfinished deck held as a draft, does not reread the
+/// disk, and its next save would write over a slide saved behind its back.
+@MainActor
+final class SlideStudioInbox: ObservableObject {
+    static let shared = SlideStudioInbox()
+
+    @Published private(set) var pending: [String: [LampPresentationSlide]] = [:]
+    /// The library's decks by title, for a menu that offers them. Shared, so
+    /// a deck made from one menu, or in Slide Studio, is in every other.
+    @Published private(set) var decks: [DeckSummary] = []
+
+    struct DeckSummary: Identifiable, Equatable {
+        let id: String
+        let title: String
+    }
+
+    func note(_ decks: [LampPresentationDeck]) {
+        let summaries = decks
+            .map { DeckSummary(id: $0.id, title: $0.title) }
+            .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        if summaries != self.decks { self.decks = summaries }
+    }
+    /// What each open window shows, and the request it was opened with.
+    private var windows: [UUID: (deckID: String, request: SlideStudioRequest)] = [:]
+    /// The slide a window opening a deck should show first.
+    private var selections: [String: String] = [:]
+
+    /// The request of a window showing `deckID`, or nil when none is.
+    func window(showing deckID: String) -> SlideStudioRequest? {
+        windows.values.first { $0.deckID == deckID }?.request
+    }
+
+    func setWindow(_ window: UUID, showing deckID: String?, request: SlideStudioRequest) {
+        windows[window] = deckID.map { ($0, request) }
+    }
+
+    func send(_ slide: LampPresentationSlide, to deckID: String) {
+        pending[deckID, default: []].append(slide)
+    }
+
+    func take(for deckID: String) -> [LampPresentationSlide] {
+        guard pending[deckID] != nil else { return [] }
+        return pending.removeValue(forKey: deckID) ?? []
+    }
+
+    func select(_ slideID: String, in deckID: String) {
+        selections[deckID] = slideID
+    }
+
+    func takeSelection(for deckID: String) -> String? {
+        selections.removeValue(forKey: deckID)
+    }
+}
+
 struct SlidePresentationRequest: Codable, Hashable {
     let deckID: String
 }
@@ -36,6 +95,9 @@ struct SlideStudioView: View {
     @Environment(\.openWindow) private var openWindow
     @EnvironmentObject private var model: LibraryModel
     @EnvironmentObject private var remoteHost: LampPresentationRemoteHost
+    @ObservedObject private var inbox = SlideStudioInbox.shared
+    /// This window, to the inbox.
+    @State private var windowToken = UUID()
 
     let request: SlideStudioRequest
 
@@ -158,6 +220,20 @@ struct SlideStudioView: View {
             }
         }
         .onChange(of: selectedDeckID) { _, deckID in selectDeck(deckID) }
+        .onChange(of: deck?.id, initial: true) { _, deckID in
+            inbox.setWindow(windowToken, showing: deckID, request: request)
+            if let deckID, let slideID = inbox.takeSelection(for: deckID),
+               deck?.slides.contains(where: { $0.id == slideID }) == true {
+                selectedSlideID = slideID
+            }
+            receiveSentSlides()
+        }
+        // Not `.onReceive(inbox.$pending)`: a published value's publisher
+        // fires before the value changes, so the slide was not there yet.
+        .onChange(of: inbox.pending) { receiveSentSlides() }
+        .onChange(of: decks, initial: true) { _, decks in
+            if !isLoading { inbox.note(decks) }
+        }
         .onChange(of: deck) { previousDeck, updatedDeck in
             if let previousDeck, !isRestoring, previousDeck.id == updatedDeck?.id {
                 // Only an edit to the deck on screen. Changing deck is a move,
@@ -206,9 +282,21 @@ struct SlideStudioView: View {
             Text("This removes the editable .lampdeck document from the library.")
         }
         .onDisappear {
+            inbox.setWindow(windowToken, showing: nil, request: request)
             saveTask?.cancel()
             saveNow()
         }
+    }
+
+    /// Slides sent to the deck on screen, added at its end as an edit like any
+    /// other: saved by the autosave, and undoable.
+    private func receiveSentSlides() {
+        guard let deckID = deck?.id else { return }
+        let sent = inbox.take(for: deckID)
+        guard !sent.isEmpty else { return }
+        deck?.slides += sent
+        selectedSlideID = sent.last?.id
+        statusMessage = sent.count == 1 ? "Added a slide" : "Added \(sent.count) slides"
     }
 
     private var bindingToDeck: Binding<LampPresentationDeck>? {
@@ -1658,10 +1746,9 @@ private struct LampSlideChartEditor: View {
     /// The values are deliberately not part of this: writing them back would
     /// change the chart, which would ask for them again, for ever.
     private struct Source: Equatable {
-        var strongs = ""
-        var translationID = ""
-        var range = ""
+        var source = LampPresentationChart.Source(strongs: "", translationID: "")
         var by = LampPresentationChart.Grouping.book
+        var feature: LampGrammarFeature?
         var measure = LampPresentationChart.Measure.occurrences
         /// Part of the key, because the values themselves depend on it: a
         /// grid carries each book's chapters, a share drops the empty
@@ -1672,10 +1759,9 @@ private struct LampSlideChartEditor: View {
     private var source: Source {
         guard let chart = block.chart else { return Source() }
         return Source(
-            strongs: chart.source.strongs,
-            translationID: chart.source.translationID,
-            range: chart.source.range ?? "",
+            source: chart.source,
             by: chart.by,
+            feature: chart.feature,
             measure: chart.measure,
             style: chart.drawnStyle
         )
@@ -1683,20 +1769,25 @@ private struct LampSlideChartEditor: View {
 
     var body: some View {
         if let chart = Binding($block.chart) {
+            let current = chart.wrappedValue
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 8) {
                     TextField("Strong's key", text: chart.source.strongs)
                         .frame(width: 110)
                         .help("A key such as G26 or H3068")
-                    Picker("Translation", selection: chart.source.translationID) {
-                        // Every translation, not only the tagged ones: Lamp
-                        // says below when one has no tags for this key, which
-                        // is a more useful answer than a shorter menu.
-                        ForEach(model.translations, id: \.id) { translation in
-                            Text(translation.abbreviation ?? translation.name).tag(translation.id)
+                    if current.by == .translation {
+                        comparedTranslations(chart)
+                    } else {
+                        Picker("Translation", selection: chart.source.translationID) {
+                            // Every translation, not only the tagged ones: Lamp
+                            // says below when one has no tags for this key, which
+                            // is a more useful answer than a shorter menu.
+                            ForEach(model.translations, id: \.id) { translation in
+                                Text(translation.abbreviation ?? translation.name).tag(translation.id)
+                            }
                         }
+                        .labelsHidden()
                     }
-                    .labelsHidden()
                     TextField("Books", text: Binding(
                         get: { chart.wrappedValue.source.range ?? "" },
                         set: { chart.wrappedValue.source.range = $0.isEmpty ? nil : $0 }
@@ -1709,34 +1800,64 @@ private struct LampSlideChartEditor: View {
                     get: { chart.wrappedValue.drawnStyle },
                     set: { style in
                         chart.wrappedValue.style = style
-                        // A grid is of a book's chapters, so choosing one
+                        // A grid and a card are of books, so choosing one
                         // moves the grouping with it. Disabling the control
                         // alone would leave a deck that fails to validate
                         // behind a picker nobody can reach.
-                        if style == .grid { chart.wrappedValue.by = .book }
+                        if style.isOfBooks { chart.wrappedValue.by = .book }
+                        if style == .share, !chart.wrappedValue.by.isPartOfWhole {
+                            chart.wrappedValue.by = .rendering
+                        }
                     }
                 )) {
                     ForEach(LampPresentationChart.Style.allCases) { style in
                         Text(studioStyleName(style)).tag(style)
                     }
                 }
-                Picker("Group by", selection: chart.by) {
+                Picker("Group by", selection: Binding(
+                    get: { chart.wrappedValue.by },
+                    set: { grouping in
+                        chart.wrappedValue.by = grouping
+                        // A feature only means something to a chart of
+                        // grammar, and the validator says so of a stray one.
+                        if grouping == .grammar {
+                            chart.wrappedValue.feature = chart.wrappedValue.feature ?? .grammaticalCase
+                        } else {
+                            chart.wrappedValue.feature = nil
+                        }
+                        if grouping != .translation { chart.wrappedValue.source.translations = nil }
+                        if !grouping.isPartOfWhole, chart.wrappedValue.drawnStyle == .share {
+                            chart.wrappedValue.style = .bars
+                        }
+                    }
+                )) {
                     ForEach(LampPresentationChart.Grouping.allCases) { grouping in
-                        Text(grouping.rawValue.capitalized).tag(grouping)
+                        Text(studioGroupingName(grouping)).tag(grouping)
                     }
                 }
-                .disabled(chart.wrappedValue.drawnStyle == .grid)
-                .help(chart.wrappedValue.drawnStyle == .grid
-                    ? "A grid shades each book's chapters, so it charts by book"
+                .disabled(current.drawnStyle.isOfBooks)
+                .help(current.drawnStyle.isOfBooks
+                    ? "A \(current.drawnStyle == .grid ? "grid" : "card") draws each book, so it charts by book"
                     : "")
+                if current.by == .grammar {
+                    Picker("Feature", selection: Binding(
+                        get: { chart.wrappedValue.feature ?? .grammaticalCase },
+                        set: { chart.wrappedValue.feature = $0 }
+                    )) {
+                        ForEach(LampGrammarFeature.allCases, id: \.self) { feature in
+                            Text(feature.title).tag(feature)
+                        }
+                    }
+                }
                 Picker("Measure", selection: chart.measure) {
                     Text("Occurrences").tag(LampPresentationChart.Measure.occurrences)
                     Text("Per 1,000 words").tag(LampPresentationChart.Measure.perThousandWords)
                 }
-                .disabled(chart.wrappedValue.drawnStyle == .share)
-                .help(chart.wrappedValue.drawnStyle == .share
+                .disabled(current.drawnStyle == .share || !current.by.usesMeasure)
+                .help(current.drawnStyle == .share
                     ? "A share is of occurrences: rates do not add up to a whole"
-                    : "")
+                    : current.by.usesMeasure ? "" : "Companions are measured against chance")
+                filterFields(chart)
                 HStack(spacing: 6) {
                     if isWorking { ProgressView().controlSize(.small) }
                     if let status {
@@ -1759,13 +1880,99 @@ private struct LampSlideChartEditor: View {
         }
     }
 
+    /// Only some occurrences: a rendering, a form, a grammatical value. Each
+    /// field narrows further, as the deck's filter does.
+    private func filterFields(_ chart: Binding<LampPresentationChart>) -> some View {
+        func field(_ path: WritableKeyPath<LampPresentationChart.Filter, String?>) -> Binding<String> {
+            Binding(
+                get: { chart.wrappedValue.source.filter?[keyPath: path] ?? "" },
+                set: { text in
+                    var filter = chart.wrappedValue.source.filter ?? .init()
+                    filter[keyPath: path] = text.isEmpty ? nil : text
+                    chart.wrappedValue.source.filter = filter.isEmpty && filter.grammar == nil ? nil : filter
+                }
+            )
+        }
+        let grammar = Binding<LampGrammarFeature?>(
+            get: { chart.wrappedValue.source.filter?.grammar?.feature },
+            set: { feature in
+                var filter = chart.wrappedValue.source.filter ?? .init()
+                filter.grammar = feature.map { .init(feature: $0, value: filter.grammar?.value ?? "") }
+                chart.wrappedValue.source.filter =
+                    filter.rendering == nil && filter.form == nil && filter.grammar == nil ? nil : filter
+            }
+        )
+        return VStack(alignment: .leading, spacing: 5) {
+            Text("Only occurrences")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                TextField("Rendered as", text: field(\.rendering))
+                    .help("An English rendering, as Rendered As lists it: love")
+                TextField("Form", text: field(\.form))
+                    .help("An original-language form, as Forms lists it: ἀγάπης")
+            }
+            HStack(spacing: 6) {
+                Picker("Grammar", selection: grammar) {
+                    Text("Any grammar").tag(LampGrammarFeature?.none)
+                    ForEach(LampGrammarFeature.allCases, id: \.self) { feature in
+                        Text(feature.title).tag(LampGrammarFeature?.some(feature))
+                    }
+                }
+                .labelsHidden()
+                if grammar.wrappedValue != nil {
+                    TextField("Value", text: Binding(
+                        get: { chart.wrappedValue.source.filter?.grammar?.value ?? "" },
+                        set: { chart.wrappedValue.source.filter?.grammar?.value = $0 }
+                    ))
+                    .help("As Grammar lists it: Genitive, Aorist")
+                }
+            }
+        }
+    }
+
+    /// The translations a comparison counts: every tagged one, or those ticked.
+    private func comparedTranslations(_ chart: Binding<LampPresentationChart>) -> some View {
+        let chosen = chart.wrappedValue.source.translations
+        return Menu(chosen.map { $0.count == 1 ? "1 translation" : "\($0.count) translations" }
+            ?? "Every tagged translation") {
+            Button("Every Tagged Translation") { chart.wrappedValue.source.translations = nil }
+            Divider()
+            ForEach(model.translations, id: \.id) { translation in
+                Toggle(translation.abbreviation ?? translation.name, isOn: Binding(
+                    get: { chosen?.contains(translation.id) == true },
+                    set: { isOn in
+                        var list = chart.wrappedValue.source.translations ?? []
+                        list.removeAll { $0 == translation.id }
+                        if isOn { list.append(translation.id) }
+                        chart.wrappedValue.source.translations = list.isEmpty ? nil : list
+                    }
+                ))
+            }
+        }
+        .fixedSize()
+        .help("The translations to set side by side")
+    }
+
+    private func studioGroupingName(_ grouping: LampPresentationChart.Grouping) -> String {
+        switch grouping {
+        case .book: "Book"
+        case .section: "Section"
+        case .rendering: "Rendering"
+        case .form: "Form"
+        case .grammar: "Grammar"
+        case .translation: "Translation (compare)"
+        case .companion: "Companion words"
+        }
+    }
+
     /// What this style draws, for counting them in the status line. A grid
     /// draws a row per book, not a bar.
     private func drawnThings(_ style: LampPresentationChart.Style) -> String {
         switch style {
         case .bars: "bars"
         case .columns: "columns"
-        case .grid: "books"
+        case .grid, .card: "books"
         case .share: "slices"
         }
     }
@@ -1797,6 +2004,7 @@ private struct LampSlideChartEditor: View {
         case .columns: "Columns in Bible order"
         case .grid: "Chapter grid"
         case .share: "Share of the whole"
+        case .card: "Headword card"
         }
     }
 
@@ -1807,7 +2015,7 @@ private struct LampSlideChartEditor: View {
     private func fill() async {
         guard var chart = block.chart,
               !chart.source.strongs.trimmingCharacters(in: .whitespaces).isEmpty,
-              !chart.source.translationID.isEmpty
+              chart.by == .translation || !chart.source.translationID.isEmpty
         else {
             status = "Name a key and a translation to draw."
             return
@@ -1815,23 +2023,27 @@ private struct LampSlideChartEditor: View {
         isWorking = true
         defer { isWorking = false }
         do {
-            guard let values = try await model.library.chartValues(chart) else {
-                status = "\(chart.source.translationID) has no tags for "
-                    + "\(chart.source.strongs) here, so the chart draws empty."
+            guard let worked = try await model.library.workedOut(chart) else {
+                status = chart.by == .translation
+                    ? "No translation here tags \(chart.source.strongs), so the chart draws empty."
+                    : "\(chart.source.translationID) has no tags for "
+                        + "\(chart.source.strongs) here, so the chart draws empty."
                 return
             }
+            let values = worked.values ?? []
             // Only when they differ, so opening a slide does not mark its deck
             // changed and send it round the sync for nothing.
-            if chart.values != values {
-                chart.values = values
+            if chart.values != worked.values || chart.headword != worked.headword {
+                chart.values = worked.values
+                chart.headword = worked.headword
                 block.chart = chart
             }
             if values.isEmpty {
                 status = "Nothing to chart in this range."
             } else {
                 status = crowding(values.count, style: chart.drawnStyle)
-                    ?? "\(values.count) \(drawnThings(chart.drawnStyle)) "
-                        + "from \(chart.source.translationID)."
+                    ?? "\(values.count) \(drawnThings(chart.drawnStyle)) from "
+                        + (chart.by == .translation ? "the translations." : "\(chart.source.translationID).")
             }
         } catch {
             // An unreadable range arrives here, which is the one mistake easy

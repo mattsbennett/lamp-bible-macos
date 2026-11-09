@@ -301,6 +301,50 @@ struct DeckValidatorAgreementTests {
                 .init(kind: .citation, text: "Job 28 (ESV)"),
             ]),
         ]),
+        // Charts: every rule the two hold a chart to, the new kinds among
+        // them, beside charts of each kind that draw as written.
+        LampPresentationDeck(title: "Charts", slides: {
+            let one = [LampPresentationChart.Value(label: "One", value: 1)]
+            let source = LampPresentationChart.Source(strongs: "G26", translationID: "T")
+            func slide(_ chart: LampPresentationChart) -> LampPresentationSlide {
+                .init(layout: .image, blocks: [.init(kind: .chart, chart: chart)])
+            }
+            return [
+                // No values yet, and a filter keeping one value of the feature charted.
+                slide(.init(
+                    source: .init(
+                        strongs: "G26", translationID: "T",
+                        filter: .init(grammar: .init(feature: .grammaticalCase, value: "Genitive"))
+                    ),
+                    by: .grammar, feature: .grammaticalCase
+                )),
+                // A feature and a list of translations that a chart by book reads neither of.
+                slide(.init(
+                    source: .init(strongs: "G26", translationID: "T", translations: ["U"]),
+                    by: .book, feature: .tense, values: one
+                )),
+                // A rate a companion does not read.
+                slide(.init(source: source, by: .companion, measure: .perThousandWords, values: one)),
+                // A headword only a card draws.
+                slide(.init(
+                    source: source, by: .book, values: one,
+                    headword: .init(occurrences: 1, verses: 1, books: 1, bookCount: 1, perThousandWords: 1, translation: "T")
+                )),
+                // A ring of nine slices, at a rate.
+                slide(.init(
+                    source: source, by: .rendering, measure: .perThousandWords, style: .share,
+                    values: Array(repeating: one[0], count: 9)
+                )),
+                // A filter naming nothing, and one keeping the one rendering charted.
+                slide(.init(source: .init(strongs: "G26", translationID: "T", filter: .init(form: " ")), by: .book, values: one)),
+                slide(.init(source: .init(strongs: "G26", translationID: "T", filter: .init(rendering: "love")), by: .rendering, values: one)),
+                // Drawn as written.
+                slide(.init(source: source, by: .book, style: .card, values: one)),
+                slide(.init(source: .init(strongs: "G26", translationID: "", translations: ["T", "U"]), by: .translation, values: one)),
+                slide(.init(source: .init(strongs: "G26", translationID: "T", filter: .init(rendering: "love")), by: .section, values: one)),
+                slide(.init(source: source, by: .grammar, feature: .tense, style: .share, values: one)),
+            ]
+        }()),
         // Nothing to say about a well-formed deck.
         LampPresentationDeck(title: "Clean", slides: [
             .init(layout: .titleAndBody, blocks: [

@@ -332,9 +332,12 @@ whole slide behind everything else, on any layout:
 
 ## Charts
 
-A `chart` block draws where a Strong's key is found, as bars. Name what to
-count; never write the numbers. Lamp works the values out from the library when
-the deck is built or imported, and overwrites anything it finds there.
+A `chart` block puts a figure from Lamp's Strong's analysis on a slide: where a
+word falls across the books, how translators rendered it, its original forms
+and grammar, the words that keep it company, how each translation tags it, or
+the headword card that sums it up. Name what to chart; never write the numbers.
+Lamp works the values out from the library when the deck is built or imported,
+and overwrites anything it finds there.
 
 ```json
 {
@@ -350,42 +353,157 @@ the deck is built or imported, and overwrites anything it finds there.
 }
 ```
 
-- `source.strongs` is a key such as `G26` or `H3068`.
-- `source.translationID` is the translation whose tags are counted. A count is
-  only as good as that translation's tagging, so it is not a fact about the
-  Bible — name the translation in the caption.
-- `source.range` takes whole books: `NT`, `Romans`, `Matthew-John`. Omit it for
-  the whole translation.
-- `style` is how it is drawn, and decides what the other fields can be:
-  - `bars` (the default if absent) ranks the divisions. Keep it under about 24.
-  - `columns` stand in Bible order, every book among them including the empty
-    ones, so where a word gathers shows as a shape. Twenty-seven or sixty-six
-    columns are the point here, not a problem.
-  - `grid` shades each book's chapters. It charts `by` book and nothing else,
-    and reads badly past about 40 books.
-  - `share` is a ring of the whole, largest first. It always counts
-    occurrences, whatever `measure` says, because rates per thousand words do
-    not add up to a whole. Past eight slices Lamp gathers the smallest into
-    "Others".
-  - A style Lamp does not know is drawn as bars rather than refused, so a deck
-    from a newer Lamp still opens.
-- `by` is `book`, `section`, `rendering`, or `form`. Renderings and forms show
-  the commonest eight.
-- `measure` is `occurrences` or `perThousandWords`. Use the rate when comparing
-  books of unequal length, where a raw count mostly measures how long a book is.
-- `text` is an optional heading drawn over the bars, and may be empty.
-- `values` is Lamp's to write, including each row's `chapters` for a grid.
-  Leave it out. The validator warns that a chart
-  has none yet, which is the expected state for a deck you have just written.
+### What to count: `source`
 
-Use `analyze_strongs` first to find out what is worth charting — which books
+- `strongs` is a key such as `G26` or `H3068`.
+- `translationID` is the translation whose tags are counted. A count is only
+  as good as that translation's tagging, so it is not a fact about the Bible —
+  name the translation in the caption. A chart `by` translation compares
+  several and does not need this; leave it as `""`.
+- `range` takes whole books: `NT`, `Romans`, `Matthew-John`. Omit it for the
+  whole translation.
+- `filter` narrows the chart to some occurrences only. Give any of these, and
+  an occurrence is counted only when it matches every one given:
+  - `rendering`: an English rendering, as `analyze_strongs` lists it under
+    `renderings` — `"love"`. It matches the word that carries the rendering, so
+    `"love"` also keeps "of love" and "love's".
+  - `form`: an original-language form, as `analyze_strongs` lists it under
+    `originalForms` — `"ἀγάπης"`. Case, and a grave accent standing for an
+    acute, are not differences.
+  - `grammar`: `{ "feature": "grammaticalCase", "value": "Genitive" }`, the
+    feature and value as `analyze_strongs` lists them under `grammar`.
+  Everything else in the chart is then of those occurrences alone, each book
+  still weighed against all of its tagged words. Say in the heading or caption
+  that the chart is narrowed ("where ἀγάπη is rendered *love*"); a narrowed
+  figure presented as the whole word misleads.
+- `translations` is the list a chart `by` translation compares. Leave it out to
+  compare every tagged translation in the library — but naming them keeps the
+  slide the same on another device, whose library may hold different ones.
+
+### What to group by: `by`
+
+- `book` and `section` say where the word falls. `section` (Gospels, Paul's
+  Letters…) is the clearer picture across a testament.
+- `rendering` and `form` rank the English renderings and the original forms;
+  a chart shows the commonest eight.
+- `grammar` ranks the values of one grammatical feature, named by `feature`
+  beside `by`: `partOfSpeech`, `stem`, `form`, `tense`, `voice`, `mood`,
+  `person`, `grammaticalCase`, `number`, `gender` or `state`. The feature's
+  name as `analyze_strongs` prints it (`"Case"`, `"Part of speech"`) is read
+  too.
+- `translation` puts the word's count in each translation side by side, with
+  its commonest renderings under each name. The counts differ because the
+  taggings differ, not because the texts do; say so if it matters to the point.
+- `companion` ranks the keys that share the word's verses more often than
+  chance predicts, named by their lexicon headword and gloss, and measured in
+  how many times chance (`9.1×`). Strongest association first, which is not the
+  largest multiple: a high multiple over few verses says less than a smaller
+  one over many, and the shared-verse count is printed under each for that
+  reason.
+
+### How to measure it: `measure`
+
+`occurrences` (the default when absent) or `perThousandWords`. Use the rate when
+comparing books or translations of unequal length, where a raw count mostly
+measures how long a book is. A companion is measured against chance, so the
+measure is not read for one.
+
+### How to draw it: `style`
+
+- `bars` (the default when absent) ranks the divisions. Keep it under about 24.
+  Bars of a whole — books, sections, renderings, forms, grammar, counted as
+  occurrences — print each count with its part of the whole: `12 · 16%`.
+- `columns` stand in Bible order, every book among them including the empty
+  ones, so where a word gathers shows as a shape. Twenty-seven or sixty-six
+  columns are the point here, not a problem.
+- `grid` shades each book's chapters. It charts `by` book and nothing else, and
+  reads badly past about 40 books.
+- `share` is a ring of the whole, largest first: the six largest slices and
+  "Other", as Lamp's own analysis draws it. It always counts occurrences,
+  whatever `measure` says, because rates per thousand words do not add up to a
+  whole. Translations and companions are not parts of one whole, so neither is
+  drawn as a share.
+- `card` is the analysis's headword card: the word large with its
+  transliteration and gloss, how many times it occurs, in how many verses and
+  books, and a column for each book beneath. It charts `by` book only. A card
+  makes a good opening slide for a word study.
+- A style Lamp does not know is drawn as bars rather than refused, so a deck
+  from a newer Lamp still opens.
+
+### What Lamp writes
+
+`values` — each with its `label` and `value`, and where they apply a
+`standing`, a grid row's `chapters`, a bar's `share` of the whole, and a
+`detail` line under the label — and a card's `headword` are Lamp's to write.
+Leave them out. The validator warns that a chart has none yet, which is the
+expected state for a deck you have just written. `text` is an optional heading
+drawn over the chart, and may be empty.
+
+### From a request to a chart
+
+Use `analyze_strongs` first. It tells you what is worth charting — which books
 stand out, whether the picture is clearer by section, how many bars a grouping
-would produce. Charting something and looking at it afterwards wastes a render.
+would produce — and it gives the exact rendering, form and grammar names a
+filter or a grammar chart needs. Charting something and looking at it
+afterwards wastes a render.
+
+| Asked for | Chart |
+| --- | --- |
+| "a ring of how the ESV renders ἀγάπη in John" | `source: {strongs: "G26", translationID: "ESVs", range: "John"}`, `by: "rendering"`, `style: "share"` |
+| "where it's rendered *love*, book by book" | `source.filter: {rendering: "love"}`, `by: "book"`, `style: "columns"` |
+| "only the genitives" | `source.filter: {grammar: {feature: "grammaticalCase", value: "Genitive"}}` |
+| "its cases" / "its tenses" | `by: "grammar"`, `feature: "grammaticalCase"` / `"tense"` |
+| "compare the translations" | `by: "translation"`, `source.translations: [...]`, `translationID: ""` |
+| "what words go with it" | `by: "companion"` |
+| "the headword card" | `by: "book"`, `style: "card"` |
+
+Examples of the newer kinds:
+
+```json
+{ "kind": "chart", "text": "How the ESV renders ἀγάπη in John",
+  "chart": { "source": { "strongs": "G26", "translationID": "ESVs", "range": "John" },
+             "by": "rendering", "style": "share" } }
+```
+
+```json
+{ "kind": "chart", "text": "ἀγάπη rendered “love”",
+  "chart": { "source": { "strongs": "G26", "translationID": "ESVs", "range": "NT",
+                         "filter": { "rendering": "love" } },
+             "by": "section" } }
+```
+
+```json
+{ "kind": "chart", "text": "The cases of ἀγάπη",
+  "chart": { "source": { "strongs": "G26", "translationID": "BSBs" },
+             "by": "grammar", "feature": "grammaticalCase" } }
+```
+
+```json
+{ "kind": "chart", "text": "ἀγάπη in four translations",
+  "chart": { "source": { "strongs": "G26", "translationID": "",
+                         "translations": ["ESVs", "BSBs", "KJVs", "WEBs"] },
+             "by": "translation", "measure": "perThousandWords" } }
+```
+
+```json
+{ "kind": "chart", "text": "Words that keep ἀγάπη company",
+  "chart": { "source": { "strongs": "G26", "translationID": "ESVs", "range": "NT" },
+             "by": "companion" } }
+```
+
+```json
+{ "kind": "chart", "text": "",
+  "chart": { "source": { "strongs": "G26", "translationID": "ESVs", "range": "NT" },
+             "by": "book", "style": "card" } }
+```
+
+(Each block needs its `id` as well; they are left out here for space.)
 
 A bar marked `more` or `fewer` means **more or fewer than chance would give**,
 tested against the rest of the range, not simply above or below average. Do not
 describe it as "Mark's favourite word" or "Paul uses it most" unless the
-measure actually says so.
+measure actually says so. In the same way, renderings are the choices
+translators made, not the range of what the word means.
 
 ### Where a chart goes
 

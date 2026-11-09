@@ -32,15 +32,38 @@ BLOCK_KINDS = {
     "chart",
 }
 HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
-CHART_GROUPINGS = {"book", "section", "rendering", "form"}
+CHART_GROUPINGS = {
+    "book", "section", "rendering", "form", "grammar", "translation", "companion",
+}
+# Groupings whose values are not parts of one whole: each translation counts
+# the whole again, and a companion is measured against chance. Neither makes a
+# ring or a percentage.
+CHART_NOT_PART_OF_WHOLE = {"translation", "companion"}
 CHART_MEASURES = {"occurrences", "perThousandWords"}
 # How a chart is drawn. Absent means bars, and an unknown style is read as
 # bars too, so a deck from a newer Lamp still opens on an older one.
-CHART_STYLES = {"bars", "columns", "grid", "share"}
+CHART_STYLES = {"bars", "columns", "grid", "share", "card"}
+# The grammatical features a chart by grammar, or a grammar filter, can name,
+# by raw name and by the title `analyze_strongs` prints. Mirrors
+# `LampGrammarFeature.named` in LampCore.
+CHART_GRAMMAR_FEATURES = {
+    "partOfSpeech": "Part of speech",
+    "stem": "Stem",
+    "form": "Form",
+    "tense": "Tense",
+    "voice": "Voice",
+    "mood": "Mood",
+    "person": "Person",
+    "grammaticalCase": "Case",
+    "number": "Number",
+    "gender": "Gender",
+    "state": "State",
+}
 # Past this many books a grid cannot be read across a room.
 CHART_READABLE_GRID_ROWS = 40
-# Past this many slices a share cannot be told apart.
-CHART_READABLE_SLICES = 8
+# Past this many slices a share cannot be told apart: the six largest and
+# "Other". Mirrors `LampPresentationChart.shareSlices`.
+CHART_READABLE_SLICES = 7
 # Past this many bars a chart is hard to read from the back of a room. Mirrors
 # `LampPresentationChart.readableBars`.
 CHART_READABLE_BARS = 24
@@ -473,13 +496,27 @@ def ignored_hint(layout: str, kind: str) -> str:
     return ""
 
 
+def grammar_feature(name: object) -> str | None:
+    """The feature `name` reads as, or None. Mirrors `LampGrammarFeature.named`."""
+    if not isinstance(name, str):
+        return None
+    if name in CHART_GRAMMAR_FEATURES:
+        return name
+    folded = "".join(c for c in name.lower() if c.isalpha())
+    for raw, title in CHART_GRAMMAR_FEATURES.items():
+        if raw.lower() == folded or "".join(c for c in title.lower() if c.isalpha()) == folded:
+            return raw
+    return None
+
+
 def chart_issues(block: dict) -> tuple[list[str], list[str]]:
     """Errors and warnings for a chart block, by path within the block.
 
     Structure only. What a chart is *worth* — whether the key occurs where the
     values say it does — needs the library, so Lamp works the values out and
     this script never second-guesses them. Hence "no values yet" is a warning:
-    an agent is meant to write the source and let Lamp fill the rest.
+    an agent is meant to write the source and let Lamp fill the rest. The
+    rules mirror `LampPresentationDeckValidator` in LampCore.
     """
     kind = block.get("kind")
     chart = block.get("chart")
@@ -494,29 +531,6 @@ def chart_issues(block: dict) -> tuple[list[str], list[str]]:
 
     errors: list[str] = []
     warnings: list[str] = []
-    source = chart.get("source")
-    if not isinstance(source, dict):
-        errors.append("chart.source: expected an object naming a key and a translation")
-    else:
-        strongs = source.get("strongs")
-        if not nonempty(strongs):
-            errors.append("chart.source.strongs: a Strong's key is required")
-        elif not str(strongs).strip()[:1].upper() in {"H", "G"}:
-            warnings.append(
-                "chart.source.strongs: a key usually begins with H or G, as in G26; "
-                f"{str(strongs).strip()!r} may not match any tag"
-            )
-        if not nonempty(source.get("translationID")):
-            errors.append("chart.source.translationID: a translation ID is required")
-        if "range" in source and source.get("range") is not None:
-            # Only that it is a range at all. Reading it needs Lamp's own
-            # reference parser, and guessing here would reject what Lamp takes.
-            if not nonempty(source.get("range")):
-                errors.append(
-                    "chart.source.range: expected whole books, such as NT, "
-                    "Romans or Matthew-John"
-                )
-
     grouping = chart.get("by")
     if grouping not in CHART_GROUPINGS:
         errors.append(
@@ -537,13 +551,104 @@ def chart_issues(block: dict) -> tuple[list[str], list[str]]:
         )
     drawn = style if style in CHART_STYLES else "bars"
 
+    feature = None
+    if "feature" in chart and chart.get("feature") is not None:
+        feature = grammar_feature(chart.get("feature"))
+        if feature is None:
+            errors.append(
+                "chart.feature: expected one of " + ", ".join(CHART_GRAMMAR_FEATURES)
+            )
+
+    source = chart.get("source")
+    if not isinstance(source, dict):
+        errors.append("chart.source: expected an object naming a key and a translation")
+    else:
+        strongs = source.get("strongs")
+        if not nonempty(strongs):
+            errors.append("chart.source.strongs: a Strong's key is required")
+        elif not str(strongs).strip()[:1].upper() in {"H", "G"}:
+            warnings.append(
+                "chart.source.strongs: a key usually begins with H or G, as in G26; "
+                f"{str(strongs).strip()!r} may not match any tag"
+            )
+        # A chart by translation compares `translations` and never reads this,
+        # but the field itself is still expected, as an empty string.
+        if not isinstance(source.get("translationID"), str):
+            errors.append("chart.source.translationID: a translation ID is required")
+        elif grouping != "translation" and not nonempty(source.get("translationID")):
+            errors.append("chart.source.translationID: a translation ID is required")
+        if "range" in source and source.get("range") is not None:
+            # Only that it is a range at all. Reading it needs Lamp's own
+            # reference parser, and guessing here would reject what Lamp takes.
+            if not nonempty(source.get("range")):
+                errors.append(
+                    "chart.source.range: expected whole books, such as NT, "
+                    "Romans or Matthew-John"
+                )
+
+        translations = source.get("translations")
+        if translations is not None:
+            if not isinstance(translations, list) or not all(
+                isinstance(t, str) for t in translations
+            ):
+                errors.append("chart.source.translations: expected an array of translation IDs")
+            elif grouping == "translation" and not any(nonempty(t) for t in translations):
+                errors.append(
+                    "chart.source.translations: Name the translations to compare, or leave "
+                    "the list out to compare every tagged one."
+                )
+            if grouping in CHART_GROUPINGS and grouping != "translation":
+                warnings.append(
+                    "chart.source.translations: Only a chart by translation compares "
+                    "translations; this one counts translationID."
+                )
+
+        filter_ = source.get("filter")
+        if filter_ is not None:
+            filter_errors, filter_warnings = chart_filter_issues(filter_, grouping, feature)
+            errors.extend(filter_errors)
+            warnings.extend(filter_warnings)
+
+    if grouping == "grammar" and chart.get("feature") is None:
+        errors.append(
+            "chart.feature: A chart by grammar names its feature, such as "
+            "grammaticalCase or tense."
+        )
+    if chart.get("feature") is not None and grouping in CHART_GROUPINGS and grouping != "grammar":
+        warnings.append("chart.feature: A feature is read only by a chart by grammar.")
+
     if drawn == "grid" and grouping in CHART_GROUPINGS and grouping != "book":
         errors.append("chart.by: A grid shades each book's chapters, so it charts by book.")
+    if drawn == "card" and grouping in CHART_GROUPINGS and grouping != "book":
+        errors.append(
+            "chart.by: A card draws a column for each book under the word, so it charts by book."
+        )
+    if drawn == "share" and grouping in CHART_NOT_PART_OF_WHOLE:
+        errors.append(
+            "chart.style: "
+            + (
+                "Each translation counts the whole again, so they are not slices of one ring."
+                if grouping == "translation"
+                else "Companions are measured against chance, not counted, so they make no ring."
+            )
+        )
     if drawn == "share" and measure == "perThousandWords":
         warnings.append(
             "chart.measure: A share is of occurrences: rates per thousand words do "
             "not add up to a whole, so the ring counts occurrences."
         )
+    if grouping == "companion" and measure == "perThousandWords":
+        warnings.append(
+            "chart.measure: A companion is measured by how many times chance it shares "
+            "the key's verses, so the measure is not read."
+        )
+
+    headword = chart.get("headword")
+    if headword is not None:
+        if not isinstance(headword, dict):
+            errors.append("chart.headword: expected an object, which Lamp writes")
+        if drawn != "card":
+            warnings.append("chart.headword: Only a card draws a headword.")
 
     values = chart.get("values")
     if values is None:
@@ -593,6 +698,70 @@ def chart_issues(block: dict) -> tuple[list[str], list[str]]:
                 f"chart.values: A share of {len(values)} slices cannot be told apart. "
                 "Build the deck again to gather the smallest."
             )
+    return errors, warnings
+
+
+def chart_filter_issues(
+    filter_: object, grouping: object, feature: str | None
+) -> tuple[list[str], list[str]]:
+    """Errors and warnings for a chart's `source.filter`.
+
+    A filter keeps the occurrences that match every field it gives. One that
+    gives nothing counts everything, and one that keeps a single value of the
+    very thing the chart groups by draws one bar; both are warnings, as in
+    Lamp.
+    """
+    if not isinstance(filter_, dict):
+        return ["chart.source.filter: expected an object with rendering, form or grammar"], []
+    errors: list[str] = []
+    warnings: list[str] = []
+    for field in ("rendering", "form"):
+        if filter_.get(field) is not None and not isinstance(filter_.get(field), str):
+            errors.append(f"chart.source.filter.{field}: expected text")
+    grammar = filter_.get("grammar")
+    grammar_feature_name = None
+    if grammar is not None:
+        if not isinstance(grammar, dict):
+            errors.append(
+                "chart.source.filter.grammar: expected an object with a feature and a value"
+            )
+            grammar = None
+        else:
+            grammar_feature_name = grammar_feature(grammar.get("feature"))
+            if grammar_feature_name is None:
+                errors.append(
+                    "chart.source.filter.grammar.feature: expected one of "
+                    + ", ".join(CHART_GRAMMAR_FEATURES)
+                )
+            if not isinstance(grammar.get("value"), str):
+                errors.append("chart.source.filter.grammar.value: expected text, such as Genitive")
+    if errors:
+        return errors, warnings
+
+    empty = (
+        not nonempty(filter_.get("rendering"))
+        and not nonempty(filter_.get("form"))
+        and not (isinstance(grammar, dict) and nonempty(grammar.get("value")))
+    )
+    if empty:
+        warnings.append(
+            "chart.source.filter: This filter names nothing, so every occurrence is counted."
+        )
+    narrows_grouping = (
+        (grouping == "rendering" and filter_.get("rendering") is not None)
+        or (grouping == "form" and filter_.get("form") is not None)
+        or (
+            grouping == "grammar"
+            and grammar is not None
+            and grammar_feature_name is not None
+            and grammar_feature_name == feature
+        )
+    )
+    if narrows_grouping:
+        warnings.append(
+            f"chart.source.filter: The filter keeps one {grouping}, so a chart by "
+            f"{grouping} draws a single value."
+        )
     return errors, warnings
 
 
@@ -792,7 +961,9 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
                     errors.append(f"{block_path}.placement: expected 'background'")
                 elif kind != "image":
                     errors.append(f"{block_path}.placement: placement requires image content")
-            if kind != "image" and not nonempty(block.get("text")):
+            # A picture has no text, and a chart's text is an optional heading
+            # over it, as Lamp reads them.
+            if kind not in {"image", "chart"} and not nonempty(block.get("text")):
                 errors.append(f"{block_path}.text: content cannot be empty")
             text = block.get("text", "")
             if kind == "title" and isinstance(text, str) and len(text) > 90:
