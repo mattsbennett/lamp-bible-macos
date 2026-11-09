@@ -227,6 +227,7 @@ private struct ReaderSettingsView: View {
     @AppStorage("reader.readAloud.voice") private var readAloudVoice = ""
     @AppStorage("reader.readAloud.rate") private var readAloudRate = 0.5
     @AppStorage("reader.readAloud.followAlong") private var followReadAloud = true
+    @AppStorage(LampPronunciation.GreekReading.preferenceKey) private var greekReading = ""
     @AppStorage("plans.wordsPerMinute")
     private var wordsPerMinute = LampPreferenceDefaults.plansWordsPerMinute
     @AppStorage(LampReadingMode.silent.wordsPerMinuteKey)
@@ -372,6 +373,26 @@ private struct ReaderSettingsView: View {
                             )
                         }
                         Toggle("Follow the spoken verse", isOn: $followReadAloud)
+                        LabeledContent {
+                            Picker("Greek Words", selection: Binding(
+                                get: {
+                                    LampPronunciation.GreekReading.resolved(
+                                        greekReading, hasGreekVoice: WordSpeaker.hasGreekVoice)
+                                },
+                                set: { greekReading = $0.rawValue }
+                            )) {
+                                ForEach(LampPronunciation.GreekReading.allCases, id: \.self) { reading in
+                                    Text(reading.title).tag(reading)
+                                }
+                            }
+                            .labelsHidden()
+                            .disabled(!WordSpeaker.hasGreekVoice)
+                        } label: {
+                            Text("Greek Words")
+                            Text(WordSpeaker.hasGreekVoice
+                                ? "How the speaker beside a Strong’s word says Greek. Hebrew is always said from Strong’s own respelling."
+                                : "Modern Greek needs a Greek voice: add one in System Settings › Accessibility › Spoken Content.")
+                        }
                     }
                     Section {
                         Toggle("Show Strong’s number hints", isOn: $showStrongsHints)
@@ -388,6 +409,7 @@ private struct ReaderSettingsView: View {
                                 readAloudVoice = ""
                                 readAloudRate = 0.5
                                 followReadAloud = true
+                                greekReading = ""
                                 showStrongsHints = true
                                 canonicalCrossReferenceOrder = false
                             }

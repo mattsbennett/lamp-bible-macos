@@ -2155,41 +2155,62 @@ private struct StudySection<Content: View>: View {
 /// Says a Strong's word aloud.
 ///
 /// Not from its spelling: an English voice reads "agápē" as the English
-/// "agape", and the Greek and Hebrew voices read the modern languages. Core
-/// gives the word in IPA, which a voice says as written. The voice is the
-/// reader's Read Aloud voice when that one is English — the IPA keeps to
-/// English sounds — and otherwise the system's English one. Shown only once
-/// there is something to say.
+/// "agape", and the Hebrew voice ignores vowel points. Core gives the word in
+/// IPA, which a voice says as written, or — for Greek, when the reader has
+/// chosen Modern Greek in Settings — the word itself for a Greek voice. The
+/// right-click menu says it the other way without changing the setting. Shown
+/// only once there is something to say.
 struct PronounceButton: View {
     let key: String
 
     @EnvironmentObject private var model: LibraryModel
     @AppStorage("reader.readAloud.voice") private var readAloudVoice = ""
-    @State private var spoken: (word: String, ipa: String)?
+    @AppStorage(LampPronunciation.GreekReading.preferenceKey) private var greekReading = ""
+    @State private var entries: [LampDictionaryResult] = []
+
+    private func utterance(_ reading: LampPronunciation.GreekReading) -> LampPronunciation.Utterance? {
+        LampPronunciation.utterance(forKey: key, entries: entries, greekReading: reading)
+    }
 
     var body: some View {
         // A ZStack, not a Group: a Group hands its modifiers to its children,
         // and with no button yet it has none, so the task that finds the
         // pronunciation never ran and the button never appeared.
         ZStack {
-            if let spoken {
+            let reading = LampPronunciation.GreekReading.resolved(
+                greekReading, hasGreekVoice: WordSpeaker.hasGreekVoice)
+            if let spoken = utterance(reading) {
                 Button {
-                    WordSpeaker.shared.say(spoken.word, ipa: spoken.ipa, voiceIdentifier: readAloudVoice)
+                    WordSpeaker.shared.say(spoken, voiceIdentifier: readAloudVoice)
                 } label: {
                     Image(systemName: "speaker.wave.2")
                 }
                 .buttonStyle(.borderless)
                 .foregroundStyle(.secondary)
-                .help("Say \(spoken.word) aloud")
-                .accessibilityLabel("Say \(spoken.word) aloud")
+                .help(Self.label(spoken))
+                .accessibilityLabel(Self.label(spoken))
+                .contextMenu {
+                    if spoken.greekReading != nil {
+                        ForEach(LampPronunciation.GreekReading.allCases, id: \.self) { other in
+                            Button("Say in \(other.title)") {
+                                if let said = utterance(other) {
+                                    WordSpeaker.shared.say(said, voiceIdentifier: readAloudVoice)
+                                }
+                            }
+                            .disabled(other == .modern && !WordSpeaker.hasGreekVoice)
+                        }
+                    }
+                }
             }
         }
         .task(id: key) {
-            spoken = nil
-            guard let entries = try? await model.library.dictionaryEntries(keys: [key]),
-                  let ipa = LampPronunciation.ipa(forKey: key, entries: entries) else { return }
-            spoken = (entries.first?.lemma ?? key, ipa)
+            entries = []
+            entries = (try? await model.library.dictionaryEntries(keys: [key])) ?? []
         }
+    }
+
+    private static func label(_ spoken: LampPronunciation.Utterance) -> String {
+        spoken.greekReading.map { "Say \(spoken.word) aloud, \($0.title)" } ?? "Say \(spoken.word) aloud"
     }
 }
 
@@ -2200,13 +2221,21 @@ final class WordSpeaker {
     static let shared = WordSpeaker()
     private let synthesizer = AVSpeechSynthesizer()
 
-    func say(_ word: String, ipa: String, voiceIdentifier: String) {
+    /// Whether a voice is installed that can read Modern Greek.
+    static var hasGreekVoice: Bool {
+        AVSpeechSynthesisVoice(language: LampPronunciation.greekVoiceLanguage) != nil
+    }
+
+    /// IPA goes to the reader's Read Aloud voice when that one is English —
+    /// the IPA keeps to English sounds — and otherwise to the system's
+    /// English one; a modern reading goes to a Greek voice.
+    func say(_ spoken: LampPronunciation.Utterance, voiceIdentifier: String) {
         synthesizer.stopSpeaking(at: .immediate)
-        let utterance = AVSpeechUtterance(attributedString: LampPronunciation.spoken(word, ipa: ipa))
+        let utterance = AVSpeechUtterance(attributedString: spoken.text)
         let chosen = AVSpeechSynthesisVoice(identifier: voiceIdentifier)
-        utterance.voice = chosen?.language.hasPrefix("en") == true
+        utterance.voice = spoken.ipa != nil && chosen?.language.hasPrefix("en") == true
             ? chosen
-            : AVSpeechSynthesisVoice(language: "en-US")
+            : AVSpeechSynthesisVoice(language: spoken.voiceLanguage)
         synthesizer.speak(utterance)
     }
 }
