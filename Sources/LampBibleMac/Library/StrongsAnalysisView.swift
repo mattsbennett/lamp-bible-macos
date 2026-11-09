@@ -541,6 +541,9 @@ struct StrongsAnalysisPane: View {
     /// Set once rather than per search, so it is remembered.
     @AppStorage("strongs.renderingsAsRing") private var renderingsAsRing = true
     @AppStorage("strongs.formsAsRing") private var formsAsRing = true
+    /// Each form read for someone without the language, by form ID, with the
+    /// analysis it was read from so a new word never shows the last one's.
+    @State private var formReadings: (source: String, byID: [String: LampStrongsFormReading])?
     @EnvironmentObject private var model: LibraryModel
     @Environment(\.colorScheme) private var colorScheme
     @State private var septuagint = SeptuagintLoader()
@@ -948,6 +951,7 @@ struct StrongsAnalysisPane: View {
             if !analysis.forms.isEmpty {
                 group(
                     "Forms",
+                    note: LampStrongsFormReading.note(forKey: analysis.key),
                     asRing: $formsAsRing,
                     deck: addToDeck(analysis, [deckChart(
                         analysis, name: "Forms", by: .form,
@@ -955,9 +959,17 @@ struct StrongsAnalysisPane: View {
                         title: "The forms of \(headword(analysis))"
                     )])
                 ) {
+                    let readings = formReadings(of: analysis)
                     if formsAsRing {
                         ShareRing(
                             divisions: LampStrongsGrouping.forms.divisions(of: analysis),
+                            details: Dictionary(uniqueKeysWithValues: analysis.forms.enumerated().map { index, form in
+                                (index, ShareRing.Detail(
+                                    aside: readings[form.id]?.transliteration,
+                                    line: formLine(readings[form.id]),
+                                    help: readings[form.id]?.parsing
+                                ))
+                            }),
                             choose: choose
                         )
                     } else {
@@ -965,6 +977,9 @@ struct StrongsAnalysisPane: View {
                         ForEach(analysis.forms) { form in
                             chooseRow(
                                 title: form.text,
+                                aside: readings[form.id]?.transliteration,
+                                subtitle: formLine(readings[form.id]),
+                                detailHelp: readings[form.id]?.parsing,
                                 count: form.count,
                                 most: most,
                                 isChosen: filter == .form(form.text)
@@ -1016,6 +1031,20 @@ struct StrongsAnalysisPane: View {
         .padding(.vertical, 12)
         .task(id: analysis.key) {
             await septuagint.loadWords(key: analysis.key, model: model)
+        }
+        .task(id: formsSource(of: analysis)) {
+            let source = formsSource(of: analysis)
+            guard formReadings?.source != source else { return }
+            // The other translations lend their parsings to a translation
+            // whose tags give only the spelling, as the BSB's do.
+            let others = loader.analyses.filter { $0.translationID != analysis.translationID }
+            // Off the main thread: it reads every occurrence, which for an
+            // article or a common verb runs to thousands.
+            let readings = await Task.detached(priority: .userInitiated) {
+                LampStrongsFormReading.readings(of: analysis, parsingsFrom: others)
+            }.value
+            guard !Task.isCancelled else { return }
+            formReadings = (source, Dictionary(readings.map { ($0.form.id, $0) }) { first, _ in first })
         }
     }
 
@@ -1667,6 +1696,31 @@ struct StrongsAnalysisPane: View {
         .padding(.vertical, 12)
     }
 
+    // MARK: - Forms
+
+    /// What a form reading is read from: the word, the translation, how many
+    /// occurrences (which changes with the books chosen), and how many other
+    /// translations had been analysed to lend parsings.
+    private func formsSource(of analysis: LampStrongsAnalysis) -> String {
+        "\(analysis.key)|\(analysis.translationID)|\(analysis.occurrenceCount)|\(loader.analyses.count)"
+    }
+
+    private func formReadings(of analysis: LampStrongsAnalysis) -> [String: LampStrongsFormReading] {
+        guard let formReadings, formReadings.source == formsSource(of: analysis) else { return [:] }
+        return formReadings.byID
+    }
+
+    /// A form's line under its spelling: what it does, and the English it
+    /// became, as "“of …” · here “of love”".
+    private func formLine(_ reading: LampStrongsFormReading?) -> String? {
+        guard let reading else { return nil }
+        let english = reading.renderedAs.isEmpty
+            ? nil
+            : "here " + reading.renderedAs.map { "“\($0)”" }.joined(separator: ", ")
+        let parts = [reading.role, english].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
     // MARK: - Deck charts
 
     /// The word as a title names it.
@@ -1792,17 +1846,29 @@ struct StrongsAnalysisPane: View {
     /// the words they counted to be read across to.
     private func chooseRow(
         title: String,
+        aside: String? = nil,
+        subtitle: String? = nil,
+        detailHelp: String? = nil,
         count: Int,
         most: Int,
         isChosen: Bool,
         choose: @escaping () -> Void
     ) -> some View {
         Button(action: choose) {
+            VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 10) {
-                Text(title)
-                    .font(.system(size: fontSize))
-                    .lineLimit(1)
-                    .frame(width: 150, alignment: .leading)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(title)
+                        .font(.system(size: fontSize))
+                        .lineLimit(1)
+                    if let aside {
+                        Text(aside)
+                            .font(.system(size: max(10, fontSize - 1), design: .serif).italic())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                .frame(width: 150, alignment: .leading)
                 GeometryReader { proxy in
                     ZStack(alignment: .leading) {
                         RoundedRectangle(cornerRadius: 3).fill(Self.barTrack)
@@ -1818,6 +1884,13 @@ struct StrongsAnalysisPane: View {
                     .font(.system(size: Self.chartLabelSize, weight: .medium).monospacedDigit())
                     .frame(minWidth: 30, alignment: .trailing)
             }
+            if let subtitle {
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            }
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
             .background(
@@ -1828,7 +1901,7 @@ struct StrongsAnalysisPane: View {
         }
         .buttonStyle(.plain)
         .chartClickable()
-        .help("\(title): \(count)." + Self.listsThese(count))
+        .help("\(title): \(count)." + (detailHelp.map { " \($0)." } ?? "") + Self.listsThese(count))
     }
 
     /// What a click on a figure does, said in its help, since nothing else on
@@ -2236,7 +2309,17 @@ private struct DonutSlice: Shape {
 /// one page shared it, and slice IDs, which are positions, matched across
 /// them.
 private struct ShareRing: View {
+    /// More about a slice than its name, for a figure that needs reading:
+    /// a form's Latin letters beside it, and what it does under it.
+    struct Detail {
+        var aside: String?
+        var line: String?
+        var help: String?
+    }
+
     let divisions: [LampStrongsChartDivision]
+    /// By division ID.
+    var details: [Int: Detail] = [:]
     let choose: (LampStrongsFilter) -> Void
 
     @State private var hovered: LampStrongsShare.Slice?
@@ -2347,6 +2430,7 @@ private struct ShareRing: View {
                 Button {
                     if let filter = filter(for: slice) { choose(filter) }
                 } label: {
+                    VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 8) {
                         RoundedRectangle(cornerRadius: 2)
                             .fill(.tint)
@@ -2359,6 +2443,12 @@ private struct ShareRing: View {
                                 }
                             }
                         Text(slice.name).font(.callout).lineLimit(1)
+                        if let aside = detail(for: slice)?.aside {
+                            Text(aside)
+                                .font(.system(.callout, design: .serif).italic())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
                         Spacer(minLength: 4)
                         Text("\(slice.value)")
                             .font(.callout.monospacedDigit())
@@ -2367,13 +2457,27 @@ private struct ShareRing: View {
                             .foregroundStyle(.secondary)
                             .frame(width: 34, alignment: .trailing)
                     }
+                    if let line = detail(for: slice)?.line {
+                        Text(line)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.leading, 18)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    }
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .disabled(filter(for: slice) == nil)
+                .help(detail(for: slice)?.help ?? "")
                 .onHover { hovered = $0 ? slice : nil }
             }
         }
+    }
+
+    private func detail(for slice: LampStrongsShare.Slice) -> Detail? {
+        Int(slice.id).flatMap { details[$0] }
     }
 
     /// One hue, strongest for the largest slice. "Other" is always faintest,
