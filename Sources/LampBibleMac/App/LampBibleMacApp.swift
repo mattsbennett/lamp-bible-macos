@@ -241,6 +241,10 @@ private struct ReaderSettingsView: View {
     @AppStorage("plans.reminder.minute")
     private var reminderMinute = LampPreferenceDefaults.plansReminderMinute
     @State private var reminderError: String?
+    @State private var isShowingBetterVoiceHelp = false
+    /// Bumped when voices are installed or removed, so a voice downloaded
+    /// while Settings is open shows up, and becomes Automatic, at once.
+    @State private var voicesRevision = 0
     @AppStorage("reader.showStrongsHints") private var showStrongsHints = true
     @AppStorage("reader.crossReferences.canonicalOrder") private var canonicalCrossReferenceOrder = false
     @AppStorage("reader.defaultTranslationID") private var defaultTranslationID = ""
@@ -279,7 +283,8 @@ private struct ReaderSettingsView: View {
     @State private var isForgettingSyncDetails = false
 
     private var voices: [AVSpeechSynthesisVoice] {
-        AVSpeechSynthesisVoice.speechVoices()
+        _ = voicesRevision
+        return AVSpeechSynthesisVoice.speechVoices()
             .filter { $0.language.hasPrefix("en") }
             .sorted {
                 ($0.name, $0.language).0.localizedStandardCompare(($1.name, $1.language).0) == .orderedAscending
@@ -289,13 +294,15 @@ private struct ReaderSettingsView: View {
     /// The voice Automatic resolves to, named so the setting does not hide
     /// which one speaks.
     private var automaticVoice: AVSpeechSynthesisVoice? {
-        SpeechVoices.voice(language: SpeechVoices.english, stored: nil)
+        _ = voicesRevision
+        return SpeechVoices.voice(language: SpeechVoices.english, stored: nil)
     }
 
     private func voiceTitle(_ voice: AVSpeechSynthesisVoice) -> String {
+        // Apple's names often carry their quality already: "Ava (Premium)".
         let quality = switch voice.quality {
-        case .premium: " · Premium"
-        case .enhanced: " · Enhanced"
+        case .premium where !voice.name.contains("Premium"): " · Premium"
+        case .enhanced where !voice.name.contains("Enhanced"): " · Enhanced"
         default: ""
         }
         return "\(voice.name) — \(voice.language)\(quality)"
@@ -371,7 +378,7 @@ private struct ReaderSettingsView: View {
                     Section("Read Aloud") {
                         LabeledContent {
                             Picker("Voice", selection: $readAloudVoice) {
-                                Text(automaticVoice.map { "Automatic (\($0.name))" } ?? "Automatic").tag("")
+                                Text(automaticVoice.map { "Automatic: \($0.name)" } ?? "Automatic").tag("")
                                 ForEach(voices, id: \.identifier) { voice in
                                     Text(voiceTitle(voice)).tag(voice.identifier)
                                 }
@@ -381,7 +388,12 @@ private struct ReaderSettingsView: View {
                             Text("Voice")
                             if let inUse = SpeechVoices.voice(language: SpeechVoices.english, stored: readAloudVoice),
                                SpeechVoices.describe(inUse).isBasic {
-                                Text("\(inUse.name) is a basic voice, so words can sound slow and choppy. Better voices are free in System Settings › Accessibility › Spoken Content › System Voice › Manage Voices: choose a named voice marked Enhanced or Premium. Siri’s voices can’t be used by other apps.")
+                                Text("\(inUse.name) is a basic voice, so words can sound slow and choppy.")
+                                Button("How to get a better voice…") { isShowingBetterVoiceHelp = true }
+                                    .buttonStyle(.link)
+                                    .popover(isPresented: $isShowingBetterVoiceHelp, arrowEdge: .bottom) {
+                                        BetterVoiceHelp()
+                                    }
                             }
                         }
                         LabeledContent("Speed") {
@@ -415,9 +427,12 @@ private struct ReaderSettingsView: View {
                             Text("Greek Words")
                             Text(WordSpeaker.hasGreekVoice
                                 ? "How the speaker beside a Strong’s word says Greek. Hebrew is always said from Strong’s own respelling."
-                                : "Modern Greek needs a Greek voice: add one in System Settings › Accessibility › Spoken Content.")
+                                : "Modern Greek needs a Greek voice: add one in System Settings › Accessibility › Read & Speak.")
                         }
                     }
+                    .onReceive(NotificationCenter.default.publisher(
+                        for: AVSpeechSynthesizer.availableVoicesDidChangeNotification
+                    )) { _ in voicesRevision += 1 }
                     Section {
                         Toggle("Show Strong’s number hints", isOn: $showStrongsHints)
                         Toggle("Sort cross-references canonically", isOn: $canonicalCrossReferenceOrder)
@@ -1480,3 +1495,49 @@ private struct ReaderTypePreview: View {
         .animation(.easeOut(duration: 0.15), value: lineSpacing)
     }
 }
+
+/// Where to get a voice better than a basic one. Lamp cannot download
+/// voices, and Siri's, the best of them, are not offered to other apps.
+private struct BetterVoiceHelp: View {
+    /// The Read & Speak pane, at its System voice row; the older Universal
+    /// Access pane if this one will not open.
+    private static let readAndSpeak = URL(
+        string: "x-apple.systempreferences:com.apple.Accessibility-Settings.extension?AX_SPOKEN_VOICE")!
+    private static let legacy = URL(
+        string: "x-apple.systempreferences:com.apple.preference.universalaccess?SpokenContent")!
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Get a better voice")
+                .font(.headline)
+            Text("Apple’s Enhanced and Premium voices are free, and say words smoothly.")
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 6) {
+                step(1, "In System Settings, open Accessibility › Read & Speak.")
+                step(2, "Next to System voice, click ⓘ.")
+                step(3, "Under English, download a named voice marked Premium or Enhanced, such as Ava (Premium). Siri’s voices, named “Voice” and a number, can’t be used by other apps.")
+                step(4, "Come back here: with Voice set to Automatic, Lamp picks the best voice you have.")
+            }
+            Button("Open Read & Speak Settings") {
+                if !NSWorkspace.shared.open(Self.readAndSpeak) {
+                    NSWorkspace.shared.open(Self.legacy)
+                }
+            }
+            .padding(.top, 4)
+        }
+        .padding(16)
+        .frame(width: 340, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func step(_ number: Int, _ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text("\(number).")
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+            Text(text)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
