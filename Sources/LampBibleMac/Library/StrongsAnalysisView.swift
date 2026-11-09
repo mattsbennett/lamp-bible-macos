@@ -1697,7 +1697,10 @@ struct StrongsAnalysisPane: View {
             chart: LampPresentationChart(
                 source: .init(
                     strongs: analysis.key,
-                    translationID: grouping == .translation ? "" : analysis.translationID,
+                    // The pane's translation even for a comparison, which
+                    // reads `translations` instead: an empty ID would follow
+                    // the chart into another grouping in Slide Studio.
+                    translationID: analysis.translationID,
                     range: deckRange
                 ),
                 by: grouping,
@@ -2672,7 +2675,7 @@ struct AddToDeckMenu: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .help("Add to a slide deck")
-        .task { await loadDecks() }
+        .task { inbox.refreshDecks(rootURL: model.library.rootURL) }
     }
 
     @ViewBuilder
@@ -2710,12 +2713,16 @@ struct AddToDeckMenu: View {
         }
     }
 
-    private func loadDecks() async {
-        let store = LampPresentationDeckStore(rootURL: model.library.rootURL)
-        let found = await Task.detached(priority: .utility) {
-            (try? store.decks()) ?? []
-        }.value
-        inbox.note(found)
+    /// Brings forward a Slide Studio window that shows `deckID` but was
+    /// opened without naming it, so it cannot be reopened by its request.
+    /// Found by the window group's identifier and the deck's title, which is
+    /// the studio's window title; without it the click looked like nothing
+    /// happened, though the slide was added.
+    private func raiseStudioWindow(showing deckID: String) {
+        guard let title = inbox.decks.first(where: { $0.id == deckID })?.title else { return }
+        NSApp.windows
+            .first { $0.identifier?.rawValue.hasPrefix("slide-studio") == true && $0.title == title }?
+            .makeKeyAndOrderFront(nil)
     }
 
     private func add(_ figure: AnalysisDeckChart, to deckID: String?) async {
@@ -2747,6 +2754,8 @@ struct AddToDeckMenu: View {
                 // be a second editor of it, so it is left where it is.
                 if request.deckID == deckID {
                     openWindow(id: "slide-studio", value: request)
+                } else {
+                    raiseStudioWindow(showing: deckID)
                 }
                 return
             }
@@ -2766,7 +2775,7 @@ struct AddToDeckMenu: View {
             try store.save(deck)
             inbox.select(slide.id, in: deck.id)
             openWindow(id: "slide-studio", value: SlideStudioRequest(deckID: deck.id))
-            await loadDecks()
+            inbox.refreshDecks(rootURL: model.library.rootURL, force: true)
         } catch {
             model.errorMessage = error.localizedDescription
         }

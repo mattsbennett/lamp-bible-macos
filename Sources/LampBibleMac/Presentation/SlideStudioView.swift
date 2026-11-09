@@ -49,7 +49,29 @@ final class SlideStudioInbox: ObservableObject {
         let title: String
     }
 
+    private var listing: Task<Void, Never>?
+    private var listedAt: Date?
+
+    /// Reads the library's decks into `decks`, once for however many menus
+    /// ask together, and not again for a few seconds. Every deck is decoded
+    /// in full to list it, and an analysis pane holds seven menus, so seven
+    /// loads on each open were seven reads of every deck for nothing.
+    func refreshDecks(rootURL: URL, force: Bool = false) {
+        guard listing == nil else { return }
+        if !force, let listedAt, Date().timeIntervalSince(listedAt) < 10 { return }
+        let store = LampPresentationDeckStore(rootURL: rootURL)
+        listing = Task { [weak self] in
+            let found = await Task.detached(priority: .utility) {
+                (try? store.decks()) ?? []
+            }.value
+            self?.listing = nil
+            self?.note(found)
+        }
+    }
+
+    /// The decks as a studio window or a load found them.
     func note(_ decks: [LampPresentationDeck]) {
+        listedAt = Date()
         let summaries = decks
             .map { DeckSummary(id: $0.id, title: $0.title) }
             .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
