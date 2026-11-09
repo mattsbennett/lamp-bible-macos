@@ -309,6 +309,19 @@ struct StrongsAnalysisSupportTests {
         ) == "Hebrew רנן pi. · 0 verses")
     }
 
+    /// A missing verse names the text that is missing it. Brenton prints
+    /// Codex Vaticanus, which leaves out 1 Samuel 18:1–5 among others, and
+    /// other witnesses have them — so the absence is that edition's, not the
+    /// Septuagint tradition's.
+    @Test func aMissingVerseNamesTheTextRatherThanTheWholeTradition() {
+        #expect(LampSeptuagintSection.missingVerse(in: "Brenton Greek Septuagint")
+            == "This verse isn’t in Brenton Greek Septuagint.")
+        #expect(LampSeptuagintSection.missingVerse(in: nil)
+            == "This verse isn’t in the Greek text installed.")
+        #expect(LampSeptuagintSection.missingVerse(in: "")
+            == "This verse isn’t in the Greek text installed.")
+    }
+
     // MARK: - The spread chart
 
     @Test func barsAreScaledAgainstTheLongestOne() {

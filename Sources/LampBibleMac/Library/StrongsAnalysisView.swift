@@ -206,6 +206,9 @@ final class SeptuagintLoader {
     /// and nothing came back, which must not read as "not asked yet".
     private(set) var verses: [String: [Verse]] = [:]
     private(set) var errorMessage: String?
+    /// The name of the Greek text the verses were read from, for saying which
+    /// text is missing a verse rather than blaming the whole tradition.
+    private(set) var septuagintName: String?
 
     private var loadedKey: String?
     private var countedKey: String?
@@ -271,10 +274,12 @@ final class SeptuagintLoader {
         else { return }
         let shown = Array(references.prefix(Self.shownVerses))
         verses[word.id] = shown.map { Verse(reference: $0, greek: nil) }
-        guard let septuagint = await septuagintText(model),
-              let hebrewNumbering = try? await model.library
+        guard let septuagint = await septuagintText(model) else { return }
+        septuagintName = septuagint.name
+        guard
+            let hebrewNumbering = try? await model.library
                   .versification(moduleID: hebrewText.id),
-              let greekNumbering = try? await model.library
+            let greekNumbering = try? await model.library
                   .versification(moduleID: septuagint.id)
         else { return }
         var chapters: [Int: [Int: String]] = [:]
@@ -1493,7 +1498,7 @@ private struct SeptuagintWordGroup: View {
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                Text("The Septuagint doesn’t have this verse.")
+                Text(LampSeptuagintSection.missingVerse(in: loader.septuagintName))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

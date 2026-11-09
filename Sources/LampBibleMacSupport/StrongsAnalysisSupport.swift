@@ -754,6 +754,20 @@ public enum LampSeptuagintSection {
         return "\(hebrew.text) \(stem)"
     }
 
+    /// What to say where the Greek text has no such verse, naming the text.
+    ///
+    /// The absence belongs to the edition, not to the Septuagint: Brenton
+    /// prints Codex Vaticanus, whose shorter David and Goliath leaves out
+    /// 1 Samuel 17:12–31 and 18:1–5 among others, which other witnesses have.
+    /// Saying "the Septuagint doesn't have this verse" would be a claim about
+    /// the whole tradition that the installed text cannot support.
+    public static func missingVerse(in septuagint: String?) -> String {
+        guard let septuagint, !septuagint.isEmpty else {
+            return "This verse isn’t in the Greek text installed."
+        }
+        return "This verse isn’t in \(septuagint)."
+    }
+
     /// "Hebrew אַהֲבָה (H160) · 40 verses", naming whose verses they are.
     public static func heading(_ hebrew: LampSeptuagintHebrew, verses: Int) -> String {
         let name = hebrew.strongs.map { "\(word(hebrew)) (\($0))" } ?? word(hebrew)
