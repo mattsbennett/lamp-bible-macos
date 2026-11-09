@@ -427,7 +427,7 @@ private struct ReaderSettingsView: View {
                             Text("Greek Words")
                             Text(WordSpeaker.hasGreekVoice
                                 ? "How the speaker beside a Strong’s word says Greek. Hebrew is always said from Strong’s own respelling."
-                                : "Modern Greek needs a Greek voice: add one in System Settings › Accessibility › Read & Speak.")
+                                : "Modern Greek needs a Greek voice: add one in System Settings › Accessibility › Read & Speak (Spoken Content before macOS 27).")
                         }
                     }
                     .onReceive(NotificationCenter.default.publisher(
@@ -1499,8 +1499,9 @@ private struct ReaderTypePreview: View {
 /// Where to get a voice better than a basic one. Lamp cannot download
 /// voices, and Siri's, the best of them, are not offered to other apps.
 private struct BetterVoiceHelp: View {
-    /// The Read & Speak pane, at its System voice row; the older Universal
-    /// Access pane if this one will not open.
+    /// The Read & Speak pane (Spoken Content before macOS 27), at its
+    /// System voice row; the older Universal Access pane if this one will
+    /// not open.
     private static let readAndSpeak = URL(
         string: "x-apple.systempreferences:com.apple.Accessibility-Settings.extension?AX_SPOKEN_VOICE")!
     private static let legacy = URL(
@@ -1513,12 +1514,12 @@ private struct BetterVoiceHelp: View {
             Text("Apple’s Enhanced and Premium voices are free, and say words smoothly.")
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 6) {
-                step(1, "In System Settings, open Accessibility › Read & Speak.")
+                step(1, "In System Settings, open Accessibility › Read & Speak (Spoken Content before macOS 27).")
                 step(2, "Next to System voice, click ⓘ.")
                 step(3, "Under English, download a named voice marked Premium or Enhanced, such as Ava (Premium). Siri’s voices, named “Voice” and a number, can’t be used by other apps.")
                 step(4, "Come back here: with Voice set to Automatic, Lamp picks the best voice you have.")
             }
-            Button("Open Read & Speak Settings") {
+            Button("Open Voice Settings") {
                 if !NSWorkspace.shared.open(Self.readAndSpeak) {
                     NSWorkspace.shared.open(Self.legacy)
                 }
