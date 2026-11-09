@@ -410,15 +410,14 @@ struct StrongsAnalysisPane: View {
     /// keys, so someone reading one lexicon keeps reading it as they follow
     /// a companion.
     @State private var definitionDictionaryID: String?
-    @State private var style: LampStrongsChartStyle = .bars
+    @State private var spreadGrouping: LampStrongsSpreadGrouping = .books
     @State private var measure: LampStrongsSpreadMeasure = .occurrences
-    @State private var grouping: LampStrongsGrouping = .books
     @State private var openBook: Int?
     /// The slice the pointer is over, named in the ring's hole. Every slice
     /// is a shade of one colour, so matching one to its row by eye is hard.
-    @State private var hoveredSlice: LampStrongsShare.Slice?
     /// Set once rather than per search, so it is remembered.
-    @AppStorage("strongs.shareAsRing") private var shareAsRing = true
+    @AppStorage("strongs.renderingsAsRing") private var renderingsAsRing = false
+    @AppStorage("strongs.formsAsRing") private var formsAsRing = false
     @EnvironmentObject private var model: LibraryModel
     @Environment(\.colorScheme) private var colorScheme
     @State private var septuagint = SeptuagintLoader()
@@ -797,24 +796,42 @@ struct StrongsAnalysisPane: View {
     private func overview(_ analysis: LampStrongsAnalysis) -> some View {
         VStack(alignment: .leading, spacing: 24) {
             if !analysis.renderings.isEmpty {
-                group("Rendered As", note: "What translators reached for, not what the word means.") {
-                    let most = analysis.renderings.map(\.count).max() ?? 0
-                    ForEach(analysis.renderings) { rendering in
-                        renderingRow(rendering, most: most)
+                group(
+                    "Rendered As",
+                    note: "What translators reached for, not what the word means.",
+                    asRing: $renderingsAsRing
+                ) {
+                    if renderingsAsRing {
+                        ShareRing(
+                            divisions: LampStrongsGrouping.renderings.divisions(of: analysis),
+                            choose: choose
+                        )
+                    } else {
+                        let most = analysis.renderings.map(\.count).max() ?? 0
+                        ForEach(analysis.renderings) { rendering in
+                            renderingRow(rendering, most: most)
+                        }
                     }
                 }
             }
             if !analysis.forms.isEmpty {
-                group("Forms") {
-                    let most = analysis.forms.map(\.count).max() ?? 0
-                    ForEach(analysis.forms) { form in
-                        chooseRow(
-                            title: form.text,
-                            count: form.count,
-                            most: most,
-                            isChosen: filter == .form(form.text)
-                        ) {
-                            choose(.form(form.text))
+                group("Forms", asRing: $formsAsRing) {
+                    if formsAsRing {
+                        ShareRing(
+                            divisions: LampStrongsGrouping.forms.divisions(of: analysis),
+                            choose: choose
+                        )
+                    } else {
+                        let most = analysis.forms.map(\.count).max() ?? 0
+                        ForEach(analysis.forms) { form in
+                            chooseRow(
+                                title: form.text,
+                                count: form.count,
+                                most: most,
+                                isChosen: filter == .form(form.text)
+                            ) {
+                                choose(.form(form.text))
+                            }
                         }
                     }
                 }
@@ -974,100 +991,62 @@ struct StrongsAnalysisPane: View {
     /// A chapter's cell. Twelve was a speck; these are meant to be aimed at.
     private static let gridCellHeight: Double = 16
     private static let gridCellMaxWidth: Double = 18
-    /// How tall the canonical-order columns stand.
-    private static let columnsHeight: Double = 132
     /// A horizontal bar's thickness.
     private static let barHeight: Double = 16
-    /// The ring or pie's side.
-    private static let ringSize: Double = 164
-    /// The ring's share of its radius. A pie fills to the middle.
-    private static let ringThickness: Double = 0.38
-
-    private func sliceIndex(
-        at point: CGPoint, among slices: [LampStrongsShare.Slice]
-    ) -> Int? {
-        LampStrongsShareHit.index(
-            at: point,
-            in: CGSize(width: Self.ringSize, height: Self.ringSize),
-            fractions: slices.map(\.fraction),
-            thickness: shareAsRing ? Self.ringThickness : 1
-        )
-    }
     /// The chapter strip that opens under a bar. It was 7 points wide with
     /// 7-point numbers — the one chart that kept its original size when the
     /// others grew.
     private static let chapterBarWidth: Double = 12
     private static let chapterStripHeight: Double = 56
 
-    /// The grouping in force: a grid is of chapters, which only books have.
+    /// The grouping the bars stand for. The chapter grid is drawn from books.
     private var activeGrouping: LampStrongsGrouping {
-        style.needsBooks ? .books : grouping
+        spreadGrouping.bars ?? .books
     }
 
     private func divisions(of analysis: LampStrongsAnalysis) -> [LampStrongsChartDivision] {
         activeGrouping.divisions(of: analysis)
     }
 
-    /// One light row of menus rather than two more bands of segmented
-    /// controls.
-    ///
-    /// With the section picker above it, segmented controls here made three
-    /// stacked bars of buttons before any chart appeared, and they read as
-    /// more important than the chart they were describing. Menus state the
-    /// current choice in a word and recede.
-    /// Occurrences unless a rate is both drawable and meaningful here.
+    /// Occurrences unless a rate means something here.
     private var chartMeasure: LampStrongsSpreadMeasure {
-        activeGrouping.usesMeasure ? measure : .occurrences
+        spreadGrouping.usesMeasure ? measure : .occurrences
     }
 
+    /// Where the word occurs, by books, sections or chapters, in one light
+    /// row of menus.
+    ///
+    /// How it is drawn follows from what it is grouped by — bars for books
+    /// and sections, a grid for chapters — rather than being a third menu.
+    /// Bars, columns and a ring were once all on offer here, three drawings
+    /// of the same figures; the card's strip is the columns now, and each
+    /// bar says its percentage, which was all the ring added.
     private func spread(_ analysis: LampStrongsAnalysis) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 10) {
-                Picker("Chart", selection: $style) {
-                    ForEach(LampStrongsChartStyle.allCases) { Text($0.title).tag($0) }
+                Picker("By", selection: $spreadGrouping) {
+                    ForEach(LampStrongsSpreadGrouping.allCases) { Text($0.title).tag($0) }
                 }
                 .labelsHidden()
                 .fixedSize()
-                .help("How to draw it")
+                .help("Where to count it")
 
-                Picker("By", selection: $grouping) {
-                    ForEach(LampStrongsGrouping.allCases) { Text($0.title).tag($0) }
-                }
-                .labelsHidden()
-                .fixedSize()
-                .disabled(style.needsBooks)
-                .help(style.needsBooks ? "Chapters belong to books" : "What to group by")
-
-                if style.usesMeasure && activeGrouping.usesMeasure {
+                if spreadGrouping.usesMeasure {
                     Picker("Measure", selection: $measure) {
                         ForEach(LampStrongsSpreadMeasure.allCases) { Text($0.title).tag($0) }
                     }
                     .labelsHidden()
                     .fixedSize()
                     .help("What to count")
-                } else if style == .share {
-                    Picker("Shape", selection: $shareAsRing) {
-                        Text("Ring").tag(true)
-                        Text("Pie").tag(false)
-                    }
-                    .labelsHidden()
-                    .fixedSize()
                 }
                 Spacer(minLength: 0)
             }
 
-            if style == .bars {
+            if spreadGrouping == .chapters {
+                gridChart(analysis)
+            } else {
                 expectationKey
-            }
-
-            switch style {
-            case .bars: barsChart(analysis)
-            case .columns: columnsChart(analysis)
-            case .grid: gridChart(analysis)
-            case .share: shareChart(analysis)
-            }
-
-            if style != .share {
+                barsChart(analysis)
                 Text("“More” and “fewer” mean beyond chance, not simply above or "
                     + "below average.")
                     .font(.system(size: Self.chartFinePrintSize))
@@ -1095,100 +1074,6 @@ struct StrongsAnalysisPane: View {
             spreadBar(bar, choosing: entries[index].filter)
             if activeGrouping == .books, openBook == bar.id {
                 chapterStrip(analysis, book: bar.id)
-            }
-        }
-    }
-
-    // MARK: - The shape across the canon
-
-    /// One column per book in Bible order, gaps and all.
-    ///
-    /// Fitted to the width rather than scrolled: a shape you have to scroll
-    /// through is not a shape, and the whole point is seeing where the key
-    /// gathers in one look.
-    @ViewBuilder
-    private func columnsChart(_ analysis: LampStrongsAnalysis) -> some View {
-        // The same list bars use. Core's `books` is already every book with
-        // tags of the key's own language, zeros included — so a Greek key
-        // gives the 27 New Testament books and nothing else. Padding it out
-        // to the whole canon, as this did, is what put two thirds of empty
-        // Old Testament on the chart.
-        let entries = divisions(of: analysis)
-        let bars = LampStrongsSpread.bars(entries.map(\.division), measure: chartMeasure)
-        if bars.isEmpty {
-            nothingToChart
-        } else {
-            let tallest = bars.max { $0.share < $1.share }
-            VStack(alignment: .leading, spacing: 5) {
-                GeometryReader { proxy in
-                    let gap: Double = bars.count > 40 ? 1 : 2
-                    let width = max(
-                        2,
-                        (proxy.size.width - gap * Double(bars.count - 1)) / Double(bars.count)
-                    )
-                    HStack(alignment: .bottom, spacing: gap) {
-                        ForEach(bars.indices, id: \.self) { index in
-                            let bar = bars[index]
-                            Button {
-                                if let filter = entries[index].filter { choose(filter) }
-                            } label: {
-                                // The whole column answers the pointer, not
-                                // just the ink. A book with two occurrences
-                                // draws three points tall, which is nothing
-                                // to aim at — and a book with none drew a
-                                // hairline that could not be hovered at all.
-                                VStack(spacing: 0) {
-                                    Spacer(minLength: 0)
-                                    RoundedRectangle(cornerRadius: min(2, width / 2))
-                                        .fill(fill(for: bar.expectation))
-                                        .frame(
-                                            width: width,
-                                            height: bar.share > 0
-                                                ? max(3, Self.columnsHeight * bar.share)
-                                                : 1
-                                        )
-                                        .opacity(bar.share > 0 ? 1 : 0.25)
-                                }
-                                .frame(width: max(width, 6), height: Self.columnsHeight)
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .chartClickable()
-                            .help(helpText(bar))
-                            // The one label worth drawing, over the column it
-                            // belongs to. Centred in the row instead, it
-                            // pointed at whatever happened to be in the
-                            // middle.
-                            .overlay(alignment: .top) {
-                                if bar.id == tallest?.id, bar.occurrenceCount > 0 {
-                                    Text("\(LampBibleReferenceFormatter.bookAbbreviation(bar.id)) "
-                                        + "\(bar.occurrenceCount)")
-                                        .font(.system(size: Self.chartFinePrintSize, weight: .semibold))
-                                        .foregroundStyle(.tint)
-                                        .fixedSize()
-                                        .offset(y: -13)
-                                }
-                            }
-                        }
-                    }
-                    .frame(height: Self.columnsHeight, alignment: .bottom)
-                }
-                .frame(height: Self.columnsHeight)
-
-                // Selective labels: the ends anchor the order, and the tallest
-                // is the one anyone will ask about. A name on all sixty-six
-                // would be a grey smear.
-                // The ends anchor the order; the peak labels itself above its
-                // own column.
-                HStack(spacing: 4) {
-                    Text(bars.first?.name ?? "")
-                        .font(.system(size: Self.chartFinePrintSize))
-                    Spacer()
-                    Text(bars.last?.name ?? "")
-                        .font(.system(size: Self.chartFinePrintSize))
-                }
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
             }
         }
     }
@@ -1278,131 +1163,6 @@ struct StrongsAnalysisPane: View {
         }
     }
 
-    // MARK: - Share
-
-    /// Each division's proportion of the whole.
-    ///
-    /// Every slice is named with its count and percentage beside the ring, so
-    /// nothing here is carried by colour alone — which matters more than
-    /// usual, since the slices are one hue at different strengths rather than
-    /// separate colours.
-    @ViewBuilder
-    private func shareChart(_ analysis: LampStrongsAnalysis) -> some View {
-        let slices = LampStrongsShare.slices(from: divisions(of: analysis).map(\.division))
-        if slices.isEmpty {
-            nothingToChart
-        } else {
-            HStack(alignment: .center, spacing: 20) {
-                ZStack {
-                    ForEach(Array(slices.enumerated()), id: \.element.id) { index, slice in
-                        let wedge = DonutSlice(
-                            start: slices.prefix(index).reduce(0) { $0 + $1.fraction },
-                            extent: slice.fraction,
-                            thickness: shareAsRing ? Self.ringThickness : 1
-                        )
-                        wedge
-                            .fill(.tint)
-                            .opacity(
-                                hoveredSlice == nil || hoveredSlice?.id == slice.id
-                                    ? sliceOpacity(
-                                        index, of: slices.count, isOther: slice.isOther
-                                    )
-                                    // The others recede rather than vanish, so
-                                    // the ring keeps its shape while one slice
-                                    // is picked out.
-                                    : 0.12
-                            )
-                            .help("\(slice.name): \(slice.value)")
-                    }
-                    // The hole is somewhere to put the total, which is the
-                    // one number a share otherwise leaves you to add up.
-                    if shareAsRing {
-                        VStack(spacing: 0) {
-                            if let hoveredSlice {
-                                Text(hoveredSlice.name)
-                                    .font(.caption)
-                                    .multilineTextAlignment(.center)
-                                    .lineLimit(2)
-                                Text("\(hoveredSlice.value)")
-                                    .font(.title3.weight(.semibold).monospacedDigit())
-                                Text("\(Int((hoveredSlice.fraction * 100).rounded()))%")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                Text("\(slices.reduce(0) { $0 + $1.value })")
-                                    .font(.title3.weight(.semibold).monospacedDigit())
-                                Text("in all").font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                        .frame(width: 92)
-                        .animation(.easeOut(duration: 0.12), value: hoveredSlice?.id)
-                    }
-                }
-                .frame(width: Self.ringSize, height: Self.ringSize)
-                .contentShape(Rectangle())
-                // One hover for the whole ring, worked out by angle.
-                // Per-slice hit-testing did not work: `.contentShape(wedge)`
-                // did not narrow what `.onHover` reported, so every slice
-                // answered for the whole square and "Other", drawn last, lit
-                // up wherever the pointer was.
-                .onContinuousHover { phase in
-                    guard case .active(let point) = phase else {
-                        hoveredSlice = nil
-                        return
-                    }
-                    hoveredSlice = sliceIndex(at: point, among: slices).map { slices[$0] }
-                }
-                .onTapGesture { point in
-                    guard let index = sliceIndex(at: point, among: slices) else { return }
-                    let divisions = divisions(of: analysis)
-                    guard !slices[index].isOther, index < divisions.count,
-                          let filter = divisions[index].filter else { return }
-                    choose(filter)
-                }
-                // Only over a wedge, so the pointer does not promise a click
-                // in the hole or the corners.
-                .pointerStyle(hoveredSlice == nil ? nil : .link)
-
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(Array(slices.enumerated()), id: \.element.id) { index, slice in
-                        HStack(spacing: 8) {
-                            RoundedRectangle(cornerRadius: 2)
-                                .fill(.tint)
-                                .opacity(
-                                    sliceOpacity(index, of: slices.count, isOther: slice.isOther)
-                                )
-                                .frame(width: 10, height: 10)
-                                .overlay {
-                                    if hoveredSlice?.id == slice.id {
-                                        RoundedRectangle(cornerRadius: 2)
-                                            .stroke(.primary, lineWidth: 1.5)
-                                    }
-                                }
-                            Text(slice.name).font(.callout).lineLimit(1)
-                            Spacer(minLength: 4)
-                            Text("\(slice.value)")
-                                .font(.callout.monospacedDigit())
-                            Text("\(Int((slice.fraction * 100).rounded()))%")
-                                .font(.callout.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                                .frame(width: 34, alignment: .trailing)
-                        }
-                        .contentShape(Rectangle())
-                        .onHover { hoveredSlice = $0 ? slice : nil }
-                    }
-                }
-            }
-        }
-    }
-
-    /// One hue, strongest for the largest slice. "Other" is always faintest,
-    /// because it is a leftover rather than a finding.
-    private func sliceOpacity(_ index: Int, of count: Int, isOther: Bool) -> Double {
-        guard !isOther else { return 0.2 }
-        guard count > 1 else { return 1 }
-        return 1 - 0.6 * (Double(index) / Double(count - 1))
-    }
-
     private var nothingToChart: some View {
         Text("Nothing to chart in these books.")
             .font(.caption)
@@ -1441,6 +1201,13 @@ struct StrongsAnalysisPane: View {
                 Text(measureLabel(bar))
                     .font(.system(size: Self.chartLabelSize, weight: .medium).monospacedDigit())
                     .frame(width: 40, alignment: .trailing)
+                if chartMeasure == .occurrences {
+                    // Blank beside a zero, which needs no "0%" to say so.
+                    Text(bar.occurrenceCount > 0 ? LampStrongsSpread.percent(bar.fractionOfOccurrences) : "")
+                        .font(.system(size: Self.chartLabelSize).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(width: 34, alignment: .trailing)
+                }
                 standing(bar.expectation)
                     .frame(width: 18)
             }
@@ -1492,7 +1259,7 @@ struct StrongsAnalysisPane: View {
     }
 
     private func measureLabel(_ bar: LampStrongsSpreadBar) -> String {
-        switch measure {
+        switch chartMeasure {
         case .occurrences: "\(bar.occurrenceCount)"
         case .perThousandWords: String(format: "%.2f", bar.value)
         }
@@ -1522,9 +1289,12 @@ struct StrongsAnalysisPane: View {
     /// the grey bars and arrows otherwise had to be guessed at.
     private var expectationKey: some View {
         HStack(spacing: 14) {
-            keyItem(.more, "More than chance", arrow: "arrow.up")
+            // Short, so the key keeps to one line in the study column; the
+            // note under the bars says what "more" and "fewer" are measured
+            // against.
+            keyItem(.more, "More", arrow: "arrow.up")
             keyItem(.asExpected, "As expected", arrow: nil)
-            keyItem(.fewer, "Fewer than chance", arrow: "arrow.down")
+            keyItem(.fewer, "Fewer", arrow: "arrow.down")
             Spacer(minLength: 0)
         }
         .font(.system(size: Self.chartFinePrintSize))
@@ -1673,14 +1443,31 @@ struct StrongsAnalysisPane: View {
 
     /// A section of the overview: the shared section heading, with what the
     /// section means said beneath it rather than trailing after.
+    /// A titled group, with a List / Ring switch at its heading where
+    /// `asRing` is given.
     private func group<Content: View>(
         _ title: String,
         note: String? = nil,
+        asRing: Binding<Bool>? = nil,
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .lampSectionHeading()
+            HStack(alignment: .firstTextBaseline) {
+                Text(title)
+                    .lampSectionHeading()
+                Spacer(minLength: 8)
+                if let asRing {
+                    Picker("Show \(title) as", selection: asRing) {
+                        Text("List").tag(false)
+                        Text("Ring").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .controlSize(.small)
+                    .fixedSize()
+                    .help("A list to compare, or a ring of each one's part of the whole")
+                }
+            }
             if let note {
                 Text(note)
                     .font(.caption)
@@ -2060,6 +1847,163 @@ private struct DonutSlice: Shape {
         path.addArc(center: centre, radius: inner, startAngle: to, endAngle: from, clockwise: true)
         path.closeSubpath()
         return path
+    }
+}
+
+/// A word's renderings or forms as a ring: each one's part of the whole.
+///
+/// Every slice is named beside the ring with its count and percentage, so
+/// nothing is carried by colour alone — the slices are one hue at different
+/// strengths. Its own view so each ring keeps its own hover: two rings on
+/// one page shared it, and slice IDs, which are positions, matched across
+/// them.
+private struct ShareRing: View {
+    let divisions: [LampStrongsChartDivision]
+    let choose: (LampStrongsFilter) -> Void
+
+    @State private var hovered: LampStrongsShare.Slice?
+
+    private static let size: Double = 164
+    /// The ring's share of its radius.
+    private static let thickness: Double = 0.38
+
+    var body: some View {
+        let slices = LampStrongsShare.slices(from: divisions.map(\.division))
+        // Side by side where the column allows, the legend under the ring
+        // where it does not.
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 20) {
+                ring(slices)
+                legend(slices).frame(minWidth: 180)
+            }
+            VStack(alignment: .leading, spacing: 14) {
+                ring(slices)
+                legend(slices)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    /// The filter a slice stands for. Found by ID, not position: slices are
+    /// ranked by count and "Other" stands for several.
+    private func filter(for slice: LampStrongsShare.Slice) -> LampStrongsFilter? {
+        guard !slice.isOther else { return nil }
+        return divisions.first { String($0.division.id) == slice.id }?.filter
+    }
+
+    private func index(at point: CGPoint, among slices: [LampStrongsShare.Slice]) -> Int? {
+        LampStrongsShareHit.index(
+            at: point,
+            in: CGSize(width: Self.size, height: Self.size),
+            fractions: slices.map(\.fraction),
+            thickness: Self.thickness
+        )
+    }
+
+    private func ring(_ slices: [LampStrongsShare.Slice]) -> some View {
+        ZStack {
+            ForEach(Array(slices.enumerated()), id: \.element.id) { index, slice in
+                DonutSlice(
+                    start: slices.prefix(index).reduce(0) { $0 + $1.fraction },
+                    extent: slice.fraction,
+                    thickness: Self.thickness
+                )
+                .fill(.tint)
+                .opacity(
+                    hovered == nil || hovered?.id == slice.id
+                        ? opacity(index, of: slices.count, isOther: slice.isOther)
+                        // The others recede rather than vanish, so the ring
+                        // keeps its shape while one slice is picked out.
+                        : 0.12
+                )
+            }
+            // The hole holds the total, the one number a share otherwise
+            // leaves you to add up.
+            VStack(spacing: 0) {
+                if let hovered {
+                    Text(hovered.name)
+                        .font(.caption)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                    Text("\(hovered.value)")
+                        .font(.title3.weight(.semibold).monospacedDigit())
+                    Text(LampStrongsSpread.percent(hovered.fraction))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("\(slices.reduce(0) { $0 + $1.value })")
+                        .font(.title3.weight(.semibold).monospacedDigit())
+                    Text("in all").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 92)
+            .animation(.easeOut(duration: 0.12), value: hovered?.id)
+        }
+        .frame(width: Self.size, height: Self.size)
+        .contentShape(Rectangle())
+        // One hover for the whole ring, worked out by angle: `.contentShape`
+        // on a wedge did not narrow what `.onHover` reported, so every slice
+        // answered for the whole square.
+        .onContinuousHover { phase in
+            guard case .active(let point) = phase else {
+                hovered = nil
+                return
+            }
+            hovered = index(at: point, among: slices).map { slices[$0] }
+        }
+        .onTapGesture { point in
+            guard let index = index(at: point, among: slices),
+                  let filter = filter(for: slices[index]) else { return }
+            choose(filter)
+        }
+        // Only over a wedge, so the pointer does not promise a click in the
+        // hole or the corners.
+        .pointerStyle(hovered.flatMap(filter(for:)) == nil ? nil : .link)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(slices.map { "\($0.name) \($0.value)" }.joined(separator: ", "))
+    }
+
+    private func legend(_ slices: [LampStrongsShare.Slice]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(slices.enumerated()), id: \.element.id) { index, slice in
+                Button {
+                    if let filter = filter(for: slice) { choose(filter) }
+                } label: {
+                    HStack(spacing: 8) {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(.tint)
+                            .opacity(opacity(index, of: slices.count, isOther: slice.isOther))
+                            .frame(width: 10, height: 10)
+                            .overlay {
+                                if hovered?.id == slice.id {
+                                    RoundedRectangle(cornerRadius: 2)
+                                        .stroke(.primary, lineWidth: 1.5)
+                                }
+                            }
+                        Text(slice.name).font(.callout).lineLimit(1)
+                        Spacer(minLength: 4)
+                        Text("\(slice.value)")
+                            .font(.callout.monospacedDigit())
+                        Text(LampStrongsSpread.percent(slice.fraction))
+                            .font(.callout.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .frame(width: 34, alignment: .trailing)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(filter(for: slice) == nil)
+                .onHover { hovered = $0 ? slice : nil }
+            }
+        }
+    }
+
+    /// One hue, strongest for the largest slice. "Other" is always faintest,
+    /// because it is a leftover rather than a finding.
+    private func opacity(_ index: Int, of count: Int, isOther: Bool) -> Double {
+        guard !isOther else { return 0.2 }
+        guard count > 1 else { return 1 }
+        return 1 - 0.6 * (Double(index) / Double(count - 1))
     }
 }
 
