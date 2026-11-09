@@ -1382,23 +1382,29 @@ public struct ReaderTabSidebar: Codable, Equatable, Sendable {
     /// by, and the word that led there. Empty when nothing has been looked up.
     public var dictionaryKeys: [String]
     public var dictionaryWord: String?
+    /// The Strong's analyses opened over the dictionary entry, the one shown
+    /// last: each companion followed from an analysis goes on the end, and
+    /// Back takes it off. Empty when the entry itself is showing.
+    public var analysisKeys: [String]
 
     public init(
         pane: Pane? = nil,
         studyTool: String? = nil,
         dictionaryQuery: String = "",
         dictionaryKeys: [String] = [],
-        dictionaryWord: String? = nil
+        dictionaryWord: String? = nil,
+        analysisKeys: [String] = []
     ) {
         self.pane = pane
         self.studyTool = studyTool
         self.dictionaryQuery = dictionaryQuery
         self.dictionaryKeys = dictionaryKeys
         self.dictionaryWord = dictionaryWord
+        self.analysisKeys = analysisKeys
     }
 
     private enum CodingKeys: String, CodingKey {
-        case pane, studyTool, dictionaryQuery, dictionaryKeys, dictionaryWord
+        case pane, studyTool, dictionaryQuery, dictionaryKeys, dictionaryWord, analysisKeys
     }
 
     public init(from decoder: Decoder) throws {
@@ -1413,6 +1419,7 @@ public struct ReaderTabSidebar: Codable, Equatable, Sendable {
         dictionaryQuery = lenient(String.self, .dictionaryQuery) ?? ""
         dictionaryKeys = lenient([String].self, .dictionaryKeys) ?? []
         dictionaryWord = lenient(String.self, .dictionaryWord)
+        analysisKeys = lenient([String].self, .analysisKeys) ?? []
     }
 }
 

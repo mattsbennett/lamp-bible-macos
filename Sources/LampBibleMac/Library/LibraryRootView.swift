@@ -370,6 +370,9 @@ struct LibraryRootView: View {
         .onChange(of: studyPane.dictionaryLookup) { _, _ in
             recordTabSidebar()
         }
+        .onChange(of: studyPane.analysisKeys) { _, _ in
+            recordTabSidebar()
+        }
         .fileImporter(
             isPresented: $showingImporter,
             allowedContentTypes: [.data],
@@ -832,7 +835,8 @@ struct LibraryRootView: View {
                                 } else {
                                     StudyInspectorView(
                                         isPresented: showingStudyInspector,
-                                        recordTypedQuery: recordTabSidebar
+                                        recordTypedQuery: recordTabSidebar,
+                                        readerTranslationID: workspace.selectedTranslationID
                                     )
                                         .environmentObject(model)
                                         .environmentObject(scrollLink)

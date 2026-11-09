@@ -1,3 +1,4 @@
+import AppKit
 import LampCore
 #if canImport(LampBibleMacSupport)
 import LampBibleMacSupport
@@ -334,8 +335,14 @@ struct StrongsAnalysisPane: View {
         case spread = "Spread"
         case companions = "Companions"
         case compare = "Compare"
+        /// The occurrences themselves, where nothing beside the pane lists
+        /// them: the reader's sidebar, which has no room for a second column.
+        case verses = "Verses"
 
         var id: String { rawValue }
+
+        /// Search's sections. Its occurrences have a column of their own.
+        static let besideOccurrences: [Section] = [.definition, .overview, .spread, .companions, .compare]
     }
 
     let key: String
@@ -349,10 +356,14 @@ struct StrongsAnalysisPane: View {
     /// The reader's text size, carried in so the pane's words move with it
     /// rather than sitting at a fixed caption size.
     let fontSize: Double
+    /// The sections offered, the first showing to begin with.
+    var sections: [Section] = Section.besideOccurrences
+    /// The occurrence list, for a pane that has `.verses` among its sections.
+    var verses: (() -> AnyView)? = nil
 
     /// The definition first: it is what someone looking a word up came for,
     /// and the figures are one click away.
-    @State private var section: Section = .definition
+    @State private var section: Section?
     /// The dictionary chosen from the Definition's menu, held here rather
     /// than in the tab, which is rebuilt each time it is shown. Kept across
     /// keys, so someone reading one lexicon keeps reading it as they follow
@@ -399,22 +410,24 @@ struct StrongsAnalysisPane: View {
             } else if let analysis {
                 header(analysis)
                 Divider()
-                Picker("Section", selection: $section) {
-                    ForEach(Section.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
+                sectionPicker
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
                 Divider()
-                ScrollView {
-                    switch section {
-                    case .definition:
-                        StrongsDefinitionView(key: analysis.key, chosenID: $definitionDictionaryID)
-                    case .overview: overview(analysis)
-                    case .spread: spread(analysis)
-                    case .companions: companions(analysis)
-                    case .compare: compare
+                if shownSection == .verses, let verses {
+                    // The list scrolls itself, and nesting it in the pane's
+                    // scroll view would leave it no height to scroll in.
+                    verses()
+                } else {
+                    ScrollView {
+                        switch shownSection {
+                        case .definition:
+                            StrongsDefinitionView(key: analysis.key, chosenID: $definitionDictionaryID)
+                        case .overview: overview(analysis)
+                        case .spread: spread(analysis)
+                        case .companions: companions(analysis)
+                        case .compare, .verses: compare
+                        }
                     }
                 }
             } else {
@@ -422,6 +435,41 @@ struct StrongsAnalysisPane: View {
             }
         }
         .frame(minWidth: 320, idealWidth: 400)
+        .onChange(of: filter) { _, chosen in
+            // Where the occurrences are a section, choosing a figure has to
+            // show them: otherwise the click narrows a list out of sight.
+            if chosen != nil, sections.contains(.verses) { section = .verses }
+        }
+    }
+
+    /// Segmented beside Search's occurrence column, where there is room for
+    /// it. In the study column, the column's own tabs: five segments do not
+    /// shrink, and pushed the pane past both of the column's edges.
+    @ViewBuilder
+    private var sectionPicker: some View {
+        let selection = Binding(get: { shownSection }, set: { section = $0 })
+        if sections.contains(.verses) {
+            UnderlinedTabs(
+                label: "Section",
+                items: sections.map { ($0, $0.rawValue) },
+                selection: selection,
+                spacing: 14
+            )
+            .font(.callout)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            Picker("Section", selection: selection) {
+                ForEach(sections) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+        }
+    }
+
+    /// The section chosen, or the first offered: a pane that offers no
+    /// Definition opens on what it does offer.
+    private var shownSection: Section {
+        section.flatMap { sections.contains($0) ? $0 : nil } ?? sections.first ?? .overview
     }
 
     // MARK: - Header
@@ -1693,5 +1741,261 @@ private struct DonutSlice: Shape {
         path.addArc(center: centre, radius: inner, startAngle: to, endAngle: from, clockwise: true)
         path.closeSubpath()
         return path
+    }
+}
+
+// MARK: - Occurrences
+
+/// What an occurrence list holds and what narrowed it, with the chip that
+/// widens it again.
+///
+/// Above the list rather than in the pane whose figure was clicked: the reader
+/// clicks there and reads the effect here. One height with or without the
+/// chip, so the rows under it don't move when a figure is chosen.
+struct StrongsOccurrenceHeading: View {
+    let analysis: LampStrongsAnalysis
+    let shown: Int
+    @Binding var filter: LampStrongsFilter?
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(LampStrongsFilter.heading(
+                shown: shown,
+                total: analysis.occurrenceCount,
+                narrowed: filter != nil
+            ))
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            if let filter {
+                Button {
+                    self.filter = nil
+                } label: {
+                    HStack(spacing: 5) {
+                        Text(filter.narrowing).lineLimit(1)
+                        Image(systemName: "xmark.circle.fill")
+                            .imageScale(.small)
+                    }
+                    .font(.callout.weight(.medium))
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 3)
+                    .background(.tint.opacity(0.22), in: Capsule())
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .pointerStyle(.link)
+                .help("Show every occurrence again")
+            }
+            Spacer(minLength: 6)
+            Text(analysis.translationAbbreviation ?? analysis.translationName)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(height: 24)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+    }
+}
+
+/// One occurrence: where it is, the form there, and the verse around it.
+struct StrongsOccurrenceLabel: View {
+    let occurrence: LampStrongsAnalysis.Occurrence
+    /// The verse, where the analysis kept it. Only the translation being read
+    /// keeps its verses.
+    let verse: String?
+    let fontSize: Double
+
+    static func reference(_ reference: Int) -> String {
+        let parts = LampBibleReferenceFormatter.components(of: reference)
+        return "\(LampBibleReferenceFormatter.bookName(parts.book)) \(parts.chapter):\(parts.verse)"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                Text(Self.reference(occurrence.reference))
+                    .font(.system(size: fontSize, weight: .medium))
+                Spacer()
+                if let form = occurrence.form, !form.isEmpty {
+                    Text(form)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if let verse {
+                // The outer style is the default for spans that set none, so
+                // the tagged word keeps the mark it was given.
+                snippet(of: verse)
+                    .font(.system(size: fontSize))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+            } else if !occurrence.text.isEmpty {
+                // No verse kept for this translation, so the rendered words on
+                // their own.
+                Text("“\(occurrence.text)”")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// The verse with the tagged word picked out, so a row reads as the
+    /// sentence it came from rather than as a word on its own.
+    ///
+    /// Marked as a find match — yellow behind text that keeps its colour —
+    /// because that is what it is: the thing searched for. Accent text reads
+    /// as a link or a selection, which ColorRules.md names as the thing to
+    /// avoid, and search rows have always drawn matches this way.
+    private func snippet(of verse: String) -> Text {
+        let snippet = LampStrongsContext.snippet(
+            of: verse,
+            from: occurrence.startOffset,
+            to: occurrence.endOffset
+        )
+        return Text(snippet.isTrimmedAtStart ? "…" : "")
+            + Text(snippet.before)
+            + Text.lampFindMatch(snippet.word)
+            + Text(snippet.after)
+            + Text(snippet.isTrimmedAtEnd ? "…" : "")
+    }
+}
+
+// MARK: - In the study pane
+
+/// A Strong's analysis in the reader's sidebar, opened over a dictionary entry.
+///
+/// Here rather than in Search so the passage stays beside it: Search takes the
+/// window, and the reader loses their place to read a word's figures. The
+/// occurrences are a section of the pane, since a sidebar has no room for
+/// Search's second column, and choosing one opens it in the reader beside.
+///
+/// `keys` is the way back. Each companion followed goes on the end and Back
+/// takes it off, down to the entry the first was opened from.
+struct StudyAnalysisView: View {
+    @Binding var keys: [String]
+    /// The translation the tab is reading, analysed first and the one whose
+    /// verses are listed.
+    let translationID: String?
+    @EnvironmentObject private var model: LibraryModel
+    @Environment(\.readerReferenceActions) private var referenceActions
+    @AppStorage("reader.fontSize") private var readerFontSize = LampTextScale.readerText.defaultValue
+    @State private var loader = StrongsAnalysisLoader()
+    @State private var filter: LampStrongsFilter?
+
+    private var key: String { keys.last ?? "" }
+
+    private var fontSize: Double { LampTextScale.studyText(readerSize: readerFontSize) }
+
+    private var request: StrongsAnalysisLoader.Request {
+        StrongsAnalysisLoader.Request(
+            key: key,
+            activeTranslationID: translationID ?? model.selectedTranslationID,
+            bookRange: nil,
+            translationIDs: model.translations.map(\.id)
+        )
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Button {
+                    keys.removeLast()
+                } label: {
+                    Label(backTitle, systemImage: "chevron.left")
+                }
+                .buttonStyle(.borderless)
+                // Named for where it goes: "Dictionary" alone is also the
+                // tab above it.
+                .accessibilityLabel(backHelp)
+                .help(backHelp)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            Divider()
+            StrongsAnalysisPane(
+                key: key,
+                loader: loader,
+                filter: $filter,
+                analyse: { keys.append($0) },
+                bookRange: nil,
+                fontSize: fontSize,
+                sections: [.overview, .spread, .companions, .compare, .verses],
+                verses: { AnyView(occurrences) }
+            )
+        }
+        .task(id: request) {
+            // A rendering chosen for the last key means nothing for this one.
+            filter = nil
+            loader.load(request, library: model.library)
+        }
+        .onDisappear { loader.cancel() }
+    }
+
+    private var backHelp: String {
+        keys.count > 1 ? "Back to \(backTitle)" : "Back to the dictionary entry"
+    }
+
+    /// The key Back returns to, or the entry when this is the first.
+    private var backTitle: String {
+        keys.count > 1 ? keys[keys.count - 2] : "Dictionary"
+    }
+
+    private var occurrences: some View {
+        let analysis = loader.analyses.first
+        let shown = analysis?.occurrences(matching: filter) ?? []
+        return VStack(spacing: 0) {
+            if let analysis {
+                StrongsOccurrenceHeading(analysis: analysis, shown: shown.count, filter: $filter)
+                Divider()
+            }
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    // By position: one verse can carry the key twice, and a
+                    // reference would not tell those two rows apart.
+                    ForEach(Array(shown.enumerated()), id: \.offset) { _, occurrence in
+                        occurrenceRow(occurrence, in: analysis)
+                        Divider()
+                    }
+                }
+                .padding(.horizontal, 14)
+            }
+        }
+    }
+
+    private func occurrenceRow(
+        _ occurrence: LampStrongsAnalysis.Occurrence,
+        in analysis: LampStrongsAnalysis?
+    ) -> some View {
+        let reference = StrongsOccurrenceLabel.reference(occurrence.reference)
+        return Button {
+            referenceActions.openInCurrent(occurrence.reference)
+        } label: {
+            StrongsOccurrenceLabel(
+                occurrence: occurrence,
+                verse: analysis?.verseTexts[occurrence.reference],
+                fontSize: fontSize
+            )
+            .padding(.vertical, 9)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .chartClickable()
+        .help("Open \(reference) in the reader")
+        .contextMenu {
+            Button("Open \(reference)") {
+                referenceActions.openInCurrent(occurrence.reference)
+            }
+            if referenceActions.opensTabs {
+                Button("Open in New Tab", systemImage: "plus.square.on.square") {
+                    referenceActions.openInNewTab(occurrence.reference)
+                }
+            }
+            Button("Copy Verse") {
+                let verse = analysis?.verseTexts[occurrence.reference] ?? occurrence.text
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString("\(reference) \(verse)", forType: .string)
+            }
+        }
     }
 }

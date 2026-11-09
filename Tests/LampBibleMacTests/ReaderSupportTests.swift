@@ -433,7 +433,8 @@ struct ReaderSupportTests {
         let studyID = tabs.selectedID
         let open = ReaderTabSidebar(
             pane: .study, studyTool: "dictionary",
-            dictionaryQuery: "logos", dictionaryKeys: ["G3056"], dictionaryWord: "Word"
+            dictionaryQuery: "logos", dictionaryKeys: ["G3056"], dictionaryWord: "Word",
+            analysisKeys: ["G3056", "G2316"]
         )
         tabs.updateSelected(sidebar: open)
 
@@ -484,7 +485,7 @@ struct ReaderSupportTests {
              "sidebar":"not a column"},
             {"id":"8D3A6D4A-2C7A-4B5A-9A84-BD3D4E5F6071",
              "location":{"translationID":"WEB","bookNumber":45,"chapterNumber":8},
-             "sidebar":{"pane":"study","studyTool":"commentary"}}],
+             "sidebar":{"pane":"study","studyTool":"commentary","analysisKeys":"G26"}}],
             "selectedID":"6B1E4B2E-0A5E-4F3E-9E62-9B1B2C3D4E5F"}
             """#.utf8)
 
@@ -496,6 +497,7 @@ struct ReaderSupportTests {
         #expect(restored.tabs[0].sidebar.dictionaryKeys.isEmpty)
         #expect(restored.tabs[1].sidebar == ReaderTabSidebar())
         #expect(restored.tabs[2].sidebar.pane == .study)
+        #expect(restored.tabs[2].sidebar.analysisKeys.isEmpty, "an unreadable analysis costs only the analysis")
     }
 
     /// A place that cannot be read costs that tab, not the window's tabs: the

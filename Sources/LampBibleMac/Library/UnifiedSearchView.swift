@@ -351,42 +351,11 @@ struct UnifiedSearchView: View {
                 // clicks over there and reads the effect over here. The row
                 // keeps one height with or without the chip, so the list
                 // under it doesn't move when a bar is chosen.
-                HStack(spacing: 6) {
-                    Text(LampStrongsFilter.heading(
-                        shown: occurrences.count,
-                        total: analysis.occurrenceCount,
-                        narrowed: strongsFilter != nil
-                    ))
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    if let strongsFilter {
-                        Button {
-                            self.strongsFilter = nil
-                        } label: {
-                            HStack(spacing: 5) {
-                                Text(strongsFilter.narrowing).lineLimit(1)
-                                Image(systemName: "xmark.circle.fill")
-                                    .imageScale(.small)
-                            }
-                            .font(.callout.weight(.medium))
-                            .padding(.horizontal, 9)
-                            .padding(.vertical, 3)
-                            .background(.tint.opacity(0.22), in: Capsule())
-                            .contentShape(Capsule())
-                        }
-                        .buttonStyle(.plain)
-                        .pointerStyle(.link)
-                        .help("Show every occurrence again")
-                    }
-                    Spacer(minLength: 6)
-                    Text(analysis.translationAbbreviation ?? analysis.translationName)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .frame(height: 24)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
+                StrongsOccurrenceHeading(
+                    analysis: analysis,
+                    shown: occurrences.count,
+                    filter: $strongsFilter
+                )
                 Divider()
             }
             if strongsLoader.isLoadingFirst {
@@ -400,33 +369,11 @@ struct UnifiedSearchView: View {
                         Button {
                             previewedOccurrence = occurrence.reference
                         } label: {
-                            VStack(alignment: .leading, spacing: 7) {
-                                HStack(spacing: 8) {
-                                    Text(strongsReference(occurrence.reference))
-                                        .font(.system(size: hitFontSize, weight: .medium))
-                                    Spacer()
-                                    if let form = occurrence.form, !form.isEmpty {
-                                        Text(form)
-                                            .font(.callout)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                                if let verse = analysis?.verseTexts[occurrence.reference] {
-                                    // The outer style is the default for spans
-                                    // that set none, so the tagged word keeps
-                                    // the tint it was given.
-                                    strongsSnippet(of: verse, at: occurrence)
-                                        .font(.system(size: hitFontSize))
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(3)
-                                } else if !occurrence.text.isEmpty {
-                                    // No verse kept for this translation, so
-                                    // the rendered words on their own.
-                                    Text("“\(occurrence.text)”")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
+                            StrongsOccurrenceLabel(
+                                occurrence: occurrence,
+                                verse: analysis?.verseTexts[occurrence.reference],
+                                fontSize: hitFontSize
+                            )
                             .padding(.vertical, 10)
                             .contentShape(Rectangle())
                         }
@@ -487,34 +434,8 @@ struct UnifiedSearchView: View {
         .frame(minWidth: 300, idealWidth: 380)
     }
 
-    /// The verse with the tagged word picked out, so a row reads as the
-    /// sentence it came from rather than as a word on its own.
-    ///
-    /// Marked as a find match — yellow behind text that keeps its colour —
-    /// because that is what it is: the thing searched for. It was bold accent
-    /// text, which ColorRules.md names as the thing to avoid, since accent
-    /// text reads as a link or a selection. It also disagreed with the search
-    /// rows a few points to the left, which have always drawn matches this
-    /// way.
-    private func strongsSnippet(
-        of verse: String,
-        at occurrence: LampStrongsAnalysis.Occurrence
-    ) -> Text {
-        let snippet = LampStrongsContext.snippet(
-            of: verse,
-            from: occurrence.startOffset,
-            to: occurrence.endOffset
-        )
-        return Text(snippet.isTrimmedAtStart ? "…" : "")
-            + Text(snippet.before)
-            + Text.lampFindMatch(snippet.word)
-            + Text(snippet.after)
-            + Text(snippet.isTrimmedAtEnd ? "…" : "")
-    }
-
     private func strongsReference(_ reference: Int) -> String {
-        let parts = LampBibleReferenceFormatter.components(of: reference)
-        return "\(LampBibleReferenceFormatter.bookName(parts.book)) \(parts.chapter):\(parts.verse)"
+        StrongsOccurrenceLabel.reference(reference)
     }
 
     /// The word on the left, its occurrences on the right: the word is what

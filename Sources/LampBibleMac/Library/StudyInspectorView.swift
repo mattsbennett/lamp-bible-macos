@@ -53,6 +53,9 @@ final class StudyPaneState {
     var tool = "commentary"
     var dictionaryQuery = ""
     var dictionaryLookup: DictionaryLookup?
+    /// The analyses opened over the dictionary entry, the one showing last.
+    /// Empty while the entry itself is showing.
+    var analysisKeys: [String] = []
 
     /// Takes up a tab's pane. A tab that has never chosen a tool starts on
     /// `defaultTool`, and one saved with a tool since removed — the
@@ -64,6 +67,15 @@ final class StudyPaneState {
         dictionaryLookup = sidebar.dictionaryKeys.isEmpty
             ? nil
             : DictionaryLookup(keys: sidebar.dictionaryKeys, word: sidebar.dictionaryWord)
+        analysisKeys = sidebar.analysisKeys
+    }
+
+    /// Shows a word's entry, putting away any analysis opened over the last
+    /// one: a word clicked in the reader is asked about from the start.
+    func lookUp(_ lookup: DictionaryLookup) {
+        dictionaryLookup = lookup
+        analysisKeys = []
+        tool = "dictionary"
     }
 
     /// This pane as a tab keeps it, with the column showing `pane`.
@@ -73,7 +85,8 @@ final class StudyPaneState {
             studyTool: tool,
             dictionaryQuery: dictionaryQuery,
             dictionaryKeys: dictionaryLookup?.keys ?? [],
-            dictionaryWord: dictionaryLookup?.word
+            dictionaryWord: dictionaryLookup?.word,
+            analysisKeys: analysisKeys
         )
     }
 }
@@ -87,6 +100,9 @@ struct StudyInspectorView: View {
     /// paused. Called from here because only this view watches the field;
     /// the window watching it would redraw at every keystroke.
     let recordTypedQuery: () -> Void
+    /// The translation this window's reader is in, which an analysis opened
+    /// here lists the verses of.
+    var readerTranslationID: String?
 
     private static let scrollLinkButtonWidth: CGFloat = 16
 
@@ -124,16 +140,30 @@ struct StudyInspectorView: View {
 
             switch pane.tool {
             case "dictionary":
-                DictionaryInspectorView(
-                    query: $pane.dictionaryQuery,
-                    lookup: $pane.dictionaryLookup
-                )
+                // The entry stays built beneath an analysis opened over it, so
+                // Back returns to it as it was left — scrolled where it was —
+                // rather than looking the word up again.
+                ZStack {
+                    DictionaryInspectorView(
+                        query: $pane.dictionaryQuery,
+                        lookup: $pane.dictionaryLookup,
+                        analyse: { pane.analysisKeys = [$0] }
+                    )
+                    .opacity(pane.analysisKeys.isEmpty ? 1 : 0)
+                    .allowsHitTesting(pane.analysisKeys.isEmpty)
+                    .accessibilityHidden(!pane.analysisKeys.isEmpty)
+                    if !pane.analysisKeys.isEmpty {
+                        StudyAnalysisView(
+                            keys: $pane.analysisKeys,
+                            translationID: readerTranslationID
+                        )
+                    }
+                }
             case "verse":
                 VerseInspectorView { key, word in
                     // The dictionary pane seeds the field from the lookup itself;
                     // clearing the query here would read as the user typing.
-                    pane.dictionaryLookup = DictionaryLookup(keys: [key], word: word)
-                    pane.tool = "dictionary"
+                    pane.lookUp(DictionaryLookup(keys: [key], word: word))
                 }
             case "notes":
                 NotesInspectorView()
@@ -181,8 +211,7 @@ struct StudyInspectorView: View {
 
     private func adoptDictionaryLookup(_ request: DictionaryLookupRequest?) {
         guard let request, !request.keys.isEmpty else { return }
-        pane.dictionaryLookup = DictionaryLookup(keys: request.keys, word: request.word)
-        pane.tool = "dictionary"
+        pane.lookUp(DictionaryLookup(keys: request.keys, word: request.word))
         model.consumeDictionaryLookupRequest(request)
     }
 }
@@ -1144,6 +1173,8 @@ private struct DictionaryInspectorView: View {
     @EnvironmentObject private var model: LibraryModel
     @Binding var query: String
     @Binding var lookup: DictionaryLookup?
+    /// Opens a Strong's key's analysis over the entry.
+    let analyse: (String) -> Void
     @AppStorage("commentary.fontSize") private var fontSize = LampTextScale.commentaryText.defaultValue
     @AppStorage("commentary.lineSpacing") private var lineSpacing = LampTextScale.commentaryLineSpacing.defaultValue
     @AppStorage("commentary.typeface") private var typeface = ProseTypeface.commentaryDefault
@@ -1313,6 +1344,7 @@ private struct DictionaryInspectorView: View {
                         .help("Looking up \(lookupKeyList)")
                 }
                 Spacer(minLength: 0)
+                analyseButton(lookup)
                 clearLookupButton
             }
             .padding(.horizontal)
@@ -1321,6 +1353,42 @@ private struct DictionaryInspectorView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             plainLookupHeader(lookup)
+        }
+    }
+
+    /// The keys of a lookup that have an analysis: Strong's numbers, and not
+    /// the morphology codes a word can also be tagged with.
+    private func analysableKeys(_ lookup: DictionaryLookup) -> [String] {
+        var seen = Set<String>()
+        return lookup.keys.compactMap(LampStrongsKey.typedKey).filter {
+            !$0.hasPrefix("TH") && seen.insert($0).inserted
+        }
+    }
+
+    /// Where the word is used and how it is rendered, opened here over the
+    /// entry rather than in Search, so the passage stays beside it. A word
+    /// tagged with more than one number offers each.
+    @ViewBuilder
+    private func analyseButton(_ lookup: DictionaryLookup) -> some View {
+        let keys = analysableKeys(lookup)
+        if keys.count == 1, let key = keys.first {
+            Button("Analyse", systemImage: "chart.bar.xaxis") { analyse(key) }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Analyse \(key): where it is used and how it is rendered")
+        } else if keys.count > 1 {
+            Menu {
+                ForEach(keys, id: \.self) { key in
+                    Button("Analyse \(key)") { analyse(key) }
+                }
+            } label: {
+                Label("Analyse", systemImage: "chart.bar.xaxis")
+            }
+            .menuStyle(.button)
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .fixedSize()
+            .help("Analyse one of these numbers")
         }
     }
 
@@ -1365,6 +1433,7 @@ private struct DictionaryInspectorView: View {
 
             Spacer(minLength: 0)
 
+            analyseButton(lookup)
             clearLookupButton
         }
         .padding(.horizontal)
@@ -1478,6 +1547,14 @@ private struct DictionaryInspectorView: View {
                 LazyVStack(alignment: .leading, spacing: 10) {
                     ForEach(results) { result in
                         dictionaryResult(result)
+                            .contextMenu {
+                                if let key = LampStrongsKey.typedKey(result.key),
+                                   !key.hasPrefix("TH") {
+                                    Button("Analyse \(key)", systemImage: "chart.bar.xaxis") {
+                                        analyse(key)
+                                    }
+                                }
+                            }
                     }
                 }
                 .padding(StudyPaneMetrics.contentInset)
@@ -3603,7 +3680,6 @@ private struct DictionaryPopoverEntryView: View {
 /// weight that would make the word wider.
 struct StudyToolPicker: View {
     @Binding var selection: String
-    @State private var hovered: String?
 
     private static let tools: [(id: String, title: String)] = [
         ("commentary", "Commentary"),
@@ -3614,36 +3690,47 @@ struct StudyToolPicker: View {
 
     static var toolIDs: [String] { tools.map(\.id) }
 
-    private var tools: [(id: String, title: String)] { Self.tools }
+    var body: some View {
+        UnderlinedTabs(label: "Study Tool", items: Self.tools, selection: $selection)
+            .font(.body)
+    }
+}
+
+/// The study column's tabs: words with a bar under the chosen one, which sit
+/// lighter in a narrow column than a row of segmented buttons. While the
+/// column has room for them all; else the same choice as a pop-up menu.
+struct UnderlinedTabs<ID: Hashable>: View {
+    let label: String
+    let items: [(id: ID, title: String)]
+    @Binding var selection: ID
+    var spacing: CGFloat = 18
+    @State private var hovered: ID?
 
     var body: some View {
-        // Tabs while the column has room for them all, else the same choice
-        // as a pop-up menu.
         ViewThatFits(in: .horizontal) {
             tabs
 
-            Picker("Study Tool", selection: $selection) {
-                ForEach(tools, id: \.id) { tool in
-                    Text(tool.title).tag(tool.id)
+            Picker(label, selection: $selection) {
+                ForEach(items, id: \.id) { item in
+                    Text(item.title).tag(item.id)
                 }
             }
             .pickerStyle(.menu)
             .labelsHidden()
             .fixedSize()
         }
-        .font(.body)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Study Tool")
+        .accessibilityLabel(label)
     }
 
     private var tabs: some View {
-        HStack(spacing: 18) {
-            ForEach(tools, id: \.id) { tool in
-                let isSelected = selection == tool.id
+        HStack(spacing: spacing) {
+            ForEach(items, id: \.id) { item in
+                let isSelected = selection == item.id
                 Button {
-                    selection = tool.id
+                    selection = item.id
                 } label: {
-                    Text(tool.title)
+                    Text(item.title)
                         .lineLimit(1)
                         .fixedSize()
                         .padding(.bottom, 6)
@@ -3657,13 +3744,13 @@ struct StudyToolPicker: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(
-                    isSelected || hovered == tool.id
+                    isSelected || hovered == item.id
                         ? AnyShapeStyle(.primary) : AnyShapeStyle(Color.lampSecondaryText)
                 )
                 .fontWeight(isSelected ? .semibold : .regular)
                 .onHover { isHovering in
                     hovered = isHovering
-                        ? tool.id : (hovered == tool.id ? nil : hovered)
+                        ? item.id : (hovered == item.id ? nil : hovered)
                 }
                 .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
             }
