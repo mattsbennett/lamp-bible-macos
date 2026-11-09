@@ -2713,18 +2713,6 @@ struct AddToDeckMenu: View {
         }
     }
 
-    /// Brings forward a Slide Studio window that shows `deckID` but was
-    /// opened without naming it, so it cannot be reopened by its request.
-    /// Found by the window group's identifier and the deck's title, which is
-    /// the studio's window title; without it the click looked like nothing
-    /// happened, though the slide was added.
-    private func raiseStudioWindow(showing deckID: String) {
-        guard let title = inbox.decks.first(where: { $0.id == deckID })?.title else { return }
-        NSApp.windows
-            .first { $0.identifier?.rawValue.hasPrefix("slide-studio") == true && $0.title == title }?
-            .makeKeyAndOrderFront(nil)
-    }
-
     private func add(_ figure: AnalysisDeckChart, to deckID: String?) async {
         var chart = figure.chart
         var caption = figure.caption
@@ -2747,16 +2735,10 @@ struct AddToDeckMenu: View {
         let inbox = SlideStudioInbox.shared
         let store = LampPresentationDeckStore(rootURL: model.library.rootURL)
         do {
-            if let deckID, let request = inbox.window(showing: deckID) {
+            if let deckID, inbox.isShowing(deckID) {
+                // That window takes the slide and brings itself forward.
+                // Opening one here would be a second editor of the deck.
                 inbox.send(slide, to: deckID)
-                // Bringing that window forward. One opened without a request
-                // cannot be named, and a new window on the same deck would
-                // be a second editor of it, so it is left where it is.
-                if request.deckID == deckID {
-                    openWindow(id: "slide-studio", value: request)
-                } else {
-                    raiseStudioWindow(showing: deckID)
-                }
                 return
             }
             var deck: LampPresentationDeck

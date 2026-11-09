@@ -51,21 +51,34 @@ final class SlideStudioInbox: ObservableObject {
 
     private var listing: Task<Void, Never>?
     private var listedAt: Date?
+    /// A forced refresh asked for while a load was running. That load began
+    /// before whatever prompted the force, a deck just saved, so it runs again.
+    private var refreshAgain = false
 
     /// Reads the library's decks into `decks`, once for however many menus
     /// ask together, and not again for a few seconds. Every deck is decoded
     /// in full to list it, and an analysis pane holds seven menus, so seven
     /// loads on each open were seven reads of every deck for nothing.
     func refreshDecks(rootURL: URL, force: Bool = false) {
-        guard listing == nil else { return }
+        if listing != nil {
+            if force { refreshAgain = true }
+            return
+        }
         if !force, let listedAt, Date().timeIntervalSince(listedAt) < 10 { return }
         let store = LampPresentationDeckStore(rootURL: rootURL)
         listing = Task { [weak self] in
             let found = await Task.detached(priority: .utility) {
-                (try? store.decks()) ?? []
+                try? store.decks()
             }.value
-            self?.listing = nil
-            self?.note(found)
+            guard let self else { return }
+            listing = nil
+            // A failed read stamps nothing, so the next menu tries again
+            // rather than showing no decks for ten seconds.
+            if let found { note(found) }
+            if refreshAgain {
+                refreshAgain = false
+                refreshDecks(rootURL: rootURL, force: true)
+            }
         }
     }
 
@@ -77,18 +90,19 @@ final class SlideStudioInbox: ObservableObject {
             .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
         if summaries != self.decks { self.decks = summaries }
     }
-    /// What each open window shows, and the request it was opened with.
-    private var windows: [UUID: (deckID: String, request: SlideStudioRequest)] = [:]
+    /// The deck each open window shows.
+    private var windows: [UUID: String] = [:]
     /// The slide a window opening a deck should show first.
     private var selections: [String: String] = [:]
 
-    /// The request of a window showing `deckID`, or nil when none is.
-    func window(showing deckID: String) -> SlideStudioRequest? {
-        windows.values.first { $0.deckID == deckID }?.request
+    /// Whether a window shows `deckID`. That window takes a slide sent to it
+    /// and brings itself forward.
+    func isShowing(_ deckID: String) -> Bool {
+        windows.values.contains(deckID)
     }
 
-    func setWindow(_ window: UUID, showing deckID: String?, request: SlideStudioRequest) {
-        windows[window] = deckID.map { ($0, request) }
+    func setWindow(_ window: UUID, showing deckID: String?) {
+        windows[window] = deckID
     }
 
     func send(_ slide: LampPresentationSlide, to deckID: String) {
@@ -109,6 +123,36 @@ final class SlideStudioInbox: ObservableObject {
     }
 }
 
+/// The window a view is in, held weakly.
+final class HostWindowBox {
+    weak var window: NSWindow?
+}
+
+/// Records its window in a box as it moves into one. Nothing happens on an
+/// update, which runs on every redraw of the view it backs.
+private struct HostWindowReader: NSViewRepresentable {
+    let box: HostWindowBox
+
+    func makeNSView(context: Context) -> NSView { Reader(box: box) }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    private final class Reader: NSView {
+        let box: HostWindowBox
+
+        init(box: HostWindowBox) {
+            self.box = box
+            super.init(frame: .zero)
+        }
+
+        required init?(coder: NSCoder) { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            box.window = window
+        }
+    }
+}
+
 struct SlidePresentationRequest: Codable, Hashable {
     let deckID: String
 }
@@ -120,6 +164,8 @@ struct SlideStudioView: View {
     @ObservedObject private var inbox = SlideStudioInbox.shared
     /// This window, to the inbox.
     @State private var windowToken = UUID()
+    /// This window, to bring forward when a slide is sent to it.
+    @State private var hostWindow = HostWindowBox()
 
     let request: SlideStudioRequest
 
@@ -243,7 +289,7 @@ struct SlideStudioView: View {
         }
         .onChange(of: selectedDeckID) { _, deckID in selectDeck(deckID) }
         .onChange(of: deck?.id, initial: true) { _, deckID in
-            inbox.setWindow(windowToken, showing: deckID, request: request)
+            inbox.setWindow(windowToken, showing: deckID)
             if let deckID, let slideID = inbox.takeSelection(for: deckID),
                deck?.slides.contains(where: { $0.id == slideID }) == true {
                 selectedSlideID = slideID
@@ -253,6 +299,7 @@ struct SlideStudioView: View {
         // Not `.onReceive(inbox.$pending)`: a published value's publisher
         // fires before the value changes, so the slide was not there yet.
         .onChange(of: inbox.pending) { receiveSentSlides() }
+        .background(HostWindowReader(box: hostWindow))
         .onChange(of: decks, initial: true) { _, decks in
             if !isLoading { inbox.note(decks) }
         }
@@ -304,7 +351,7 @@ struct SlideStudioView: View {
             Text("This removes the editable .lampdeck document from the library.")
         }
         .onDisappear {
-            inbox.setWindow(windowToken, showing: nil, request: request)
+            inbox.setWindow(windowToken, showing: nil)
             saveTask?.cancel()
             saveNow()
         }
@@ -318,6 +365,9 @@ struct SlideStudioView: View {
         guard !sent.isEmpty else { return }
         deck?.slides += sent
         selectedSlideID = sent.last?.id
+        // The window raises itself: it alone knows it is the one, whatever
+        // its deck is called on disk or on screen.
+        hostWindow.window?.makeKeyAndOrderFront(nil)
         statusMessage = sent.count == 1 ? "Added a slide" : "Added \(sent.count) slides"
     }
 
