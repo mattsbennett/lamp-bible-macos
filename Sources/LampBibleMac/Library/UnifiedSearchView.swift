@@ -481,6 +481,9 @@ struct UnifiedSearchView: View {
                 loader: strongsLoader,
                 filter: $strongsFilter,
                 analyse: followCompanion,
+                // Search's own module picker is the choice of translation,
+                // so opening another one sets it, where it can be undone.
+                openIn: { selectedModuleID = $0 },
                 bookRange: bookScope.range,
                 fontSize: hitFontSize,
                 back: strongsTrail.last.map { previous in

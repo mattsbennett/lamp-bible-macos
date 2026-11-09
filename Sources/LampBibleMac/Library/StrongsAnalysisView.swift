@@ -501,6 +501,11 @@ struct StrongsAnalysisPane: View {
     @Binding var filter: LampStrongsFilter?
     /// Analyses another key, for a companion the reader chooses.
     let analyse: (String) -> Void
+    /// Puts another translation's analysis first, for a section that needs a
+    /// text whose tags carry what this one's do not: TAGNT's forms and
+    /// grammar for a translation that tags only the number. Nil where the
+    /// pane cannot change what it analyses first.
+    var openIn: ((String) -> Void)? = nil
     /// The books being searched, so the shape can put back the ones the key
     /// never reaches.
     let bookRange: ClosedRange<Int>?
@@ -948,19 +953,22 @@ struct StrongsAnalysisPane: View {
                     }
                 }
             }
-            if !analysis.forms.isEmpty {
+            if !analysis.forms.isEmpty || isOriginalLanguageKey(analysis.key) {
+                let readings = formReadings(of: analysis)
                 group(
                     "Forms",
-                    note: LampStrongsFormReading.note(forKey: analysis.key),
-                    asRing: $formsAsRing,
+                    note: LampStrongsFormReading.note(for: analysis, readings: Array(readings.values)),
+                    asRing: analysis.forms.isEmpty ? nil : $formsAsRing,
                     deck: addToDeck(analysis, [deckChart(
                         analysis, name: "Forms", by: .form,
                         style: formsAsRing ? .share : .bars,
                         title: "The forms of \(headword(analysis))"
                     )])
                 ) {
-                    let readings = formReadings(of: analysis)
-                    if formsAsRing {
+                    formGaps(analysis, readings: readings)
+                    if analysis.forms.isEmpty {
+                        EmptyView()
+                    } else if formsAsRing {
                         ShareRing(
                             divisions: LampStrongsGrouping.forms.divisions(of: analysis),
                             details: Dictionary(uniqueKeysWithValues: analysis.forms.enumerated().map { index, form in
@@ -1035,13 +1043,10 @@ struct StrongsAnalysisPane: View {
         .task(id: formsSource(of: analysis)) {
             let source = formsSource(of: analysis)
             guard formReadings?.source != source else { return }
-            // The other translations lend their parsings to a translation
-            // whose tags give only the spelling, as the BSB's do.
-            let others = loader.analyses.filter { $0.translationID != analysis.translationID }
             // Off the main thread: it reads every occurrence, which for an
             // article or a common verb runs to thousands.
             let readings = await Task.detached(priority: .userInitiated) {
-                LampStrongsFormReading.readings(of: analysis, parsingsFrom: others)
+                LampStrongsFormReading.readings(of: analysis)
             }.value
             guard !Task.isCancelled else { return }
             formReadings = (source, Dictionary(readings.map { ($0.form.id, $0) }) { first, _ in first })
@@ -1698,11 +1703,54 @@ struct StrongsAnalysisPane: View {
 
     // MARK: - Forms
 
-    /// What a form reading is read from: the word, the translation, how many
-    /// occurrences (which changes with the books chosen), and how many other
-    /// translations had been analysed to lend parsings.
+    /// What a form reading is read from: the word, the translation, and how
+    /// many occurrences, which changes with the books chosen.
     private func formsSource(of analysis: LampStrongsAnalysis) -> String {
-        "\(analysis.key)|\(analysis.translationID)|\(analysis.occurrenceCount)|\(loader.analyses.count)"
+        "\(analysis.key)|\(analysis.translationID)|\(analysis.occurrenceCount)"
+    }
+
+    private func isOriginalLanguageKey(_ key: String) -> Bool {
+        let first = LampStrongsKey.normalized(key).first
+        return first == "G" || first == "H"
+    }
+
+    /// The text written in the key's own language whose tags carry what
+    /// this translation's lack, among those already analysed: TAGNT for a
+    /// Greek key, TAHOT for a Hebrew one. Found by the language a module
+    /// declares, not by its name.
+    private func originalText(for analysis: LampStrongsAnalysis) -> LampStrongsAnalysis? {
+        let languages = LampStrongsKey.normalized(analysis.key).first == "H" ? ["hbo", "he", "arc"] : ["grc"]
+        return loader.analyses.first { other in
+            other.translationID != analysis.translationID
+                && !other.forms.isEmpty
+                && model.translations.first(where: { $0.id == other.translationID })?.language
+                    .map { language in languages.contains { language.lowercased().hasPrefix($0) } } == true
+        }
+    }
+
+    /// What this translation's tags do not say about the word's forms, and
+    /// the text that does, one click away.
+    @ViewBuilder
+    private func formGaps(_ analysis: LampStrongsAnalysis, readings: [String: LampStrongsFormReading]) -> some View {
+        let gaps = LampStrongsFormReading.gaps(of: analysis, readings: Array(readings.values))
+        let original = gaps.isEmpty ? nil : originalText(for: analysis)
+        if !gaps.isEmpty, formReadings?.source == formsSource(of: analysis) || analysis.forms.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(gaps, id: \.self) { gap in
+                    Text(gap)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let original, let openIn {
+                    let name = original.translationAbbreviation ?? original.translationName
+                    Button("Open in \(name)") { openIn(original.translationID) }
+                        .controlSize(.small)
+                        .help("Analyse \(analysis.key) in \(name), whose tags give each spelling and its grammar")
+                }
+            }
+            .padding(.bottom, 6)
+        }
     }
 
     private func formReadings(of analysis: LampStrongsAnalysis) -> [String: LampStrongsFormReading] {
@@ -1711,15 +1759,13 @@ struct StrongsAnalysisPane: View {
     }
 
     /// A form's line under its spelling: what it does, and the English it
-    /// became, as "“of …” · here “of love”". A Greek or Hebrew text has no
-    /// English of its own, so it names the translation it borrows from:
-    /// "in BSB “of love”".
+    /// became, as "“of …” · here “of love”". Only this translation's own:
+    /// a Greek or Hebrew text has no English, and none is borrowed.
     private func formLine(_ reading: LampStrongsFormReading?) -> String? {
         guard let reading else { return nil }
         let english = reading.renderedAs.isEmpty
             ? nil
-            : (reading.renderedIn.map { "in \($0) " } ?? "here ")
-                + reading.renderedAs.map { "“\($0)”" }.joined(separator: ", ")
+            : "here " + reading.renderedAs.map { "“\($0)”" }.joined(separator: ", ")
         let parts = [reading.role, english].compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
@@ -2629,15 +2675,20 @@ struct StudyAnalysisView: View {
     @AppStorage("reader.fontSize") private var readerFontSize = LampTextScale.readerText.defaultValue
     @State private var loader = StrongsAnalysisLoader()
     @State private var filter: LampStrongsFilter?
+    /// A translation put first from the pane, TAGNT for its forms, in place
+    /// of the one the tab reads. Cleared by Back to it and by a new word.
+    @State private var openedTranslationID: String?
 
     private var key: String { keys.last ?? "" }
+
+    private var readingTranslationID: String? { translationID ?? model.selectedTranslationID }
 
     private var fontSize: Double { LampTextScale.studyText(readerSize: readerFontSize) }
 
     private var request: StrongsAnalysisLoader.Request {
         StrongsAnalysisLoader.Request(
             key: key,
-            activeTranslationID: translationID ?? model.selectedTranslationID,
+            activeTranslationID: openedTranslationID ?? readingTranslationID,
             bookRange: nil,
             translationIDs: model.translations.map(\.id)
         )
@@ -2657,6 +2708,13 @@ struct StudyAnalysisView: View {
                 .accessibilityLabel(backHelp)
                 .help(backHelp)
                 Spacer(minLength: 0)
+                if openedTranslationID != nil, let reading = readingTranslationID {
+                    let name = model.translations.first { $0.id == reading }
+                        .map { $0.abbreviation ?? $0.name } ?? reading
+                    Button("Back to \(name)") { openedTranslationID = nil }
+                        .buttonStyle(.borderless)
+                        .help("Analyse in \(name), the translation this tab reads")
+                }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
@@ -2666,6 +2724,7 @@ struct StudyAnalysisView: View {
                 loader: loader,
                 filter: $filter,
                 analyse: { keys.append($0) },
+                openIn: { openedTranslationID = $0 },
                 bookRange: nil,
                 fontSize: fontSize,
                 sections: [.overview, .spread, .companions, .compare, .verses],
@@ -2680,6 +2739,7 @@ struct StudyAnalysisView: View {
             filter = nil
             loader.load(request, library: model.library)
         }
+        .onChange(of: key) { openedTranslationID = nil }
         .onDisappear { loader.cancel() }
     }
 
