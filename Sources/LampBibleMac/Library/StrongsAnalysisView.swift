@@ -494,6 +494,10 @@ struct StrongsAnalysisPane: View {
 
     let key: String
     let loader: StrongsAnalysisLoader
+    /// Narrows the verse list only. The figures above it count every
+    /// occurrence, and Add to Deck charts them so, unless "Only occurrences…"
+    /// is ticked: a figure made to follow this filter would no longer match
+    /// the chart its menu adds, and that chart outlives the pane in a deck.
     @Binding var filter: LampStrongsFilter?
     /// Analyses another key, for a companion the reader chooses.
     let analyse: (String) -> Void

@@ -367,7 +367,11 @@ struct SlideStudioView: View {
         selectedSlideID = sent.last?.id
         // The window raises itself: it alone knows it is the one, whatever
         // its deck is called on disk or on screen.
-        hostWindow.window?.makeKeyAndOrderFront(nil)
+        // Ordering front leaves a minimized window in the Dock;
+        // deminiaturizing brings it forward itself.
+        if let window = hostWindow.window {
+            if window.isMiniaturized { window.deminiaturize(nil) } else { window.makeKeyAndOrderFront(nil) }
+        }
         statusMessage = sent.count == 1 ? "Added a slide" : "Added \(sent.count) slides"
     }
 
