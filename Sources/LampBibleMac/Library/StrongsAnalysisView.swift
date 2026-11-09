@@ -194,11 +194,13 @@ final class SeptuagintLoader {
         /// only the second may be settled.
         enum English: Equatable {
             case pending
-            /// The English translation does not tag the word in this verse,
-            /// or has no counterpart for it. Nothing is shown, and nothing is
-            /// marked at a likely word instead.
+            /// The English translation has no counterpart for this verse, so
+            /// the Hebrew number is all there is to show.
             case none
-            case marked(LampSeptuagintSection.English)
+            /// Its English number, and the verse with the word marked where
+            /// the translation tags it there. Untagged, no English is shown:
+            /// marking a likely word would be a guess.
+            case read(LampSeptuagintSection.English)
         }
 
         /// In the Hebrew text's numbering.
@@ -381,7 +383,7 @@ final class SeptuagintLoader {
         verses[word.id] = .rows(shown.map {
             Verse(
                 reference: $0,
-                english: english[$0].map(Verse.English.marked) ?? .none,
+                english: english[$0].map(Verse.English.read) ?? .none,
                 greek: .pending
             )
         })
@@ -1765,17 +1767,19 @@ private struct SeptuagintWordGroup: View {
     private func row(_ verse: SeptuagintLoader.Verse) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             switch verse.english {
-            case .marked(let english):
+            case .read(let english):
                 Text(reference(english.reference))
                     .font(.caption.weight(.semibold))
-                (Text(english.snippet.isTrimmedAtStart ? "…" : "")
-                    + Text(english.snippet.before)
-                    + Text.lampFindMatch(english.snippet.word)
-                    + Text(english.snippet.after)
-                    + Text(english.snippet.isTrimmedAtEnd ? "…" : ""))
-                    .font(.system(size: fontSize))
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+                if let snippet = english.snippet {
+                    (Text(snippet.isTrimmedAtStart ? "…" : "")
+                        + Text(snippet.before)
+                        + Text.lampFindMatch(snippet.word)
+                        + Text(snippet.after)
+                        + Text(snippet.isTrimmedAtEnd ? "…" : ""))
+                        .font(.system(size: fontSize))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             case .none, .pending:
                 Text(reference(verse.reference))
                     .font(.caption.weight(.semibold))
