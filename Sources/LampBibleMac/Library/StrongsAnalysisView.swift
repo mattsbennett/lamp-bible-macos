@@ -6,18 +6,6 @@ import LampBibleMacSupport
 import LampModuleKit
 import SwiftUI
 
-/// A key's lemma and gloss, read the way the agent tool reads them.
-///
-/// Deliberately the same rule as `analyzeStrongs`: the first permitted
-/// lexicon's lemma, and the first sense carrying either a gloss or a short
-/// definition. The pane and an outside agent looking at the same key should
-/// not disagree about what the word is.
-struct StrongsEntry: Equatable, Sendable {
-    var lemma: String?
-    var transliteration: String?
-    var gloss: String?
-}
-
 /// Works out a key's analyses, the translation being read first.
 ///
 /// One translation at a time, published as each arrives, because a whole Bible
@@ -34,7 +22,10 @@ final class StrongsAnalysisLoader {
     }
 
     private(set) var analyses: [LampStrongsAnalysis] = []
-    private(set) var entries: [String: StrongsEntry] = [:]
+    /// Each key's lemma and gloss, by core's rule, which the agent tool
+    /// reads by too: the pane and an outside agent looking at the same key
+    /// should not disagree about what the word is.
+    private(set) var entries: [String: LampStrongsHeadword] = [:]
     /// Nothing has been worked out yet, so the pane has nothing to show.
     private(set) var isLoadingFirst = false
     /// The first analysis is on screen and the rest are still coming.
@@ -143,20 +134,11 @@ final class StrongsAnalysisLoader {
         guard let results = try? await library.dictionaryEntries(keys: Array(Set(missing)))
         else { return }
         if Task.isCancelled || requested != request { return }
-        for result in results {
-            let normalized = LampStrongsKey.normalized(result.key)
-            let known = entries[normalized]
-            entries[normalized] = StrongsEntry(
-                lemma: known?.lemma ?? result.lemma,
-                transliteration: known?.transliteration ?? result.transliteration,
-                gloss: known?.gloss
-                    ?? result.senses.lazy.compactMap { $0.gloss ?? $0.shortDefinition }.first
-            )
-        }
+        entries = LampStrongsHeadword.merging(results, into: entries)
         // Asking for a key no lexicon holds must not ask again on every
         // translation, so record the absence as well as the answer.
         for key in missing where entries[key] == nil {
-            entries[key] = StrongsEntry()
+            entries[key] = LampStrongsHeadword()
         }
     }
 }
@@ -283,27 +265,21 @@ final class SeptuagintLoader {
             let greekNumbering = try? await model.library
                   .versification(moduleID: septuagint.id)
         else { return }
-        var chapters: [Int: [Int: String]] = [:]
-        var greek: [Int: String] = [:]
-        for reference in shown {
-            guard let mapped = hebrewNumbering.convert(reference, to: greekNumbering)
-            else { continue }
-            let parts = LampBibleReferenceFormatter.components(of: mapped)
-            let chapterKey = parts.book * 1_000 + parts.chapter
-            if chapters[chapterKey] == nil {
-                let read = try? await model.library.chapter(
-                    moduleID: septuagint.id,
-                    bookNumber: parts.book,
-                    chapterNumber: parts.chapter
-                )
-                chapters[chapterKey] = Dictionary(
-                    (read?.verses ?? []).map { ($0.number, $0.text) },
-                    uniquingKeysWith: { first, _ in first }
-                )
-            }
-            if let text = chapters[chapterKey]?[parts.verse] {
-                greek[reference] = text
-            }
+        let library = model.library
+        let greek = await LampSeptuagintSection.greek(
+            for: shown,
+            hebrewNumbering: hebrewNumbering,
+            septuagintNumbering: greekNumbering
+        ) { book, chapter in
+            let read = try await library.chapter(
+                moduleID: septuagint.id,
+                bookNumber: book,
+                chapterNumber: chapter
+            )
+            return Dictionary(
+                read.verses.map { ($0.number, $0.text) },
+                uniquingKeysWith: { first, _ in first }
+            )
         }
         guard verses[word.id]?.count == shown.count else { return }
         verses[word.id] = shown.map { Verse(reference: $0, greek: greek[$0]) }
@@ -388,7 +364,7 @@ struct StrongsAnalysisPane: View {
     /// `LampStrongsAnalysisOrder` keeps at the front.
     private var analysis: LampStrongsAnalysis? { loader.analyses.first }
 
-    private var entry: StrongsEntry? { loader.entries[LampStrongsKey.normalized(key)] }
+    private var entry: LampStrongsHeadword? { loader.entries[LampStrongsKey.normalized(key)] }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
