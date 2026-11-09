@@ -242,6 +242,11 @@ final class SeptuagintLoader {
     private(set) var septuagintName: String?
     /// Each Hebrew word's lemma and transliteration, by normalized key.
     private(set) var headwords: [String: LampStrongsHeadword] = [:]
+    /// What each Hebrew word means, by normalized key, for where no English
+    /// renders it: a lexicon's own gloss, else Strong's definition. Never
+    /// Strong's short definition, which is the King James renderings
+    /// ("[idiom] do, familiar, [idiom] fare" for שָׁלוֹם).
+    private(set) var meanings: [String: String] = [:]
     /// What each word is most often rendered by in the English translation,
     /// by word id: the gloss a reader with no Hebrew goes by.
     private(set) var renderings: [String: String] = [:]
@@ -258,6 +263,7 @@ final class SeptuagintLoader {
         words = []
         verses = [:]
         headwords = [:]
+        meanings = [:]
         renderings = [:]
         countedKey = nil
         errorMessage = nil
@@ -277,6 +283,18 @@ final class SeptuagintLoader {
                let entries = try? await model.library.dictionaryEntries(keys: hebrewKeys),
                loadedKey == key {
                 headwords = LampStrongsHeadword.merging(entries)
+                let ordered = LampModuleSelection.ordered(
+                    entries, preferredIDs: LampStrongsHeadword.preferredDictionaryIDs, id: \.moduleID
+                )
+                for entry in ordered {
+                    let key = LampStrongsKey.normalized(entry.key)
+                    guard meanings[key] == nil else { continue }
+                    let meaning = headwords[key]?.shortGloss
+                        ?? entry.senses.lazy.compactMap(\.definition).first {
+                            !$0.trimmingCharacters(in: .whitespaces).isEmpty
+                        }
+                    if let meaning { meanings[key] = meaning }
+                }
             }
         } catch is CancellationError {
             loadedKey = nil
@@ -983,6 +1001,11 @@ struct StrongsAnalysisPane: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     translatesRows
+                    // Until the Hebrew text has been counted there are no
+                    // verse lists to show, and an empty space reads as none.
+                    if septuagint.words.allSatisfy({ $0.references == nil }) {
+                        ProgressView().controlSize(.small)
+                    }
                     ForEach(septuagint.words) { word in
                         if let references = word.references, !references.isEmpty {
                             SeptuagintWordGroup(
@@ -999,7 +1022,29 @@ struct StrongsAnalysisPane: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 8)
             } label: {
-                Text(LampSeptuagintSection.title).lampSectionHeading()
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(LampSeptuagintSection.title).lampSectionHeading()
+                    // What is inside, before it is opened: the Hebrew words,
+                    // and how to say them. Marks around each separator keep
+                    // the words in the lexicon's order, left to right,
+                    // rather than letting the Hebrew run them as one phrase.
+                    Text("\u{200E}" + septuagint.words
+                        .map { LampSeptuagintSection.word($0.hebrew) }
+                        .joined(separator: "\u{200E}  ·  \u{200E}"))
+                        .font(.system(size: fontSize + 1))
+                        .lineLimit(1)
+                    let said = septuagint.words.compactMap { word in
+                        word.hebrew.strongs.flatMap {
+                            septuagint.headwords[LampStrongsKey.normalized($0)]?.transliteration
+                        }
+                    }.filter { !$0.isEmpty }
+                    if !said.isEmpty {
+                        Text(said.joined(separator: "  ·  "))
+                            .font(.system(size: max(10, fontSize - 1)).italic())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
             }
             .task(id: isShowingSeptuagint) {
                 guard isShowingSeptuagint else { return }
@@ -1035,27 +1080,40 @@ struct StrongsAnalysisPane: View {
 
     /// The word as someone with no Hebrew reads it — its transliteration and
     /// the English it is most often rendered by — with the Hebrew beside.
+    /// Where the translation doesn't render it, the lexicons' meaning goes
+    /// under it, unquoted: quoted, a definition would pass for a rendering.
     private func hebrewWord(_ word: SeptuagintLoader.Word, number: String?) -> some View {
         let transliteration = number.flatMap {
             septuagint.headwords[LampStrongsKey.normalized($0)]?.transliteration
         }
         let rendering = septuagint.renderings[word.id]
-        return HStack(alignment: .firstTextBaseline, spacing: 8) {
-            if let transliteration, !transliteration.isEmpty {
-                Text(transliteration)
-                    .font(.system(size: fontSize + 1).italic())
-            }
-            if let rendering {
-                Text("“\(rendering)”")
+        let meaning = rendering == nil
+            ? number.flatMap { septuagint.meanings[LampStrongsKey.normalized($0)] }
+            : nil
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                if let transliteration, !transliteration.isEmpty {
+                    Text(transliteration)
+                        .font(.system(size: fontSize + 1).italic())
+                }
+                if let rendering {
+                    Text("“\(rendering)”")
+                        .font(.system(size: fontSize + 1))
+                }
+                Text(LampSeptuagintSection.word(word.hebrew))
                     .font(.system(size: fontSize + 1))
+                    .foregroundStyle(transliteration == nil && rendering == nil ? .primary : .secondary)
+                if let number {
+                    Text(number)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
             }
-            Text(LampSeptuagintSection.word(word.hebrew))
-                .font(.system(size: fontSize + 1))
-                .foregroundStyle(transliteration == nil && rendering == nil ? .primary : .secondary)
-            if let number {
-                Text(number)
-                    .font(.caption.monospacedDigit())
+            if let meaning {
+                Text(meaning)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
         }
     }
@@ -1686,6 +1744,7 @@ private struct SeptuagintWordGroup: View {
     let analyse: (String) -> Void
 
     @EnvironmentObject private var model: LibraryModel
+    @Environment(\.readerReferenceActions) private var referenceActions
     @State private var isExpanded = false
 
     private var listed: SeptuagintLoader.Verses? { loader.verses[word.id] }
@@ -1761,10 +1820,39 @@ private struct SeptuagintWordGroup: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
-    /// The verse in English with the word marked, and the Greek under it.
+    /// The verse in English with the word marked, and the Greek under it,
+    /// opening the verse in the reader as the analysis's own verses do.
+    ///
     /// The reference is the English one once the English is read: that is
-    /// the number a reader of the English will look it up by.
+    /// the number a reader of the English looks it up by, and opens it at.
     private func row(_ verse: SeptuagintLoader.Verse) -> some View {
+        let opens: Int
+        if case .read(let english) = verse.english {
+            opens = english.reference
+        } else {
+            opens = verse.reference
+        }
+        let name = reference(opens)
+        return Button {
+            referenceActions.openInCurrent(opens)
+        } label: {
+            rowContent(verse)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .chartClickable()
+        .help("Open \(name) in the reader")
+        .contextMenu {
+            Button("Open \(name)") { referenceActions.openInCurrent(opens) }
+            if referenceActions.opensTabs {
+                Button("Open in New Tab", systemImage: "plus.square.on.square") {
+                    referenceActions.openInNewTab(opens)
+                }
+            }
+        }
+    }
+
+    private func rowContent(_ verse: SeptuagintLoader.Verse) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             switch verse.english {
             case .read(let english):
@@ -1787,7 +1875,7 @@ private struct SeptuagintWordGroup: View {
             switch verse.greek {
             case .text(let greek):
                 Text(greek)
-                    .font(.system(size: max(10, fontSize - 1)))
+                    .font(.system(size: max(10, fontSize - 1), design: .serif))
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
