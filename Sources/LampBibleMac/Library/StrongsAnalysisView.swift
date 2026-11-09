@@ -535,8 +535,8 @@ struct StrongsAnalysisPane: View {
     /// The slice the pointer is over, named in the ring's hole. Every slice
     /// is a shade of one colour, so matching one to its row by eye is hard.
     /// Set once rather than per search, so it is remembered.
-    @AppStorage("strongs.renderingsAsRing") private var renderingsAsRing = false
-    @AppStorage("strongs.formsAsRing") private var formsAsRing = false
+    @AppStorage("strongs.renderingsAsRing") private var renderingsAsRing = true
+    @AppStorage("strongs.formsAsRing") private var formsAsRing = true
     @EnvironmentObject private var model: LibraryModel
     @Environment(\.colorScheme) private var colorScheme
     @State private var septuagint = SeptuagintLoader()
