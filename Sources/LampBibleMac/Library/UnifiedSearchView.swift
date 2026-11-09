@@ -37,6 +37,14 @@ struct UnifiedSearchView: View {
     @State private var previewedOccurrence: Int?
     @State private var strongsLoader = StrongsAnalysisLoader()
     @State private var strongsFilter: LampStrongsFilter?
+    /// The keys a companion was followed from, the last most recent: Back
+    /// returns to it. Any other change of key — typed, from history, from a
+    /// dictionary hit — starts again, so Back never leads somewhere the reader
+    /// did not come from.
+    @State private var strongsTrail: [String] = []
+    /// Set while a change of key comes from following or going back, which
+    /// keeps the trail; read and cleared by the key's change handler.
+    @State private var isWalkingStrongsTrail = false
     /// The hit being previewed, if any.
     @State private var previewedResult: LampModuleSearchResult?
 
@@ -243,6 +251,11 @@ struct UnifiedSearchView: View {
         .onChange(of: devotionalCategory) { _, _ in runSearch() }
         .onChange(of: bookScope) { _, _ in runSearch() }
         .onChange(of: strongsKey) { _, key in
+            if isWalkingStrongsTrail {
+                isWalkingStrongsTrail = false
+            } else {
+                strongsTrail = []
+            }
             // A key is a key on scripture. Set only when nothing is chosen,
             // so someone looking one up in a lexicon keeps that choice.
             if selectedKind == nil,
@@ -438,6 +451,21 @@ struct UnifiedSearchView: View {
         StrongsOccurrenceLabel.reference(reference)
     }
 
+    /// Analyses a companion, keeping the key it was followed from to go back to.
+    private func followCompanion(_ key: String) {
+        let current = strongsRequest.key
+        guard LampStrongsKey.normalized(key) != LampStrongsKey.normalized(current) else { return }
+        if !current.isEmpty { strongsTrail.append(current) }
+        isWalkingStrongsTrail = true
+        strongsKey = key
+    }
+
+    private func goBackAlongStrongsTrail() {
+        guard let previous = strongsTrail.popLast() else { return }
+        isWalkingStrongsTrail = true
+        strongsKey = previous
+    }
+
     /// The word on the left, its occurrences on the right: the word is what
     /// was searched for, so it leads, and the list it narrows reads as the
     /// result of choosing in it.
@@ -452,9 +480,12 @@ struct UnifiedSearchView: View {
                 key: strongsRequest.key,
                 loader: strongsLoader,
                 filter: $strongsFilter,
-                analyse: { strongsKey = $0 },
+                analyse: followCompanion,
                 bookRange: bookScope.range,
-                fontSize: hitFontSize
+                fontSize: hitFontSize,
+                back: strongsTrail.last.map { previous in
+                    StrongsAnalysisPane.Back(title: previous, go: goBackAlongStrongsTrail)
+                }
             )
             strongsOccurrences
         }

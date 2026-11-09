@@ -266,20 +266,30 @@ final class SeptuagintLoader {
                   .versification(moduleID: septuagint.id)
         else { return }
         let library = model.library
-        let greek = await LampSeptuagintSection.greek(
-            for: shown,
-            hebrewNumbering: hebrewNumbering,
-            septuagintNumbering: greekNumbering
-        ) { book, chapter in
-            let read = try await library.chapter(
-                moduleID: septuagint.id,
-                bookNumber: book,
-                chapterNumber: chapter
-            )
-            return Dictionary(
-                read.verses.map { ($0.number, $0.text) },
-                uniquingKeysWith: { first, _ in first }
-            )
+        let greek: [Int: String]
+        do {
+            greek = try await LampSeptuagintSection.greek(
+                for: shown,
+                hebrewNumbering: hebrewNumbering,
+                septuagintNumbering: greekNumbering
+            ) { book, chapter in
+                let read = try await library.chapter(
+                    moduleID: septuagint.id,
+                    bookNumber: book,
+                    chapterNumber: chapter
+                )
+                return Dictionary(
+                    read.verses.map { ($0.number, $0.text) },
+                    uniquingKeysWith: { first, _ in first }
+                )
+            }
+        } catch {
+            // Cut short — the group folded, or the pane moved on. Forget the
+            // word's verses rather than keep them: a verse not reached would
+            // otherwise say the Greek text lacks it, and the empty rows would
+            // stay, since a word with verses is never read again.
+            verses[word.id] = nil
+            return
         }
         guard verses[word.id]?.count == shown.count else { return }
         verses[word.id] = shown.map { Verse(reference: $0, greek: greek[$0]) }
@@ -336,6 +346,14 @@ struct StrongsAnalysisPane: View {
     var sections: [Section] = Section.besideOccurrences
     /// The occurrence list, for a pane that has `.verses` among its sections.
     var verses: (() -> AnyView)? = nil
+    /// The way back to the key a companion was followed from, shown before
+    /// the key. Nil where there is none, or where the host draws its own.
+    var back: Back? = nil
+
+    struct Back {
+        let title: String
+        let go: () -> Void
+    }
 
     /// The definition first: it is what someone looking a word up came for,
     /// and the figures are one click away.
@@ -453,6 +471,15 @@ struct StrongsAnalysisPane: View {
     private func header(_ analysis: LampStrongsAnalysis) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
+                if let back {
+                    Button(action: back.go) {
+                        Label(back.title, systemImage: "chevron.left")
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Back to \(back.title)")
+                    .help("Back to \(back.title)")
+                    Divider().frame(height: 16)
+                }
                 Text(analysis.key)
                     .font(.title3.weight(.semibold))
                 if let lemma = entry?.lemma, !lemma.isEmpty {
@@ -481,8 +508,15 @@ struct StrongsAnalysisPane: View {
         let rate = (analysis.ratePerThousandWords * 100).rounded() / 100
         let occurrences = analysis.occurrenceCount == 1 ? "occurrence" : "occurrences"
         let verses = analysis.verseCount == 1 ? "verse" : "verses"
-        return "\(analysis.occurrenceCount) \(occurrences) in \(analysis.verseCount) \(verses) · "
-            + "\(rate) per 1,000 tagged words · \(analysis.translationAbbreviation ?? analysis.translationName)"
+        // Books out of those in range that tag the key's language, so a Greek
+        // word is counted against the New Testament and not the whole canon.
+        let books = "\(analysis.booksWithOccurrences) of \(analysis.books.count) books"
+        // The dot held to the part before it, so a narrow column breaks after
+        // a separator rather than starting a line with one.
+        let separator = "\u{00A0}· "
+        return "\(analysis.occurrenceCount) \(occurrences) in \(analysis.verseCount) \(verses), \(books)"
+            + separator + "\(rate) per 1,000 tagged words"
+            + separator + (analysis.translationAbbreviation ?? analysis.translationName)
     }
 
     // MARK: - Overview
