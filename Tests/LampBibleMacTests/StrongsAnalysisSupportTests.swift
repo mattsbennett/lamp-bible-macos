@@ -252,6 +252,63 @@ struct StrongsAnalysisSupportTests {
         ) == "tbesg")
     }
 
+    // MARK: - The Septuagint section
+
+    /// The same Hebrew word named by two senses is one word to a reader, and
+    /// the lexicon's order is the order it is printed in.
+    @Test func theHebrewIsListedOnceInTheOrderTheLexiconPrintsIt() {
+        let senses = [
+            LampDictionarySense(septuagintHebrew: [
+                LampSeptuagintHebrew(text: "דָּבָר", strongs: "H1697"),
+                LampSeptuagintHebrew(text: "מִלָּה", strongs: "H4405"),
+            ]),
+            LampDictionarySense(septuagintHebrew: [
+                LampSeptuagintHebrew(text: "דָּבָר", strongs: "H1697"),
+                LampSeptuagintHebrew(text: "אֵמֶר", strongs: "H561"),
+            ]),
+        ]
+        #expect(LampSeptuagintSection.words(in: senses).map(\.strongs)
+            == ["H1697", "H4405", "H561"])
+        #expect(LampSeptuagintSection.words(in: []).isEmpty)
+        #expect(LampSeptuagintSection.words(in: [LampDictionarySense(definition: "x")])
+            .isEmpty)
+    }
+
+    /// Two words that share a number are still two words: folding them would
+    /// lose one of the forms the lexicon prints.
+    @Test func wordsSharingANumberAreNotFoldedTogether() {
+        let senses = [LampDictionarySense(septuagintHebrew: [
+            LampSeptuagintHebrew(text: "גיל", strongs: "H1523"),
+            LampSeptuagintHebrew(text: "גילה", strongs: "H1523"),
+        ])]
+        #expect(LampSeptuagintSection.words(in: senses).count == 2)
+    }
+
+    @Test func aStemIsPrintedWithItsWord() {
+        #expect(LampSeptuagintSection.word(
+            LampSeptuagintHebrew(text: "רנן", stem: "pi.")
+        ) == "רנן pi.")
+        #expect(LampSeptuagintSection.word(
+            LampSeptuagintHebrew(text: "גיל", strongs: "H1523")
+        ) == "גיל")
+    }
+
+    /// The heading has one job beyond counting: saying whose verses these are.
+    /// The Septuagint doesn't always use this Greek word where that Hebrew
+    /// stands, so a bare "40 verses" beside a Greek word would be a wrong
+    /// claim about the Greek word.
+    @Test func theHeadingSaysTheVersesAreTheHebrewWords() {
+        let hebrew = LampSeptuagintHebrew(text: "אַהֲבָה", strongs: "H160")
+        #expect(LampSeptuagintSection.heading(hebrew, verses: 40)
+            == "Hebrew אַהֲבָה (H160) · 40 verses")
+        #expect(LampSeptuagintSection.heading(hebrew, verses: 1)
+            == "Hebrew אַהֲבָה (H160) · 1 verse")
+        // No number to show, and nothing to follow: the word still names itself.
+        #expect(LampSeptuagintSection.heading(
+            LampSeptuagintHebrew(text: "רנן", stem: "pi."), verses: 0
+        ) == "Hebrew רנן pi. · 0 verses")
+    }
+
     // MARK: - The spread chart
 
     @Test func barsAreScaledAgainstTheLongestOne() {

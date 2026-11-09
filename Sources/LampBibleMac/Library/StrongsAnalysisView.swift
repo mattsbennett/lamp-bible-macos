@@ -161,6 +161,167 @@ final class StrongsAnalysisLoader {
 }
 
 /// What a Strong's key does across the translations that tag it.
+/// The Septuagint section's data for a Greek word: the Hebrew it renders there,
+/// and for each of those words with a number, where that Hebrew stands in the
+/// Old Testament and how the Septuagint reads in those places.
+///
+/// Three loads, each paid for only when something asks for it. The words come
+/// from the lexicon and cost one entry lookup, so they load with the pane —
+/// without them there is nothing to show and the section must not appear.
+/// The counts are a search per word, paid when the section is opened. The Greek
+/// beside a verse is a chapter read per chapter those verses fall in, paid when
+/// a word is opened.
+///
+/// Nothing here belongs to the Greek word's own counts. These are the Hebrew
+/// word's verses: the Septuagint does not always use this Greek word where that
+/// Hebrew stands, and until STEPBible publishes its tagged Septuagint there is
+/// no way to say which verses it does.
+@MainActor @Observable
+final class SeptuagintLoader {
+    struct Word: Identifiable {
+        let hebrew: LampSeptuagintHebrew
+        /// The verses of the Old Testament this Hebrew word stands in. Nil
+        /// until counted, and empty for a word with no number to count by.
+        var references: [Int]?
+
+        var id: String { "\(hebrew.text)|\(hebrew.strongs ?? "")" }
+    }
+
+    struct Verse: Identifiable {
+        let reference: Int
+        /// The Septuagint's Greek for the verse, where it has that verse: the
+        /// numbering does not always line up, and some books it does not carry.
+        let greek: String?
+
+        var id: Int { reference }
+    }
+
+    /// The most verses listed for one Hebrew word. דָּבָר stands in some 1,400
+    /// of them, which is not a list anyone reads inside a collapsed section;
+    /// the rest are one click away in that word's own analysis.
+    static let shownVerses = 25
+
+    private(set) var words: [Word] = []
+    /// The verses read for a word, by its id. A present empty list means asked
+    /// and nothing came back, which must not read as "not asked yet".
+    private(set) var verses: [String: [Verse]] = [:]
+    private(set) var errorMessage: String?
+
+    private var loadedKey: String?
+    private var countedKey: String?
+
+    /// The Hebrew the lexicon names, from whichever dictionary carries the
+    /// note. No dictionary is named here: the note is a property of an entry,
+    /// not of a particular lexicon, and TBESG is simply the one that has it.
+    func loadWords(key: String, model: LibraryModel) async {
+        guard loadedKey != key else { return }
+        loadedKey = key
+        words = []
+        verses = [:]
+        countedKey = nil
+        errorMessage = nil
+        guard BiblicalOriginalLanguage.inferred(from: key) == .greek else { return }
+        do {
+            let found = try await model.library.dictionaryEntries(
+                keys: [key, LampStrongsKey.normalized(key)]
+            )
+            guard loadedKey == key else { return }
+            words = LampSeptuagintSection.words(in: found.flatMap(\.senses))
+                .map { Word(hebrew: $0) }
+        } catch is CancellationError {
+            loadedKey = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// How often each Hebrew word stands in the Old Testament, counted in the
+    /// Hebrew text itself rather than in an English translation that tags it.
+    func loadCounts(key: String, model: LibraryModel) async {
+        guard countedKey != key, !words.isEmpty else { return }
+        countedKey = key
+        guard let hebrewText = hebrewText(model) else {
+            for index in words.indices { words[index].references = [] }
+            return
+        }
+        for index in words.indices {
+            guard let strongs = words[index].hebrew.strongs else {
+                words[index].references = []
+                continue
+            }
+            do {
+                let analyses = try await model.library.strongsAnalyses(
+                    key: strongs, moduleIDs: [hebrewText.id]
+                )
+                guard countedKey == key else { return }
+                words[index].references = analyses.first?.references ?? []
+            } catch is CancellationError {
+                return
+            } catch {
+                words[index].references = []
+            }
+        }
+    }
+
+    /// The first `shownVerses` of a word's verses, each with the Septuagint's
+    /// Greek where the two numberings meet.
+    func loadVerses(for word: Word, model: LibraryModel) async {
+        guard verses[word.id] == nil, let references = word.references,
+              !references.isEmpty, let hebrewText = hebrewText(model)
+        else { return }
+        let shown = Array(references.prefix(Self.shownVerses))
+        verses[word.id] = shown.map { Verse(reference: $0, greek: nil) }
+        guard let septuagint = await septuagintText(model),
+              let hebrewNumbering = try? await model.library
+                  .versification(moduleID: hebrewText.id),
+              let greekNumbering = try? await model.library
+                  .versification(moduleID: septuagint.id)
+        else { return }
+        var chapters: [Int: [Int: String]] = [:]
+        var greek: [Int: String] = [:]
+        for reference in shown {
+            guard let mapped = hebrewNumbering.convert(reference, to: greekNumbering)
+            else { continue }
+            let parts = LampBibleReferenceFormatter.components(of: mapped)
+            let chapterKey = parts.book * 1_000 + parts.chapter
+            if chapters[chapterKey] == nil {
+                let read = try? await model.library.chapter(
+                    moduleID: septuagint.id,
+                    bookNumber: parts.book,
+                    chapterNumber: parts.chapter
+                )
+                chapters[chapterKey] = Dictionary(
+                    (read?.verses ?? []).map { ($0.number, $0.text) },
+                    uniquingKeysWith: { first, _ in first }
+                )
+            }
+            if let text = chapters[chapterKey]?[parts.verse] {
+                greek[reference] = text
+            }
+        }
+        guard verses[word.id]?.count == shown.count else { return }
+        verses[word.id] = shown.map { Verse(reference: $0, greek: greek[$0]) }
+    }
+
+    /// The Hebrew Old Testament, by its language rather than by its name.
+    private func hebrewText(_ model: LibraryModel) -> LampInstalledModule? {
+        model.translations.first { $0.biblicalOriginalLanguage == .hebrew }
+    }
+
+    /// The Septuagint among the installed translations: a Greek text that
+    /// numbers its verses the Septuagint's way. Its own versification says so,
+    /// which an id or a name cannot be trusted to.
+    private func septuagintText(_ model: LibraryModel) async -> LampInstalledModule? {
+        for module in model.translations where module.biblicalOriginalLanguage == .greek {
+            if let numbering = try? await model.library.versification(moduleID: module.id),
+               numbering.scheme == .septuagint {
+                return module
+            }
+        }
+        return nil
+    }
+}
+
 struct StrongsAnalysisPane: View {
     enum Section: String, CaseIterable, Identifiable {
         case definition = "Definition"
@@ -201,6 +362,11 @@ struct StrongsAnalysisPane: View {
     @State private var hoveredSlice: LampStrongsShare.Slice?
     /// Set once rather than per search, so it is remembered.
     @AppStorage("strongs.shareAsRing") private var shareAsRing = true
+    @EnvironmentObject private var model: LibraryModel
+    @State private var septuagint = SeptuagintLoader()
+    /// Collapsed to begin with: the Septuagint is a second subject, and what
+    /// it holds costs a search a word to work out.
+    @State private var isShowingSeptuagint = false
 
     /// The analysis the pane describes: the translation being read, which
     /// `LampStrongsAnalysisOrder` keeps at the front.
@@ -342,9 +508,89 @@ struct StrongsAnalysisPane: View {
                     }
                 }
             }
+            septuagintGroup(analysis)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
+        .task(id: analysis.key) {
+            await septuagint.loadWords(key: analysis.key, model: model)
+        }
+    }
+
+    // MARK: - Septuagint
+
+    /// Only for a Greek word the lexicon gives Hebrew for, and collapsed.
+    ///
+    /// Every heading inside says "Hebrew" and names the Hebrew word, because
+    /// these verses are that word's, not this Greek word's: the Septuagint
+    /// does not always use this Greek word where that Hebrew stands. Nothing
+    /// here is added to the counts above.
+    @ViewBuilder
+    private func septuagintGroup(_ analysis: LampStrongsAnalysis) -> some View {
+        if !septuagint.words.isEmpty {
+            DisclosureGroup(isExpanded: $isShowingSeptuagint) {
+                VStack(alignment: .leading, spacing: 16) {
+                    translatesRows
+                    ForEach(septuagint.words) { word in
+                        if let references = word.references, !references.isEmpty {
+                            SeptuagintWordGroup(
+                                word: word,
+                                references: references,
+                                loader: septuagint,
+                                fontSize: fontSize,
+                                analyse: analyse
+                            )
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 8)
+            } label: {
+                Text("Septuagint").lampSectionHeading()
+            }
+            .task(id: isShowingSeptuagint) {
+                guard isShowingSeptuagint else { return }
+                await septuagint.loadCounts(key: analysis.key, model: model)
+            }
+        }
+    }
+
+    /// The Hebrew this Greek word renders, each one followable to its own
+    /// analysis where it has a number. A word the lexicon could not pin to a
+    /// single number is shown plainly rather than left out — it is still what
+    /// the Greek translates.
+    private var translatesRows: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Translates")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            ForEach(septuagint.words) { word in
+                if let strongs = word.hebrew.strongs {
+                    Button {
+                        analyse(strongs)
+                    } label: {
+                        hebrewWord(word.hebrew, number: strongs)
+                    }
+                    .buttonStyle(.plain)
+                    .chartClickable()
+                    .help("Analyse \(strongs)")
+                } else {
+                    hebrewWord(word.hebrew, number: nil)
+                }
+            }
+        }
+    }
+
+    private func hebrewWord(_ hebrew: LampSeptuagintHebrew, number: String?) -> some View {
+        HStack(spacing: 8) {
+            Text(LampSeptuagintSection.word(hebrew))
+                .font(.system(size: fontSize + 3))
+            if let number {
+                Text(number)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 
     private func renderingRow(_ rendering: LampStrongsAnalysis.Rendering, most: Int) -> some View {
@@ -1186,6 +1432,82 @@ struct StrongsAnalysisPane: View {
 /// names and the study pane opens on — so a word reads the same here as it
 /// does beside the reader. The menu lists only dictionaries that hold an
 /// entry for the key: one with nothing to say about it is not a choice.
+/// One Hebrew word's Old Testament verses, with the Septuagint's Greek beside
+/// each — the heart of the Septuagint section, and its own view for one
+/// reason: it must load when *it* is opened, not when the section is, and a
+/// DisclosureGroup can only tell its own expansion to a view that holds it.
+private struct SeptuagintWordGroup: View {
+    let word: SeptuagintLoader.Word
+    /// Every verse the word stands in, which is the count in the heading even
+    /// when only the first few are listed.
+    let references: [Int]
+    let loader: SeptuagintLoader
+    let fontSize: Double
+    let analyse: (String) -> Void
+
+    @EnvironmentObject private var model: LibraryModel
+    @State private var isExpanded = false
+
+    private var listed: [SeptuagintLoader.Verse]? { loader.verses[word.id] }
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            VStack(alignment: .leading, spacing: 10) {
+                if let listed {
+                    ForEach(listed) { verse in
+                        row(verse)
+                    }
+                    if references.count > listed.count, let strongs = word.hebrew.strongs {
+                        Button("All \(references.count) verses in \(strongs)") {
+                            analyse(strongs)
+                        }
+                        .buttonStyle(.link)
+                        .font(.caption)
+                        .chartClickable()
+                        .padding(.top, 2)
+                    }
+                } else {
+                    ProgressView().controlSize(.small)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 6)
+        } label: {
+            Text(LampSeptuagintSection.heading(word.hebrew, verses: references.count))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+        .task(id: isExpanded) {
+            guard isExpanded else { return }
+            await loader.loadVerses(for: word, model: model)
+        }
+    }
+
+    private func row(_ verse: SeptuagintLoader.Verse) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(reference(verse.reference))
+                .font(.caption.weight(.semibold))
+            if let greek = verse.greek {
+                Text(greek)
+                    .font(.system(size: fontSize))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("The Septuagint doesn’t have this verse.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func reference(_ reference: Int) -> String {
+        let parts = LampBibleReferenceFormatter.components(of: reference)
+        return "\(LampBibleReferenceFormatter.bookName(parts.book)) "
+            + "\(parts.chapter):\(parts.verse)"
+    }
+}
+
 struct StrongsDefinitionView: View {
     let key: String
     @Binding var chosenID: String?

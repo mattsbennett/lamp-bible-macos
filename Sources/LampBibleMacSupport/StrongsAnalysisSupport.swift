@@ -725,3 +725,38 @@ public enum LampStrongsDefinitionChoice {
         return withEntries.first
     }
 }
+
+/// The Septuagint section of the Analyse pane: the Hebrew a Greek word renders
+/// in the Septuagint, and what that Hebrew does in the Old Testament.
+///
+/// The counts and verses here belong to the *Hebrew* word, not to the Greek
+/// one — the Septuagint does not always use this Greek word where that Hebrew
+/// stands. Every heading says so, because a bare number beside a Greek word
+/// reads as the Greek word's own, and would be wrong.
+public enum LampSeptuagintSection {
+    /// The Hebrew words a Greek entry's senses name, in the order the lexicon
+    /// prints them, without the same word twice.
+    ///
+    /// A word repeated across senses is one word to a reader. Identity is the
+    /// printed word with its number, so two different words that happen to
+    /// share a number — or one word with and without a stem — are not folded
+    /// together.
+    public static func words(in senses: [LampDictionarySense]) -> [LampSeptuagintHebrew] {
+        var seen = Set<String>()
+        return senses.flatMap(\.septuagintHebrew).filter {
+            seen.insert("\($0.text)|\($0.strongs ?? "")").inserted
+        }
+    }
+
+    /// The printed word with the stem the note gives it: "רנן pi.".
+    public static func word(_ hebrew: LampSeptuagintHebrew) -> String {
+        guard let stem = hebrew.stem else { return hebrew.text }
+        return "\(hebrew.text) \(stem)"
+    }
+
+    /// "Hebrew אַהֲבָה (H160) · 40 verses", naming whose verses they are.
+    public static func heading(_ hebrew: LampSeptuagintHebrew, verses: Int) -> String {
+        let name = hebrew.strongs.map { "\(word(hebrew)) (\($0))" } ?? word(hebrew)
+        return "Hebrew \(name) · \(verses) \(verses == 1 ? "verse" : "verses")"
+    }
+}
