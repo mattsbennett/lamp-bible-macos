@@ -2433,7 +2433,6 @@ struct DictionaryResultView: View {
             links: sense.scriptureLinks,
             dictionaryLinks: sense.dictionaryLinks,
             dictionaryModuleID: result.moduleID,
-            quietLinks: true,
             styles: sense.styles.filter { $0.field == field },
             stylePrefix: label.unicodeScalars.count,
             holdsLeftToRight: true
@@ -2933,11 +2932,6 @@ private struct ScriptureLinkedText: View {
     var dictionaryModuleID: String?
     var appendedLinks: [LampScriptureLink] = []
     var appendedDictionaryLinks: [LampDictionaryLink] = []
-    /// Links set in the prose's own colour with a dotted rule in the link
-    /// blue, for text so dense with references — a lexicon sense — that a run
-    /// of blue words took the paragraph over. Still marked as links, by the
-    /// blue rule and the pointer; the words between them are read first.
-    var quietLinks = false
     /// A dictionary field's bold, italic and Greek or Hebrew stretches,
     /// counted from `stylePrefix` scalars into `text`.
     var styles: [LampDictionaryStyle] = []
@@ -3090,13 +3084,10 @@ private struct ScriptureLinkedText: View {
         return result
     }
 
+    /// One link style wherever references sit in prose, a lexicon sense as
+    /// much as a commentary paragraph, as on iPhone.
     private func markLink(_ run: inout AttributedSubstring) {
-        if quietLinks {
-            run.foregroundColor = .lampProse
-            run.swiftUI.underlineStyle = Text.LineStyle(pattern: .dot, color: .lampProseLink)
-        } else {
-            run.foregroundColor = .lampProseLink
-        }
+        run.foregroundColor = .lampProseLink
     }
 
     private func firstAvailableRange(
