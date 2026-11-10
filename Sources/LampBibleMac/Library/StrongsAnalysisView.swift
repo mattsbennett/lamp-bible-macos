@@ -1750,11 +1750,17 @@ struct StrongsAnalysisPane: View {
     /// declares, not by its name.
     private func originalText(for analysis: LampStrongsAnalysis) -> LampStrongsAnalysis? {
         let languages = LampStrongsKey.normalized(analysis.key).first == "H" ? ["hbo", "he", "arc"] : ["grc"]
-        return loader.analyses.first { other in
+        let candidates = loader.analyses.filter { other in
             other.translationID != analysis.translationID
                 && !other.forms.isEmpty
                 && model.translations.first(where: { $0.id == other.translationID })?.language
                     .map { language in languages.contains { language.lowercased().hasPrefix($0) } } == true
+        }
+        // The one sharing most of this word's verses, so a Greek Old
+        // Testament is not offered for a New Testament word.
+        let verses = Set(analysis.references)
+        return candidates.max { left, right in
+            verses.intersection(left.references).count < verses.intersection(right.references).count
         }
     }
 
