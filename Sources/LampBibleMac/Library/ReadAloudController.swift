@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import Foundation
 import LampCore
@@ -229,8 +230,58 @@ enum SpeechVoices {
     /// The language verses and questions are read in, and the IPA spoken.
     static let english = "en-US"
 
-    static func installed() -> [LampSpeechVoice] {
-        AVSpeechSynthesisVoice.speechVoices().map(describe)
+    /// The installed voices, held until the system says they changed.
+    ///
+    /// Enumerating them costs about 55 ms on a Mac with 181 voices
+    /// installed, and the Settings pane asks three times for every redraw —
+    /// the list, the voice Automatic resolves to, and the voice in use — so
+    /// opening it, and every slider drag on it, spent a sixth of a second
+    /// here before this was held.
+    @MainActor
+    private static var held: (voices: [AVSpeechSynthesisVoice], described: [LampSpeechVoice])?
+    /// Registered once and never removed, so a voice downloaded while the app
+    /// is open is still picked up by whatever asks next — the cache would
+    /// otherwise outlast the thing it describes.
+    @MainActor private static var watching: [any NSObjectProtocol] = []
+
+    @MainActor
+    static func installed() -> [LampSpeechVoice] { enumerated().described }
+
+    /// The voices themselves, for a list that shows them.
+    @MainActor
+    static func all() -> [AVSpeechSynthesisVoice] { enumerated().voices }
+
+    /// Drops what is held. The Settings pane calls this as it redraws on the
+    /// same notification, so the order the two observers happen to fire in
+    /// cannot leave it drawing a list the system has already changed.
+    @MainActor
+    static func forget() { held = nil }
+
+    @MainActor
+    private static func enumerated()
+        -> (voices: [AVSpeechSynthesisVoice], described: [LampSpeechVoice]) {
+        if watching.isEmpty {
+            // Two, because the first has never been seen to fire here and a
+            // cache that misses it is wrong until the app is relaunched —
+            // not only in the Settings list but in every speaking path. The
+            // second cannot be missed: voices are installed in System
+            // Settings, so coming back to Lamp is the one thing a reader who
+            // has just downloaded one is certain to do. It costs one
+            // enumeration per return to the app, against one per frame.
+            watching = [
+                AVSpeechSynthesizer.availableVoicesDidChangeNotification,
+                NSApplication.didBecomeActiveNotification,
+            ].map { name in
+                NotificationCenter.default.addObserver(
+                    forName: name, object: nil, queue: .main
+                ) { _ in MainActor.assumeIsolated { forget() } }
+            }
+        }
+        if let held { return held }
+        let enumerated = AVSpeechSynthesisVoice.speechVoices()
+        let answer = (voices: enumerated, described: enumerated.map(describe))
+        held = answer
+        return answer
     }
 
     static func describe(_ voice: AVSpeechSynthesisVoice) -> LampSpeechVoice {
@@ -244,6 +295,7 @@ enum SpeechVoices {
         )
     }
 
+    @MainActor
     static func voice(language: String, stored: String?) -> AVSpeechSynthesisVoice? {
         let preferred = AVSpeechSynthesisVoice.currentLanguageCode()
         let chosen = LampSpeechVoice.choose(

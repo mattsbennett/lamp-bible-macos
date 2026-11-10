@@ -284,7 +284,7 @@ private struct ReaderSettingsView: View {
 
     private var voices: [AVSpeechSynthesisVoice] {
         _ = voicesRevision
-        return AVSpeechSynthesisVoice.speechVoices()
+        return SpeechVoices.all()
             .filter { $0.language.hasPrefix("en") }
             .sorted {
                 ($0.name, $0.language).0.localizedStandardCompare(($1.name, $1.language).0) == .orderedAscending
@@ -432,7 +432,10 @@ private struct ReaderSettingsView: View {
                     }
                     .onReceive(NotificationCenter.default.publisher(
                         for: AVSpeechSynthesizer.availableVoicesDidChangeNotification
-                    )) { _ in voicesRevision += 1 }
+                    )) { _ in
+                        SpeechVoices.forget()
+                        voicesRevision += 1
+                    }
                     Section {
                         Toggle("Show Strong’s number hints", isOn: $showStrongsHints)
                         Toggle("Sort cross-references canonically", isOn: $canonicalCrossReferenceOrder)
