@@ -877,6 +877,7 @@ struct StrongsAnalysisPane: View {
             CardSlotsChooser(
                 available: LampStrongsCardChoice.available(for: analysis),
                 charts: LampStrongsGrouping.allCases.filter { $0.canDraw(analysis) },
+                standIn: cardChoice.standIn(for: analysis),
                 figures: $storedCardFigures,
                 chart: $storedCardChart
             )
@@ -2767,6 +2768,9 @@ private struct DonutSlice: Shape {
 private struct CardSlotsChooser: View {
     let available: [LampStrongsCardFigure]
     let charts: [LampStrongsGrouping]
+    /// What the card draws in the chosen chart's place, here: Forms for a
+    /// Translated As in a text in the word's own language (core decides).
+    var standIn: LampStrongsGrouping? = nil
     @Binding var figures: String
     @Binding var chart: String
 
@@ -2839,9 +2843,11 @@ private struct CardSlotsChooser: View {
         var offered = charts.map { (tag: $0.rawValue, title: $0.title) }
         if chart != LampStrongsCardChoice.noChart,
            !charts.contains(where: { $0.rawValue == chart }) {
+            let title = LampStrongsGrouping(rawValue: chart)?.title ?? chart
             offered.append((
                 tag: chart,
-                title: (LampStrongsGrouping(rawValue: chart)?.title ?? chart) + " (none)"
+                // Says what the card draws instead, where it draws anything.
+                title: title + (standIn.map { " (\($0.title) here)" } ?? " (none)")
             ))
         }
         offered.append((tag: LampStrongsCardChoice.noChart, title: "None"))
