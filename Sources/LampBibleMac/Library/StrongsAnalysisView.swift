@@ -549,6 +549,9 @@ struct StrongsAnalysisPane: View {
     /// Each form read for someone without the language, by form ID, with the
     /// analysis it was read from so a new word never shows the last one's.
     @State private var formReadings: (source: String, byID: [String: LampStrongsFormReading])?
+    /// What the analysed translation declares was matched to it when its
+    /// module was built, by translation ID.
+    @State private var translationSources: (id: String, sources: [LampTranslationSource])?
     @EnvironmentObject private var model: LibraryModel
     @Environment(\.colorScheme) private var colorScheme
     @State private var septuagint = SeptuagintLoader()
@@ -586,6 +589,12 @@ struct StrongsAnalysisPane: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
                         card(analysis)
+                            .task(id: analysis.translationID) {
+                                let id = analysis.translationID
+                                guard translationSources?.id != id else { return }
+                                let sources = (try? await model.library.translationSources(moduleID: id)) ?? []
+                                translationSources = (id, sources)
+                            }
                             .padding(.horizontal, 14)
                             .padding(.top, 12)
                             .padding(.bottom, 4)
@@ -750,6 +759,17 @@ struct StrongsAnalysisPane: View {
             Text(cardFootnote(analysis))
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            // The whole analysis counts these numbers, so where they were
+            // matched to the text is said under the figures they make.
+            ForEach(declaredSources(.strongs, for: analysis), id: \.source) { source in
+                Text(source.disclosure(
+                    translationName: analysis.translationAbbreviation ?? analysis.translationName,
+                    strongsKey: analysis.key
+                ))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1709,6 +1729,16 @@ struct StrongsAnalysisPane: View {
         "\(analysis.key)|\(analysis.translationID)|\(analysis.occurrenceCount)"
     }
 
+    /// The sources the analysed translation declares for `part`, once they
+    /// have been read for it.
+    private func declaredSources(
+        _ part: LampTranslationSource.Part,
+        for analysis: LampStrongsAnalysis
+    ) -> [LampTranslationSource] {
+        guard let translationSources, translationSources.id == analysis.translationID else { return [] }
+        return translationSources.sources.filter { $0.part == part }
+    }
+
     private func isOriginalLanguageKey(_ key: String) -> Bool {
         let first = LampStrongsKey.normalized(key).first
         return first == "G" || first == "H"
@@ -1734,6 +1764,19 @@ struct StrongsAnalysisPane: View {
     private func formGaps(_ analysis: LampStrongsAnalysis, readings: [String: LampStrongsFormReading]) -> some View {
         let gaps = LampStrongsFormReading.gaps(of: analysis, readings: Array(readings.values))
         let original = gaps.isEmpty ? nil : originalText(for: analysis)
+        // Spellings matched to the text when its module was built are said
+        // to be, so they are not read as the translation's own print.
+        let matched = analysis.forms.isEmpty ? [] : declaredSources(.forms, for: analysis)
+        ForEach(matched, id: \.source) { source in
+            Text(source.disclosure(
+                translationName: analysis.translationAbbreviation ?? analysis.translationName,
+                strongsKey: analysis.key
+            ))
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.bottom, gaps.isEmpty ? 6 : 0)
+        }
         if !gaps.isEmpty, formReadings?.source == formsSource(of: analysis) || analysis.forms.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(gaps, id: \.self) { gap in
