@@ -59,6 +59,21 @@ public enum AIFeatures {
         }
     }
 
+    /// Where the Mac keeps the shared preferences each sync source last
+    /// agreed on (`LibrarySyncController`).
+    static let syncBaselinesKey = "sync.sharedPreferences.bases"
+
+    /// The switch as some sync source last agreed it, if one did.
+    static func agreedValue(in defaults: UserDefaults) -> Bool? {
+        guard let bases = defaults.dictionary(forKey: syncBaselinesKey) else { return nil }
+        for data in bases.values.compactMap({ $0 as? Data }) {
+            guard let ledger = try? LampSyncPreferenceState.decode(data),
+                  case .boolean(let value)? = ledger.fields[key]?.value else { continue }
+            return value
+        }
+        return nil
+    }
+
     /// Stores "on" where nothing is stored and the library already uses AI,
     /// so the choice is explicit and travels to the other devices. Leaves a
     /// stored value alone, and stores nothing for a library that does not use
@@ -71,6 +86,15 @@ public enum AIFeatures {
         fileManager: FileManager = .default
     ) -> Bool {
         if let stored = defaults.object(forKey: key) as? Bool { return stored }
+        // A value the devices last agreed on comes before anything worked
+        // out here. An older Lamp keeps another device's choice in its sync
+        // baseline without applying the key it does not know; inferring
+        // "on" over it would then be published as this Mac's edit and
+        // override that device's "off".
+        if let agreed = agreedValue(in: defaults) {
+            defaults.set(agreed, forKey: key)
+            return agreed
+        }
         guard libraryUsesAI(libraryRootURL: libraryRootURL, defaults: defaults, fileManager: fileManager) else {
             return LampPreferenceDefaults.aiFeaturesEnabled
         }

@@ -246,18 +246,29 @@ final class LibraryModel: ObservableObject {
         selectedBookNumber = storedBook > 0 ? storedBook : nil
         selectedChapterNumber = max(defaults.integer(forKey: "reader.chapterNumber"), 1)
         errorMessage = settingsRecoveryError?.localizedDescription
+        // Before any window draws, so a library that uses AI never shows a
+        // moment without it; then whenever the preferences change, however
+        // they changed — Settings, a sync from another device, an older
+        // Lamp dropping the key — with or without a window open.
+        settleAIFeatures()
+        aiFeaturesObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification, object: defaults, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.aiPreferencesChanged() }
+        }
     }
 
     deinit {
         searchTask?.cancel()
         moduleSearchTask?.cancel()
+        aiSettleTask?.cancel()
+        if let aiFeaturesObserver { NotificationCenter.default.removeObserver(aiFeaturesObserver) }
     }
 
     /// Reads the library for the first time. No reader is open yet to read
     /// a chapter again: each window reads its own once this is done.
     func start() {
         guard modules.isEmpty, !isRefreshing else { return }
-        settleAIFeatures()
         Task {
             await refreshLibrary(reloadingReader: false)
             await takeInRequestedReadingPlans()
@@ -269,23 +280,64 @@ final class LibraryModel: ObservableObject {
     }
 
     /// Whether the AI features are shown, working it out where nothing is
-    /// stored (`AIFeatures`). Asked at launch and every few seconds after,
-    /// so a value an older Lamp dropped from the shared preferences is
-    /// worked out again rather than read as off. With AI off, an outside
-    /// app is told the library is closed.
+    /// stored (`AIFeatures`), so a value an older Lamp dropped from the
+    /// shared preferences is worked out again rather than read as off.
+    ///
+    /// Acts on each change of it, from whichever direction: off withdraws
+    /// what an outside app may read; on again offers it once more, as the
+    /// settings say. Neither waits for a window or the Settings pane.
     @discardableResult
     func settleAIFeatures() -> Bool {
-        let enabled = AIFeatures.settleIfUnset(libraryRootURL: library.rootURL)
-        if !enabled, !hasWithdrawnAgentAccess {
-            hasWithdrawnAgentAccess = true
+        let enabled = AIFeatures.settleIfUnset(libraryRootURL: library.rootURL, defaults: defaults)
+        guard enabled != lastAIFeaturesEnabled else { return enabled }
+        let isFirst = lastAIFeaturesEnabled == nil
+        lastAIFeaturesEnabled = enabled
+        if !enabled {
             AgentModuleAccessPreferences.withdrawIfPublished(libraryRootURL: library.rootURL)
-        } else if enabled {
-            hasWithdrawnAgentAccess = false
+        } else if !isFirst {
+            republishAgentAccess()
         }
         return enabled
     }
 
-    private var hasWithdrawnAgentAccess = false
+    /// The switch as last worked out; nil until it first is.
+    private var lastAIFeaturesEnabled: Bool?
+    private var aiFeaturesObserver: NSObjectProtocol?
+    private var aiSettleTask: Task<Void, Never>?
+
+    /// Preferences change often (a reader's place, a text size), so the
+    /// switch is settled on the next turn, once for a burst of changes.
+    private func aiPreferencesChanged() {
+        guard aiSettleTask == nil else { return }
+        aiSettleTask = Task { @MainActor [weak self] in
+            await Task.yield()
+            guard let self else { return }
+            self.aiSettleTask = nil
+            self.settleAIFeatures()
+        }
+    }
+
+    /// Offers outside apps what the AI settings allow, as Settings would on
+    /// showing its pane: for AI features turned on from somewhere else.
+    private func republishAgentAccess() {
+        let accessEnabled = defaults.object(forKey: "agent.moduleAccess.enabled") as? Bool ?? true
+        let scope = defaults.string(forKey: "agent.moduleAccess.scope")
+            .flatMap(AgentModuleAccessScope.init(rawValue:)) ?? .enabledModules
+        try? AgentModuleAccessPreferences.publish(
+            AgentModuleAccessPreferences.policy(
+                isEnabled: accessEnabled,
+                scope: scope,
+                includesPersonalContent: defaults.bool(forKey: "agent.moduleAccess.personal"),
+                modules: modules,
+                hiddenModuleIDs: hiddenModuleIDs
+            ),
+            libraryRootURL: library.rootURL,
+            bundledModulesArchiveURL: Bundle.main.url(forResource: "bundled_modules.db", withExtension: "zlib"),
+            allowsExternalApps: defaults.bool(forKey: AgentModuleAccessPreferences.allowsExternalAppsKey),
+            allowsExternalWriting: defaults.bool(forKey: AgentModuleAccessPreferences.allowsExternalWritingKey),
+            allowsExternalReadingPlans: defaults.bool(forKey: AgentModuleAccessPreferences.allowsExternalReadingPlansKey)
+        )
+    }
 
     func setModuleHidden(_ moduleID: String, hidden: Bool) {
         if hidden {

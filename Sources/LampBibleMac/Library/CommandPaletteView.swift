@@ -72,7 +72,9 @@ struct CommandPaletteView: View {
     let close: () -> Void
 
     @State private var query = ""
-    @State private var highlighted = 0
+    /// The chosen row, by what it is rather than where it sits, so library
+    /// matches arriving above it do not move the choice to another row.
+    @State private var highlightedID: String?
     @State private var libraryResults: [CommandPaletteItem] = []
     @State private var libraryResultsQuery = ""
     @FocusState private var isFieldFocused: Bool
@@ -103,6 +105,12 @@ struct CommandPaletteView: View {
             shown += named.filter { $0.0.group == group }.prefix(Self.perGroup).map(\.0)
         }
         return shown + typed.filter { $0.group == .search }
+    }
+
+    /// Where the chosen row sits now: the top row until one is chosen, or
+    /// once the chosen one is gone.
+    private func highlightedIndex(in rows: [CommandPaletteItem]) -> Int {
+        highlightedID.flatMap { id in rows.firstIndex { $0.id == id } } ?? 0
     }
 
     var body: some View {
@@ -145,7 +153,7 @@ struct CommandPaletteView: View {
             libraryResults = found
             libraryResultsQuery = words
         }
-        .onChange(of: trimmed) { _, _ in highlighted = 0 }
+        .onChange(of: trimmed) { _, _ in highlightedID = nil }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Go to anything")
     }
@@ -159,13 +167,13 @@ struct CommandPaletteView: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: 19))
                 .focused($isFieldFocused)
-                .onSubmit { perform(rows, at: highlighted) }
+                .onSubmit { perform(rows, at: highlightedIndex(in: rows)) }
                 .onKeyPress(.downArrow) {
-                    highlighted = min(highlighted + 1, max(rows.count - 1, 0))
+                    move(by: 1, in: rows)
                     return .handled
                 }
                 .onKeyPress(.upArrow) {
-                    highlighted = max(highlighted - 1, 0)
+                    move(by: -1, in: rows)
                     return .handled
                 }
                 .onKeyPress(.escape) {
@@ -177,8 +185,15 @@ struct CommandPaletteView: View {
         .frame(height: 54)
     }
 
+    private func move(by step: Int, in rows: [CommandPaletteItem]) {
+        guard !rows.isEmpty else { return }
+        let index = min(max(highlightedIndex(in: rows) + step, 0), rows.count - 1)
+        highlightedID = rows[index].id
+    }
+
     private func list(_ rows: [CommandPaletteItem]) -> some View {
-        ScrollViewReader { proxy in
+        let highlighted = highlightedIndex(in: rows)
+        return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(rows.enumerated()), id: \.element.id) { index, item in
@@ -192,7 +207,7 @@ struct CommandPaletteView: View {
                         row(item, isHighlighted: index == highlighted)
                             .id(item.id)
                             .onTapGesture { perform(rows, at: index) }
-                            .onHover { if $0 { highlighted = index } }
+                            .onHover { if $0 { highlightedID = item.id } }
                     }
                 }
                 .padding(.bottom, 8)
@@ -200,9 +215,8 @@ struct CommandPaletteView: View {
             // As tall as its rows, up to a point: a short list should not
             // sit in a tall empty box.
             .frame(height: min(Self.estimatedHeight(of: rows), 420))
-            .onChange(of: highlighted) { _, index in
-                guard rows.indices.contains(index) else { return }
-                proxy.scrollTo(rows[index].id)
+            .onChange(of: highlightedID) { _, id in
+                if let id { proxy.scrollTo(id) }
             }
         }
     }

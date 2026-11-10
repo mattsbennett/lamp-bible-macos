@@ -256,9 +256,10 @@ struct UnifiedSearchView: View {
             } else {
                 strongsTrail = []
             }
-            // A key is a key on scripture. Set only when nothing is chosen,
-            // so someone looking one up in a lexicon keeps that choice.
-            if selectedKind == nil,
+            // A key is a key on scripture or in a lexicon. Any other content
+            // chosen (Books, say) has no analysis to show, so the key moves
+            // the search to scripture; a lexicon keeps that choice.
+            if selectedKind != .translation, selectedKind != .dictionary,
                !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 selectedKind = .translation
             }

@@ -95,6 +95,10 @@ struct LibraryRootView: View {
     /// has no button, no shortcut and no pane, and no conversation is taken
     /// up or started; the chats on disk are kept for when it is on again.
     @AppStorage(AIFeatures.key) private var aiFeaturesEnabled = AIFeatures.defaultValue
+    /// Whether this window has taken up the chats its tabs remember. Once
+    /// only: they stay this window's while AI is off, and taking them again
+    /// would find them held — by this window — and forget them.
+    @State private var hasAdoptedRestoredChats = false
     @State private var lastReaderSidebar = ReaderSidebar.study
     /// The session this window keeps its tabs under, taken up once the library
     /// has been read. The chats are the tabs' own; see `ReaderTab.chatID`.
@@ -217,7 +221,11 @@ struct LibraryRootView: View {
         .onChange(of: aiFeaturesEnabled) { _, enabled in
             if enabled {
                 guard hasRestoredReaderTabs else { return }
-                ReaderChatHousekeeping.letGoOfOldChats(libraryRootURL: model.library.rootURL)
+                // Swept only before this window first takes up its chats, as
+                // at launch: once taken, they are this window's to keep.
+                if !hasAdoptedRestoredChats {
+                    ReaderChatHousekeeping.letGoOfOldChats(libraryRootURL: model.library.rootURL)
+                }
                 adoptRestoredChats()
                 ensureSelectedTabHasChat()
             } else if readerSidebar == .chat {
@@ -255,8 +263,6 @@ struct LibraryRootView: View {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(6))
                 guard !Task.isCancelled else { return }
-                // A switch an older Lamp dropped is worked out again here.
-                model.settleAIFeatures()
                 await syncController.syncLocalWorkIfAppeared(library: model.library)
             }
         }
@@ -389,6 +395,9 @@ struct LibraryRootView: View {
         }
         .onChange(of: workspace.requestedSearch) { _, words in
             guard let words else { return }
+            // Words, not a key: a key left from an analysis would keep the
+            // analysis on screen in place of the search.
+            searchStrongsKey = ""
             searchQuery = words
             selection = .section(.search)
             workspace.requestedSearch = nil
@@ -586,11 +595,12 @@ struct LibraryRootView: View {
         adoptRestoredChats()
         adoptTabSidebar()
         ensureSelectedTabHasChat()
-        // A place asked for while no reader was open goes in the chosen tab.
-        workspace.start(
-            model: model,
-            at: model.takePendingReaderLocation() ?? readerTabs.selectedTab?.location
-        )
+        // A place asked for while no reader was open goes in the chosen tab,
+        // at its verse: ⌥↩ on John 3:16 in the palette opens a new window
+        // there, not at the top of John 3.
+        let pending = model.takePendingReaderLocation()
+        workspace.start(model: model, at: pending ?? readerTabs.selectedTab?.location)
+        if let verse = pending?.verseReference { workspace.focusVerse(verse) }
         model.activeReader = workspace
     }
 
@@ -703,7 +713,8 @@ struct LibraryRootView: View {
     private func adoptRestoredChats() {
         // With AI off the tabs keep the chats they remember, untaken, so they
         // are theirs again when it is turned on.
-        guard aiFeaturesEnabled else { return }
+        guard aiFeaturesEnabled, !hasAdoptedRestoredChats else { return }
+        hasAdoptedRestoredChats = true
         let root = model.library.rootURL
         var lost: Set<UUID> = []
         for chat in readerTabs.chatIDs where !OpenReaderChats.take(chat, libraryRootURL: root) {
@@ -7049,9 +7060,16 @@ extension LibraryRootView {
         case .section(let section):
             selection = .section(section)
         case .book(let moduleID, let sectionID):
-            requestedBookID = moduleID
-            requestedBookSectionID = sectionID
+            // Cleared, then asked for on the next turn: Books follows a
+            // change in what is asked for, and asking for the book it was
+            // last asked for — another chosen by hand since — changes nothing.
+            requestedBookID = nil
+            requestedBookSectionID = nil
             selection = .section(.books)
+            DispatchQueue.main.async {
+                requestedBookID = moduleID
+                requestedBookSectionID = sectionID
+            }
         case .writing(let id):
             requestedDevotionalID = id
             selection = .section(.devotionals)

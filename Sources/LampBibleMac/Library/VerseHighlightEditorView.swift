@@ -375,12 +375,13 @@ private struct SelectableVerseText: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(selection: $selection) }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSTextView.scrollableTextView()
+        // Lamp's text view, which asks the AI switch each time Writing
+        // Tools are offered.
+        let scrollView = LampTextView.scrollableTextView()
         guard let textView = scrollView.documentView as? NSTextView else { return scrollView }
         textView.delegate = context.coordinator
         textView.isEditable = false
         textView.isSelectable = true
-        textView.writingToolsBehavior = AIFeatures.writingToolsBehavior
         textView.drawsBackground = false
         textView.textContainerInset = NSSize(width: 14, height: 14)
         textView.font = .systemFont(ofSize: 20)

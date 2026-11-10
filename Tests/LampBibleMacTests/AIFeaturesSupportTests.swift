@@ -1,4 +1,5 @@
 import Foundation
+import LampModuleKit
 import Testing
 @testable import LampBibleMacSupport
 
@@ -53,5 +54,23 @@ struct AIFeaturesSupportTests {
         defaults.set("claude", forKey: "reader.chat.provider")
         defaults.set(false, forKey: AIFeatures.key)
         #expect(AIFeatures.settleIfUnset(libraryRootURL: root, defaults: defaults) == false)
+    }
+
+    /// Codex review, finding 2: an older Mac carried another device's "off"
+    /// in its sync baseline without applying the key it did not know. After
+    /// the upgrade, inferring "on" from the chats would be published as this
+    /// Mac's edit and override the other device's choice.
+    @Test func anOffCarriedInTheSyncBaselineIsNotOverridden() throws {
+        let (root, defaults, suite) = try scratch()
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: root) }
+        let chat = root.appendingPathComponent("AgentWorkspaces/Reader/\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: chat, withIntermediateDirectories: true)
+        let baseline = LampSharedPreferenceLedger(fields: [AIFeatures.key: .init(value: .boolean(false))])
+        defaults.set(
+            ["webdav:https://example.test/lamp": try LampSyncPreferenceState.encode(baseline)],
+            forKey: "sync.sharedPreferences.bases"
+        )
+        #expect(AIFeatures.settleIfUnset(libraryRootURL: root, defaults: defaults) == false)
+        #expect(defaults.object(forKey: AIFeatures.key) as? Bool == false)
     }
 }
