@@ -1002,8 +1002,17 @@ struct UnifiedSearchView: View {
         ToolbarItem {
             Picker("Module", selection: $selectedModuleID) {
                 Text("All Modules").tag(String?.none)
-                ForEach(availableModules, id: \.id) { module in
-                    Text(module.name).tag(Optional(module.id))
+                if selectedKind == .translation {
+                    // By language, as every translation picker lists them.
+                    let offered = Set(availableModules.map(\.id))
+                    TranslationPickerOptions(
+                        translations: model.translations.filter { offered.contains($0.id) },
+                        tag: { Optional($0.id) }
+                    )
+                } else {
+                    ForEach(availableModules, id: \.id) { module in
+                        Text(module.name).tag(Optional(module.id))
+                    }
                 }
             }
             // Capped, so a long module name cannot take the search

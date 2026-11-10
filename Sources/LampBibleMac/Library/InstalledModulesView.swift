@@ -466,3 +466,31 @@ extension LampInstalledModule {
         tagsStrongs ? Text("Strong’s") : nil
     }
 }
+
+/// A picker's translations under the languages they are written in —
+/// English, any other modern language, then the biblical languages — or one
+/// plain list when they share a language. Each carries its Strong's badge.
+struct TranslationPickerOptions<Tag: Hashable>: View {
+    let translations: [LampInstalledModule]
+    var title: (LampInstalledModule) -> String = { $0.name }
+    let tag: (LampInstalledModule) -> Tag
+
+    var body: some View {
+        let groups = LampTranslationLanguages.grouped(translations, language: \.language)
+        if groups.count > 1 {
+            ForEach(groups) { group in
+                Section(group.title) { rows(group.items) }
+            }
+        } else {
+            rows(translations)
+        }
+    }
+
+    private func rows(_ items: [LampInstalledModule]) -> some View {
+        ForEach(items) { translation in
+            Text(title(translation))
+                .badge(translation.strongsMenuBadge)
+                .tag(tag(translation))
+        }
+    }
+}

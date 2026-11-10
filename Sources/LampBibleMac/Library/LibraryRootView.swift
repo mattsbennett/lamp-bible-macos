@@ -3317,11 +3317,7 @@ private struct PassagePickerPopover: View {
             // view around it, where the arrow keys can be heard.
             HStack(spacing: 0) {
                 Picker("Translation", selection: $translationID) {
-                    ForEach(model.translations) { translation in
-                        Text(translation.name)
-                            .badge(translation.strongsMenuBadge)
-                            .tag(translation.id)
-                    }
+                    TranslationPickerOptions(translations: model.translations, tag: \.id)
                 }
                 .labelsHidden()
             }
@@ -5007,11 +5003,7 @@ private struct TranslationReaderView: View, Equatable {
     ) -> some View {
         Menu {
             Picker(title, selection: selection) {
-                ForEach(translations) { translation in
-                    Text(translation.name)
-                        .badge(translation.strongsMenuBadge)
-                        .tag(translation.id)
-                }
+                TranslationPickerOptions(translations: translations, tag: \.id)
             }
             .pickerStyle(.inline)
             .labelsHidden()

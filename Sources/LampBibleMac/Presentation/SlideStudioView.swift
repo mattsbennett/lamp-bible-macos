@@ -1858,11 +1858,11 @@ private struct LampSlideChartEditor: View {
                             // Every translation, not only the tagged ones: Lamp
                             // says below when one has no tags for this key, which
                             // is a more useful answer than a shorter menu.
-                            ForEach(model.translations, id: \.id) { translation in
-                                Text(translation.abbreviation ?? translation.name)
-                                .badge(translation.strongsMenuBadge)
-                                .tag(translation.id)
-                            }
+                            TranslationPickerOptions(
+                                translations: model.translations,
+                                title: { $0.abbreviation ?? $0.name },
+                                tag: \.id
+                            )
                         }
                         .labelsHidden()
                     }
@@ -2016,7 +2016,25 @@ private struct LampSlideChartEditor: View {
             ?? "Every tagged translation") {
             Button("Every Tagged Translation") { chart.wrappedValue.source.translations = nil }
             Divider()
-            ForEach(model.translations, id: \.id) { translation in
+            // Only those tagged with Strong's: no other can be compared.
+            let tagged = model.translations.filter(\.tagsStrongs)
+            let groups = LampTranslationLanguages.grouped(tagged, language: \.language)
+            ForEach(groups) { group in
+                Section(groups.count > 1 ? group.title : "") {
+                    compareToggles(group.items, chart: chart, chosen: chosen)
+                }
+            }
+        }
+        .fixedSize()
+        .help("The translations to set side by side")
+    }
+
+    private func compareToggles(
+        _ translations: [LampInstalledModule],
+        chart: Binding<LampPresentationChart>,
+        chosen: [String]?
+    ) -> some View {
+        ForEach(translations, id: \.id) { translation in
                 Toggle(translation.abbreviation ?? translation.name, isOn: Binding(
                     get: { chosen?.contains(translation.id) == true },
                     set: { isOn in
@@ -2027,9 +2045,6 @@ private struct LampSlideChartEditor: View {
                     }
                 ))
             }
-        }
-        .fixedSize()
-        .help("The translations to set side by side")
     }
 
     private func studioGroupingName(_ grouping: LampPresentationChart.Grouping) -> String {
@@ -2180,10 +2195,11 @@ private struct LampSlideScripturePicker: View {
         DisclosureGroup(isExpanded: $isExpanded) {
             VStack(alignment: .leading, spacing: 8) {
                 Picker("Translation", selection: $translationID) {
-                    ForEach(model.translations) { translation in
-                        Text(translation.abbreviation ?? translation.name)
-                            .tag(translation.id)
-                    }
+                    TranslationPickerOptions(
+                        translations: model.translations,
+                        title: { $0.abbreviation ?? $0.name },
+                        tag: \.id
+                    )
                 }
 
                 Picker("Book", selection: $bookNumber) {
