@@ -600,17 +600,13 @@ private struct TodayPlanCard: View {
                 .menuIndicator(.hidden)
                 .fixedSize()
                 .help("More plan actions")
-                Button {
-                    guard let next = firstUnread ?? day.readings.first else { return }
-                    openReading(readingMode(activeReadingID: next.id))
-                } label: {
-                    Label(readTitle, systemImage: "book")
-                        .padding(.horizontal, 4)
+                // Plain once the day is done, as on the phone: reading
+                // again is no longer the thing to do next.
+                if isDayDone {
+                    readButton.buttonStyle(.bordered)
+                } else {
+                    readButton.buttonStyle(.borderedProminent)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .disabled(day.readings.isEmpty)
-                .help("Open the plan’s readings in the reader")
             }
             .padding(.bottom, 12)
 
@@ -647,10 +643,27 @@ private struct TodayPlanCard: View {
         day.readings.count(where: isCompleted)
     }
 
+    private var readButton: some View {
+        Button {
+            guard let next = firstUnread ?? day.readings.first else { return }
+            openReading(readingMode(activeReadingID: next.id))
+        } label: {
+            Label(readTitle, systemImage: "book")
+                .padding(.horizontal, 4)
+        }
+        .controlSize(.large)
+        .disabled(day.readings.isEmpty)
+        .help("Open the plan’s readings in the reader")
+    }
+
+    private var isDayDone: Bool {
+        !day.readings.isEmpty && firstUnread == nil
+    }
+
     /// The same words as the phone's Today button.
     private var readTitle: String {
-        if completedCount == 0 { return "Start Reading" }
-        return firstUnread == nil ? "Read Again" : "Continue Reading"
+        if isDayDone { return "Read Again" }
+        return completedCount == 0 ? "Start Reading" : "Continue Reading"
     }
 
     private var firstUnread: LampPlanReading? {
