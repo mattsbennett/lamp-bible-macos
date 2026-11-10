@@ -3730,7 +3730,8 @@ private struct PassagePickerPopover: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Button(action: closeVerses) {
-                    Label("Chapters", systemImage: "chevron.left")
+                    // "Back to", as every back row in the app says.
+                    Label("Back to Chapters", systemImage: "chevron.left")
                 }
                 .buttonStyle(.borderless)
                 .help("Back to the chapters (Esc)")

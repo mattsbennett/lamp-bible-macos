@@ -498,12 +498,13 @@ private struct ReaderSettingsView: View {
 
                 case .modules:
                     Section("Modules") {
-                        Picker("Module Type", selection: $selectedModuleType) {
-                            ForEach(ConfigurableModuleType.allCases) { type in
-                                Text(type.title).tag(type)
-                            }
+                        LabeledContent("Module Type") {
+                            LampSegmentedPicker(
+                                "Module Type",
+                                selection: $selectedModuleType,
+                                items: ConfigurableModuleType.allCases.map { .init(id: $0, title: $0.title) }
+                            )
                         }
-                        .pickerStyle(.segmented)
 
                         switch selectedModuleType {
                         case .translations:

@@ -1059,14 +1059,13 @@ struct DevotionalAgentWorkspaceView: View {
 
     @ViewBuilder
     private var agentSessionControls: some View {
-        Picker("Session interface", selection: $sessionModeID) {
-            ForEach(AgentSessionDisplayMode.allCases) { mode in
-                Label(mode.title, systemImage: mode.systemImage).tag(mode.rawValue)
+        LampSegmentedPicker(
+            "Session interface",
+            selection: $sessionModeID,
+            items: AgentSessionDisplayMode.allCases.map {
+                .init(id: $0.rawValue, title: $0.title, systemImage: $0.systemImage)
             }
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .fixedSize()
+        )
 
         if sessionMode == .terminal {
             Button(activeProvider == nil ? "Launch" : "Restart", systemImage: "play.fill") {

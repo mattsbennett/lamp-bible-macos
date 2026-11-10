@@ -1752,14 +1752,12 @@ private struct LampSlideBlockEditor: View {
                 .help("Behind the slide, Lamp chooses the colour of the words and covers the picture only as far as they need")
             } else {
                 if block.kind == .body {
-                    Picker("Body format", selection: $block.listStyle) {
-                        Text("Text").tag(nil as LampPresentationListStyle?)
-                        ForEach(LampPresentationListStyle.allCases) { style in
-                            Text(style.displayName).tag(Optional(style))
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
+                    LampSegmentedPicker(
+                        "Body format",
+                        selection: $block.listStyle,
+                        items: [.init(id: nil, title: "Text")]
+                            + LampPresentationListStyle.allCases.map { .init(id: Optional($0), title: $0.displayName) }
+                    )
 
                     if block.listStyle != nil {
                         Text("Enter one list item per line.")

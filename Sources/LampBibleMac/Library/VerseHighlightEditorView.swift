@@ -181,13 +181,11 @@ struct VerseHighlightEditorView: View {
                 }
                 GridRow {
                     Text("Style")
-                    Picker("Style", selection: $style) {
-                        ForEach(LampHighlightStyle.allCases, id: \.self) { style in
-                            Text(style.displayName).tag(style)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
+                    LampSegmentedPicker(
+                        "Style",
+                        selection: $style,
+                        items: LampHighlightStyle.allCases.map { .init(id: $0, title: $0.displayName) }
+                    )
                 }
                 GridRow {
                     Text("Color")

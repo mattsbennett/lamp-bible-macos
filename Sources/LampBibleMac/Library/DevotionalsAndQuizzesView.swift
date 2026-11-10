@@ -127,6 +127,7 @@ struct DevotionalsView: View {
     @AppStorage("devotional.typeface")
     private var devotionalTypeface = ProseTypeface.readerDefault
     @State private var selection: String?
+    @AppStorage("writing.showsList") private var showsWritingList = true
     @State private var query = ""
     @State private var categoryFilter: String?
     @State private var moduleFilter: String?
@@ -211,58 +212,8 @@ struct DevotionalsView: View {
                 ContentUnavailableView.search(text: query)
             } else {
                 HSplitView {
-                    // Group headings are ordinary rows rather than `Section`
-                    // headers. Section chrome draws a rule under the topmost
-                    // heading only, in the separator's own colour, and no
-                    // separator modifier suppresses or restyles it — owning the
-                    // rows outright is the only way every heading gets the same
-                    // rule and it can be drawn stronger than the item separators.
-                    List(selection: $selection) {
-                        ForEach(listSections) { section in
-                            if let title = section.title {
-                                sectionHeaderRow(title)
-                            }
-                            ForEach(Array(section.devotionals.enumerated()), id: \.element.id) { index, devotional in
-                                devotionalRow(devotional)
-                                if index < section.devotionals.index(before: section.devotionals.endIndex) {
-                                    itemDividerRow
-                                }
-                            }
-                        }
-                    }
-                    // The inset style keeps its own row margin that `listRowInsets`
-                    // cannot clear, which is what stopped the group headers
-                    // reaching the edges of the column.
-                    .listStyle(.plain)
-                    // Separator rows are intentionally one point tall. The
-                    // default minimum row height otherwise surrounds each rule
-                    // with a band of empty, non-interactive space; content rows
-                    // remain as tall as their intrinsic content requires.
-                    .environment(\.defaultMinListRowHeight, 1)
-                    .contentMargins(.bottom, 52, for: .scrollContent)
-                    .frame(minWidth: 220, idealWidth: 260, maxWidth: 300)
-                    // A footer action in the list's own voice, as Notes and
-                    // Mail put theirs: a full-width filled button was the
-                    // loudest thing in the window, louder than the writing.
-                    .overlay(alignment: .bottom) {
-                        VStack(spacing: 0) {
-                            Divider()
-                            Button {
-                                beginEditing(nil)
-                            } label: {
-                                Label("New Writing", systemImage: "plus")
-                                    .fontWeight(.medium)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.borderless)
-                            .foregroundStyle(.tint)
-                            .help("Create new writing")
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 11)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .background(.bar)
+                    if showsWritingList {
+                        writingList(listSections)
                     }
 
                     if let devotional = selectedDevotional {
@@ -287,17 +238,20 @@ struct DevotionalsView: View {
         .searchable(text: $query, prompt: "Search writing")
         .toolbar {
             ToolbarItemGroup {
-                filterMenu
-                arrangeMenu
-                TextSizeMenu(
-                    fontSize: $devotionalFontSize,
-                    lineSpacing: $devotionalLineSpacing,
-                    typeface: $devotionalTypeface,
-                    defaultTypeface: ProseTypeface.readerDefault,
-                    fontScale: .writingReadingText,
-                    lineSpacingScale: .writingReadingLineSpacing,
-                    help: "Adjust the reading typeface, text size, and line spacing"
-                )
+                if showsWritingList {
+                    filterMenu
+                    arrangeMenu
+                }
+                // As Books' list hides, so this one does, to read wide.
+                Button(
+                    showsWritingList ? "Hide Writing List" : "Show Writing List",
+                    systemImage: "sidebar.squares.left"
+                ) {
+                    showsWritingList.toggle()
+                }
+                .labelStyle(.iconOnly)
+                .help(showsWritingList ? "Hide Writing List" : "Show Writing List")
+                .accessibilityValue(showsWritingList ? "Shown" : "Hidden")
                 if let devotional = selectedDevotional {
                     // Named: its figure-at-a-screen symbol, alone, read as
                     // a person rather than as presenting.
@@ -436,145 +390,110 @@ struct DevotionalsView: View {
             }
     }
 
-    /// Drawn by hand rather than left to `Section(_ title:)`.
-    ///
-    /// The built-in header rule reaches the column edges only at the top of the
-    /// list; every later group gets an inset one, so the first group looked
-    /// deliberately different from the rest.
-    ///
-    /// `listRowInsets` does not clear the margin a header row carries, so the
-    /// rule is bled back out to the column edges explicitly. `ruleBleed` is that
-    /// residual margin, measured off the rendered list: header content sits 8pt
-    /// inside the column on the left and 9pt on the right, and the wider of the
-    /// two covers both without overhanging anything.
-    private func sectionHeaderRow(_ title: String) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 12)
-                .padding(.top, 10)
-                .padding(.bottom, 6)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            // Deliberately stronger than the hairline between items, so a group
-            // boundary reads as a bigger break than the rows inside it.
-            Rectangle()
-                .fill(Color.primary.opacity(0.28))
-                .frame(height: 1)
-                // `listRowInsets` does not clear the margin a row carries, so
-                // the rule is bled back out to reach the column edges. The value
-                // is that residual margin, measured off the rendered list.
-                .padding(.horizontal, -Self.ruleBleed)
+    /// The list as Books draws its own: an inset list, its groups under
+    /// the list's own section headers, and the selection the system draws.
+    /// Before, this list drew its rules and headings itself, and so looked
+    /// unlike every other list in the app.
+    private func writingList(_ listSections: [WritingListSection]) -> some View {
+        List(selection: $selection) {
+            ForEach(listSections) { section in
+                // Always in a section: an inset list draws its row rules
+                // only inside one, and Books' rows have them.
+                if let title = section.title {
+                    Section(title) { devotionalRows(section.devotionals) }
+                } else {
+                    Section { devotionalRows(section.devotionals) }
+                }
+            }
         }
-        .listRowInsets(EdgeInsets())
-        .listRowSeparator(.hidden)
-        // A heading is a label, not a document to open.
-        .selectionDisabled()
-    }
-
-    private static let ruleBleed: CGFloat = 9
-    /// How far a row's content sits inside the column at its leading edge, and so
-    /// the inset an item separator matches at both ends.
-    private static let contentInset: CGFloat = 9
-    /// Breathing room above and below each item's content.
-    private static let verticalContentInset: CGFloat = 12
-
-    private var itemDividerRow: some View {
-        Rectangle()
-            .fill(Color.primary.opacity(0.14))
-            .frame(height: 1)
-            // `listRowInsets` leaves the plain list's residual margin in place;
-            // bleed through it so item rules span the full column width.
-            .padding(.horizontal, -Self.ruleBleed)
-            .listRowInsets(EdgeInsets())
-            .listRowSeparator(.hidden)
-            .listRowBackground(Color.clear)
-            .selectionDisabled()
-            .accessibilityHidden(true)
-    }
-
-    private func devotionalRow(_ devotional: LampDevotional) -> some View {
-        HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 5) {
-                    Text(devotional.title)
-                        .font(.headline)
-                        .lineLimit(2)
-                    // Only installed entries are worth badging. Nearly everything
-                    // in this list is the reader's own writing, so a badge on
-                    // every editable row marked nothing at all.
-                    if !devotional.isEditable {
-                        Image(systemName: "lock")
-                            .imageScale(.small)
-                            .foregroundStyle(.tertiary)
-                            .help("Installed writing — read only")
-                            .accessibilityLabel("Read only")
-                    }
-                }
-                // Auto-titled drafts all read "Untitled Devotional", so the
-                // opening line is the only thing that tells two of them apart.
-                if let snippet = rowSnippet(for: devotional) {
-                    Text(snippet)
-                        .font(.callout)
-                        .foregroundStyle(Color.lampSecondaryText)
-                        .lineLimit(3)
-                        .lineSpacing(1)
-                }
-                Text(rowMetadata(for: devotional))
-                    .font(.subheadline)
-                    .foregroundStyle(Color.lampSecondaryText)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 4)
-            if !presentationDecks(for: devotional).isEmpty {
-                Image(systemName: LinkedPresentationDeckLookup.systemImage)
-                    .symbolRenderingMode(.hierarchical)
-                    // A status marker, not an action: it should read as quieter
-                    // than the row's own text, not compete with it.
-                    .foregroundStyle(.secondary)
-                    .help(presentationDescription(for: devotional))
-                    .accessibilityLabel(presentationDescription(for: devotional))
-            }
-            if devotional.isEditable {
-                Menu {
-                    presentationActions(for: devotional)
-                    Divider()
-                    Button("Edit", systemImage: "pencil") {
-                        beginEditing(devotional)
-                    }
-                    Button("Export…", systemImage: "square.and.arrow.up") {
-                        export(devotional)
-                    }
-                    Divider()
-                    Button("Delete", systemImage: "trash", role: .destructive) {
-                        devotionalPendingDeletion = devotional
-                    }
+        // Inset, as Books' list is: a sidebar list draws under the toolbar.
+        .listStyle(.inset)
+        .contentMargins(.bottom, 52, for: .scrollContent)
+        .frame(minWidth: 220, idealWidth: 260, maxWidth: 300)
+        // A footer action in the list's own voice, as the sidebar's Import
+        // or Create… is: a full-width filled button was the loudest thing
+        // in the window, louder than the writing.
+        .overlay(alignment: .bottom) {
+            VStack(spacing: 0) {
+                Divider()
+                Button {
+                    beginEditing(nil)
                 } label: {
-                    Label("Writing Actions", systemImage: "ellipsis")
-                        .labelStyle(.iconOnly)
-                        .frame(width: 28, height: 28)
-                        .contentShape(Circle())
-                        .background(Color.primary.opacity(0.08), in: Circle())
+                    Label("New Writing", systemImage: "plus")
+                        .fontWeight(.medium)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .help("Open its presentation, edit, export, or delete this writing")
+                .buttonStyle(.borderless)
+                .foregroundStyle(.tint)
+                .help("Create new writing")
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
             }
+            .frame(maxWidth: .infinity)
+            .background(.bar)
         }
-        .padding(.vertical, Self.verticalContentInset)
-        .contentShape(Rectangle())
+    }
+
+    private func devotionalRows(_ devotionals: [LampDevotional]) -> some View {
+        ForEach(devotionals) { devotional in
+            devotionalRow(devotional)
+        }
+    }
+
+    /// Set as a book's row is: the title, then a quieter line under it.
+    /// Writing adds its opening words, which are what tell two drafts
+    /// apart, and keeps its actions in the context menu and the strip over
+    /// the preview, as Books does, rather than a button on every row.
+    private func devotionalRow(_ devotional: LampDevotional) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                Text(devotional.title)
+                    .font(.system(size: LampMetrics.listTitleSize, weight: .medium))
+                    .lineLimit(2)
+                    // Two lines when it needs them: beside the lock badge the
+                    // row measured it as one and cut it off.
+                    .fixedSize(horizontal: false, vertical: true)
+                // Only installed entries are worth badging. Nearly everything
+                // in this list is the reader's own writing, so a badge on
+                // every editable row marked nothing at all.
+                if !devotional.isEditable {
+                    Image(systemName: "lock")
+                        .imageScale(.small)
+                        .foregroundStyle(.tertiary)
+                        .help("Installed writing — read only")
+                        .accessibilityLabel("Read only")
+                }
+            }
+            // Auto-titled drafts all read "Untitled Devotional", so the
+            // opening line is the only thing that tells two of them apart.
+            if let snippet = rowSnippet(for: devotional) {
+                // The list's detail line, as a book's author is.
+                Text(snippet)
+                    .font(.system(size: LampMetrics.listDetailSize))
+                    .foregroundStyle(Color.lampSecondaryText)
+                    .lineLimit(2)
+                    .lineSpacing(1)
+            }
+            HStack(spacing: 5) {
+                Text(rowMetadata(for: devotional))
+                    .lineLimit(1)
+                // A status, said in the row's quietest line, as a book's
+                // place is said under its author.
+                if !presentationDecks(for: devotional).isEmpty {
+                    Image(systemName: LinkedPresentationDeckLookup.systemImage)
+                        .imageScale(.small)
+                        .help(presentationDescription(for: devotional))
+                        .accessibilityLabel(presentationDescription(for: devotional))
+                }
+            }
+            .font(.system(size: LampMetrics.listCaptionSize))
+            .foregroundStyle(Color.lampSecondaryText)
+        }
+        .padding(.vertical, 6)
+        // Ruled between rows, as Books' list is.
+        .listRowSeparator(.visible)
         .tag(devotional.id)
-        .listRowInsets(EdgeInsets(
-            top: 0,
-            leading: Self.contentInset,
-            bottom: 0,
-            trailing: Self.contentInset
-        ))
-        // Dividers are separate, non-selectable rows. Keeping them outside this
-        // row prevents the native selection background from occupying the same
-        // bounds as the rule.
-        .listRowSeparator(.hidden)
         // Explicitly adopt the clicked row. The former simultaneous double-click
         // recognizer competed with List's native selection, leaving keyboard
         // navigation working while pointer clicks failed to update the preview.
@@ -636,6 +555,8 @@ struct DevotionalsView: View {
     private func devotionalDetail(_ devotional: LampDevotional) -> some View {
         ScrollViewReader { proxy in
             VStack(spacing: 0) {
+                previewStrip(devotional)
+                Divider()
                 if previewFind.isVisible {
                     WritingFindBar(controller: previewFind)
                     Divider()
@@ -678,44 +599,139 @@ struct DevotionalsView: View {
         .onAppear { previewFind.attach(previewFinder) }
     }
 
+    /// The writing's own actions, over it, as Books puts a section's over
+    /// the page: step through the list, then edit, share, set the type, and
+    /// the rest. The window's toolbar keeps what acts on the list.
+    private func previewStrip(_ devotional: LampDevotional) -> some View {
+        let neighbours = previewNeighbours(of: devotional)
+        return HStack(spacing: 14) {
+            Button("Previous Writing", systemImage: "chevron.left") {
+                if let previous = neighbours.previous { selection = previous }
+            }
+            .labelStyle(.iconOnly)
+            .disabled(neighbours.previous == nil)
+            .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+
+            Button("Next Writing", systemImage: "chevron.right") {
+                if let next = neighbours.next { selection = next }
+            }
+            .labelStyle(.iconOnly)
+            .disabled(neighbours.next == nil)
+            .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
+
+            Spacer()
+            if devotional.isEditable {
+                Button("Edit", systemImage: "pencil") { beginEditing(devotional) }
+                    .labelStyle(.iconOnly)
+                    .help("Edit this writing")
+            }
+
+            ShareLink(
+                item: devotional.content,
+                subject: Text(devotional.title),
+                message: Text(devotional.summary ?? devotional.title)
+            ) {
+                Label("Share as Markdown", systemImage: "square.and.arrow.up")
+            }
+            .labelStyle(.iconOnly)
+            .help("Share this writing as Markdown")
+
+            TextSizeMenu(
+                fontSize: $devotionalFontSize,
+                lineSpacing: $devotionalLineSpacing,
+                typeface: $devotionalTypeface,
+                defaultTypeface: ProseTypeface.readerDefault,
+                fontScale: .writingReadingText,
+                lineSpacingScale: .writingReadingLineSpacing,
+                help: "Adjust the reading typeface, text size, and line spacing"
+            )
+
+            Menu("More", systemImage: "ellipsis.circle") {
+                presentationActions(for: devotional)
+                if devotional.isEditable {
+                    Divider()
+                    Button("Export…", systemImage: "square.and.arrow.up") { export(devotional) }
+                    Divider()
+                    Button("Delete", systemImage: "trash", role: .destructive) {
+                        devotionalPendingDeletion = devotional
+                    }
+                }
+            }
+            .labelStyle(.iconOnly)
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Presentation deck, export, and delete")
+        }
+        .buttonStyle(.borderless)
+        // The same size and shade as the book reader's strip.
+        .font(.system(size: 14.5))
+        .foregroundStyle(.primary.opacity(0.78))
+        .padding(.horizontal, 14)
+        .frame(height: 42)
+    }
+
+    /// The writings either side of this one, in the list's order.
+    private func previewNeighbours(of devotional: LampDevotional) -> (previous: String?, next: String?) {
+        let ids = writingListSections(from: filteredDevotionals).flatMap { $0.devotionals.map(\.id) }
+        guard let index = ids.firstIndex(of: devotional.id) else { return (nil, nil) }
+        return (
+            index > ids.startIndex ? ids[index - 1] : nil,
+            index + 1 < ids.endIndex ? ids[index + 1] : nil
+        )
+    }
+
+    /// What kind of writing this is, over its title, as "Chapter 2" is over
+    /// a book section's: its series where it has one, else its category.
+    private func previewEyebrow(_ devotional: LampDevotional) -> String? {
+        if let series = devotional.seriesName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !series.isEmpty {
+            return series
+        }
+        return LampWritingCategory.displayName(devotional.category)
+    }
+
     private func devotionalDocument(_ devotional: LampDevotional) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 7) {
-                    // Scales with the reading size rather than sitting at a
-                    // fixed `largeTitle`, so turning the text up does not
-                    // leave the title looking detached from its own document.
+                // Set as a book section's header is: an eyebrow, the title,
+                // its subtitle, then the passages it is about.
+                VStack(alignment: .leading, spacing: 10) {
+                    if let eyebrow = previewEyebrow(devotional) {
+                        Text(eyebrow.uppercased())
+                            .font(.system(size: 12, weight: .semibold))
+                            .tracking(1.4)
+                            .foregroundStyle(Color.lampSecondaryText)
+                    }
                     Text(devotional.title)
                         .font(.system(
-                            size: devotionalFontSize * 1.9,
+                            size: max(devotionalFontSize * 1.8, 30),
                             weight: .bold,
                             design: devotionalTypeface.design
                         ))
+                        .fixedSize(horizontal: false, vertical: true)
                     if let subtitle = devotional.subtitle, !subtitle.isEmpty {
                         Text(subtitle)
                             .font(.system(
-                                size: devotionalFontSize * 1.25,
+                                size: max(devotionalFontSize * 1.15, 18),
                                 design: devotionalTypeface.design
                             ))
-                            .foregroundStyle(Color.lampSecondaryText)
+                            .foregroundStyle(.secondary)
                     }
                     detailMetadata(devotional)
-                }
-
-                if !devotional.keyScriptures.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Key Scripture")
-                            .font(.headline)
-                        // Wraps: a devotional can carry more references than the
-                        // detail pane has room for on a single line.
-                        WrappingRow(spacing: 8) {
+                    if !devotional.keyScriptures.isEmpty {
+                        // Wraps: a writing can carry more references than
+                        // the pane has room for on one line.
+                        WrappingRow(spacing: 6) {
                             ForEach(devotional.keyScriptures) { scripture in
                                 Button(scripture.displayDescription) {
                                     openReference(scripture.startReference)
                                 }
                                 .buttonStyle(.bordered)
+                                .controlSize(.small)
                             }
                         }
+                        .padding(.top, 3)
                     }
                 }
 
@@ -881,15 +897,6 @@ struct DevotionalsView: View {
             }
             if statistics.wordCount > 0 {
                 ReadingTimeMenu(statistics: statistics, showsIcon: true)
-            }
-            if devotional.isEditable {
-                // A button rather than a word of tinted text: it is the way
-                // into the editor, and read as a stray link.
-                Button("Edit", systemImage: "pencil") {
-                    beginEditing(devotional)
-                }
-                .buttonStyle(.borderedProminent)
-                .help("Edit this writing")
             }
         }
         .font(.callout)

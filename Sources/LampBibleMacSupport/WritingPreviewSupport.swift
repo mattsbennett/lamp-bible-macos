@@ -131,12 +131,23 @@ public struct WritingStatistics: Equatable, Sendable {
 
     /// A single-line opening for a list row. Collapses the paragraph breaks that
     /// would otherwise make one line of a row render as an empty gap.
+    ///
+    /// A line that ends without punctuation — a heading, a reference, a label —
+    /// is followed by a middle dot rather than a space. Joined by spaces, a
+    /// study's opening read "Class 1 Judges 6:1-24 The Upper Hand V1: …", as
+    /// one sentence that was never written.
     public static func snippet(from markdown: String, limit: Int = 160) -> String {
-        let collapsed = plainProse(from: markdown)
+        let lines = plainProse(from: markdown)
             .split(whereSeparator: { $0.isNewline })
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
-            .joined(separator: " ")
+        var collapsed = ""
+        for line in lines {
+            if let last = collapsed.last {
+                collapsed += Self.closesASentence(last) ? " " : " · "
+            }
+            collapsed += line
+        }
         guard collapsed.count > limit else { return collapsed }
         // Break on a word so the ellipsis never lands mid-word.
         let clipped = collapsed.prefix(limit)
@@ -144,6 +155,10 @@ public struct WritingStatistics: Equatable, Sendable {
             return String(clipped) + "…"
         }
         return clipped[clipped.startIndex..<lastSpace] + "…"
+    }
+
+    private static func closesASentence(_ character: Character) -> Bool {
+        ".!?:;,\u{2026}\u{201D}\u{2019}\")\u{2014}".contains(character)
     }
 
     private static func plainProse(from markdown: String) -> String {

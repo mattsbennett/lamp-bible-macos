@@ -165,6 +165,14 @@ enum LampMetrics {
     static let tileRadius: CGFloat = 7
     /// Between the cards of a page.
     static let cardSpacing: CGFloat = 20
+
+    /// The rows of a list column beside a page (books, contents, writing):
+    /// the name, the line under it, and its smallest notes. One scale, a
+    /// step above what these lists began at, which a blind panel found
+    /// small against the page beside them in every round.
+    static let listTitleSize: CGFloat = 14
+    static let listDetailSize: CGFloat = 12.5
+    static let listCaptionSize: CGFloat = 11.5
 }
 
 extension Color {
@@ -273,5 +281,102 @@ extension Text {
         // accent *colour*, which reads as a link.
         marked.inlinePresentationIntent = .stronglyEmphasized
         return Text(marked)
+    }
+}
+
+/// A choice of one among a few — List or Ring, Visual or Markdown — drawn
+/// in the text's own colours: the chosen one raised on a quiet track, as
+/// Slide Studio's choice tiles mark theirs.
+///
+/// Not the system's segmented control, which fills the chosen segment with
+/// the accent. Red is for where you are and what you press (ColorRules.md);
+/// a mode chosen in a corner of a pane is neither, and a blind panel found
+/// the filled segments the loudest thing on screen, louder than the figures
+/// they switch between. Use this wherever a segmented picker would go, so
+/// every one in the app reads alike.
+struct LampSegmentedPicker<ID: Hashable>: View {
+    struct Item {
+        let id: ID
+        let title: String
+        var systemImage: String? = nil
+    }
+
+    let label: String
+    let items: [Item]
+    @Binding var selection: ID
+    @Environment(\.controlSize) private var controlSize
+    @Environment(\.isEnabled) private var isEnabled
+
+    init(_ label: String, selection: Binding<ID>, items: [Item]) {
+        self.label = label
+        self._selection = selection
+        self.items = items
+    }
+
+    /// The chosen segment, raised off the track: white on light; on dark a
+    /// clear step up, since the raised tile's 7.5% vanished on the track.
+    private static var chosenFill: Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.lampIsDark
+                ? NSColor(white: 1, alpha: 0.2)
+                : NSColor(white: 1, alpha: 1)
+        })
+    }
+
+    private var isSmall: Bool { controlSize == .small || controlSize == .mini }
+    private var height: CGFloat { isSmall ? 20 : 24 }
+    private var font: Font { .system(size: isSmall ? 11.5 : 13) }
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(items.indices, id: \.self) { index in
+                segment(items[index])
+            }
+        }
+        .padding(2)
+        .background(
+            Color.primary.opacity(0.07),
+            in: RoundedRectangle(cornerRadius: LampMetrics.tileRadius, style: .continuous)
+        )
+        .opacity(isEnabled ? 1 : 0.5)
+        .fixedSize()
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(label)
+    }
+
+    private func segment(_ item: Item) -> some View {
+        let isChosen = item.id == selection
+        return Button {
+            selection = item.id
+        } label: {
+            Group {
+                if let systemImage = item.systemImage {
+                    Label(item.title, systemImage: systemImage)
+                } else {
+                    Text(item.title)
+                }
+            }
+            .font(font)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, isSmall ? 8 : 10)
+            .frame(height: height)
+            .foregroundStyle(isChosen ? AnyShapeStyle(.primary) : AnyShapeStyle(Color.lampSecondaryText))
+            .background {
+                if isChosen {
+                    RoundedRectangle(cornerRadius: LampMetrics.tileRadius - 2, style: .continuous)
+                        .fill(Self.chosenFill)
+                        .shadow(color: .black.opacity(0.12), radius: 1, y: 0.5)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: LampMetrics.tileRadius - 2, style: .continuous)
+                                .strokeBorder(Color.lampCardStroke)
+                        }
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(item.title)
+        .accessibilityAddTraits(isChosen ? .isSelected : [])
     }
 }

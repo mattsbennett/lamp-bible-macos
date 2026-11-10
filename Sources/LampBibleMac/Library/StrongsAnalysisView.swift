@@ -546,6 +546,10 @@ struct StrongsAnalysisPane: View {
     /// Set once rather than per search, so it is remembered.
     @AppStorage("strongs.renderingsAsRing") private var renderingsAsRing = true
     @AppStorage("strongs.formsAsRing") private var formsAsRing = true
+    /// List or ring, chosen for one word's figure that opened as a list
+    /// because one share was nearly all of it. Not stored: the reader's
+    /// setting above still decides every other word.
+    @State private var ringChoices: [String: Bool] = [:]
     /// Which figures the card prints and what it draws under them, by name.
     /// Per device, as the ring settings above are: which figures a reader
     /// wants at a glance is how one person reads, not something the library
@@ -567,6 +571,9 @@ struct StrongsAnalysisPane: View {
     /// Collapsed to begin with: the Septuagint is a second subject, and what
     /// it holds costs a search a word to work out.
     @State private var isShowingSeptuagint = false
+    /// Closed to begin with: where the forms' spellings come from, and what
+    /// the tags leave out, read once rather than every time.
+    @State private var isShowingFormNotes = false
 
     /// The analysis the pane describes: the translation being read, which
     /// `LampStrongsAnalysisOrder` keeps at the front.
@@ -638,28 +645,18 @@ struct StrongsAnalysisPane: View {
         }
     }
 
-    /// Segmented beside Search's occurrence column, where there is room for
-    /// it. In the study column, the column's own tabs: five segments do not
-    /// shrink, and pushed the pane past both of the column's edges.
-    @ViewBuilder
+    /// The pane's own tabs, wherever it sits, as the study column's are.
+    /// Search used a segmented control here, filled with the accent, and so
+    /// drew the same pane two ways and outshouted the figures under it.
     private var sectionPicker: some View {
-        let selection = Binding(get: { shownSection }, set: { section = $0 })
-        if sections.contains(.verses) {
-            UnderlinedTabs(
-                label: "Section",
-                items: sections.map { ($0, $0.rawValue) },
-                selection: selection,
-                spacing: 14
-            )
-            .font(.callout)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        } else {
-            Picker("Section", selection: selection) {
-                ForEach(sections) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-        }
+        UnderlinedTabs(
+            label: "Section",
+            items: sections.map { ($0, $0.rawValue) },
+            selection: Binding(get: { shownSection }, set: { section = $0 }),
+            spacing: 14
+        )
+        .font(.callout)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// The section chosen, or the first offered: a pane that offers no
@@ -707,14 +704,16 @@ struct StrongsAnalysisPane: View {
     /// short definition cut to fit was what this header used to show, and it
     /// read as a sentence broken off.
     private func card(_ analysis: LampStrongsAnalysis) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
+        // A little shorter than it was: in the study column the card took
+        // most of the first screen, and the figures under it began below it.
+        VStack(alignment: .leading, spacing: 12) {
             if let back {
+                // "Back to", as every back row in the app says: a bare key
+                // above another key's card read as that card's own name.
                 Button(action: back.go) {
-                    Label(back.title, systemImage: "chevron.left")
+                    Label("Back to \(back.title)", systemImage: "chevron.left")
                 }
                 .buttonStyle(.borderless)
-                .accessibilityLabel("Back to \(back.title)")
-                .help("Back to \(back.title)")
             }
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
@@ -783,8 +782,8 @@ struct StrongsAnalysisPane: View {
                     }
             }
             Text(cardFootnote(analysis))
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(.subheadline)
+                .foregroundStyle(Color.lampSecondaryText)
             // The whole analysis counts these numbers, so where they were
             // matched to the text is said under the figures they make.
             ForEach(declaredSources(.strongs, for: analysis), id: \.source) { source in
@@ -833,7 +832,7 @@ struct StrongsAnalysisPane: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(figure.title)
-                .font(.caption.weight(.medium))
+                .font(.subheadline.weight(.medium))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
@@ -961,7 +960,7 @@ struct StrongsAnalysisPane: View {
         ] as [String?]).compactMap { $0 }.joined(separator: "\u{00A0}· ")
     }
 
-    private static let stripHeight: Double = 64
+    private static let stripHeight: Double = 54
     private static let stripLabelBand: Double = 16
 
     /// The key's spread through the canon at a glance: a column for each book
@@ -1079,20 +1078,48 @@ struct StrongsAnalysisPane: View {
 
     // MARK: - Overview
 
+    /// The reader's list-or-ring setting, except where one share is nearly
+    /// all of the figure: that opens as a list, as on the phone, because the
+    /// ring would say only that one thing (core decides when). Switching it
+    /// there is remembered for that word, not stored as the setting.
+    private func ringBinding(
+        _ part: String,
+        stored: Binding<Bool>,
+        counts: [Int],
+        of analysis: LampStrongsAnalysis
+    ) -> Binding<Bool> {
+        let id = "\(part)|\(analysis.key)|\(analysis.translationID)"
+        let isDominated = LampStrongsShare.isDominated(counts)
+        return Binding(
+            get: { ringChoices[id] ?? (isDominated ? false : stored.wrappedValue) },
+            set: { chosen in
+                if isDominated { ringChoices[id] = chosen } else { stored.wrappedValue = chosen }
+            }
+        )
+    }
+
     private func overview(_ analysis: LampStrongsAnalysis) -> some View {
-        VStack(alignment: .leading, spacing: 24) {
+        let renderingsRing = ringBinding(
+            "renderings", stored: $renderingsAsRing,
+            counts: analysis.renderings.map(\.count), of: analysis
+        )
+        let formsRing = ringBinding(
+            "forms", stored: $formsAsRing,
+            counts: analysis.forms.map(\.count), of: analysis
+        )
+        return VStack(alignment: .leading, spacing: 24) {
             if !analysis.renderings.isEmpty {
                 group(
                     "Translated As",
                     note: "What translators reached for, not what the word means.",
-                    asRing: $renderingsAsRing,
+                    asRing: renderingsRing,
                     deck: addToDeck(analysis, [deckChart(
                         analysis, name: "Translated As", by: .rendering,
-                        style: renderingsAsRing ? .share : .bars,
+                        style: renderingsRing.wrappedValue ? .share : .bars,
                         title: "How \(translationName(analysis)) translates \(headword(analysis))"
                     )])
                 ) {
-                    if renderingsAsRing {
+                    if renderingsRing.wrappedValue {
                         ShareRing(
                             divisions: LampStrongsGrouping.renderings.divisions(of: analysis),
                             choose: choose
@@ -1110,19 +1137,19 @@ struct StrongsAnalysisPane: View {
                 group(
                     "Forms",
                     note: LampStrongsFormReading.note(for: analysis, readings: Array(readings.values)),
-                    asRing: analysis.forms.isEmpty ? nil : $formsAsRing,
+                    asRing: analysis.forms.isEmpty ? nil : formsRing,
                     // Nothing to chart without forms: a slide of none would be
                     // an empty placeholder.
                     deck: analysis.forms.isEmpty ? nil : addToDeck(analysis, [deckChart(
                         analysis, name: "Forms", by: .form,
-                        style: formsAsRing ? .share : .bars,
+                        style: formsRing.wrappedValue ? .share : .bars,
                         title: "The forms of \(headword(analysis))"
                     )])
                 ) {
                     formGaps(analysis, readings: readings)
                     if analysis.forms.isEmpty {
                         EmptyView()
-                    } else if formsAsRing {
+                    } else if formsRing.wrappedValue {
                         ShareRing(
                             divisions: LampStrongsGrouping.forms.divisions(of: analysis),
                             details: Dictionary(uniqueKeysWithValues: analysis.forms.enumerated().map { index, form in
@@ -1390,7 +1417,7 @@ struct StrongsAnalysisPane: View {
     /// Book and section names, and the figures beside them.
     private static let chartLabelSize: Double = 13
     /// The finest print a chart has: axis ends, the shade key, the cautions.
-    private static let chartFinePrintSize: Double = 11.5
+    private static let chartFinePrintSize: Double = 12
     /// One row of the chapter grid: the cell plus room for its book's name.
     private static let gridRowHeight: Double = 19
     /// A chapter's cell. Twelve was a speck; these are meant to be aimed at.
@@ -1682,11 +1709,20 @@ struct StrongsAnalysisPane: View {
             + Self.listsThese(bar.occurrenceCount)
     }
 
+    /// The three shades are told apart by lightness. On a dark ground the
+    /// accent at half strength sinks towards the full accent, so "as
+    /// expected" is fainter there, and "fewer" lighter, to keep three steps.
     private func fill(for expectation: LampStrongsAnalysis.Expectation) -> AnyShapeStyle {
+        let isDark = colorScheme == .dark
         switch expectation {
-        case .more: AnyShapeStyle(.tint)
-        case .fewer: AnyShapeStyle(Color.primary.opacity(0.32))
-        case .asExpected: AnyShapeStyle(.tint.opacity(0.55))
+        case .more: return AnyShapeStyle(.tint)
+        case .fewer: return AnyShapeStyle(Color.primary.opacity(isDark ? 0.5 : 0.32))
+        case .asExpected:
+            // Lightened on a dark ground, as a share's shades are: faded,
+            // it was a maroon barely off its track.
+            return isDark
+                ? AnyShapeStyle(Color(nsColor: NSColor(Color.accentColor).blended(withFraction: 0.5, of: .white) ?? .systemPink))
+                : AnyShapeStyle(.tint.opacity(0.55))
         }
     }
 
@@ -1763,6 +1799,18 @@ struct StrongsAnalysisPane: View {
                 Text("No other key shares enough verses with this one.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            } else {
+                // Says what the figure at each row's end is: a bare "7.9×
+                // chance" in a corner read as a stray number.
+                HStack {
+                    Text("Found in its verses, strongest first")
+                    Spacer()
+                    Text("× as often as chance")
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Color.lampSecondaryText)
+                .textCase(.uppercase)
+                Divider()
             }
             ForEach(analysis.companions) { companion in
                 Button {
@@ -1776,9 +1824,10 @@ struct StrongsAnalysisPane: View {
                                 Text(lemma).font(.system(size: fontSize))
                             }
                             Spacer()
-                            Text(String(format: "%.1f× chance", companion.lift))
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.secondary)
+                            Text(String(format: "%.1f×", companion.lift))
+                                .font(.system(size: fontSize, weight: .medium).monospacedDigit())
+                                .foregroundStyle(Color.lampSecondaryText)
+                                .help("Shares verses \(String(format: "%.1f", companion.lift)) times as often as chance would give")
                         }
                         if let gloss = loader.entries[companion.key]?.gloss {
                             Text(gloss)
@@ -1786,9 +1835,20 @@ struct StrongsAnalysisPane: View {
                                 .foregroundStyle(.secondary)
                                 .lineLimit(2)
                         }
-                        Text("\(companion.sharedVerseCount) shared verses of \(companion.verseCount)")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
+                        // The strength the list is ordered by, against the
+                        // strongest here: without it the multipliers beside
+                        // the rows read as a list sorted badly.
+                        HStack(spacing: 8) {
+                            CompanionStrength(
+                                fraction: LampStrongsCompanionStrength.fraction(
+                                    of: companion, among: analysis.companions
+                                )
+                            )
+                            Text("\(companion.sharedVerseCount) shared verses of \(companion.verseCount)")
+                                .font(.caption)
+                                .foregroundStyle(Color.lampSecondaryText)
+                        }
+                        .padding(.top, 1)
                     }
                     .contentShape(Rectangle())
                 }
@@ -1802,11 +1862,12 @@ struct StrongsAnalysisPane: View {
                 // ordered by how strongly the association shows, which is not
                 // the multiple beside them: σπλάγχνα at 25× chance rests on
                 // three shared verses, and πίστις at 9× on twenty-two.
-                Text("Strongest association first, which is not the largest multiple: "
-                    + "a high multiple over few verses says less than a smaller one "
-                    + "over many.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                Text("The bar is each word's strength of association with this one, "
+                    + "against the strongest here, and the list follows it. The multiple "
+                    + "says how much more often than chance the two share a verse: a high "
+                    + "multiple over few verses says less than a smaller one over many.")
+                    .font(.subheadline)
+                    .foregroundStyle(Color.lampSecondaryText)
                     .padding(.top, 2)
             }
         }
@@ -1922,32 +1983,41 @@ struct StrongsAnalysisPane: View {
         // Spellings matched to the text when its module was built are said
         // to be, so they are not read as the translation's own print.
         let matched = analysis.forms.isEmpty ? [] : declaredSources(.forms, for: analysis)
-        ForEach(matched, id: \.source) { source in
-            Text(source.disclosure(
-                translationName: analysis.translationAbbreviation ?? analysis.translationName,
-                strongsKey: analysis.key
-            ))
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.bottom, gaps.isEmpty ? 6 : 0)
-        }
-        if !gaps.isEmpty, formReadings?.source == formsSource(of: analysis) || analysis.forms.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(gaps, id: \.self) { gap in
-                    Text(gap)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+        let showsGaps = !gaps.isEmpty
+            && (formReadings?.source == formsSource(of: analysis) || analysis.forms.isEmpty)
+        let name = analysis.translationAbbreviation ?? analysis.translationName
+        if !matched.isEmpty || showsGaps {
+            // Where the spellings come from and what the tags leave out,
+            // behind a disclosure as the Septuagint is: set out in full
+            // above the figures they were several paragraphs of fine print
+            // between the reader and the forms. The disclosure's label
+            // stays, so it is still said that there is something to know.
+            DisclosureGroup(isExpanded: $isShowingFormNotes) {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(matched, id: \.source) { source in
+                        Text(source.disclosure(translationName: name, strongsKey: analysis.key))
+                    }
+                    if showsGaps {
+                        ForEach(gaps, id: \.self) { Text($0) }
+                    }
                 }
-                if let original, let openIn {
-                    let name = original.translationAbbreviation ?? original.translationName
-                    Button("Open in \(name)") { openIn(original.translationID) }
-                        .controlSize(.small)
-                        .help("Analyse \(analysis.key) in \(name), whose tags give each spelling and its grammar")
-                }
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 4)
+            } label: {
+                Text(matched.isEmpty
+                    ? "What \(name)\u{2019}s tags leave out"
+                    : "Where \(name)\u{2019}s spellings come from")
+                    .font(.callout)
             }
-            .padding(.bottom, 6)
+        }
+        if showsGaps, let original, let openIn {
+            let originalName = original.translationAbbreviation ?? original.translationName
+            Button("Open in \(originalName)") { openIn(original.translationID) }
+                .controlSize(.small)
+                .help("Analyse \(analysis.key) in \(originalName), whose tags give each spelling and its grammar")
+                .padding(.bottom, 6)
         }
     }
 
@@ -2073,21 +2143,21 @@ struct StrongsAnalysisPane: View {
                 Spacer(minLength: 8)
                 if let deck { deck }
                 if let asRing {
-                    Picker("Show \(title) as", selection: asRing) {
-                        Text("List").tag(false)
-                        Text("Ring").tag(true)
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
+                    LampSegmentedPicker("Show \(title) as", selection: asRing, items: [
+                        .init(id: false, title: "List"),
+                        .init(id: true, title: "Ring"),
+                    ])
                     .controlSize(.small)
-                    .fixedSize()
                     .help("A list to compare, or a ring of each one's part of the whole")
                 }
             }
             if let note {
+                // A size up and a shade firmer than it was: these say how
+                // to read the figure, and at caption size on a dark ground
+                // they were the first thing nobody read.
                 Text(note)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.subheadline)
+                    .foregroundStyle(Color.lampSecondaryText)
                     .padding(.bottom, 4)
             }
             content()
@@ -2166,7 +2236,15 @@ struct StrongsAnalysisPane: View {
 
     /// The empty length behind a bar, a step off the pane in either
     /// appearance: `.quaternary` all but vanished on dark.
-    private static var barTrack: Color { Color.primary.opacity(0.08) }
+    private static var barTrack: Color {
+        // A shade firmer on a dark ground, where 8% left an empty track
+        // and a short grey bar both near the pane's own colour.
+        Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                ? NSColor.white.withAlphaComponent(0.12)
+                : NSColor.black.withAlphaComponent(0.08)
+        })
+    }
 
     /// Choosing the filter already in force removes it, so the same click both
     /// narrows and widens and nobody has to find the chip to get back.
@@ -2525,6 +2603,58 @@ private extension View {
 ///
 /// Drawn from twelve o'clock clockwise, which is where a reader expects a
 /// share to start.
+/// A companion's strength of association, as a share of the strongest
+/// listed: a short bar in the accent, named, as on the phone.
+private struct CompanionStrength: View {
+    let fraction: Double
+
+    var body: some View {
+        HStack(spacing: 5) {
+            // Wide and thick enough to compare down the list: at 44 by 4
+            // points the panel found it a hairline nobody could read.
+            Capsule()
+                .fill(Color.primary.opacity(0.1))
+                .frame(width: 64, height: 6)
+                .overlay(alignment: .leading) {
+                    Capsule()
+                        .fill(.tint)
+                        .frame(width: max(6, 64 * fraction), height: 6)
+                }
+            Text("strength")
+                .font(.subheadline)
+                .foregroundStyle(Color.lampSecondaryText)
+        }
+        .help("Strength of association, against the strongest here: the order of this list")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Strength of association")
+        .accessibilityValue("\(Int((fraction * 100).rounded()))% of the strongest")
+    }
+}
+
+/// A share's shade of the accent: the largest full, each smaller one
+/// paler. In light mode the accent is faded towards the white ground. On a
+/// dark ground fading darkens it, to maroons too alike to match a slice to
+/// its key, so there it is lightened towards white instead, which keeps the
+/// same order of steps from strong to pale that light mode shows.
+private struct ShareShade: ViewModifier {
+    let strength: Double
+    @Environment(\.colorScheme) private var colorScheme
+
+    func body(content: Content) -> some View {
+        if colorScheme == .dark {
+            content.brightness((1 - strength) * 0.55)
+        } else {
+            content.opacity(strength)
+        }
+    }
+}
+
+private extension View {
+    func shareShade(_ strength: Double) -> some View {
+        modifier(ShareShade(strength: strength))
+    }
+}
+
 private struct DonutSlice: Shape {
     /// Where this wedge begins, 0...1 of the turn.
     let start: Double
@@ -2749,7 +2879,7 @@ private struct CardShareBar: View {
             HStack(spacing: 5) {
                 RoundedRectangle(cornerRadius: 2, style: .continuous)
                     .fill(.tint)
-                    .opacity(opacity(index, of: count, isOther: slice.isOther))
+                    .shareShade(opacity(index, of: count, isOther: slice.isOther))
                     .frame(width: 9, height: 9)
                 Text(slice.name)
                     .font(.system(size: Self.type, weight: isLargest ? .bold : .regular))
@@ -2780,7 +2910,7 @@ private struct CardShareBar: View {
         choosable(slice) {
             RoundedRectangle(cornerRadius: 3, style: .continuous)
                 .fill(.tint)
-                .opacity(opacity(index, of: count, isOther: slice.isOther))
+                .shareShade(opacity(index, of: count, isOther: slice.isOther))
                 .frame(width: width, height: Self.height)
                 .contentShape(Rectangle())
         }
@@ -2818,7 +2948,9 @@ private struct CardShareBar: View {
     private func opacity(_ index: Int, of count: Int, isOther: Bool) -> Double {
         guard !isOther else { return 0.2 }
         guard count > 1 else { return 1 }
-        return 1 - 0.6 * (Double(index) / Double(count - 1))
+        // Across three quarters of the range, as on the phone: five shades
+        // over 60% were too alike to match a slice to its key.
+        return 1 - 0.75 * (Double(index) / Double(count - 1))
     }
 }
 
@@ -2884,13 +3016,25 @@ private struct ShareRing: View {
                     thickness: Self.thickness
                 )
                 .fill(.tint)
-                .opacity(
-                    hovered == nil || hovered?.id == slice.id
-                        ? opacity(index, of: slices.count, isOther: slice.isOther)
-                        // The others recede rather than vanish, so the ring
-                        // keeps its shape while one slice is picked out.
-                        : 0.12
-                )
+                .shareShade(opacity(index, of: slices.count, isOther: slice.isOther))
+                // The others recede rather than vanish, so the ring keeps
+                // its shape while one slice is picked out. Not too far: at a
+                // tenth the ring read as empty, and a 1% slice was then the
+                // only thing on it.
+                .opacity(hovered == nil || hovered?.id == slice.id ? 1 : 0.35)
+                // A hairline of the ground between slices: shades of one
+                // colour run together, and a 1% slice beside another was
+                // one band.
+                .overlay {
+                    if slices.count > 1 {
+                        DonutSlice(
+                            start: slices.prefix(index).reduce(0) { $0 + $1.fraction },
+                            extent: slice.fraction,
+                            thickness: Self.thickness
+                        )
+                        .stroke(.background, lineWidth: 1.5)
+                    }
+                }
             }
             // The hole holds the total, the one number a share otherwise
             // leaves you to add up.
@@ -2948,7 +3092,7 @@ private struct ShareRing: View {
                     HStack(spacing: 8) {
                         RoundedRectangle(cornerRadius: 2)
                             .fill(.tint)
-                            .opacity(opacity(index, of: slices.count, isOther: slice.isOther))
+                            .shareShade(opacity(index, of: slices.count, isOther: slice.isOther))
                             .frame(width: 10, height: 10)
                             .overlay {
                                 if hovered?.id == slice.id {
@@ -2999,7 +3143,9 @@ private struct ShareRing: View {
     private func opacity(_ index: Int, of count: Int, isOther: Bool) -> Double {
         guard !isOther else { return 0.2 }
         guard count > 1 else { return 1 }
-        return 1 - 0.6 * (Double(index) / Double(count - 1))
+        // Across three quarters of the range, as on the phone: five shades
+        // over 60% were too alike to match a slice to its key.
+        return 1 - 0.75 * (Double(index) / Double(count - 1))
     }
 }
 
@@ -3078,22 +3224,24 @@ struct StrongsOccurrenceLabel: View {
                 if let form = occurrence.form, !form.isEmpty {
                     Text(form)
                         .font(.callout)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color.lampSecondaryText)
                 }
             }
             if let verse {
                 // The outer style is the default for spans that set none, so
-                // the tagged word keeps the mark it was given.
+                // the tagged word keeps the mark it was given. Scripture in
+                // the text's own colour, as every search result shows it: in
+                // the system grey these were the faintest verses in the app.
                 snippet(of: verse)
                     .font(.system(size: fontSize))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.primary)
                     .lineLimit(3)
             } else if !occurrence.text.isEmpty {
                 // No verse kept for this translation, so the rendered words on
                 // their own.
                 Text("“\(occurrence.text)”")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.callout)
+                    .foregroundStyle(Color.lampSecondaryText)
             }
         }
     }
@@ -3165,12 +3313,11 @@ struct StudyAnalysisView: View {
                 Button {
                     keys.removeLast()
                 } label: {
-                    Label(backTitle, systemImage: "chevron.left")
+                    // "Back to", as every back row in the app says. It also
+                    // settles "Dictionary" alone, which is the tab above it.
+                    Label("Back to \(backTitle)", systemImage: "chevron.left")
                 }
                 .buttonStyle(.borderless)
-                // Named for where it goes: "Dictionary" alone is also the
-                // tab above it.
-                .accessibilityLabel(backHelp)
                 .help(backHelp)
                 Spacer(minLength: 0)
                 if openedTranslationID != nil, let reading = readingTranslationID {
@@ -3209,7 +3356,8 @@ struct StudyAnalysisView: View {
     }
 
     private var backHelp: String {
-        keys.count > 1 ? "Back to \(backTitle)" : "Back to the dictionary entry"
+        // Says more than the button's own words, not the same again.
+        keys.count > 1 ? "Back to the analysis of \(backTitle)" : "Back to the dictionary entry"
     }
 
     /// The key Back returns to, or the entry when this is the first.

@@ -131,13 +131,15 @@ struct WritingStatisticsTests {
         Faithfulness is rarely **dramatic**.
         """)
 
-        #expect(snippet == "The Weight of Small Obedience Faithfulness is rarely dramatic.")
+        // The heading has no closing punctuation, so a dot parts it from the
+        // sentence after it.
+        #expect(snippet == "The Weight of Small Obedience · Faithfulness is rarely dramatic.")
     }
 
     @Test func snippetsCollapseBlankLinesRatherThanShowingGaps() {
-        let snippet = WritingStatistics.snippet(from: "one\n\n\ntwo")
+        let snippet = WritingStatistics.snippet(from: "one.\n\n\ntwo")
 
-        #expect(snippet == "one two")
+        #expect(snippet == "one. two")
     }
 
     @Test func snippetsClipOnAWordBoundary() {
@@ -155,6 +157,17 @@ struct WritingStatisticsTests {
 
         #expect(snippet == "a short line")
         #expect(!snippet.hasSuffix("…"))
+    }
+
+    @Test func snippetsPartLabelsButJoinSentences() {
+        let snippet = WritingStatistics.snippet(from: """
+        # Class 1
+        Judges 6:1-24
+        The first sentence ends here.
+        And the next follows on.
+        """)
+
+        #expect(snippet == "Class 1 · Judges 6:1-24 · The first sentence ends here. And the next follows on.")
     }
 
     @Test func anEmptyDraftHasNoSnippet() {

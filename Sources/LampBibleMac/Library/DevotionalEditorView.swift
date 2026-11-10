@@ -1619,14 +1619,11 @@ struct DevotionalEditorView: View {
         }
 
         ToolbarItem {
-            Picker("Writing Surface", selection: editorSurfaceSelection) {
-                ForEach(DevotionalEditorMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize(horizontal: true, vertical: false)
+            LampSegmentedPicker(
+                "Writing Surface",
+                selection: editorSurfaceSelection,
+                items: DevotionalEditorMode.allCases.map { .init(id: $0, title: $0.title) }
+            )
             .disabled(!activeDocumentSupportsVisual)
             .help(activeDocumentSupportsVisual
                 ? "Choose the writing surface"

@@ -297,13 +297,13 @@ struct BookModulesView: View {
                         } label: {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(entry.book.title)
-                                    .font(.subheadline.weight(.medium))
+                                    .font(.system(size: LampMetrics.listTitleSize, weight: .medium))
                                     .lineLimit(2)
                                 Label(
                                     entry.sectionTitle ?? "Resume reading",
                                     systemImage: "bookmark"
                                 )
-                                .font(.caption)
+                                .font(.system(size: LampMetrics.listCaptionSize))
                                 .foregroundStyle(Color.lampSecondaryText)
                                 .lineLimit(1)
                             }
@@ -365,11 +365,11 @@ struct BookModulesView: View {
                 // line cut most titles off before the words that tell
                 // them apart ("Rome, the Greek World,…" twice).
                 Text(book.title)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: LampMetrics.listTitleSize, weight: .medium))
                     .lineLimit(2)
                 if let author = book.author, !author.isEmpty {
                     Text(author)
-                        .font(.system(size: 11.5))
+                        .font(.system(size: LampMetrics.listDetailSize))
                         .foregroundStyle(Color.lampSecondaryText)
                         .lineLimit(1)
                 }
@@ -378,12 +378,12 @@ struct BookModulesView: View {
                         ? sections.first(where: { $0.id == position.sectionID })?.title
                         : nil
                     Label(sectionTitle ?? "Resume reading", systemImage: "bookmark")
-                        .font(.caption)
+                        .font(.system(size: LampMetrics.listCaptionSize))
                         .foregroundStyle(Color.lampSecondaryText)
                         .lineLimit(1)
                 }
             }
-            .padding(.vertical, 5)
+            .padding(.vertical, 6)
             .tag(Optional(book.id))
         }
     }
@@ -449,6 +449,7 @@ struct BookModulesView: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Text(section.title)
+                        .font(.system(size: LampMetrics.listTitleSize))
                         .fixedSize(horizontal: false, vertical: true)
                     if bookmarkIDs.contains(section.id) {
                         Image(systemName: "bookmark.fill")
@@ -458,8 +459,8 @@ struct BookModulesView: View {
                 }
                 if let subtitle = section.subtitle, !subtitle.isEmpty {
                     Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: LampMetrics.listCaptionSize))
+                        .foregroundStyle(Color.lampSecondaryText)
                         .lineLimit(2)
                 }
             }
