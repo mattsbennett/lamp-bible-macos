@@ -664,10 +664,14 @@ struct DevotionalsView: View {
                 }
             }
         }
-        // ⌘F reaches whichever writing surface has focus. Here that is the
-        // preview, which is read-only, so Find and Replace stays unavailable
-        // rather than opening a bar whose Replace does nothing.
-        .focusedValue(\.writingFind, previewFind)
+        // ⌘F finds in the preview whatever in the window has focus. A
+        // focused value counted only while something inside the preview had
+        // keyboard focus, and read-only text rarely does: with the writing
+        // list focused beside it, Find was disabled and ⌘F did nothing. The
+        // preview exists only while Writing is shown, so this cannot reach
+        // another section. It is read-only, so Find and Replace stays
+        // unavailable rather than opening a bar whose Replace does nothing.
+        .focusedSceneValue(\.writingFind, previewFind)
         // Moving to another writing keeps the query — it is the same bar — and
         // the new text is searched as it is rendered, because the preview
         // hands the finder its runs every time it draws.
