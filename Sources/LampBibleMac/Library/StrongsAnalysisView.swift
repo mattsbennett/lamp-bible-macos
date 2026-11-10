@@ -759,7 +759,12 @@ struct StrongsAnalysisPane: View {
             }
             let figures = cardChoice.readings(of: analysis)
             if !figures.isEmpty {
-                HStack(alignment: .top, spacing: 0) {
+                // Spaced, because a tile's value can be a word rather than a
+                // number: "97% “lovingkind…” sat against the next tile's
+                // figure and the two read as one. ios-56 saw it first at
+                // phone width, and the Mac card is no wider than three of
+                // these.
+                HStack(alignment: .top, spacing: 12) {
                     ForEach(figures) { statTile($0.figure, reading: $0.reading) }
                 }
                 .accessibilityElement(children: .ignore)
@@ -840,7 +845,9 @@ struct StrongsAnalysisPane: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .help(figure.note)
+        // The reading as well as the note, because a long word is truncated
+        // on the tile and this is then the only place it can be read whole.
+        .help("\(reading.spoken) — \(figure.note)")
     }
 
     /// The button that opens the card's slots.
