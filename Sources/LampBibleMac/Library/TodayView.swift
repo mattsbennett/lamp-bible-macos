@@ -604,7 +604,7 @@ private struct TodayPlanCard: View {
                     guard let next = firstUnread ?? day.readings.first else { return }
                     openReading(readingMode(activeReadingID: next.id))
                 } label: {
-                    Label(completedCount == 0 ? "Start Reading" : "Continue", systemImage: "book")
+                    Label(readTitle, systemImage: "book")
                         .padding(.horizontal, 4)
                 }
                 .buttonStyle(.borderedProminent)
@@ -645,6 +645,12 @@ private struct TodayPlanCard: View {
 
     private var completedCount: Int {
         day.readings.count(where: isCompleted)
+    }
+
+    /// The same words as the phone's Today button.
+    private var readTitle: String {
+        if completedCount == 0 { return "Start Reading" }
+        return firstUnread == nil ? "Read Again" : "Continue Reading"
     }
 
     private var firstUnread: LampPlanReading? {
