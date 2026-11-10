@@ -7,6 +7,21 @@ import LampCore
 import LampModuleKit
 import SwiftUI
 
+/// How the book list is grouped.
+enum BookGrouping: String, CaseIterable, Identifiable {
+    case genre
+    case none
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .genre: "Genre"
+        case .none: "None"
+        }
+    }
+}
+
 struct BookReaderRequest: Codable, Hashable {
     var bookID: String?
     var sectionID: String?
@@ -22,7 +37,11 @@ struct BookModulesView: View {
     @EnvironmentObject private var model: LibraryModel
     @AppStorage("books.showsBookList") private var showsBookList = true
     @AppStorage("books.showsTableOfContents") private var showsTableOfContents = true
+    /// How the book list is grouped: by genre unless the reader chose none.
+    @AppStorage("books.groupBy") private var groupByRawValue = BookGrouping.genre.rawValue
     @State private var books: [LampBook] = []
+    /// The genres books are grouped by, from the bundle.
+    @State private var genres: [LampBookGenre] = []
     @State private var sections: [LampBookSection] = []
     @State private var selectedBookID: String?
     @State private var selectedSectionID: String?
@@ -148,6 +167,19 @@ struct BookModulesView: View {
         .navigationSubtitle(selectedSection?.title ?? "")
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
+                if showsBookList {
+                    Menu("Group Books", systemImage: "rectangle.3.group") {
+                        Picker("Group By", selection: $groupByRawValue) {
+                            ForEach(BookGrouping.allCases) { grouping in
+                                Text(grouping.title).tag(grouping.rawValue)
+                            }
+                        }
+                        .pickerStyle(.inline)
+                    }
+                    .labelStyle(.iconOnly)
+                    .help("Group books")
+                }
+
                 Button(
                     showsBookList ? "Hide Book List" : "Show Book List",
                     systemImage: "books.vertical"
@@ -282,9 +314,34 @@ struct BookModulesView: View {
                         .buttonStyle(.plain)
                     }
                 }
-                Section("All Books") { bookRows }
-            } else {
-                bookRows
+                if groupBy == .none { Section("All Books") { bookRows(books) } }
+            }
+            if groupBy == .genre {
+                let sections = LampBookGenre.grouped(books, genre: \.genre, catalog: genres)
+                ForEach(Array(sections.enumerated()), id: \.element.id) { index, section in
+                    Section {
+                        bookRows(section.books)
+                    } header: {
+                        // The group above the first of its genres: "Bible and
+                        // Faith", then its genres beneath it.
+                        let opensGroup = section.group != nil
+                            && (index == 0 || sections[index - 1].group != section.group)
+                        VStack(alignment: .leading, spacing: 2) {
+                            if opensGroup, let group = section.group {
+                                Text(group)
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(Color.lampSecondaryText)
+                                    .textCase(.uppercase)
+                                    .padding(.top, index == 0 ? 0 : 6)
+                            }
+                            // A library whose books carry no genre yet has
+                            // one run of them, which is all of its books.
+                            Text(sections.count == 1 && section.group == nil ? "All Books" : section.title)
+                        }
+                    }
+                }
+            } else if continueReading.count <= 1 {
+                bookRows(books)
             }
         }
         // Inset, not sidebar: a sidebar list draws under the toolbar, so the
@@ -294,7 +351,11 @@ struct BookModulesView: View {
         .listStyle(.inset)
     }
 
-    private var bookRows: some View {
+    private var groupBy: BookGrouping {
+        BookGrouping(rawValue: groupByRawValue) ?? .genre
+    }
+
+    private func bookRows(_ books: [LampBook]) -> some View {
         ForEach(books) { book in
             // Title and author only: at this column's width a cover would be
             // a letter tile, too small to tell one book from another and
@@ -462,6 +523,7 @@ struct BookModulesView: View {
     private func loadBooks() async {
         do {
             books = try await model.library.bookModules()
+            genres = (try? await model.library.bookGenres()) ?? []
             await loadContinueReading()
             errorMessage = nil
             if !books.contains(where: { $0.id == selectedBookID }) {
