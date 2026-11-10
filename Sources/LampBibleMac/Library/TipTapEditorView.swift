@@ -1200,6 +1200,9 @@ final class TipTapEditorPool {
     struct Key: Hashable {
         let libraryRootURL: URL
         let compact: Bool
+        /// Whether Writing Tools are offered, which a web view takes at its
+        /// making: a spare made under the other setting is never handed out.
+        var writingTools = AIFeatures.isEnabledNow
     }
 
     private var spares: [Key: TipTapEditorPage] = [:]
@@ -1243,6 +1246,8 @@ final class TipTapEditorPool {
 
     private func makePage(for key: Key) -> TipTapEditorPage {
         let configuration = WKWebViewConfiguration()
+        // The system's Writing Tools only while AI features are on.
+        configuration.writingToolsBehavior = key.writingTools ? .default : .none
         // The page's own stylesheet paints pure black before any host message can
         // reach it, which reads as a flash of black as the editor opens. Injecting
         // the host colour at document start means the very first paint is already

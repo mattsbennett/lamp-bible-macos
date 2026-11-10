@@ -85,6 +85,9 @@ struct LampBibleMacApp: App {
                 .environmentObject(libraryModel)
                 .environmentObject(syncController)
                 .environmentObject(scrollLink)
+                // Every window's text offers the system's Writing Tools only
+                // while AI features are on.
+                .lampWritingToolsGate()
         }
         .defaultSize(width: 1_240, height: 820)
         .commands {
@@ -102,6 +105,7 @@ struct LampBibleMacApp: App {
         WindowGroup("Book Reader", id: "book-reader", for: BookReaderRequest.self) { $request in
             StandaloneBookReaderView(request: request ?? BookReaderRequest())
                 .environmentObject(libraryModel)
+                .lampWritingToolsGate()
         }
         .restorationBehavior(.disabled)
         .defaultSize(width: 1_180, height: 820)
@@ -109,6 +113,7 @@ struct LampBibleMacApp: App {
         Window("Import or Create Content", id: "add-to-library") {
             AddToLibraryView()
                 .environmentObject(libraryModel)
+                .lampWritingToolsGate()
         }
         .defaultSize(width: 1_100, height: 700)
 
@@ -119,6 +124,7 @@ struct LampBibleMacApp: App {
             DevotionalEditorView(request: request ?? DevotionalEditorRequest())
                 .environmentObject(libraryModel)
                 .environmentObject(syncController)
+                .lampWritingToolsGate()
         }
         .restorationBehavior(.disabled)
         .defaultSize(width: 1_180, height: 780)
@@ -127,6 +133,7 @@ struct LampBibleMacApp: App {
             SlideStudioView(request: request ?? SlideStudioRequest())
                 .environmentObject(libraryModel)
                 .environmentObject(presentationRemoteHost)
+                .lampWritingToolsGate()
         }
         .restorationBehavior(.disabled)
         .defaultSize(width: 1_360, height: 860)
@@ -165,6 +172,7 @@ struct LampBibleMacApp: App {
                 .environmentObject(libraryModel)
                 .environmentObject(syncController)
                 .environmentObject(softwareUpdater)
+                .lampWritingToolsGate()
         }
 
         MenuBarExtra("Lamp Bible", systemImage: "book.closed.fill") {
@@ -215,6 +223,7 @@ private struct ReaderSettingsView: View {
     @EnvironmentObject private var model: LibraryModel
     @EnvironmentObject private var syncController: LibrarySyncController
     @EnvironmentObject private var softwareUpdater: SoftwareUpdater
+    @AppStorage(AIFeatures.key) private var aiFeaturesEnabled = AIFeatures.defaultValue
     @AppStorage("reader.fontSize") private var fontSize = LampTextScale.readerText.defaultValue
     @AppStorage("reader.lineSpacing") private var lineSpacing = LampTextScale.readerLineSpacing.defaultValue
     @AppStorage("reader.typeface") private var typeface = ProseTypeface.readerDefault
@@ -648,6 +657,28 @@ private struct ReaderSettingsView: View {
                     }
 
                 case .aiAndAgents:
+                    // The one thing this pane shows with AI off, so opting in
+                    // stays findable and nothing else in Lamp mentions AI.
+                    Section {
+                        Toggle("Show AI Features", isOn: $aiFeaturesEnabled)
+                    } header: {
+                        Text("AI Features")
+                    } footer: {
+                        Text(
+                            """
+                            Chat about a passage, write with an agent, and make \
+                            plans from a description. Off hides them all, \
+                            including the system's writing tools in Lamp's \
+                            text. Your chats and drafts are kept.
+                            """
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                    // Off withdraws what an outside app may read as well.
+                    .onChange(of: aiFeaturesEnabled) { _, _ in publishAgentAccess() }
+
+                    if aiFeaturesEnabled {
                     Section("AI Provider Accounts") {
                         AIProviderAccountsSettingsView()
                         Divider()
@@ -773,6 +804,7 @@ private struct ReaderSettingsView: View {
                     .onChange(of: agentAllowsExternalWriting) { _, _ in publishAgentAccess() }
                     .onChange(of: agentAllowsExternalReadingPlans) { _, _ in publishAgentAccess() }
                     .task { publishAgentAccess() }
+                    }
 
                 case .readingPlans:
                     Section("Reading Plans") {
@@ -1346,13 +1378,15 @@ private struct ReaderSettingsView: View {
     /// changing a setting about. "Test Module Tools" is the button that
     /// reports, and it writes the same two files first.
     private func publishAgentAccess() {
+        // With AI features off, nothing is offered to an agent, inside Lamp
+        // or out, whatever the switches below say.
         try? AgentModuleAccessPreferences.publish(
-            currentAgentAccessPolicy,
+            aiFeaturesEnabled ? currentAgentAccessPolicy : .disabled,
             libraryRootURL: model.library.rootURL,
             bundledModulesArchiveURL: bundledModulesArchiveURL,
-            allowsExternalApps: agentAllowsExternalApps,
-            allowsExternalWriting: agentAllowsExternalWriting,
-            allowsExternalReadingPlans: agentAllowsExternalReadingPlans
+            allowsExternalApps: aiFeaturesEnabled && agentAllowsExternalApps,
+            allowsExternalWriting: aiFeaturesEnabled && agentAllowsExternalWriting,
+            allowsExternalReadingPlans: aiFeaturesEnabled && agentAllowsExternalReadingPlans
         )
     }
 
@@ -1544,3 +1578,29 @@ private struct BetterVoiceHelp: View {
     }
 }
 
+
+extension ReaderSettingsSection {
+    /// The settings each pane holds, by the names they have in it, so the
+    /// ⌘K palette finds the pane from a setting: "line spacing" is Reader's.
+    /// The AI pane answers to AI words only while AI features are on.
+    var paletteKeywords: [String] {
+        switch self {
+        case .reader:
+            ["Typeface", "Text Size", "Line Spacing", "Font", "Read Aloud", "Voice", "Speed",
+             "Follow the spoken verse", "Strong's number hints", "Cross-references", "Study Aids"]
+        case .books: ["Book Typeface", "Book Text Size", "Book Line Spacing"]
+        case .studySidebar: ["Study Tools", "Commentary text", "Sidebar Typeface", "Sidebar Text Size"]
+        case .modules:
+            ["Default Translation", "Greek Dictionary", "Hebrew Dictionary", "Default Commentary", "Module Type"]
+        case .devotionalsAndQuizzes: ["Quiz", "Age Group", "Answers"]
+        case .writing: ["Editor", "Writing Text Size", "Reading Time", "Writing Typeface"]
+        case .aiAndAgents:
+            AIFeatures.isEnabledNow
+                ? ["AI Features", "Agents", "Provider Accounts", "Reader Chats", "Claude Desktop", "Other Apps"]
+                : ["AI Features"]
+        case .readingPlans: ["External Bible", "Daily reading reminder", "Reminder Time"]
+        case .sync: ["iCloud Drive", "Folder", "Provider", "Sync automatically", "Password"]
+        case .updates: ["Software Updates", "Check for updates", "Version"]
+        }
+    }
+}

@@ -26,7 +26,17 @@ struct GoToPassageActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
+/// ⌘K: the palette that goes anywhere in Lamp, in the window in front.
+struct CommandPaletteActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
 extension FocusedValues {
+    var commandPaletteAction: (() -> Void)? {
+        get { self[CommandPaletteActionKey.self] }
+        set { self[CommandPaletteActionKey.self] = newValue }
+    }
+
     var installModuleAction: (() -> Void)? {
         get { self[InstallModuleActionKey.self] }
         set { self[InstallModuleActionKey.self] = newValue }
@@ -57,6 +67,7 @@ extension FocusedValues {
 struct LampBibleCommands: Commands {
     @Environment(\.openWindow) private var openWindow
     @FocusedValue(\.installModuleAction) private var installModule
+    @FocusedValue(\.commandPaletteAction) private var commandPalette
     @FocusedValue(\.importStudyDataAction) private var importStudyData
     @FocusedValue(\.newReaderTabAction) private var newReaderTab
     @FocusedValue(\.goToPassageAction) private var goToPassage
@@ -134,6 +145,9 @@ struct LampBibleCommands: Commands {
         }
 
         CommandGroup(after: .sidebar) {
+            Button("Go to Anything…") { commandPalette?() }
+                .keyboardShortcut("k", modifiers: .command)
+                .disabled(commandPalette == nil)
             Button("Go to Passage or Search…") { goToPassage?() }
                 .keyboardShortcut("l", modifiers: .command)
                 .disabled(goToPassage == nil)

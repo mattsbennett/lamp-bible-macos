@@ -257,6 +257,7 @@ final class LibraryModel: ObservableObject {
     /// a chapter again: each window reads its own once this is done.
     func start() {
         guard modules.isEmpty, !isRefreshing else { return }
+        settleAIFeatures()
         Task {
             await refreshLibrary(reloadingReader: false)
             await takeInRequestedReadingPlans()
@@ -266,6 +267,25 @@ final class LibraryModel: ObservableObject {
     func refresh() {
         Task { await refreshLibrary() }
     }
+
+    /// Whether the AI features are shown, working it out where nothing is
+    /// stored (`AIFeatures`). Asked at launch and every few seconds after,
+    /// so a value an older Lamp dropped from the shared preferences is
+    /// worked out again rather than read as off. With AI off, an outside
+    /// app is told the library is closed.
+    @discardableResult
+    func settleAIFeatures() -> Bool {
+        let enabled = AIFeatures.settleIfUnset(libraryRootURL: library.rootURL)
+        if !enabled, !hasWithdrawnAgentAccess {
+            hasWithdrawnAgentAccess = true
+            AgentModuleAccessPreferences.withdrawIfPublished(libraryRootURL: library.rootURL)
+        } else if enabled {
+            hasWithdrawnAgentAccess = false
+        }
+        return enabled
+    }
+
+    private var hasWithdrawnAgentAccess = false
 
     func setModuleHidden(_ moduleID: String, hidden: Bool) {
         if hidden {
@@ -840,7 +860,9 @@ final class LibraryModel: ObservableObject {
     func takeInRequestedReadingPlans(
         applicationSupportURL: URL? = LampAgentDescriptorStore.defaultApplicationSupportURL()
     ) async {
-        guard let applicationSupportURL else { return }
+        // Plans asked for by an agent in another app wait while AI features
+        // are off, and arrive once they are on again.
+        guard settleAIFeatures(), let applicationSupportURL else { return }
         let waiting = LampReadingPlanAdditions.pending(
             inApplicationSupport: applicationSupportURL
         )
@@ -1199,6 +1221,12 @@ final class LibraryModel: ObservableObject {
 
     /// A place asked for while no reader was open, for the next one to take.
     private(set) var pendingReaderLocation: ReaderLocation?
+
+    /// Keeps a place for the next reader window to open at: ⌥↩ in the ⌘K
+    /// palette opens a passage in a new window this way.
+    func holdForNextReader(_ location: ReaderLocation) {
+        pendingReaderLocation = location
+    }
 
     func takePendingReaderLocation() -> ReaderLocation? {
         defer { pendingReaderLocation = nil }

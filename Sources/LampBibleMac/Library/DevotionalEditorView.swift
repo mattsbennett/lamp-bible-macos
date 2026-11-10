@@ -408,6 +408,9 @@ struct DevotionalEditorView: View {
     @AppStorage("agent.moduleAccess.scope") private var agentModuleAccessScope = AgentModuleAccessScope.enabledModules.rawValue
     @AppStorage("agent.moduleAccess.personal") private var agentPersonalContentEnabled = false
     @State private var showingAgentWorkspace = false
+    /// Whether AI features are shown (`AIFeatures`): off, the editor has no
+    /// Agent button and no agent pane. The workspace on disk is kept.
+    @AppStorage(AIFeatures.key) private var aiFeaturesEnabled = AIFeatures.defaultValue
     @State private var linkedPresentationDecks: [LampPresentationDeck] = []
     @State private var isOpeningPresentation = false
     @State private var workspaceDocuments: [DevotionalWorkspaceEditorDocument] = []
@@ -731,6 +734,14 @@ struct DevotionalEditorView: View {
         // What is selected when the agent pane opens, or another document is
         // shown, has had no change of selection to report it.
         .onChange(of: showingAgentWorkspace) { readVisualSelectionSoon() }
+        // Turned off while the agent's pane is open: it closes, and the
+        // details take its place as they would on closing it by hand.
+        .onChange(of: aiFeaturesEnabled) { _, enabled in
+            if !enabled, showingAgentWorkspace {
+                showingAgentWorkspace = false
+                showsDetails = true
+            }
+        }
         .onChange(of: selectedWorkspaceDocumentID) {
             visualSelectedText = ""
             readVisualSelectionSoon()
@@ -1647,6 +1658,7 @@ struct DevotionalEditorView: View {
             .help(showsDetails ? "Hide details" : "Show details")
         }
 
+        if aiFeaturesEnabled {
         ToolbarItem {
             Toggle(isOn: Binding(
                 get: { showingAgentWorkspace },
@@ -1659,6 +1671,7 @@ struct DevotionalEditorView: View {
             }
             .tint(.secondary)
             .help(showingAgentWorkspace ? "Hide agent workspace" : "Show agent workspace")
+        }
         }
 
         ToolbarItem {

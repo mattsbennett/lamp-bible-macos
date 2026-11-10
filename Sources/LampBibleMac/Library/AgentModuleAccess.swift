@@ -129,6 +129,26 @@ enum AgentModuleAccessPreferences {
         return policyURL
     }
 
+    /// Withdraws what an outside app may read, where it was ever offered:
+    /// with AI features off, a helper Claude Desktop starts must find the
+    /// library closed rather than serve it. Nothing is written for someone
+    /// who never set it up.
+    static func withdrawIfPublished(libraryRootURL: URL) {
+        guard let support = LampAgentDescriptorStore.defaultApplicationSupportURL(),
+              FileManager.default.fileExists(
+                atPath: LampAgentDescriptorStore.url(inApplicationSupport: support).path
+              ) else { return }
+        try? publish(
+            .disabled,
+            libraryRootURL: libraryRootURL,
+            bundledModulesArchiveURL: nil,
+            allowsExternalApps: false,
+            allowsExternalWriting: false,
+            allowsExternalReadingPlans: false,
+            applicationSupportURL: support
+        )
+    }
+
     static func healthCheck(
         policy: LampAgentAccessPolicy,
         libraryRootURL: URL,

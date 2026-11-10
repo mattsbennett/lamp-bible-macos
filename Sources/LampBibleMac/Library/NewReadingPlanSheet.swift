@@ -19,6 +19,9 @@ struct NewReadingPlanSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var form = LampReadingPlanForm()
+    /// Off, the sheet is the form alone: no description for Apple
+    /// Intelligence to fill it in from (`AIFeatures`).
+    @AppStorage(AIFeatures.key) private var aiFeaturesEnabled = AIFeatures.defaultValue
     /// The plan as core lays it out, worked out again whenever the form moves.
     @State private var draft: LampReadingPlanDraft?
     /// Why the form as it stands cannot be laid out, in core's own words.
@@ -97,7 +100,9 @@ struct NewReadingPlanSheet: View {
 
     private var fields: some View {
         Form {
-            if let assistantUnavailableReason {
+            if !aiFeaturesEnabled {
+                EmptyView()
+            } else if let assistantUnavailableReason {
                 Section {
                     Label(assistantUnavailableReason, systemImage: "sparkles")
                         .font(.callout)

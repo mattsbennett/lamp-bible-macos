@@ -60,6 +60,11 @@ private enum LibrarySelection: Hashable {
 
 struct LibraryRootView: View {
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
+    /// ⌘K: the palette that goes anywhere in Lamp, over this window.
+    @State private var showingCommandPalette = false
+    /// The decks the palette can open by name, read as it opens.
+    @State private var paletteDecks: [LampPresentationDeck] = []
     /// Whether this window is the one being used, which is how the library
     /// knows whose place to hand to the writing editor and Slide Studio.
     @Environment(\.controlActiveState) private var controlActiveState
@@ -86,6 +91,10 @@ struct LibraryRootView: View {
     @State private var isResumingReaderSession = false
     @State private var showingNewReaderTab = false
     @State private var readerSidebar: ReaderSidebar?
+    /// Whether AI features are shown (`AIFeatures`). Off, the reader's chat
+    /// has no button, no shortcut and no pane, and no conversation is taken
+    /// up or started; the chats on disk are kept for when it is on again.
+    @AppStorage(AIFeatures.key) private var aiFeaturesEnabled = AIFeatures.defaultValue
     @State private var lastReaderSidebar = ReaderSidebar.study
     /// The session this window keeps its tabs under, taken up once the library
     /// has been read. The chats are the tabs' own; see `ReaderTab.chatID`.
@@ -136,8 +145,10 @@ struct LibraryRootView: View {
 
     private var showingReaderChat: Binding<Bool> {
         Binding(
-            get: { readerSidebar == .chat },
-            set: { if $0 { readerSidebar = .chat } else if readerSidebar == .chat { readerSidebar = nil } }
+            get: { aiFeaturesEnabled && readerSidebar == .chat },
+            set: {
+                if $0, aiFeaturesEnabled { readerSidebar = .chat } else if readerSidebar == .chat { readerSidebar = nil }
+            }
         )
     }
 
@@ -174,7 +185,11 @@ struct LibraryRootView: View {
             guard read else { return }
             // Before the tabs take up the chats they remember, so one that has
             // outstayed the reader's retention is let go of rather than opened.
-            ReaderChatHousekeeping.letGoOfOldChats(libraryRootURL: model.library.rootURL)
+            // Not with AI off: nothing is opened then, and turning it on
+            // again sweeps what has outstayed retention in one pass.
+            if aiFeaturesEnabled {
+                ReaderChatHousekeeping.letGoOfOldChats(libraryRootURL: model.library.rootURL)
+            }
             // Before the tabs, which are kept under the session taken up here.
             if readerSession == nil {
                 let claimed = OpenReaderWindows.claim()
@@ -197,6 +212,18 @@ struct LibraryRootView: View {
             ReaderTabSessionStore.save(tabs, session: readerSession)
         }
         .onChange(of: readerSidebar) { _, _ in ensureSelectedTabHasChat() }
+        // Turned off, the chat's column closes; turned on, old chats are
+        // swept and the tabs take up theirs, as they would at launch.
+        .onChange(of: aiFeaturesEnabled) { _, enabled in
+            if enabled {
+                guard hasRestoredReaderTabs else { return }
+                ReaderChatHousekeeping.letGoOfOldChats(libraryRootURL: model.library.rootURL)
+                adoptRestoredChats()
+                ensureSelectedTabHasChat()
+            } else if readerSidebar == .chat {
+                readerSidebar = nil
+            }
+        }
         .environmentObject(workspace)
         .task {
             // Read again only when a pass ran, since only then can anything
@@ -228,6 +255,8 @@ struct LibraryRootView: View {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(6))
                 guard !Task.isCancelled else { return }
+                // A switch an older Lamp dropped is worked out again here.
+                model.settleAIFeatures()
                 await syncController.syncLocalWorkIfAppeared(library: model.library)
             }
         }
@@ -293,6 +322,36 @@ struct LibraryRootView: View {
         .focusedValue(\.installModuleAction, { showingImporter = true })
         .focusedValue(\.importStudyDataAction, { showingStudyDataImporter = true })
         .focusedValue(\.newReaderTabAction, { presentNewReaderTabChooser() })
+        // Window-wide rather than focus-bound: ⌘K must work whatever in the
+        // window has focus, the reader's text or nothing at all.
+        .focusedSceneValue(\.commandPaletteAction, { showingCommandPalette.toggle() })
+        .overlay(alignment: .top) {
+            if showingCommandPalette {
+                ZStack(alignment: .top) {
+                    // A click outside closes it, as with a menu.
+                    Color.black.opacity(0.12)
+                        .ignoresSafeArea()
+                        .onTapGesture { showingCommandPalette = false }
+                    CommandPaletteView(
+                        typedItems: paletteTypedItems,
+                        namedItems: paletteNamedItems(decks: paletteDecks),
+                        recentItems: paletteRecentItems(),
+                        searchLibrary: paletteLibraryResults,
+                        close: { showingCommandPalette = false }
+                    )
+                    .padding(.top, 72)
+                }
+                .transition(.opacity)
+            }
+        }
+        .task(id: showingCommandPalette) {
+            guard showingCommandPalette else { return }
+            let root = model.library.rootURL
+            paletteDecks = await Task.detached(priority: .userInitiated) {
+                ((try? LampPresentationDeckStore(rootURL: root).decks()) ?? [])
+                    .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+            }.value
+        }
         .environment(\.readerReferenceActions, ReaderReferenceActions(
             // Any object this view keeps for as long as it lives will do.
             owner: ObjectIdentifier(readerLexicalHoverStore),
@@ -455,6 +514,18 @@ struct LibraryRootView: View {
             }
             return
         }
+        // Links core's parser does not name: a writing, a plan, a quiz, a
+        // deck, an analysis. The same routes the palette uses.
+        if let link = LampMacLink(url: url) {
+            switch link {
+            case .writing(let id): go(to: .writing(id))
+            case .plan(let id): go(to: .plan(id))
+            case .quiz(let id): go(to: .quiz(id))
+            case .deck(let id): go(to: .deck(id))
+            case .analysis(let key): go(to: .analysis(key))
+            }
+            return
+        }
         guard let deepLink = LampDeepLink(url: url) else { return }
         switch deepLink {
         case .reader(let reference, let translationID):
@@ -482,10 +553,7 @@ struct LibraryRootView: View {
                 selection = .section(.reader)
             }
         case .strongs(let key):
-            model.requestDictionaryLookup(keys: [key])
-            studyPane.tool = "dictionary"
-            readerSidebar = .study
-            selection = .section(.reader)
+            go(to: .dictionary(key, word: nil))
         case .book(let moduleID, let sectionID):
             requestedBookID = moduleID
             requestedBookSectionID = sectionID
@@ -603,7 +671,7 @@ struct LibraryRootView: View {
     /// none, which is how a chat is taken up: on opening the pane, never on
     /// making a tab, so a tab nobody chats in leaves nothing behind.
     private func ensureSelectedTabHasChat() {
-        guard hasRestoredReaderTabs, readerSidebar == .chat,
+        guard aiFeaturesEnabled, hasRestoredReaderTabs, readerSidebar == .chat,
               readerTabs.selectedTab?.chatID == nil else { return }
         readerTabs.updateSelected(
             chatID: OpenReaderChats.start(libraryRootURL: model.library.rootURL)
@@ -633,6 +701,9 @@ struct LibraryRootView: View {
     /// same identifiers, and sharing one transcript between two panes is worse
     /// than opening a new one. A chat a scrub has taken is the other.
     private func adoptRestoredChats() {
+        // With AI off the tabs keep the chats they remember, untaken, so they
+        // are theirs again when it is turned on.
+        guard aiFeaturesEnabled else { return }
         let root = model.library.rootURL
         var lost: Set<UUID> = []
         for chat in readerTabs.chatIDs where !OpenReaderChats.take(chat, libraryRootURL: root) {
@@ -651,10 +722,12 @@ struct LibraryRootView: View {
     private func adoptTabSidebar() {
         let sidebar = readerTabs.selectedTab?.sidebar ?? ReaderTabSidebar()
         studyPane.adopt(sidebar, defaultTool: lastStudyTool)
-        if (sidebar.pane != nil) != (readerSidebar != nil) {
+        // A tab left on chat opens with its column shut while AI is off.
+        let pane = sidebar.pane == .chat && !aiFeaturesEnabled ? nil : sidebar.pane
+        if (pane != nil) != (readerSidebar != nil) {
             readerSidebarSwitchesInstantly = true
         }
-        readerSidebar = sidebar.pane
+        readerSidebar = pane
     }
 
     private func openReferenceInCurrentTab(_ reference: Int) {
@@ -825,7 +898,8 @@ struct LibraryRootView: View {
                                 // included, and is shown again on return.
                                 Color.clear
                             } else if isReaderSidebarContentReady {
-                                if (readerSidebar ?? lastReaderSidebar) == .chat,
+                                if aiFeaturesEnabled,
+                                   (readerSidebar ?? lastReaderSidebar) == .chat,
                                    let chat = readerTabs.selectedTab?.chatID {
                                     ReaderChatSidebarView(
                                         chatID: chat,
@@ -1024,43 +1098,11 @@ struct LibraryRootView: View {
                     workspace.openReference(reference, translationID: translationID)
                     selection = .section(.reader)
                 },
-                openBook: { result in
-                    requestedBookID = result.moduleID
-                    let prefix = "book:\(result.moduleID):"
-                    requestedBookSectionID = result.id.hasPrefix(prefix)
-                        ? String(result.id.dropFirst(prefix.count))
-                        : result.id
-                    selection = .section(.books)
-                },
-                openKind: { result in
-                    // The section *and* the item. Switching section alone
-                    // landed the reader in a list of everything, with the
-                    // result they had just chosen nowhere in particular.
-                    switch result.kind {
-                    case .devotional:
-                        requestedDevotionalID = LampSearchResultIdentity.entryID(
-                            in: result.id, kind: "devotional", moduleID: result.moduleID
-                        )
-                        selection = .section(.devotionals)
-                    case .plan:
-                        requestedPlanID = result.moduleID
-                        selection = .section(.plans)
-                    case .quiz:
-                        requestedQuizModuleID = result.moduleID
-                        selection = .section(.quizzes)
-                    case .book:
-                        selection = .section(.books)
-                    default:
-                        break
-                    }
-                },
-                openDictionaryEntry: { key, word in
-                    // The Dictionary pane lives in the reader's study column,
-                    // so the lookup is asked for and the reader shown; the
-                    // pane picks the request up when it mounts.
-                    model.requestDictionaryLookup(keys: [key], word: word)
-                    selection = .section(.reader)
-                }
+                // The same routes the palette and links take, so a result
+                // opens alike from Search and from ⌘K.
+                openBook: { result in go(to: libraryRoute(for: result, placement: .here)) },
+                openKind: { result in go(to: libraryRoute(for: result, placement: .here)) },
+                openDictionaryEntry: { key, word in go(to: .dictionary(key, word: word)) }
             )
         case .section(.modules):
             InstalledModulesView(showImporter: { showingImporter = true })
@@ -2181,7 +2223,7 @@ private struct ReaderTextRepresentable: NSViewRepresentable {
 /// Placed from the view's own layout, so a mark always sits on the line it
 /// belongs to, at whatever width the text has wrapped to, and a change of
 /// marks costs a redraw of the margin rather than a layout of the text.
-private final class ReaderTextView: NSTextView {
+private final class ReaderTextView: LampTextView {
     var marks = ReaderMarginMarks.none {
         didSet {
             guard marks != oldValue else { return }
@@ -4051,6 +4093,7 @@ private struct TranslationReaderView: View, Equatable {
     /// changes.
     let workspace: ReaderWorkspace
     @EnvironmentObject private var scrollLink: ReaderScrollLink
+    @AppStorage(AIFeatures.key) private var aiFeaturesEnabled = AIFeatures.defaultValue
     @AppStorage("reader.fontSize") private var fontSize = LampTextScale.readerText.defaultValue
     @AppStorage("reader.lineSpacing") private var lineSpacing = LampTextScale.readerLineSpacing.defaultValue
     @AppStorage("reader.typeface") private var typeface = ProseTypeface.readerDefault
@@ -4098,9 +4141,9 @@ private struct TranslationReaderView: View, Equatable {
     }
 
     private var showingReaderChat: Bool {
-        get { readerSidebar == .chat }
+        get { aiFeaturesEnabled && readerSidebar == .chat }
         nonmutating set {
-            if newValue { readerSidebar = .chat } else if readerSidebar == .chat { readerSidebar = nil }
+            if newValue, aiFeaturesEnabled { readerSidebar = .chat } else if readerSidebar == .chat { readerSidebar = nil }
         }
     }
     /// The translator's notes for the passage on screen: what each says, and
@@ -6629,13 +6672,17 @@ private struct TranslationReaderView: View, Equatable {
         }
 
         ToolbarItemGroup(placement: .primaryAction) {
-            Button {
-                showingReaderChat.toggle()
-            } label: {
-                Label("Reader Chat", systemImage: "bubble.left.and.bubble.right")
+            // With AI off there is no button and no ⇧⌘J: nothing about the
+            // reader mentions a chat at all.
+            if aiFeaturesEnabled {
+                Button {
+                    showingReaderChat.toggle()
+                } label: {
+                    Label("Reader Chat", systemImage: "bubble.left.and.bubble.right")
+                }
+                .help(showingReaderChat ? "Hide Reader Chat" : "Show Reader Chat")
+                .keyboardShortcut("j", modifiers: [.command, .shift])
             }
-            .help(showingReaderChat ? "Hide Reader Chat" : "Show Reader Chat")
-            .keyboardShortcut("j", modifiers: [.command, .shift])
 
             Button {
                 showingStudyInspector.toggle()
@@ -6943,4 +6990,390 @@ struct ExternalBibleRequest: Identifiable, Equatable {
     let endReference: Int?
 
     var id: String { "\(startReference)-\(endReference ?? startReference)" }
+}
+
+// MARK: - Go anywhere
+
+/// Somewhere in Lamp a window can go. One route for the ⌘K palette, the
+/// links Lamp is opened with and the Search pane, so each way in arrives at
+/// the same place by the same steps.
+fileprivate enum LibraryRoute {
+    case passage(start: Int, end: Int?, translationID: String?, placement: CommandPalettePlacement)
+    case location(ReaderLocation, placement: CommandPalettePlacement)
+    case analysis(String)
+    case dictionary(String, word: String?)
+    case search(String)
+    case section(LibrarySection)
+    case book(moduleID: String, sectionID: String?)
+    case writing(String)
+    case plan(String)
+    case quiz(String)
+    case deck(String)
+    case settings(ReaderSettingsSection?)
+    case searchResult(LampModuleSearchResult, placement: CommandPalettePlacement)
+}
+
+extension LibraryRootView {
+    fileprivate func go(to route: LibraryRoute) {
+        switch route {
+        case .passage(let start, let end, let translationID, let placement):
+            let translation = translationID ?? workspace.selectedTranslationID
+                ?? model.selectedTranslationID ?? model.translations.first?.id
+            guard let translation else { return }
+            go(to: .location(
+                ReaderLocation.typed(reference: start, through: end ?? start, in: translation),
+                placement: placement
+            ))
+        case .location(let location, let placement):
+            switch placement {
+            case .here:
+                workspace.openHistoryLocation(location)
+                selection = .section(.reader)
+            case .newTab:
+                openReaderTab(at: location)
+            case .newWindow:
+                // The new window opens at it: a reader window takes a place
+                // held for it as it starts.
+                model.holdForNextReader(location)
+                openWindow(id: "reader")
+            }
+        case .analysis(let key):
+            workspace.requestedStrongsKey = key
+        case .dictionary(let key, let word):
+            model.requestDictionaryLookup(keys: [key], word: word)
+            studyPane.tool = "dictionary"
+            readerSidebar = .study
+            selection = .section(.reader)
+        case .search(let words):
+            workspace.requestedSearch = words
+        case .section(let section):
+            selection = .section(section)
+        case .book(let moduleID, let sectionID):
+            requestedBookID = moduleID
+            requestedBookSectionID = sectionID
+            selection = .section(.books)
+        case .writing(let id):
+            requestedDevotionalID = id
+            selection = .section(.devotionals)
+        case .plan(let id):
+            requestedPlanID = id
+            selection = .section(.plans)
+        case .quiz(let moduleID):
+            requestedQuizModuleID = moduleID
+            selection = .section(.quizzes)
+        case .deck(let id):
+            openWindow(id: "slide-studio", value: SlideStudioRequest(deckID: id))
+        case .settings(let section):
+            SettingsDestination.shared.section = section
+            openSettings()
+        case .searchResult(let result, let placement):
+            go(to: libraryRoute(for: result, placement: placement))
+        }
+    }
+
+    /// Where a library search result goes, as the Search pane opens it.
+    fileprivate func libraryRoute(for result: LampModuleSearchResult, placement: CommandPalettePlacement) -> LibraryRoute {
+        switch result.kind {
+        case .devotional:
+            guard let id = LampSearchResultIdentity.entryID(
+                in: result.id, kind: "devotional", moduleID: result.moduleID
+            ) else { return .section(.devotionals) }
+            return .writing(id)
+        case .plan:
+            return .plan(result.moduleID)
+        case .quiz:
+            return .quiz(result.moduleID)
+        case .book:
+            let prefix = "book:\(result.moduleID):"
+            return .book(
+                moduleID: result.moduleID,
+                sectionID: result.id.hasPrefix(prefix) ? String(result.id.dropFirst(prefix.count)) : result.id
+            )
+        case .dictionary:
+            if let key = result.entryKey { return .dictionary(key, word: result.title) }
+            return .search(result.title)
+        default:
+            guard let start = result.startReference else { return .search(result.title) }
+            let translationID: String? = switch result.kind {
+            case .translation: result.moduleID
+            case .highlights:
+                result.moduleID.hasPrefix("highlights:")
+                    ? String(result.moduleID.dropFirst("highlights:".count)).nonEmpty
+                    : nil
+            default: nil
+            }
+            return .passage(start: start, end: result.endReference, translationID: translationID, placement: placement)
+        }
+    }
+
+    // MARK: Palette rows
+
+    /// Rows for what has been typed: a passage, a Strong's key, words.
+    fileprivate func paletteTypedItems(_ typed: String) -> [CommandPaletteItem] {
+        var items: [CommandPaletteItem] = []
+        if let reference = LampSearchQuery(typed).reference {
+            items.append(CommandPaletteItem(
+                id: "go:\(reference.startReference)-\(reference.endReference)",
+                group: .suggested,
+                title: "Go to \(reference.description)",
+                systemImage: "book",
+                opensPlaces: true,
+                perform: { placement in
+                    go(to: .passage(
+                        start: reference.startReference, end: reference.endReference,
+                        translationID: nil, placement: placement
+                    ))
+                }
+            ))
+        }
+        if let key = LampStrongsKey.typedKey(typed) {
+            items.append(CommandPaletteItem(
+                id: "analyse:\(key)", group: .suggested, title: "Analyse \(key)",
+                systemImage: "chart.bar.xaxis", perform: { _ in go(to: .analysis(key)) }
+            ))
+            items.append(CommandPaletteItem(
+                id: "lookup:\(key)", group: .suggested, title: "Look Up \(key)",
+                subtitle: "In the dictionary beside the reader",
+                systemImage: "character.book.closed", perform: { _ in go(to: .dictionary(key, word: nil)) }
+            ))
+        }
+        items.append(CommandPaletteItem(
+            id: "search:\(typed)", group: .search, title: "Search for “\(typed)”",
+            subtitle: "Everything in your library, in Search",
+            systemImage: "magnifyingglass", perform: { _ in go(to: .search(typed)) }
+        ))
+        return items
+    }
+
+    /// Matches in the library, a few of each kind, as Search would open them.
+    fileprivate func paletteLibraryResults(_ words: String) async -> [CommandPaletteItem] {
+        let hidden = model.hiddenModuleIDs
+        let results = (try? await model.library.searchModules(query: words, limit: 60)) ?? []
+        var perKind: [LampModuleKind: Int] = [:]
+        return results
+            .filter { !hidden.contains($0.moduleID) }
+            .filter { result in
+                perKind[result.kind, default: 0] += 1
+                return perKind[result.kind]! <= 2
+            }
+            .map { result in
+                let opensPlace = result.startReference != nil
+                    && ![.devotional, .plan, .quiz, .book, .dictionary].contains(result.kind)
+                return CommandPaletteItem(
+                    id: "result:\(result.id)",
+                    group: .results,
+                    title: result.title,
+                    subtitle: [result.moduleName, result.snippet]
+                        .filter { !$0.isEmpty }.joined(separator: " · "),
+                    systemImage: Self.paletteIcon(for: result.kind),
+                    opensPlaces: opensPlace,
+                    perform: { placement in go(to: .searchResult(result, placement: placement)) }
+                )
+            }
+    }
+
+    /// Things to open by name, commands, sections and settings.
+    fileprivate func paletteNamedItems(decks: [LampPresentationDeck]) -> [CommandPaletteItem] {
+        var items: [CommandPaletteItem] = []
+        for book in model.modules where book.kind == .book && !model.hiddenModuleIDs.contains(book.id) {
+            items.append(CommandPaletteItem(
+                id: "book:\(book.id)", group: .open, title: book.name, subtitle: "Book",
+                systemImage: "book.closed", perform: { _ in go(to: .book(moduleID: book.id, sectionID: nil)) }
+            ))
+        }
+        for writing in model.devotionals {
+            items.append(CommandPaletteItem(
+                id: "writing:\(writing.id)", group: .open, title: writing.title,
+                subtitle: writing.isEditable ? "Writing" : "Writing · \(writing.moduleName)",
+                systemImage: "sun.max", perform: { _ in go(to: .writing(writing.id)) }
+            ))
+        }
+        for deck in decks {
+            items.append(CommandPaletteItem(
+                id: "deck:\(deck.id)", group: .open, title: deck.title, subtitle: "Presentation deck",
+                systemImage: "rectangle.on.rectangle", perform: { _ in go(to: .deck(deck.id)) }
+            ))
+        }
+        for plan in model.plans {
+            items.append(CommandPaletteItem(
+                id: "plan:\(plan.id)", group: .open, title: plan.name, subtitle: "Reading plan",
+                systemImage: "checklist", perform: { _ in go(to: .plan(plan.id)) }
+            ))
+        }
+        for quiz in model.quizModules {
+            items.append(CommandPaletteItem(
+                id: "quiz:\(quiz.id)", group: .open, title: quiz.name, subtitle: "Quiz",
+                systemImage: "questionmark.bubble", perform: { _ in go(to: .quiz(quiz.id)) }
+            ))
+        }
+        items += paletteCommands()
+        for section in LibrarySection.allCases {
+            items.append(CommandPaletteItem(
+                id: "section:\(section.rawValue)", group: .sections, title: section.rawValue,
+                systemImage: section.systemImage, perform: { _ in go(to: .section(section)) }
+            ))
+        }
+        for section in ReaderSettingsSection.allCases {
+            items.append(CommandPaletteItem(
+                id: "settings:\(section.rawValue)", group: .settings, title: "Settings › \(section.title)",
+                systemImage: section.systemImage, keywords: section.paletteKeywords,
+                perform: { _ in go(to: .settings(section)) }
+            ))
+        }
+        return items
+    }
+
+    private func paletteCommands() -> [CommandPaletteItem] {
+        var items: [CommandPaletteItem] = [
+            CommandPaletteItem(
+                id: "command:new-writing", group: .commands, title: "New Writing",
+                systemImage: "square.and.pencil", keywords: ["Write", "Devotional", "Note"],
+                perform: { _ in openWindow(id: "devotional-editor", value: DevotionalEditorRequest(devotionalID: nil)) }
+            ),
+            CommandPaletteItem(
+                id: "command:new-deck", group: .commands, title: "New Presentation Deck",
+                systemImage: "rectangle.stack.badge.plus", keywords: ["Slides", "Slide Studio"],
+                perform: { _ in openWindow(id: "slide-studio", value: SlideStudioRequest(newDeckID: UUID().uuidString)) }
+            ),
+            CommandPaletteItem(
+                id: "command:new-tab", group: .commands, title: "New Reader Tab",
+                systemImage: "plus.square.on.square", perform: { _ in presentNewReaderTabChooser() }
+            ),
+            CommandPaletteItem(
+                id: "command:new-window", group: .commands, title: "New Reader Window",
+                systemImage: "macwindow.badge.plus", perform: { _ in openWindow(id: "reader") }
+            ),
+            CommandPaletteItem(
+                id: "command:install", group: .commands, title: "Install Module…",
+                systemImage: "square.and.arrow.down", keywords: ["Add Translation", "Import Module"],
+                perform: { _ in showingImporter = true }
+            ),
+            CommandPaletteItem(
+                id: "command:import-study-data", group: .commands, title: "Import Personal Study Data…",
+                systemImage: "tray.and.arrow.down", perform: { _ in showingStudyDataImporter = true }
+            ),
+            CommandPaletteItem(
+                id: "command:back", group: .commands, title: "Go Back",
+                systemImage: "chevron.backward", keywords: ["Previous place", "History"],
+                perform: { _ in workspace.goBackInHistory(); selection = .section(.reader) }
+            ),
+            CommandPaletteItem(
+                id: "command:forward", group: .commands, title: "Go Forward",
+                systemImage: "chevron.forward", perform: { _ in workspace.goForwardInHistory(); selection = .section(.reader) }
+            ),
+            CommandPaletteItem(
+                id: "command:hide-study", group: .commands, title: "Hide Study Tools",
+                systemImage: "sidebar.trailing", perform: { _ in readerSidebar = nil }
+            ),
+        ]
+        for (tool, title, image) in [
+            ("commentary", "Commentary", "text.book.closed"), ("verse", "Verse", "text.quote"),
+            ("notes", "Notes", "note.text"), ("dictionary", "Dictionary", "character.book.closed"),
+        ] {
+            items.append(CommandPaletteItem(
+                id: "command:study-\(tool)", group: .commands, title: "Show \(title)",
+                subtitle: "Study tools beside the reader", systemImage: image, keywords: ["Study Tools"],
+                perform: { _ in
+                    studyPane.tool = tool
+                    readerSidebar = .study
+                    selection = .section(.reader)
+                }
+            ))
+        }
+        // Only with AI features on: off, nothing in Lamp mentions a chat.
+        if aiFeaturesEnabled {
+            items.append(CommandPaletteItem(
+                id: "command:reader-chat", group: .commands, title: "Reader Chat",
+                systemImage: "bubble.left.and.bubble.right", keywords: ["AI", "Ask", "Chat"],
+                perform: { _ in
+                    readerSidebar = .chat
+                    selection = .section(.reader)
+                }
+            ))
+        }
+        for translation in model.translations where !model.hiddenModuleIDs.contains(translation.id) {
+            let name = translation.abbreviation ?? translation.name
+            items.append(CommandPaletteItem(
+                id: "command:translation-\(translation.id)", group: .commands, title: "Read in \(name)",
+                subtitle: translation.abbreviation == nil ? nil : translation.name,
+                systemImage: "character.book.closed", keywords: [translation.name, "Translation", "Switch"],
+                perform: { _ in
+                    workspace.selectTranslation(translation.id)
+                    selection = .section(.reader)
+                }
+            ))
+        }
+        return items
+    }
+
+    /// Before anything is typed: where you were, what you searched for, the
+    /// books you are reading and the writing you were last in.
+    fileprivate func paletteRecentItems() -> [CommandPaletteItem] {
+        var items: [CommandPaletteItem] = []
+        for location in workspace.recentLocations.prefix(5) {
+            items.append(CommandPaletteItem(
+                id: "recent:\(location.translationID):\(location.bookNumber):\(location.chapterNumber):\(location.verseReference ?? 0)",
+                group: .recent, title: paletteLabel(location), systemImage: "clock.arrow.circlepath",
+                opensPlaces: true, perform: { placement in go(to: .location(location, placement: placement)) }
+            ))
+        }
+        let history = LampSearchHistoryMigration.history(
+            from: UserDefaults.standard.data(forKey: "search.history") ?? Data()
+        )
+        for entry in history.entries.prefix(3) {
+            let words = entry.strongsKey ?? entry.query
+            items.append(CommandPaletteItem(
+                id: "recent-search:\(entry.id)", group: .recent, title: "Search for “\(words)”",
+                systemImage: "magnifyingglass", perform: { _ in go(to: .search(words)) }
+            ))
+        }
+        let positions = LampBookReadingStateStore().positions()
+        let reading = positions.sorted { $0.value.updatedAt > $1.value.updatedAt }.prefix(2)
+        for (moduleID, position) in reading {
+            guard let book = model.modules.first(where: { $0.id == moduleID }) else { continue }
+            items.append(CommandPaletteItem(
+                id: "recent-book:\(moduleID)", group: .recent, title: book.name, subtitle: "Continue reading",
+                systemImage: "book.closed",
+                perform: { _ in go(to: .book(moduleID: moduleID, sectionID: position.sectionID)) }
+            ))
+        }
+        let writings = model.devotionals
+            .filter(\.isEditable)
+            .sorted { ($0.lastModified ?? .distantPast) > ($1.lastModified ?? .distantPast) }
+            .prefix(2)
+        for writing in writings {
+            items.append(CommandPaletteItem(
+                id: "recent-writing:\(writing.id)", group: .recent, title: writing.title, subtitle: "Writing",
+                systemImage: "sun.max", perform: { _ in go(to: .writing(writing.id)) }
+            ))
+        }
+        return items
+    }
+
+    /// "John 3 (BSB)", as the reader's history menu names a place.
+    private func paletteLabel(_ location: ReaderLocation) -> String {
+        let book = LampBibleReferenceFormatter.bookName(location.bookNumber)
+        let translation = model.translations.first { $0.id == location.translationID }
+        let name = translation?.abbreviation ?? translation?.name ?? location.translationID
+        return "\(book) \(location.chapterNumber) (\(name))"
+    }
+
+    private static func paletteIcon(for kind: LampModuleKind) -> String {
+        switch kind {
+        case .translation: "book"
+        case .dictionary: "character.book.closed"
+        case .commentary: "text.book.closed"
+        case .book: "book.closed"
+        case .devotional: "sun.max"
+        case .notes: "note.text"
+        case .plan: "checklist"
+        case .highlights: "highlighter"
+        case .quiz: "questionmark.bubble"
+        default: "doc.text"
+        }
+    }
+}
+
+private extension String {
+    var nonEmpty: String? { isEmpty ? nil : self }
 }

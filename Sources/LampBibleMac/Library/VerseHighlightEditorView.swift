@@ -380,6 +380,7 @@ private struct SelectableVerseText: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.isEditable = false
         textView.isSelectable = true
+        textView.writingToolsBehavior = AIFeatures.writingToolsBehavior
         textView.drawsBackground = false
         textView.textContainerInset = NSSize(width: 14, height: 14)
         textView.font = .systemFont(ofSize: 20)

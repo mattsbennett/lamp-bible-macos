@@ -387,7 +387,7 @@ enum MarkdownCommand: String, CaseIterable, Identifiable {
 /// A text view that keeps its lines to a measure by widening its side
 /// insets as it grows, so the source of a writing is set in a column as the
 /// visual editor sets it, rather than in lines the width of the window.
-final class MeasuredTextView: NSTextView {
+final class MeasuredTextView: LampTextView {
     /// The widest the text runs, in points; nil for the full width.
     var measure: CGFloat? {
         didSet { if measure != oldValue { updateInset(for: frame.width) } }
