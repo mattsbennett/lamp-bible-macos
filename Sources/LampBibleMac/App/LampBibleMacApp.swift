@@ -516,7 +516,9 @@ private struct ReaderSettingsView: View {
                             ) {
                                 Text("First Enabled").tag("")
                                 ForEach(enabledTranslationModules) { translation in
-                                    Text(translation.name).tag(translation.id)
+                                    Text(translation.name)
+                                        .badge(translation.strongsMenuBadge)
+                                        .tag(translation.id)
                                 }
                             }
                             ForEach(translationModules) { module in

@@ -1859,7 +1859,9 @@ private struct LampSlideChartEditor: View {
                             // says below when one has no tags for this key, which
                             // is a more useful answer than a shorter menu.
                             ForEach(model.translations, id: \.id) { translation in
-                                Text(translation.abbreviation ?? translation.name).tag(translation.id)
+                                Text(translation.abbreviation ?? translation.name)
+                                .badge(translation.strongsMenuBadge)
+                                .tag(translation.id)
                             }
                         }
                         .labelsHidden()
@@ -2088,6 +2090,11 @@ private struct LampSlideChartEditor: View {
         model.selectedTranslationID ?? model.translations.first?.id ?? ""
     }
 
+    /// A translation as a reader knows it, not by its id ("BSB", not "BSBs").
+    private func translationName(_ id: String) -> String {
+        model.translations.first { $0.id == id }.map { $0.abbreviation ?? $0.name } ?? id
+    }
+
     private func fill() async {
         guard var chart = block.chart,
               !chart.source.strongs.trimmingCharacters(in: .whitespaces).isEmpty,
@@ -2102,7 +2109,7 @@ private struct LampSlideChartEditor: View {
             guard let worked = try await model.library.workedOut(chart) else {
                 status = chart.by == .translation
                     ? "No translation here tags \(chart.source.strongs), so the chart draws empty."
-                    : "\(chart.source.translationID) has no tags for "
+                    : "\(translationName(chart.source.translationID)) has no tags for "
                         + "\(chart.source.strongs) here, so the chart draws empty."
                 return
             }
@@ -2121,7 +2128,7 @@ private struct LampSlideChartEditor: View {
             } else {
                 status = crowding(values.count, style: chart.drawnStyle)
                     ?? "\(values.count) \(drawnThings(chart.drawnStyle)) from "
-                        + (chart.by == .translation ? "the translations." : "\(chart.source.translationID).")
+                        + (chart.by == .translation ? "the translations." : "\(translationName(chart.source.translationID)).")
             }
         } catch {
             // An unreadable range arrives here, which is the one mistake easy

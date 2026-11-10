@@ -3318,7 +3318,9 @@ private struct PassagePickerPopover: View {
             HStack(spacing: 0) {
                 Picker("Translation", selection: $translationID) {
                     ForEach(model.translations) { translation in
-                        Text(translation.name).tag(translation.id)
+                        Text(translation.name)
+                            .badge(translation.strongsMenuBadge)
+                            .tag(translation.id)
                     }
                 }
                 .labelsHidden()
@@ -5006,7 +5008,9 @@ private struct TranslationReaderView: View, Equatable {
         Menu {
             Picker(title, selection: selection) {
                 ForEach(translations) { translation in
-                    Text(translation.name).tag(translation.id)
+                    Text(translation.name)
+                        .badge(translation.strongsMenuBadge)
+                        .tag(translation.id)
                 }
             }
             .pickerStyle(.inline)

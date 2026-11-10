@@ -279,7 +279,8 @@ struct InstalledModulesView: View {
                 width: Self.coverWidth,
                 shelfPosition: shelfPosition
             ),
-            isBuiltIn: module.isBundled
+            isBuiltIn: module.isBundled,
+            tagsStrongs: module.tagsStrongs
         ) {
             if !module.isBundled {
                 Button("Export Module…", systemImage: "square.and.arrow.up") {
@@ -390,6 +391,9 @@ private struct ModuleShelfCard<Actions: View>: View {
     let detail: Text
     let cover: LibraryCover
     var isBuiltIn = false
+    /// A translation whose words carry Strong's numbers, marked so: its name
+    /// no longer says so.
+    var tagsStrongs = false
     @ViewBuilder let actions: () -> Actions
 
     @State private var isHovering = false
@@ -404,6 +408,7 @@ private struct ModuleShelfCard<Actions: View>: View {
                     .font(.system(size: 13.5, weight: .medium))
                     .lineLimit(3)
                     .fixedSize(horizontal: false, vertical: true)
+                if tagsStrongs { StrongsBadge() }
                 HStack(spacing: 4) {
                     detail
                         .font(.system(size: 12))
@@ -436,5 +441,28 @@ private struct ModuleShelfCard<Actions: View>: View {
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }
         .accessibilityElement(children: .contain)
+    }
+}
+
+/// The mark of a translation whose words carry Strong's numbers, which is
+/// what the word studies, the analysis and the interlinear read.
+struct StrongsBadge: View {
+    var body: some View {
+        Text("Strong’s")
+            .font(.system(size: 10.5, weight: .semibold))
+            .foregroundStyle(.tint)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1.5)
+            .background(.tint.opacity(0.12), in: Capsule())
+            .help("Its words are tagged with Strong’s numbers")
+            .accessibilityLabel("Tagged with Strong’s numbers")
+    }
+}
+
+extension LampInstalledModule {
+    /// The badge a menu item can carry for a translation tagged with
+    /// Strong's numbers, where a styled view cannot go.
+    var strongsMenuBadge: Text? {
+        tagsStrongs ? Text("Strong’s") : nil
     }
 }
