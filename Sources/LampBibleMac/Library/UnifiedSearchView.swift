@@ -1528,7 +1528,7 @@ private struct SearchHitPreview: View {
 /// A verse with the searched words marked, as the result list marks them —
 /// so the preview, the detail pane and the row agree about what was found.
 private func searchMarkedText(_ text: String, query: String) -> Text {
-    Text.lampMarkedSnippet(LampSearchQuery(query).markedSnippet(text, limit: .max))
+    Text.lampMarkedPassage(LampSearchQuery(query).markedSnippet(text, limit: .max))
 }
 
 /// A scripture hit set in its passage, in the detail pane.
@@ -1588,14 +1588,10 @@ private struct SearchContextPassage: View {
                         .padding(.trailing, isHit ? 10 : 0)
                         .background(alignment: .leading) {
                             if isHit {
-                                ZStack(alignment: .leading) {
-                                    RoundedRectangle(cornerRadius: LampMetrics.tileRadius, style: .continuous)
-                                        .fill(Color.lampTileFill)
-                                    RoundedRectangle(cornerRadius: 1.5)
-                                        .fill(.tint)
-                                        .frame(width: 3)
-                                        .padding(.vertical, 6)
-                                }
+                                // The chosen row's tile (`LampListSelection`),
+                                // with no bar beside it.
+                                RoundedRectangle(cornerRadius: LampMetrics.tileRadius, style: .continuous)
+                                    .fill(Color.lampSelectionFill)
                             }
                         }
                     }

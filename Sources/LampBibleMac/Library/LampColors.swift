@@ -117,14 +117,23 @@ extension NSColor {
             : NSColor(srgbRed: 0.935, green: 0.935, blue: 0.945, alpha: 1)
     }
 
-    /// The page under a panel that takes the keyboard (⌘K), dimmed a
-    /// little: the page stays in view, and the panel's own fill and shadow
-    /// set it apart. (A material would blur the desktop behind the window,
+    /// The chosen row's tile (`LampListSelection`): with no accent beside
+    /// it, a step firmer than a tile that is merely choosable, so it is
+    /// found at a glance on white.
+    static let lampSelectionFill = NSColor(name: nil) { appearance in
+        appearance.lampIsDark
+            ? NSColor(white: 1, alpha: 0.13)
+            : NSColor(white: 0, alpha: 0.085)
+    }
+
+    /// The page under a panel that takes the keyboard (⌘K), dimmed so the
+    /// panel's edge reads and the page's words step back, while the page
+    /// stays in view. (A material would blur the desktop behind the window,
     /// not the page.)
     static let lampPanelScrim = NSColor(name: nil) { appearance in
         appearance.lampIsDark
-            ? NSColor(white: 0, alpha: 0.26)
-            : NSColor(white: 0, alpha: 0.06)
+            ? NSColor(white: 0, alpha: 0.36)
+            : NSColor(white: 0, alpha: 0.14)
     }
 
     /// The shadow under a panel over the page (⌘K): deeper on the dark
@@ -246,6 +255,7 @@ extension Color {
     /// A popover's opaque ground.
     static let lampPopoverFill = Color(nsColor: .lampPopoverFill)
     static let lampPanelScrim = Color(nsColor: .lampPanelScrim)
+    static let lampSelectionFill = Color(nsColor: .lampSelectionFill)
     static let lampRaisedPanelFill = Color(nsColor: .lampRaisedPanelFill)
     static let lampPanelShadow = Color(nsColor: .lampPanelShadow)
 
@@ -315,17 +325,39 @@ extension Text {
         return Text(marked)
     }
 
-    /// A search snippet with core's `<mark>` tags drawn as found words
-    /// (`lampFindMatch`), wherever a result is listed.
+    /// A word searched for, in a row that lists a result: semibold in the
+    /// label colour, on no ground, as Raycast and Spotlight mark theirs. The
+    /// words round it keep their own, quieter colour, so the match stands up
+    /// from them without a block of yellow out-shouting the row's title (the
+    /// design panel's finding, Nov 2026). The yellow ground is for a find
+    /// inside the text being read (`lampFindMatch`); the iPhone matches.
+    static func lampListMatch<S: StringProtocol>(_ text: S) -> Text {
+        Text(String(text))
+            .fontWeight(.semibold)
+            .foregroundColor(.primary)
+    }
+
+    /// A passage with core's `<mark>` tags drawn as a find inside the text
+    /// (`lampFindMatch`): Search's detail pane, where the hit is read in its
+    /// place rather than listed.
+    static func lampMarkedPassage(_ source: String) -> Text {
+        marked(source, as: { Text.lampFindMatch($0) })
+    }
+
+    /// A search snippet with core's `<mark>` tags drawn as listed matches
+    /// (`lampListMatch`), wherever a result is listed.
     static func lampMarkedSnippet(_ source: String) -> Text {
+        marked(source, as: { Text.lampListMatch($0) })
+    }
+
+    private static func marked(_ source: String, as match: (Substring) -> Text) -> Text {
         var remaining = source[...]
         var rendered = Text("")
         while let opening = remaining.range(of: LampSearchSnippet.openingMark),
               let closing = remaining[opening.upperBound...]
                   .range(of: LampSearchSnippet.closingMark) {
             rendered = rendered + Text(String(remaining[..<opening.lowerBound]))
-            rendered = rendered
-                + Text.lampFindMatch(remaining[opening.upperBound..<closing.lowerBound])
+            rendered = rendered + match(remaining[opening.upperBound..<closing.lowerBound])
             remaining = remaining[closing.upperBound...]
         }
         return rendered + Text(String(remaining))
@@ -430,13 +462,14 @@ struct LampSegmentedPicker<ID: Hashable>: View {
 }
 
 /// The chosen row of a content list — a writing, a book, a contents entry,
-/// a search result — on a quiet tile with a short bar of the accent at its
-/// leading edge, as Search's results first marked theirs.
+/// a search result, a ⌘K row — on a rounded grey tile and nothing else, as
+/// Raycast marks its rows.
 ///
 /// Not the list's own selection, which fills the row with the accent while
-/// the list has focus and turns its words white. Red is for where you are
-/// and what you press (ColorRules.md); a whole red row was the loudest thing
-/// in the window. The bar keeps the accent's "this one" without the flood.
+/// the list has focus and turns its words white: red is for where you are
+/// and what you press (ColorRules.md), and a whole red row was the loudest
+/// thing in the window. A short accent bar beside the tile was tried (Nov
+/// 2026); the design panel read tile and bar as two marks for one thing.
 struct LampListSelection: View {
     let isSelected: Bool
 
@@ -444,11 +477,7 @@ struct LampListSelection: View {
         ZStack(alignment: .leading) {
             if isSelected {
                 RoundedRectangle(cornerRadius: LampMetrics.tileRadius, style: .continuous)
-                    .fill(Color.lampTileFill)
-                RoundedRectangle(cornerRadius: 1.5)
-                    .fill(.tint)
-                    .frame(width: 3)
-                    .padding(.vertical, 8)
+                    .fill(Color.lampSelectionFill)
             }
         }
         .padding(.horizontal, 6)
