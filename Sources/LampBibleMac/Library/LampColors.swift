@@ -24,8 +24,9 @@ extension NSColor {
     }
 
     /// Anything in text that takes you somewhere: verse references,
-    /// cross-references, footnote markers, web links.
-    static let lampLink = NSColor.systemBlue
+    /// cross-references, footnote markers, web links. Lamp's own blue rather
+    /// than the system's, which took over a paragraph dense with references.
+    static let lampLink = NSColor(LampColorRole.link.color)
 
     /// Strong's numbers, Greek and Hebrew words, lexicon references.
     static let lampOriginalLanguage = NSColor.systemPurple
@@ -54,17 +55,6 @@ extension NSColor {
         appearance.lampIsDark
             ? NSColor(srgbRed: 0.09, green: 0.08, blue: 0.05, alpha: 1)
             : NSColor.labelColor
-    }
-
-    /// A link set inside dense prose — a definition, a commentary paragraph —
-    /// where a run of references in the full system blue took over the
-    /// paragraph. Still the link blue (blue takes you somewhere), a step
-    /// deeper on white and a step softer on charcoal, so the words between
-    /// the references stay the thing being read. About 5.6:1 and 7:1.
-    static let lampProseLink = NSColor(name: nil) { appearance in
-        appearance.lampIsDark
-            ? NSColor(srgbRed: 0.47, green: 0.67, blue: 0.96, alpha: 1)
-            : NSColor(srgbRed: 0.10, green: 0.38, blue: 0.80, alpha: 1)
     }
 
     /// Verse numbers, and the other small apparatus set in among scripture.
@@ -194,9 +184,6 @@ extension Color {
 
     /// The words on a find match's ground.
     static let lampOnFindMatch = Color(nsColor: .lampOnFindMatch)
-
-    /// A link inside dense prose.
-    static let lampProseLink = Color(nsColor: .lampProseLink)
 
     /// Behind a row or tile the pointer is over.
     static let lampRowHover = Color(nsColor: .lampRowHover)

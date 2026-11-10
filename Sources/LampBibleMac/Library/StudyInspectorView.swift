@@ -3058,7 +3058,7 @@ private struct ScriptureLinkedText: View {
                 var label = AttributedString(link.inlineLabel)
                 if let url = link.inlineURL {
                     label.link = url
-                    label.foregroundColor = .lampProseLink
+                    label.foregroundColor = .lampLink
                 }
                 result.append(label)
             }
@@ -3073,7 +3073,7 @@ private struct ScriptureLinkedText: View {
                 var label = AttributedString(link.inlineLabel)
                 if let url = link.inlineURL {
                     label.link = url
-                    label.foregroundColor = .lampProseLink
+                    label.foregroundColor = .lampLink
                 }
                 result.append(label)
             }
@@ -3087,7 +3087,7 @@ private struct ScriptureLinkedText: View {
     /// One link style wherever references sit in prose, a lexicon sense as
     /// much as a commentary paragraph, as on iPhone.
     private func markLink(_ run: inout AttributedSubstring) {
-        run.foregroundColor = .lampProseLink
+        run.foregroundColor = .lampLink
     }
 
     private func firstAvailableRange(
