@@ -1265,17 +1265,7 @@ struct UnifiedSearchView: View {
     }
 
     private func snippetText(_ source: String) -> Text {
-        var remaining = source[...]
-        var rendered = Text("")
-        while let opening = remaining.range(of: LampSearchSnippet.openingMark),
-              let closing = remaining[opening.upperBound...]
-                  .range(of: LampSearchSnippet.closingMark) {
-            rendered = rendered + Text(String(remaining[..<opening.lowerBound]))
-            rendered = rendered
-                + Text.lampFindMatch(remaining[opening.upperBound..<closing.lowerBound])
-            remaining = remaining[closing.upperBound...]
-        }
-        return rendered + Text(String(remaining))
+        Text.lampMarkedSnippet(source)
     }
 
     /// The palette's name for the chosen colour, where it has one.
@@ -1538,18 +1528,7 @@ private struct SearchHitPreview: View {
 /// A verse with the searched words marked, as the result list marks them —
 /// so the preview, the detail pane and the row agree about what was found.
 private func searchMarkedText(_ text: String, query: String) -> Text {
-    let marked = LampSearchQuery(query).markedSnippet(text, limit: .max)
-    var remaining = marked[...]
-    var rendered = Text("")
-    while let opening = remaining.range(of: LampSearchSnippet.openingMark),
-          let closing = remaining[opening.upperBound...]
-              .range(of: LampSearchSnippet.closingMark) {
-        rendered = rendered + Text(String(remaining[..<opening.lowerBound]))
-        rendered = rendered
-            + Text.lampFindMatch(remaining[opening.upperBound..<closing.lowerBound])
-        remaining = remaining[closing.upperBound...]
-    }
-    return rendered + Text(String(remaining))
+    Text.lampMarkedSnippet(LampSearchQuery(query).markedSnippet(text, limit: .max))
 }
 
 /// A scripture hit set in its passage, in the detail pane.

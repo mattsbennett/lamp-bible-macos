@@ -335,7 +335,7 @@ struct LibraryRootView: View {
             if showingCommandPalette {
                 ZStack(alignment: .top) {
                     // A click outside closes it, as with a menu.
-                    Color.black.opacity(0.12)
+                    Color.lampPanelScrim
                         .ignoresSafeArea()
                         .onTapGesture { showingCommandPalette = false }
                     CommandPaletteView(
@@ -7151,13 +7151,13 @@ extension LibraryRootView {
             ))
             items.append(CommandPaletteItem(
                 id: "lookup:\(key)", group: .suggested, title: "Look Up \(key)",
-                subtitle: "In the dictionary beside the reader",
+                detail: "Dictionary",
                 systemImage: "character.book.closed", perform: { _ in go(to: .dictionary(key, word: nil)) }
             ))
         }
         items.append(CommandPaletteItem(
             id: "search:\(typed)", group: .search, title: "Search for “\(typed)”",
-            subtitle: "Everything in your library, in Search",
+            detail: "Everything, in Search",
             systemImage: "magnifyingglass", perform: { _ in go(to: .search(typed)) }
         ))
         return items
@@ -7166,6 +7166,11 @@ extension LibraryRootView {
     /// Matches in the library, a few of each kind, as Search would open them.
     fileprivate func paletteLibraryResults(_ words: String) async -> [CommandPaletteItem] {
         let hidden = model.hiddenModuleIDs
+        // A module's short name where it has one: "NIC", not its full title.
+        let abbreviations = Dictionary(
+            model.modules.compactMap { module in module.abbreviation.map { (module.id, $0) } },
+            uniquingKeysWith: { first, _ in first }
+        )
         let results = (try? await model.library.searchModules(query: words, limit: 60)) ?? []
         var perKind: [LampModuleKind: Int] = [:]
         return results
@@ -7181,8 +7186,8 @@ extension LibraryRootView {
                     id: "result:\(result.id)",
                     group: .results,
                     title: result.title,
-                    subtitle: [result.moduleName, result.snippet]
-                        .filter { !$0.isEmpty }.joined(separator: " · "),
+                    subtitle: result.snippet,
+                    detail: abbreviations[result.moduleID] ?? result.moduleName,
                     systemImage: Self.paletteIcon(for: result.kind),
                     opensPlaces: opensPlace,
                     perform: { placement in go(to: .searchResult(result, placement: placement)) }
@@ -7195,32 +7200,32 @@ extension LibraryRootView {
         var items: [CommandPaletteItem] = []
         for book in model.modules where book.kind == .book && !model.hiddenModuleIDs.contains(book.id) {
             items.append(CommandPaletteItem(
-                id: "book:\(book.id)", group: .open, title: book.name, subtitle: "Book",
+                id: "book:\(book.id)", group: .open, title: book.name, detail: "Book",
                 systemImage: "book.closed", perform: { _ in go(to: .book(moduleID: book.id, sectionID: nil)) }
             ))
         }
         for writing in model.devotionals {
             items.append(CommandPaletteItem(
                 id: "writing:\(writing.id)", group: .open, title: writing.title,
-                subtitle: writing.isEditable ? "Writing" : "Writing · \(writing.moduleName)",
+                detail: writing.isEditable ? "Writing" : "Writing · \(writing.moduleName)",
                 systemImage: "sun.max", perform: { _ in go(to: .writing(writing.id)) }
             ))
         }
         for deck in decks {
             items.append(CommandPaletteItem(
-                id: "deck:\(deck.id)", group: .open, title: deck.title, subtitle: "Presentation deck",
+                id: "deck:\(deck.id)", group: .open, title: deck.title, detail: "Presentation deck",
                 systemImage: "rectangle.on.rectangle", perform: { _ in go(to: .deck(deck.id)) }
             ))
         }
         for plan in model.plans {
             items.append(CommandPaletteItem(
-                id: "plan:\(plan.id)", group: .open, title: plan.name, subtitle: "Reading plan",
+                id: "plan:\(plan.id)", group: .open, title: plan.name, detail: "Reading plan",
                 systemImage: "checklist", perform: { _ in go(to: .plan(plan.id)) }
             ))
         }
         for quiz in model.quizModules {
             items.append(CommandPaletteItem(
-                id: "quiz:\(quiz.id)", group: .open, title: quiz.name, subtitle: "Quiz",
+                id: "quiz:\(quiz.id)", group: .open, title: quiz.name, detail: "Quiz",
                 systemImage: "questionmark.bubble", perform: { _ in go(to: .quiz(quiz.id)) }
             ))
         }
@@ -7290,7 +7295,7 @@ extension LibraryRootView {
         ] {
             items.append(CommandPaletteItem(
                 id: "command:study-\(tool)", group: .commands, title: "Show \(title)",
-                subtitle: "Study tools beside the reader", systemImage: image, keywords: ["Study Tools"],
+                detail: "Study tools", systemImage: image, keywords: ["Study Tools"],
                 perform: { _ in
                     studyPane.tool = tool
                     readerSidebar = .study
@@ -7313,7 +7318,7 @@ extension LibraryRootView {
             let name = translation.abbreviation ?? translation.name
             items.append(CommandPaletteItem(
                 id: "command:translation-\(translation.id)", group: .commands, title: "Read in \(name)",
-                subtitle: translation.abbreviation == nil ? nil : translation.name,
+                detail: translation.abbreviation == nil ? nil : translation.name,
                 systemImage: "character.book.closed", keywords: [translation.name, "Translation", "Switch"],
                 perform: { _ in
                     workspace.selectTranslation(translation.id)
@@ -7350,7 +7355,7 @@ extension LibraryRootView {
         for (moduleID, position) in reading {
             guard let book = model.modules.first(where: { $0.id == moduleID }) else { continue }
             items.append(CommandPaletteItem(
-                id: "recent-book:\(moduleID)", group: .recent, title: book.name, subtitle: "Continue reading",
+                id: "recent-book:\(moduleID)", group: .recent, title: book.name, detail: "Continue reading",
                 systemImage: "book.closed",
                 perform: { _ in go(to: .book(moduleID: moduleID, sectionID: position.sectionID)) }
             ))
@@ -7361,7 +7366,7 @@ extension LibraryRootView {
             .prefix(2)
         for writing in writings {
             items.append(CommandPaletteItem(
-                id: "recent-writing:\(writing.id)", group: .recent, title: writing.title, subtitle: "Writing",
+                id: "recent-writing:\(writing.id)", group: .recent, title: writing.title, detail: "Writing",
                 systemImage: "sun.max", perform: { _ in go(to: .writing(writing.id)) }
             ))
         }

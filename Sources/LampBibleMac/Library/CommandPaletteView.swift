@@ -43,7 +43,11 @@ struct CommandPaletteItem: Identifiable {
     let id: String
     let group: Group
     let title: String
+    /// A second line: a library match's snippet, with its found words marked.
     var subtitle: String? = nil
+    /// What kind of thing it is, or where it comes from, at the row's end:
+    /// "Book", a match's module. Short, so most rows keep to one line.
+    var detail: String? = nil
     let systemImage: String
     /// Other words it answers to: a pane's settings, a command's other name.
     var keywords: [String] = []
@@ -78,8 +82,14 @@ struct CommandPaletteView: View {
     @State private var libraryResults: [CommandPaletteItem] = []
     @State private var libraryResultsQuery = ""
     @FocusState private var isFieldFocused: Bool
+    /// Where the pointer was when the palette opened or the keys last moved
+    /// the choice. A row the pointer merely rests on — the palette opened
+    /// under it, or the list scrolled beneath it — does not take the choice;
+    /// only a pointer that moves does.
+    @State private var restingPointer: NSPoint?
 
     private static let perGroup = 6
+    private static let maxListHeight: CGFloat = 420
 
     private var trimmed: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
 
@@ -95,14 +105,15 @@ struct CommandPaletteView: View {
             }
             .sorted { $0.1 > $1.1 }
         let typed = typedItems(trimmed)
-        // A passage or a key first; the search for the words last, so that
-        // "line spacing" goes to its setting and "new" to New Writing.
+        // A passage or a key first; then what is named so, so that "line
+        // spacing" goes to its setting and "new" to New Writing; then the
+        // library's matches for the words; the search for them last.
         var shown = typed.filter { $0.group != .search }
-        if libraryResultsQuery == trimmed {
-            shown += libraryResults.prefix(Self.perGroup)
-        }
         for group in [CommandPaletteItem.Group.open, .commands, .sections, .settings] {
             shown += named.filter { $0.0.group == group }.prefix(Self.perGroup).map(\.0)
+        }
+        if libraryResultsQuery == trimmed {
+            shown += libraryResults.prefix(Self.perGroup)
         }
         return shown + typed.filter { $0.group == .search }
     }
@@ -127,19 +138,30 @@ struct CommandPaletteView: View {
             } else {
                 list(rows)
             }
-            footer
+            footer(rows)
         }
         .frame(width: 640)
-        .background(Color.lampPopoverFill, in: RoundedRectangle(cornerRadius: LampMetrics.cardRadius, style: .continuous))
+        // The shadow on the panel's shape only: on the whole view it falls
+        // under the list's text too, which scrolls in its own layer.
+        .background {
+            RoundedRectangle(cornerRadius: LampMetrics.cardRadius, style: .continuous)
+                .fill(Color.lampRaisedPanelFill)
+                .shadow(color: Color.lampPanelShadow, radius: 30, y: 12)
+        }
         .overlay {
             RoundedRectangle(cornerRadius: LampMetrics.cardRadius, style: .continuous)
                 .strokeBorder(Color.lampCardStroke)
         }
-        .shadow(color: .black.opacity(0.22), radius: 24, y: 10)
-        .onAppear { isFieldFocused = true }
+        .onAppear {
+            isFieldFocused = true
+            restingPointer = NSEvent.mouseLocation
+        }
         .task(id: trimmed) {
             let words = trimmed
-            guard words.count >= 2 else {
+            // A passage or a Strong's key is a place, and a full-text match
+            // for "john 3:16" or "g26" is only noise under it.
+            let isPlace = typedItems(words).contains { $0.group == .suggested }
+            guard words.count >= 2, !isPlace else {
                 libraryResults = []
                 libraryResultsQuery = words
                 return
@@ -163,7 +185,13 @@ struct CommandPaletteView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(Color.lampSecondaryText)
-            TextField("Passage, word, writing, command or setting", text: $query)
+            TextField(
+                "Go to anything",
+                text: $query,
+                // The system's placeholder grey is too faint at this size.
+                prompt: Text("Passage, word, writing, command or setting")
+                    .foregroundStyle(Color.lampSecondaryText)
+            )
                 .textFieldStyle(.plain)
                 .font(.system(size: 19))
                 .focused($isFieldFocused)
@@ -189,6 +217,7 @@ struct CommandPaletteView: View {
         guard !rows.isEmpty else { return }
         let index = min(max(highlightedIndex(in: rows) + step, 0), rows.count - 1)
         highlightedID = rows[index].id
+        restingPointer = NSEvent.mouseLocation
     }
 
     private func list(_ rows: [CommandPaletteItem]) -> some View {
@@ -207,14 +236,28 @@ struct CommandPaletteView: View {
                         row(item, isHighlighted: index == highlighted)
                             .id(item.id)
                             .onTapGesture { perform(rows, at: index) }
-                            .onHover { if $0 { highlightedID = item.id } }
+                            .onHover { inside in
+                                guard inside, NSEvent.mouseLocation != restingPointer else { return }
+                                restingPointer = nil
+                                highlightedID = item.id
+                            }
                     }
                 }
                 .padding(.bottom, 8)
             }
             // As tall as its rows, up to a point: a short list should not
-            // sit in a tall empty box.
-            .frame(height: min(Self.estimatedHeight(of: rows), 420))
+            // sit in a tall empty box. A longer one fades at the foot, so
+            // the cut row reads as more below rather than a clipped edge.
+            .frame(height: min(Self.estimatedHeight(of: rows), Self.maxListHeight))
+            .mask {
+                VStack(spacing: 0) {
+                    Color.black
+                    if Self.estimatedHeight(of: rows) > Self.maxListHeight {
+                        LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
+                            .frame(height: 28)
+                    }
+                }
+            }
             .onChange(of: highlightedID) { _, id in
                 if let id { proxy.scrollTo(id) }
             }
@@ -224,47 +267,78 @@ struct CommandPaletteView: View {
     private func row(_ item: CommandPaletteItem, isHighlighted: Bool) -> some View {
         HStack(spacing: 12) {
             Image(systemName: item.systemImage)
-                .font(.system(size: 14))
+                .font(.system(size: 15))
                 .foregroundStyle(Color.lampSecondaryText)
-                .frame(width: 20)
-            VStack(alignment: .leading, spacing: 1) {
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 2) {
                 Text(item.title)
-                    .font(.system(size: LampMetrics.listTitleSize))
+                    .font(.system(size: Self.titleSize))
                     .lineLimit(1)
                 if let subtitle = item.subtitle, !subtitle.isEmpty {
-                    Text(subtitle)
-                        .font(.system(size: LampMetrics.listCaptionSize))
+                    // A library match's snippet marks the words it found,
+                    // as Search's rows do, cut so the row never truncates it.
+                    Text.lampMarkedSnippet(CommandPaletteSnippet.clipped(subtitle, droppingLeading: item.title))
+                        .font(.system(size: Self.snippetSize))
                         .foregroundStyle(Color.lampSecondaryText)
                         .lineLimit(1)
                 }
             }
-            Spacer(minLength: 8)
-            if isHighlighted, item.opensPlaces {
-                Text("⌘↩ New Tab   ⌥↩ New Window")
-                    .font(.system(size: LampMetrics.listCaptionSize))
+            Spacer(minLength: 12)
+            if let detail = item.detail, !detail.isEmpty {
+                Text(detail)
+                    .font(.system(size: LampMetrics.listDetailSize))
                     .foregroundStyle(Color.lampSecondaryText)
+                    .lineLimit(1)
+                    .frame(maxWidth: 150, alignment: .trailing)
             }
         }
         .padding(.horizontal, 18)
-        .padding(.vertical, 7)
+        .padding(.vertical, 8)
         .background(LampListSelection(isSelected: isHighlighted))
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isHighlighted ? [.isButton, .isSelected] : .isButton)
     }
 
-    private var footer: some View {
-        HStack(spacing: 16) {
-            Text("↩ Open")
-            Text("↑↓ Move")
-            Text("esc Close")
+    /// A launcher's rows read at a glance, a step above a list's.
+    private static let titleSize: CGFloat = 15
+    private static let snippetSize: CGFloat = 13
+
+    /// The keys that work now: ⌘↩ and ⌥↩ only on a row that opens a place.
+    private func footer(_ rows: [CommandPaletteItem]) -> some View {
+        let opensPlaces = rows.indices.contains(highlightedIndex(in: rows))
+            && rows[highlightedIndex(in: rows)].opensPlaces
+        return HStack(spacing: 14) {
+            hint("↩", "Open")
+            if opensPlaces {
+                hint("⌘↩", "New Tab")
+                hint("⌥↩", "New Window")
+            }
             Spacer()
+            hint("↑↓", "Move")
+            hint("esc", "Close")
         }
-        .font(.system(size: LampMetrics.listCaptionSize))
-        .foregroundStyle(Color.lampSecondaryText)
         .padding(.horizontal, 18)
-        .frame(height: 30)
-        .background(Color.primary.opacity(0.03))
+        .frame(height: 38)
+        .background(Color.primary.opacity(0.04))
+        .overlay(alignment: .top) { Divider() }
+    }
+
+    private func hint(_ keys: String, _ label: String) -> some View {
+        HStack(spacing: 5) {
+            Text(keys)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 6)
+                .frame(minWidth: 22, minHeight: 20)
+                .background(Color.lampTileFill, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(Color.lampCardStroke)
+                }
+            Text(label)
+                .font(.system(size: LampMetrics.listDetailSize))
+                .foregroundStyle(Color.lampSecondaryText)
+        }
     }
 
     /// The rows' height as drawn: a row with a second line is taller, and a
@@ -273,7 +347,7 @@ struct CommandPaletteView: View {
         var height: CGFloat = 8
         for (index, item) in rows.enumerated() {
             if index == 0 || rows[index - 1].group != item.group { height += index == 0 ? 28 : 32 }
-            height += (item.subtitle?.isEmpty == false) ? 46 : 32
+            height += (item.subtitle?.isEmpty == false) ? 52 : 36
         }
         return height
     }

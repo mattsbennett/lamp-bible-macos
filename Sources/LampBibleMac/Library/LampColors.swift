@@ -1,5 +1,8 @@
 import AppKit
 import LampCore
+#if canImport(LampBibleMacSupport)
+import LampBibleMacSupport
+#endif
 import SwiftUI
 
 // The colours Lamp gives a meaning to, as the Mac app draws them. Which colour
@@ -114,6 +117,32 @@ extension NSColor {
             : NSColor(srgbRed: 0.935, green: 0.935, blue: 0.945, alpha: 1)
     }
 
+    /// The page under a panel that takes the keyboard (⌘K), dimmed a
+    /// little: the page stays in view, and the panel's own fill and shadow
+    /// set it apart. (A material would blur the desktop behind the window,
+    /// not the page.)
+    static let lampPanelScrim = NSColor(name: nil) { appearance in
+        appearance.lampIsDark
+            ? NSColor(white: 0, alpha: 0.26)
+            : NSColor(white: 0, alpha: 0.06)
+    }
+
+    /// The shadow under a panel over the page (⌘K): deeper on the dark
+    /// window, where a soft one is lost.
+    static let lampPanelShadow = NSColor(name: nil) { appearance in
+        NSColor(white: 0, alpha: appearance.lampIsDark ? 0.6 : 0.28)
+    }
+
+    /// A panel over a dimmed page (⌘K). A popover is one step off the page
+    /// it sits on; over a page dimmed beneath it the step goes the other
+    /// way, so in light it is the page's own white, and in dark the
+    /// popover's lifted grey.
+    static let lampRaisedPanelFill = NSColor(name: nil) { appearance in
+        appearance.lampIsDark
+            ? NSColor(srgbRed: 0.245, green: 0.245, blue: 0.255, alpha: 1)
+            : NSColor.white
+    }
+
     /// A tile or row that can be chosen but is not: a chapter in the passage
     /// picker. Visible against an opaque popover in both appearances.
     static let lampTileFill = NSColor(name: nil) { appearance in
@@ -216,6 +245,9 @@ extension Color {
 
     /// A popover's opaque ground.
     static let lampPopoverFill = Color(nsColor: .lampPopoverFill)
+    static let lampPanelScrim = Color(nsColor: .lampPanelScrim)
+    static let lampRaisedPanelFill = Color(nsColor: .lampRaisedPanelFill)
+    static let lampPanelShadow = Color(nsColor: .lampPanelShadow)
 
     /// A choosable tile that is not chosen.
     static let lampTileFill = Color(nsColor: .lampTileFill)
@@ -281,6 +313,22 @@ extension Text {
         // accent *colour*, which reads as a link.
         marked.inlinePresentationIntent = .stronglyEmphasized
         return Text(marked)
+    }
+
+    /// A search snippet with core's `<mark>` tags drawn as found words
+    /// (`lampFindMatch`), wherever a result is listed.
+    static func lampMarkedSnippet(_ source: String) -> Text {
+        var remaining = source[...]
+        var rendered = Text("")
+        while let opening = remaining.range(of: LampSearchSnippet.openingMark),
+              let closing = remaining[opening.upperBound...]
+                  .range(of: LampSearchSnippet.closingMark) {
+            rendered = rendered + Text(String(remaining[..<opening.lowerBound]))
+            rendered = rendered
+                + Text.lampFindMatch(remaining[opening.upperBound..<closing.lowerBound])
+            remaining = remaining[closing.upperBound...]
+        }
+        return rendered + Text(String(remaining))
     }
 }
 
