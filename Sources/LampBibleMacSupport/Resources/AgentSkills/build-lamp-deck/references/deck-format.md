@@ -443,6 +443,13 @@ the translation's own print. Leave them all out. The validator warns that a char
 expected state for a deck you have just written. `text` is an optional heading
 drawn over the chart, and may be empty.
 
+### Naming the word
+
+A slide is mostly read by people without Greek or Hebrew. Name the word in a
+heading or title with its transliteration beside it — "Where ἀγάπη (agapē) is
+found" — taking the transliteration from the lexicon `analyze_strongs`
+returns, not writing your own.
+
 ### From a request to a chart
 
 Use `analyze_strongs` first. It tells you what is worth charting — which books

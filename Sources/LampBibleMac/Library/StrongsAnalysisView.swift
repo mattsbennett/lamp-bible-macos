@@ -979,7 +979,9 @@ struct StrongsAnalysisPane: View {
                     "Forms",
                     note: LampStrongsFormReading.note(for: analysis, readings: Array(readings.values)),
                     asRing: analysis.forms.isEmpty ? nil : $formsAsRing,
-                    deck: addToDeck(analysis, [deckChart(
+                    // Nothing to chart without forms: a slide of none would be
+                    // an empty placeholder.
+                    deck: analysis.forms.isEmpty ? nil : addToDeck(analysis, [deckChart(
                         analysis, name: "Forms", by: .form,
                         style: formsAsRing ? .share : .bars,
                         title: "The forms of \(headword(analysis))"
@@ -1822,8 +1824,13 @@ struct StrongsAnalysisPane: View {
     // MARK: - Deck charts
 
     /// The word as a title names it.
+    /// The word as a slide names it: the word with how to say it, "ἀγάπη
+    /// (agapē)", since a slide is mostly read by people without Greek or
+    /// Hebrew.
     private func headword(_ analysis: LampStrongsAnalysis) -> String {
-        entry?.lemma.flatMap { $0.isEmpty ? nil : $0 } ?? analysis.key
+        let word = entry?.lemma.flatMap { $0.isEmpty ? nil : $0 } ?? analysis.key
+        guard let transliteration = entry?.transliteration.flatMap({ $0.isEmpty ? nil : $0 }) else { return word }
+        return "\(word) (\(transliteration))"
     }
 
     private func translationName(_ analysis: LampStrongsAnalysis) -> String {
