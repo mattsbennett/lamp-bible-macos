@@ -434,8 +434,12 @@ measure is not read for one.
 
 `values` — each with its `label` and `value`, and where they apply a
 `standing`, a grid row's `chapters`, a bar's `share` of the whole, and a
-`detail` line under the label — and a card's `headword` are Lamp's to write.
-Leave them out. The validator warns that a chart has none yet, which is the
+`detail` line under the label — a card's `headword`, and `sources` are Lamp's
+to write. `sources` says what was matched to the counted translation when its
+module was built and the chart rests on, such as Strong's numbers aligned by
+machine or Greek spellings carried onto a translation whose source tags only
+numbers; the slide prints it under the chart, so a figure never passes for
+the translation's own print. Leave them all out. The validator warns that a chart has none yet, which is the
 expected state for a deck you have just written. `text` is an optional heading
 drawn over the chart, and may be empty.
 

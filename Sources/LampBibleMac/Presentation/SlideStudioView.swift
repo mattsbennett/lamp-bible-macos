@@ -2109,9 +2109,11 @@ private struct LampSlideChartEditor: View {
             let values = worked.values ?? []
             // Only when they differ, so opening a slide does not mark its deck
             // changed and send it round the sync for nothing.
-            if chart.values != worked.values || chart.headword != worked.headword {
+            if chart.values != worked.values || chart.headword != worked.headword
+                || chart.sources != worked.sources {
                 chart.values = worked.values
                 chart.headword = worked.headword
+                chart.sources = worked.sources
                 block.chart = chart
             }
             if values.isEmpty {

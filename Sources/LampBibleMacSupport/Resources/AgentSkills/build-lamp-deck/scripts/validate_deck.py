@@ -643,6 +643,12 @@ def chart_issues(block: dict) -> tuple[list[str], list[str]]:
             "the key's verses, so the measure is not read."
         )
 
+    sources = chart.get("sources")
+    if sources is not None and not (
+        isinstance(sources, list) and all(isinstance(s, str) for s in sources)
+    ):
+        errors.append("chart.sources: expected an array of sentences, which Lamp writes")
+
     headword = chart.get("headword")
     if headword is not None:
         if not isinstance(headword, dict):
