@@ -1381,7 +1381,7 @@ private struct DictionaryInspectorView: View {
             Button("Analyse", systemImage: "chart.bar.xaxis") { analyse(key) }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-                .help("Analyse \(key): where it is used and how it is rendered")
+                .help("Analyse \(key): where it is used and how it is translated")
         } else if keys.count > 1 {
             Menu {
                 ForEach(keys, id: \.self) { key in

@@ -559,7 +559,7 @@ struct UnifiedSearchView: View {
                         .foregroundStyle(.tint)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Analyse \(typed)").font(.headline)
-                        Text("Where it is found, how translators rendered it, "
+                        Text("Where it is found, how it is translated, "
                             + "and the keys it keeps company with.")
                             .font(.caption)
                             .foregroundStyle(.secondary)

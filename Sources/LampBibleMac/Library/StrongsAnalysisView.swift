@@ -951,13 +951,13 @@ struct StrongsAnalysisPane: View {
         VStack(alignment: .leading, spacing: 24) {
             if !analysis.renderings.isEmpty {
                 group(
-                    "Rendered As",
+                    "Translated As",
                     note: "What translators reached for, not what the word means.",
                     asRing: $renderingsAsRing,
                     deck: addToDeck(analysis, [deckChart(
-                        analysis, name: "Rendered As", by: .rendering,
+                        analysis, name: "Translated As", by: .rendering,
                         style: renderingsAsRing ? .share : .bars,
-                        title: "How \(translationName(analysis)) renders \(headword(analysis))"
+                        title: "How \(translationName(analysis)) translates \(headword(analysis))"
                     )])
                 ) {
                     if renderingsAsRing {
@@ -2923,7 +2923,7 @@ struct AddToDeckMenu: View {
     private var narrowing: Narrowing? {
         switch filter {
         case .rendering(_, let text) where !text.isEmpty:
-            return ("Rendered “\(text)”", LampPresentationChart.Filter(rendering: text), nil)
+            return ("Translated “\(text)”", LampPresentationChart.Filter(rendering: text), nil)
         case .form(let text):
             return ("As \(text)", LampPresentationChart.Filter(form: text), nil)
         case .grammar(let feature, let value):

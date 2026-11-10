@@ -1985,8 +1985,8 @@ private struct LampSlideChartEditor: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
             HStack(spacing: 6) {
-                TextField("Rendered as", text: field(\.rendering))
-                    .help("An English rendering, as Rendered As lists it: love")
+                TextField("Translated as", text: field(\.rendering))
+                    .help("An English translation of the word, as Translated As lists it: love")
                 TextField("Form", text: field(\.form))
                     .help("An original-language form, as Forms lists it: ἀγάπης")
             }
@@ -2036,7 +2036,7 @@ private struct LampSlideChartEditor: View {
         switch grouping {
         case .book: "Book"
         case .section: "Section"
-        case .rendering: "Rendering"
+        case .rendering: "Translated As"
         case .form: "Form"
         case .grammar: "Grammar"
         case .translation: "Translation (compare)"

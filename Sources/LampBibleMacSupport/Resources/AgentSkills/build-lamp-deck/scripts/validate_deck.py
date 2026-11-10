@@ -765,8 +765,8 @@ def chart_filter_issues(
     )
     if narrows_grouping:
         warnings.append(
-            f"chart.source.filter: The filter keeps one {grouping}, so a chart by "
-            f"{grouping} draws a single value."
+            "chart.source.filter: The filter keeps only one of the values this chart "
+            "is grouped by, so it draws a single value."
         )
     return errors, warnings
 
