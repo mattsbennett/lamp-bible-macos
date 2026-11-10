@@ -1332,14 +1332,17 @@ struct SlideStudioView: View {
             decks.removeAll { $0.id == deck.id }
             // Images the removed deck owned, unless another deck shares them.
             try? LampPresentationDeckSync.pruneUnreferencedAssets(in: model.library.rootURL)
-            if let next = decks.first {
-                applySelection(next)
-            } else {
-                let replacement = LampPresentationDeck.starter()
-                try store.save(replacement)
-                decks = [replacement]
-                applySelection(replacement)
-            }
+            // The window closes rather than opening some other deck in its
+            // place, which read as a deck chosen at random. The deck is let
+            // go first: the window saves what it holds as it closes, and
+            // would write the deleted deck straight back.
+            LampSlideStudioDrafts.discard(forDeck: deck.id, inApplicationSupport: applicationSupportURL)
+            history.forget()
+            self.deck = nil
+            savedDeck = nil
+            // Its own window, closed directly: the dismiss action left a
+            // studio window open on "No Presentation".
+            hostWindow.window?.close()
         } catch {
             errorMessage = error.localizedDescription
         }
