@@ -1108,7 +1108,11 @@ struct StrongsAnalysisPane: View {
             counts: analysis.forms.map(\.count), of: analysis
         )
         return VStack(alignment: .leading, spacing: 24) {
-            if !analysis.renderings.isEmpty {
+            if analysis.isInKeysOwnLanguage {
+                group("Translated As") {
+                    ownLanguageNote(analysis)
+                }
+            } else if !analysis.renderings.isEmpty {
                 group(
                     "Translated As",
                     note: "What translators reached for, not what the word means.",
@@ -1896,20 +1900,25 @@ struct StrongsAnalysisPane: View {
                     )])
                 }
             }
-            ForEach(loader.analyses, id: \.translationID) { analysis in
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 6) {
-                        Text(analysis.translationAbbreviation ?? analysis.translationName)
-                            .font(.system(size: fontSize, weight: .medium))
-                        Spacer()
-                        Text("\(analysis.occurrenceCount) in \(analysis.verseCount)")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
+            ForEach(loader.analyses, id: \.translationID) { other in
+                // Each row opens the word in that translation, its own
+                // Translated As, Forms and Spread with it: the way between
+                // translations from any of them, not only from TAGNT.
+                let isShown = other.translationID == analysis?.translationID
+                let name = other.translationAbbreviation ?? other.translationName
+                Group {
+                    if !isShown, let openIn {
+                        Button {
+                            openIn(other.translationID)
+                        } label: {
+                            compareRow(other, isShown: false)
+                        }
+                        .buttonStyle(.plain)
+                        .chartClickable()
+                        .help("Analyse this word in \(name)")
+                    } else {
+                        compareRow(other, isShown: isShown)
                     }
-                    Text(LampStrongsRenderingSummary.line(of: analysis))
-                        .font(.system(size: max(10, fontSize - 2)))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
                 }
                 Divider()
             }
@@ -1928,6 +1937,47 @@ struct StrongsAnalysisPane: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
+    }
+
+    private func compareRow(_ other: LampStrongsAnalysis, isShown: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                Text(other.translationAbbreviation ?? other.translationName)
+                    .font(.system(size: fontSize, weight: .medium))
+                if isShown {
+                    Text("shown above")
+                        .font(.caption)
+                        .foregroundStyle(Color.lampSecondaryText)
+                }
+                Spacer()
+                Text("\(other.occurrenceCount) in \(other.verseCount)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            Text(LampStrongsRenderingSummary.line(of: other))
+                .font(.system(size: max(10, fontSize - 2)))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+        }
+        .contentShape(Rectangle())
+    }
+
+    /// Where Translated As was, for a text in the word's own language: its
+    /// "translations" are its own spellings, which the forms below list, so
+    /// it says that and points to Compare, where every translation's
+    /// English for the word is.
+    private func ownLanguageNote(_ analysis: LampStrongsAnalysis) -> some View {
+        let language = LampStrongsKey.normalized(analysis.key).first == "H" ? "Hebrew" : "Greek"
+        let name = analysis.translationAbbreviation ?? analysis.translationName
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("\(name) is the \(language) text itself, so its words are the forms below. "
+                + "How each translation renders it is under Compare.")
+                .font(.subheadline)
+                .foregroundStyle(Color.lampSecondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Compare Translations") { section = .compare }
+                .controlSize(.small)
+        }
     }
 
     // MARK: - Forms
