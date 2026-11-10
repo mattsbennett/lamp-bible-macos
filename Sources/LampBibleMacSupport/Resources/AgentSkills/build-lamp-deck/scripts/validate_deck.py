@@ -59,6 +59,22 @@ CHART_GRAMMAR_FEATURES = {
     "gender": "Gender",
     "state": "State",
 }
+# The figures a card can print in its slots, in the order a chooser offers
+# them. Mirrors `LampStrongsCardFigure` in LampCore. A name that is not here
+# is left out rather than refused, as an unknown style is.
+CARD_FIGURES = (
+    "occurrences",
+    "verses",
+    "books",
+    "chapters",
+    "sections",
+    "perThousandWords",
+    "differentWords",
+    "forms",
+    "commonest",
+)
+# How many figures a card prints. Mirrors `LampStrongsCardChoice.slots`.
+CARD_SLOTS = 3
 # Past this many books a grid cannot be read across a room.
 CHART_READABLE_GRID_ROWS = 40
 # Past this many slices a share cannot be told apart: the six largest and
@@ -655,6 +671,31 @@ def chart_issues(block: dict) -> tuple[list[str], list[str]]:
             errors.append("chart.headword: expected an object, which Lamp writes")
         if drawn != "card":
             warnings.append("chart.headword: Only a card draws a headword.")
+
+    figures = chart.get("figures")
+    if figures is not None:
+        if not isinstance(figures, list) or not all(isinstance(name, str) for name in figures):
+            errors.append("chart.figures: expected an array of figure names")
+        else:
+            if drawn != "card":
+                warnings.append("chart.figures: Only a card prints figures.")
+            unknown = [name for name in figures if name not in CARD_FIGURES]
+            if unknown:
+                named = ", ".join(f"“{name}”" for name in unknown)
+                warnings.append(
+                    f"chart.figures: {named} "
+                    + ("is not a figure" if len(unknown) == 1 else "are not figures")
+                    + " a card prints, so "
+                    + ("it is" if len(unknown) == 1 else "they are")
+                    + " left out. The figures are "
+                    + ", ".join(CARD_FIGURES)
+                    + "."
+                )
+            if len(figures) > CARD_SLOTS:
+                warnings.append(
+                    f"chart.figures: A card prints {CARD_SLOTS} figures, "
+                    "so the rest are not drawn."
+                )
 
     values = chart.get("values")
     if values is None:

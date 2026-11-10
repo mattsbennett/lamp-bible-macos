@@ -330,6 +330,13 @@ struct DeckValidatorAgreementTests {
                     source: source, by: .book, values: one,
                     headword: .init(occurrences: 1, verses: 1, books: 1, bookCount: 1, perThousandWords: 1, translation: "T")
                 )),
+                // Figures only a card prints, a figure neither knows, and a
+                // fourth figure no card has room for.
+                slide(.init(source: source, by: .book, figures: ["verses"], values: one)),
+                slide(.init(
+                    source: source, by: .book, style: .card,
+                    figures: ["verses", "wingspan", "forms", "commonest"], values: one
+                )),
                 // A ring of nine slices, at a rate.
                 slide(.init(
                     source: source, by: .rendering, measure: .perThousandWords, style: .share,
@@ -340,6 +347,10 @@ struct DeckValidatorAgreementTests {
                 slide(.init(source: .init(strongs: "G26", translationID: "T", filter: .init(rendering: "love")), by: .rendering, values: one)),
                 // Drawn as written.
                 slide(.init(source: source, by: .book, style: .card, values: one)),
+                slide(.init(
+                    source: source, by: .book, style: .card,
+                    figures: ["commonest", "chapters"], values: one
+                )),
                 slide(.init(source: .init(strongs: "G26", translationID: "", translations: ["T", "U"]), by: .translation, values: one)),
                 slide(.init(source: .init(strongs: "G26", translationID: "T", filter: .init(rendering: "love")), by: .section, values: one)),
                 slide(.init(source: source, by: .grammar, feature: .tense, style: .share, values: one)),

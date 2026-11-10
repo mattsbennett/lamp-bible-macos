@@ -424,17 +424,39 @@ measure is not read for one.
   whole. Translations and companions are not parts of one whole, so neither is
   drawn as a share.
 - `card` is the analysis's headword card: the word large with its
-  transliteration and gloss, how many times it occurs, in how many verses and
-  books, and a column for each book beneath. It charts `by` book only. A card
-  makes a good opening slide for a word study.
+  transliteration and gloss, three figures saying how common it is, and a
+  column for each book beneath. It charts `by` book only. A card makes a good
+  opening slide for a word study. Name the three with `figures` to print
+  something other than its occurrences, verses and books.
 - A style Lamp does not know is drawn as bars rather than refused, so a deck
   from a newer Lamp still opens.
+
+### Which figures a card prints: `figures`
+
+Three names, in the order they are printed, beside `style` on a card:
+
+```json
+{ "by": "book", "style": "card", "figures": ["occurrences", "commonest", "forms"] }
+```
+
+Leave it out for the card's own three — `occurrences`, `verses` and `books`.
+The rest are `chapters` and `sections` (each holding it, of those in range),
+`perThousandWords` (the rate, which then leaves the fine print under the
+card), `differentWords` (how many different words the translation uses for
+it), `forms` (how many spellings it takes in the original) and `commonest`
+(the share its commonest word takes, as `67% “love”`).
+
+A figure the word cannot answer is left out rather than filled with something
+else, so a word with no forms prints the figures beside it and nothing in that
+slot. Only a card reads `figures`, three is all it draws, and a name Lamp does
+not know is dropped rather than refused — the validator says so in each case.
 
 ### What Lamp writes
 
 `values` — each with its `label` and `value`, and where they apply a
 `standing`, a grid row's `chapters`, a bar's `share` of the whole, and a
-`detail` line under the label — a card's `headword`, and `sources` are Lamp's
+`detail` line under the label — a card's `headword` (its figures among them),
+and `sources` are Lamp's
 to write. `sources` says what was matched to the counted translation when its
 module was built and the chart rests on, such as Strong's numbers aligned by
 machine or Greek spellings carried onto a translation whose source tags only
