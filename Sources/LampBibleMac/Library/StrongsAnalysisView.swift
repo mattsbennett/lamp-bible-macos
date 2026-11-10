@@ -1969,14 +1969,25 @@ struct StrongsAnalysisPane: View {
     private func ownLanguageNote(_ analysis: LampStrongsAnalysis) -> some View {
         let language = LampStrongsKey.normalized(analysis.key).first == "H" ? "Hebrew" : "Greek"
         let name = analysis.translationAbbreviation ?? analysis.translationName
+        // Compare can only answer where another translation tags this
+        // number. For an Old Testament word in the Septuagint, the English
+        // Bibles tag the Hebrew instead, so there may be none, and then the
+        // note says so rather than sending the reader to an empty tab.
+        let othersTagIt = loader.isFillingRest || loader.analyses.contains {
+            $0.translationID != analysis.translationID && $0.occurrenceCount > 0
+        }
         return VStack(alignment: .leading, spacing: 8) {
             Text("\(name) is the \(language) text itself, so its words are the forms below. "
-                + "How each translation renders it is under Compare.")
+                + (othersTagIt
+                    ? "How each translation renders it is under Compare."
+                    : "No other installed translation tags this word."))
                 .font(.subheadline)
                 .foregroundStyle(Color.lampSecondaryText)
                 .fixedSize(horizontal: false, vertical: true)
-            Button("Compare Translations") { section = .compare }
-                .controlSize(.small)
+            if othersTagIt {
+                Button("Compare Translations") { section = .compare }
+                    .controlSize(.small)
+            }
         }
     }
 
