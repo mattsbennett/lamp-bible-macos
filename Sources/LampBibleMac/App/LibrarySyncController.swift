@@ -5,6 +5,7 @@ import LampBibleMacSupport
 import LampCore
 import LampModuleKit
 import Security
+import os
 
 extension Notification.Name {
     /// A sync pass brought back a reading position or a bookmark this Mac did
@@ -295,10 +296,27 @@ final class LibrarySyncController: ObservableObject {
     /// When the last pass finished, so a probe is not made while the server
     /// may still be answering with what it held before the write.
     private var lastPassFinishedAt = Date.distantPast
+    /// When the listed folders were last compared with this Mac's records.
+    private var listingProbedAt = Date.distantPast
+    /// The listing a probe last started a pass for. A file this Mac does not
+    /// take — or a record a pass leaves as it was — would otherwise read as
+    /// work on every probe, and start a pass every two minutes for ever.
+    private var listingActedOn: [String: String]?
+    /// Every pass's start, finish and failure, kept by the system log rather
+    /// than printed: a pass that never finishes left no trace otherwise.
+    private static let log = Logger(subsystem: "com.neus.Lamp-Bible.macOS", category: "sync")
 
     /// Opens the configured remote, for something smaller than a pass.
     private func withRemoteStore<T>(
         _ body: (any LampSyncRemoteStore) async throws -> T
+    ) async throws -> T {
+        try await withRemoteStore { store, _ in try await body(store) }
+    }
+
+    /// The configured remote, with the source its file records are kept
+    /// under (`LampSyncFileRecords`).
+    private func withRemoteStore<T>(
+        _ body: (any LampSyncRemoteStore, String) async throws -> T
     ) async throws -> T {
         switch provider {
         case .off:
@@ -307,7 +325,7 @@ final class LibrarySyncController: ObservableObject {
             let folder = try resolveFolderURL()
             let hasScope = folder.startAccessingSecurityScopedResource()
             defer { if hasScope { folder.stopAccessingSecurityScopedResource() } }
-            return try await body(LampSyncDirectoryStore(root: folder))
+            return try await body(LampSyncDirectoryStore(root: folder), LampSyncFileRecords.folderSource(folder))
         case .webDAV:
             guard let url = URL(string: endpoint), url.scheme?.hasPrefix("http") == true else {
                 throw LibrarySyncError.invalidWebDAVURL
@@ -315,8 +333,30 @@ final class LibrarySyncController: ObservableObject {
             let storedPassword = SyncSecretStore.password ?? ""
             let credentials = username.isEmpty && storedPassword.isEmpty
                 ? nil : LampWebDAVCredentials(username: username, password: storedPassword)
-            return try await body(LampWebDAVClient(baseURL: url, credentials: credentials))
+            return try await body(
+                LampWebDAVClient(baseURL: url, credentials: credentials),
+                LampSyncFileRecords.webDAVSource(url)
+            )
         }
+    }
+
+    /// Whether the module and deck folders hold anything this Mac has not
+    /// taken: a file replaced or dropped in by hand on the server, or taken
+    /// away, which touches no bundle and so no bundle probe sees. One
+    /// Depth:1 listing a folder and no file read, every two minutes.
+    private func listedFoldersHaveWork(library: LampLibrary) async -> Bool {
+        guard Date().timeIntervalSince(listingProbedAt) >= 120 else { return false }
+        listingProbedAt = Date()
+        let root = library.rootURL
+        let found = try? await withRemoteStore { store, source -> [String: String]? in
+            let recorded = LampSyncFileRecords.load(fromLibraryAt: root).listedRevisions(in: source)
+            let listing = try await LampSyncFilePlan.listing(in: store, recorded: recorded)
+            return LampSyncFilePlan.remoteChanges(listing: listing, recorded: recorded).isEmpty ? nil : listing
+        }
+        guard let changed = found ?? nil, changed != listingActedOn else { return false }
+        listingActedOn = changed
+        Self.log.notice("Listed folders changed outside a pass; syncing")
+        return true
     }
 
     /// Takes in another device's work while this one is open.
@@ -348,13 +388,18 @@ final class LibrarySyncController: ObservableObject {
             lastSeenBundleRevision = revision
             return false
         }
-        guard !LampSyncConditionalWrite.namesSameRevision(revision, seen ?? "") else { return false }
+        guard !LampSyncConditionalWrite.namesSameRevision(revision, seen ?? "") else {
+            // The bundle has not moved, but a module file can still have.
+            guard await listedFoldersHaveWork(library: library) else { return false }
+            return await sync(library: library)
+        }
         return await sync(library: library)
     }
 
     private func runSyncPass(library: LampLibrary) async -> Bool {
         guard !isSyncing else { return false }
         isSyncing = true
+        Self.log.notice("Sync pass started (\(self.provider.rawValue, privacy: .public))")
         errorMessage = nil
         statusMessage = "Preparing sync…"
         let workspace = fileManager.temporaryDirectory
@@ -398,7 +443,7 @@ final class LibrarySyncController: ObservableObject {
                 )
             }
         } catch {
-            print("[LibrarySync] pass failed: \(error)")
+            Self.log.error("Sync pass failed: \(String(describing: error), privacy: .public)")
             errorMessage = LampSyncErrorText.sentence(for: error)
             statusMessage = nil
             isSyncing = false
@@ -406,6 +451,7 @@ final class LibrarySyncController: ObservableObject {
             return false
         }
         isSyncing = false
+        Self.log.notice("Sync pass finished")
         await refreshConflicts(library: library)
         return true
     }
