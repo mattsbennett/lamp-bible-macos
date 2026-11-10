@@ -746,17 +746,7 @@ struct UnifiedSearchView: View {
         .padding(.trailing, 14)
         .padding(.vertical, 11)
         .background {
-            if isSelected {
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: LampMetrics.tileRadius, style: .continuous)
-                        .fill(Color.lampTileFill)
-                    RoundedRectangle(cornerRadius: 1.5)
-                        .fill(.tint)
-                        .frame(width: 3)
-                        .padding(.vertical, 8)
-                }
-                .padding(.horizontal, 6)
-            }
+            LampListSelection(isSelected: isSelected)
         }
         // The whole row, not just the ink, so a click or right-click in the
         // space beside a short snippet still lands on it.

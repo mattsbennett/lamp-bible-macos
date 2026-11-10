@@ -128,6 +128,8 @@ struct DevotionalsView: View {
     private var devotionalTypeface = ProseTypeface.readerDefault
     @State private var selection: String?
     @AppStorage("writing.showsList") private var showsWritingList = true
+    /// The list's width, as the reader dragged it.
+    @State private var preferredWritingListWidth = 260.0
     @State private var query = ""
     @State private var categoryFilter: String?
     @State private var moduleFilter: String?
@@ -211,13 +213,27 @@ struct DevotionalsView: View {
             } else if visibleDevotionals.isEmpty {
                 ContentUnavailableView.search(text: query)
             } else {
-                HSplitView {
+                // Columns as Books lays them out: a list of a width the
+                // reader set, kept, beside the page. In an HSplitView the list
+                // shrank when a click on its empty space cleared the
+                // selection and the page beside it changed.
+                HStack(spacing: 0) {
                     if showsWritingList {
                         writingList(listSections)
+                            .frame(width: writingListWidth)
+                        LampColumnResizeHandle(
+                            preferredWidth: $preferredWritingListWidth,
+                            displayedWidth: Double(writingListWidth),
+                            minimumWidth: 220,
+                            maximumWidth: 320,
+                            label: "Resize Writing List"
+                        )
                     }
 
                     if let devotional = selectedDevotional {
                         devotionalDetail(devotional)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .layoutPriority(2)
                     } else {
                         // There are results — none is chosen. A "no results"
                         // message here would contradict the list beside it.
@@ -226,10 +242,9 @@ struct DevotionalsView: View {
                             systemImage: "sun.max",
                             description: Text("Choose an entry in the list to read it.")
                         )
-                        // Claims the pane the way the detail view does. Left at
-                        // its intrinsic size, HSplitView shrinks to fit it and
-                        // collapses the list into a small floating box.
+                        // Claims the pane the way the detail view does.
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .layoutPriority(2)
                     }
                 }
             }
@@ -294,6 +309,10 @@ struct DevotionalsView: View {
         .onChange(of: categoryFilter) { _, _ in selectFirstIfNeeded() }
         .onChange(of: moduleFilter) { _, _ in selectFirstIfNeeded() }
         .task { await monitorLinkedPresentationDecks() }
+    }
+
+    private var writingListWidth: CGFloat {
+        CGFloat(min(max(preferredWritingListWidth, 220), 320))
     }
 
     /// Category and collection filters in one menu that says what is shown.
@@ -409,7 +428,6 @@ struct DevotionalsView: View {
         // Inset, as Books' list is: a sidebar list draws under the toolbar.
         .listStyle(.inset)
         .contentMargins(.bottom, 52, for: .scrollContent)
-        .frame(minWidth: 220, idealWidth: 260, maxWidth: 300)
         // A footer action in the list's own voice, as the sidebar's Import
         // or Create… is: a full-width filled button was the loudest thing
         // in the window, louder than the writing.
@@ -494,6 +512,7 @@ struct DevotionalsView: View {
         // Ruled between rows, as Books' list is.
         .listRowSeparator(.visible)
         .tag(devotional.id)
+        .lampListRow(isSelected: selection == devotional.id)
         // Explicitly adopt the clicked row. The former simultaneous double-click
         // recognizer competed with List's native selection, leaving keyboard
         // navigation working while pointer clicks failed to update the preview.

@@ -380,3 +380,81 @@ struct LampSegmentedPicker<ID: Hashable>: View {
         .accessibilityAddTraits(isChosen ? .isSelected : [])
     }
 }
+
+/// The chosen row of a content list — a writing, a book, a contents entry,
+/// a search result — on a quiet tile with a short bar of the accent at its
+/// leading edge, as Search's results first marked theirs.
+///
+/// Not the list's own selection, which fills the row with the accent while
+/// the list has focus and turns its words white. Red is for where you are
+/// and what you press (ColorRules.md); a whole red row was the loudest thing
+/// in the window. The bar keeps the accent's "this one" without the flood.
+struct LampListSelection: View {
+    let isSelected: Bool
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            if isSelected {
+                RoundedRectangle(cornerRadius: LampMetrics.tileRadius, style: .continuous)
+                    .fill(Color.lampTileFill)
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(.tint)
+                    .frame(width: 3)
+                    .padding(.vertical, 8)
+            }
+        }
+        .padding(.horizontal, 6)
+    }
+}
+
+extension View {
+    /// A row of a selectable `List`, drawn with `LampListSelection` in place
+    /// of the list's own highlight, and its words kept in their own colours
+    /// while chosen. Put it on every row of the list.
+    func lampListRow(isSelected: Bool) -> some View {
+        self
+            .environment(\.backgroundProminence, .standard)
+            .listRowBackground(
+                ZStack {
+                    LampListSelection(isSelected: isSelected)
+                    ListHighlightSuppressor()
+                        .frame(width: 0, height: 0)
+                        .accessibilityHidden(true)
+                }
+            )
+    }
+}
+
+/// Stops the table a list row sits in from drawing its own selection, so
+/// `LampListSelection` is the only mark. SwiftUI's `List` has no setting for
+/// this; the row finds its table and asks it, each time it is laid out,
+/// since the list may set its style again.
+private struct ListHighlightSuppressor: NSViewRepresentable {
+    final class Finder: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            quiet()
+        }
+
+        override func layout() {
+            super.layout()
+            quiet()
+        }
+
+        func quiet() {
+            var view = superview
+            while let current = view {
+                if let table = current as? NSTableView {
+                    if table.selectionHighlightStyle != .none {
+                        table.selectionHighlightStyle = .none
+                    }
+                    return
+                }
+                view = current.superview
+            }
+        }
+    }
+
+    func makeNSView(context: Context) -> Finder { Finder() }
+    func updateNSView(_ view: Finder, context: Context) { view.quiet() }
+}

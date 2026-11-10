@@ -385,6 +385,7 @@ struct BookModulesView: View {
             }
             .padding(.vertical, 6)
             .tag(Optional(book.id))
+            .lampListRow(isSelected: selectedBookID == book.id)
         }
     }
 
@@ -469,6 +470,7 @@ struct BookModulesView: View {
         .padding(.leading, showsDepth ? CGFloat(section.depth) * 10 : 0)
         .listRowSeparator(.hidden)
         .tag(Optional(section.id))
+        .lampListRow(isSelected: selectedSectionID == section.id)
     }
 
     private func sectionIcon(_ type: String) -> String {
@@ -612,7 +614,7 @@ private struct BookReaderResizableLayout<
             if showsBookList {
                 bookList
                     .frame(width: bookListWidth)
-                BookReaderColumnResizeHandle(
+                LampColumnResizeHandle(
                     preferredWidth: $preferredBookListWidth,
                     displayedWidth: Double(bookListWidth),
                     minimumWidth: Double(minimumBookListWidth),
@@ -623,7 +625,7 @@ private struct BookReaderResizableLayout<
             if showsTableOfContents {
                 tableOfContents
                     .frame(width: tableOfContentsWidth)
-                BookReaderColumnResizeHandle(
+                LampColumnResizeHandle(
                     preferredWidth: $preferredTableOfContentsWidth,
                     displayedWidth: Double(tableOfContentsWidth),
                     minimumWidth: Double(minimumTableOfContentsWidth),
@@ -652,7 +654,11 @@ private struct BookReaderResizableLayout<
     }
 }
 
-private struct BookReaderColumnResizeHandle: View {
+/// The rule between a list column and the page beside it, dragged to
+/// resize the list. Shared by Books and Writing, so their columns behave
+/// alike: a stored width the layout keeps, where `HSplitView` re-sized the
+/// list whenever the page beside it changed.
+struct LampColumnResizeHandle: View {
     @Binding var preferredWidth: Double
     let displayedWidth: Double
     let minimumWidth: Double

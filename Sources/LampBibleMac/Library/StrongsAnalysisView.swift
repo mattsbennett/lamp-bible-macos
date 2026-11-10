@@ -1122,6 +1122,11 @@ struct StrongsAnalysisPane: View {
                     if renderingsRing.wrappedValue {
                         ShareRing(
                             divisions: LampStrongsGrouping.renderings.divisions(of: analysis),
+                            // A Greek text translates as its own Greek, said
+                            // in Latin letters beside it, as the forms are.
+                            details: Dictionary(uniqueKeysWithValues: analysis.renderings.enumerated().map { index, rendering in
+                                (index, ShareRing.Detail(aside: LampGreekTransliteration.latinIfGreek(rendering.text)))
+                            }),
                             choose: choose
                         )
                     } else {
@@ -1382,6 +1387,8 @@ struct StrongsAnalysisPane: View {
         VStack(alignment: .leading, spacing: 0) {
             chooseRow(
                 title: rendering.text.isEmpty ? "(no English of its own)" : rendering.text,
+                // A Greek text's own Greek, in Latin letters, as its forms.
+                aside: LampGreekTransliteration.latinIfGreek(rendering.text),
                 count: rendering.count,
                 most: most,
                 isChosen: filter == .rendering(id: rendering.id, text: rendering.text)
@@ -1899,9 +1906,7 @@ struct StrongsAnalysisPane: View {
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
-                    Text(analysis.renderings.prefix(3)
-                        .map { "\($0.text.isEmpty ? "—" : $0.text) (\($0.count))" }
-                        .joined(separator: ", "))
+                    Text(LampStrongsRenderingSummary.line(of: analysis))
                         .font(.system(size: max(10, fontSize - 2)))
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
