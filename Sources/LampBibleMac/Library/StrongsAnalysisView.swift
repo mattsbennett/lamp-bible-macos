@@ -774,6 +774,13 @@ struct StrongsAnalysisPane: View {
             }
             if let chart = cardChoice.chart(for: analysis) {
                 cardChart(chart, of: analysis)
+                    // Only for a card drawing forms: reading every
+                    // occurrence is what the Overview defers until it is
+                    // opened, and a card showing books should not pay it.
+                    .task(id: cardFormsSource(of: analysis)) {
+                        guard !cardFormsSource(of: analysis).isEmpty else { return }
+                        await loadFormReadings(of: analysis)
+                    }
             }
             Text(cardFootnote(analysis))
                 .font(.caption)
@@ -888,7 +895,20 @@ struct StrongsAnalysisPane: View {
         if grouping == .books {
             canonStrip(analysis.books)
         } else {
-            CardShareBar(divisions: grouping.divisions(of: analysis), choose: choose)
+            let readings = grouping == .forms ? formReadings(of: analysis) : [:]
+            CardShareBar(
+                divisions: grouping.divisions(of: analysis),
+                // By division id, which is the form's place in the list the
+                // divisions were made from.
+                letters: Dictionary(
+                    uniqueKeysWithValues: analysis.forms.enumerated().compactMap { index, form in
+                        readings[form.id]?.transliteration.flatMap {
+                            $0.isEmpty ? nil : (index, $0)
+                        }
+                    }
+                ),
+                choose: choose
+            )
         }
     }
 
@@ -1174,17 +1194,26 @@ struct StrongsAnalysisPane: View {
         .task(id: analysis.key) {
             await septuagint.loadWords(key: analysis.key, model: model)
         }
-        .task(id: formsSource(of: analysis)) {
-            let source = formsSource(of: analysis)
-            guard formReadings?.source != source else { return }
-            // Off the main thread: it reads every occurrence, which for an
-            // article or a common verb runs to thousands.
-            let readings = await Task.detached(priority: .userInitiated) {
-                LampStrongsFormReading.readings(of: analysis)
-            }.value
-            guard !Task.isCancelled else { return }
-            formReadings = (source, Dictionary(readings.map { ($0.form.id, $0) }) { first, _ in first })
-        }
+        .task(id: formsSource(of: analysis)) { await loadFormReadings(of: analysis) }
+    }
+
+    /// Reads each form for someone without the language.
+    ///
+    /// Shared by the Overview, which lists the forms, and by the card when a
+    /// reader has put the forms under it: the card is drawn above the
+    /// Overview and before it, so a card that waited for the Overview's load
+    /// would show its forms without their letters and then gain them when
+    /// some other section happened to be opened.
+    private func loadFormReadings(of analysis: LampStrongsAnalysis) async {
+        let source = formsSource(of: analysis)
+        guard formReadings?.source != source else { return }
+        // Off the main thread: it reads every occurrence, which for an
+        // article or a common verb runs to thousands.
+        let readings = await Task.detached(priority: .userInitiated) {
+            LampStrongsFormReading.readings(of: analysis)
+        }.value
+        guard !Task.isCancelled else { return }
+        formReadings = (source, Dictionary(readings.map { ($0.form.id, $0) }) { first, _ in first })
     }
 
     // MARK: - Septuagint
@@ -1839,6 +1868,12 @@ struct StrongsAnalysisPane: View {
 
     /// What a form reading is read from: the word, the translation, and how
     /// many occurrences, which changes with the books chosen.
+    /// The forms' source when the card is drawing them, and nothing when it
+    /// is not, so the task that reads them does not run for every card.
+    private func cardFormsSource(of analysis: LampStrongsAnalysis) -> String {
+        cardChoice.chart(for: analysis) == .forms ? formsSource(of: analysis) : ""
+    }
+
     private func formsSource(of analysis: LampStrongsAnalysis) -> String {
         "\(analysis.key)|\(analysis.translationID)|\(analysis.occurrenceCount)"
     }
@@ -2659,39 +2694,30 @@ private struct CardSlotsChooser: View {
     }
 }
 
-/// A grouping's shares as one band under the card's figures: a segment for
-/// each slice, largest first, in the ring's own shades and under the ring's
-/// own "six largest and Other" rule, so the card and the section below it
-/// never disagree about what the slices are.
+/// A grouping's shares as one band under the card's figures, with a key: a
+/// segment for each slice, largest first, in the ring's own shades and under
+/// the ring's own "six largest and Other" rule, so the card and the section
+/// below it never disagree about what the slices are.
 ///
-/// The largest slice is named above the band in the accent, as the canon
-/// strip names its standout book, rather than inside its segment: a name
-/// inside would wear the segment's colour and lose its contrast as the shades
-/// fade. Every segment says its count in its tooltip, and clicking one
-/// narrows the verses as the strip's columns do.
+/// The key is under the band rather than beside it, which the Mac has room
+/// for, because the phone has no such room and the card should be one object
+/// on both. Names go beneath rather than inside the segments: a name inside
+/// would wear its segment's colour and lose contrast as the shades fade.
+/// Each named slice narrows the verses as the strip's columns do; "Other" is
+/// a leftover rather than a value, so it narrows nothing.
 private struct CardShareBar: View {
     let divisions: [LampStrongsChartDivision]
+    /// A form in Latin letters, by division id, where the band is of forms.
+    var letters: [Int: String] = [:]
     let choose: (LampStrongsFilter) -> Void
 
     private static let height: Double = 26
-    private static let labelBand: Double = 16
     private static let gap: Double = 2
+    private static let type: Double = 11.5
 
     var body: some View {
         let slices = LampStrongsShare.slices(from: divisions.map(\.division))
-        VStack(alignment: .leading, spacing: 4) {
-            if let largest = slices.first {
-                HStack(spacing: 6) {
-                    Text(largest.name)
-                        .font(.system(size: 11.5, weight: .bold))
-                        .foregroundStyle(.tint)
-                        .lineLimit(1)
-                    Text(LampStrongsSpread.percent(largest.fraction))
-                        .font(.system(size: 11.5, weight: .semibold).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-                .frame(height: Self.labelBand, alignment: .bottom)
-            }
+        VStack(alignment: .leading, spacing: 7) {
             GeometryReader { proxy in
                 let room = proxy.size.width - Self.gap * Double(max(slices.count - 1, 0))
                 HStack(spacing: Self.gap) {
@@ -2701,9 +2727,48 @@ private struct CardShareBar: View {
                 }
             }
             .frame(height: Self.height)
+            // Ignored as a whole and said once: the segments are a drawing,
+            // and the key under them is what a reader acts on.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(slices.map { "\($0.name) \($0.value)" }.joined(separator: ", "))
+            WrappingRow(spacing: 10) {
+                ForEach(Array(slices.enumerated()), id: \.element.id) { index, slice in
+                    key(slice, index: index, of: slices.count)
+                }
+            }
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(slices.map { "\($0.name) \($0.value)" }.joined(separator: ", "))
+    }
+
+    /// One slice named: its shade, its name, the letters where it is a form,
+    /// and its share of everything charted — which is not its share of the
+    /// six named ones, since "Other" holds the rest and the named six do not
+    /// come to a hundred.
+    private func key(_ slice: LampStrongsShare.Slice, index: Int, of count: Int) -> some View {
+        let isLargest = index == 0 && !slice.isOther
+        return choosable(slice) {
+            HStack(spacing: 5) {
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(.tint)
+                    .opacity(opacity(index, of: count, isOther: slice.isOther))
+                    .frame(width: 9, height: 9)
+                Text(slice.name)
+                    .font(.system(size: Self.type, weight: isLargest ? .bold : .regular))
+                    .foregroundStyle(isLargest ? AnyShapeStyle(.tint) : AnyShapeStyle(Color.primary))
+                    .lineLimit(1)
+                if let letters = Int(slice.id).flatMap({ letters[$0] }) {
+                    Text(letters)
+                        .font(.system(size: Self.type).italic())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Text(LampStrongsSpread.percent(slice.fraction))
+                    .font(.system(size: Self.type, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .contentShape(Rectangle())
+        }
+        .help("\(slice.name): \(slice.value) · \(LampStrongsSpread.percent(slice.fraction))")
+        .accessibilityLabel("\(slice.name), \(slice.value), \(LampStrongsSpread.percent(slice.fraction))")
     }
 
     private func segment(
@@ -2712,20 +2777,36 @@ private struct CardShareBar: View {
         of count: Int,
         width: Double
     ) -> some View {
-        let filter = filter(for: slice)
-        return Button {
-            if let filter { choose(filter) }
-        } label: {
+        choosable(slice) {
             RoundedRectangle(cornerRadius: 3, style: .continuous)
                 .fill(.tint)
                 .opacity(opacity(index, of: count, isOther: slice.isOther))
                 .frame(width: width, height: Self.height)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .chartClickable()
-        .disabled(filter == nil)
         .help("\(slice.name): \(slice.value) · \(LampStrongsSpread.percent(slice.fraction))")
+    }
+
+    /// A button only where there is something to choose.
+    ///
+    /// A disabled button draws grey, and no section carries a filter — no
+    /// single one says "these books" — so a band of sections came out grey
+    /// from end to end and read as a chart that had failed rather than one
+    /// that simply is not clickable. "Other" is a leftover rather than a
+    /// value and has no filter either; its faint swatch is what marks it,
+    /// not grey text. (ios-56 hit this first.)
+    @ViewBuilder
+    private func choosable(
+        _ slice: LampStrongsShare.Slice,
+        @ViewBuilder content: () -> some View
+    ) -> some View {
+        if let filter = filter(for: slice) {
+            Button { choose(filter) } label: { content() }
+                .buttonStyle(.plain)
+                .chartClickable()
+        } else {
+            content()
+        }
     }
 
     private func filter(for slice: LampStrongsShare.Slice) -> LampStrongsFilter? {
