@@ -7403,14 +7403,62 @@ private extension String {
 }
 
 /// ⌘K when the menu found no focused value to call (see LampBibleCommands):
-/// only the key window's library answers, so one press opens one palette.
+/// the library window it names answers, so one press opens one palette.
 private struct CommandPaletteToggleReceiver: ViewModifier {
     @Binding var isPalettePresented: Bool
-    @Environment(\.controlActiveState) private var controlActiveState
+    @State private var host = CommandPaletteWindows.Host()
 
     func body(content: Content) -> some View {
-        content.onReceive(NotificationCenter.default.publisher(for: .lampToggleCommandPalette)) { _ in
-            if controlActiveState == .key { isPalettePresented.toggle() }
+        content
+            .background {
+                CommandPaletteWindows.Registrar(host: host)
+                    .frame(width: 0, height: 0)
+                    .accessibilityHidden(true)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .lampToggleCommandPalette)) { note in
+                if let target = note.object as? NSWindow, target === host.window {
+                    isPalettePresented.toggle()
+                }
+            }
+    }
+}
+
+/// The library windows open now, so ⌘K can name one when the menu has no
+/// focused value to call: the key window if it is a library, otherwise the
+/// frontmost library, brought forward. Never nobody, while one is open —
+/// an enabled ⌘K that does nothing is worse than a greyed one.
+@MainActor
+enum CommandPaletteWindows {
+    private static let windows = NSHashTable<NSWindow>.weakObjects()
+
+    static func target() -> NSWindow? {
+        if let key = NSApp.keyWindow, windows.contains(key) { return key }
+        return NSApp.orderedWindows.first { windows.contains($0) && $0.isVisible }
+    }
+
+    final class Host {
+        weak var window: NSWindow?
+    }
+
+    struct Registrar: NSViewRepresentable {
+        let host: Host
+
+        final class Probe: NSView {
+            var host: Host?
+            override func hitTest(_ point: NSPoint) -> NSView? { nil }
+            override func viewDidMoveToWindow() {
+                super.viewDidMoveToWindow()
+                host?.window = window
+                if let window { CommandPaletteWindows.windows.add(window) }
+            }
         }
+
+        func makeNSView(context: Context) -> Probe {
+            let probe = Probe()
+            probe.host = host
+            return probe
+        }
+
+        func updateNSView(_ probe: Probe, context: Context) {}
     }
 }

@@ -153,12 +153,6 @@ struct CommandPaletteView: View {
             RoundedRectangle(cornerRadius: LampMetrics.cardRadius, style: .continuous)
                 .strokeBorder(Color.lampCardStroke)
         }
-        // Behind the whole panel, so it knows the panel's frame and can find
-        // the field in it: see CommandPaletteKeyboard.
-        .background {
-            CommandPaletteKeyboard(close: close)
-                .accessibilityHidden(true)
-        }
         // Escape or ⌘. from the field, once an input method has passed it on:
         // with the press-and-hold accent popover open, Escape closes the
         // popover and never gets here.
@@ -215,6 +209,12 @@ struct CommandPaletteView: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: 19))
                 .focused($isFieldFocused)
+                // Behind the field itself, so it can find the field by
+                // place: see CommandPaletteKeyboard.
+                .background {
+                    CommandPaletteKeyboard(close: close)
+                        .accessibilityHidden(true)
+                }
                 .onSubmit { perform(rows, at: highlightedIndex(in: rows)) }
                 .onKeyPress(.downArrow) {
                     move(by: 1, in: rows)
@@ -385,15 +385,27 @@ struct CommandPaletteView: View {
 /// field's focus request was lost and nothing noticed. So the field is
 /// handed the keyboard as the palette appears, a few times over its first
 /// moments, after a menu (a key equivalent's flash) finishes tracking, and
-/// when the window becomes key again.
+/// when the window becomes key again. Each attempt first asks whether the
+/// field already has it and stops if so: a check of what is true, repeated
+/// until it holds, not a guess at when AppKit settles.
+///
+/// The field is found by place: this view sits behind it, and the field is
+/// the frontmost editable text field over this view's centre. A field
+/// behind the palette (the library's search, say) can sit inside the
+/// panel's area, so the panel's frame alone would not do, and walking the
+/// window front to back puts the palette's own first. Finding none, it does
+/// nothing: the keyboard stays where the reader left it rather than going
+/// somewhere they didn't ask for.
 ///
 /// Escape from the field is left to the text system, so an input method sees
-/// it first: the press-and-hold accent popover takes Escape before the field
-/// turns it into the cancel command (`onExitCommand`), and it never shows as
-/// marked text, so nothing earlier can tell it is open. From anywhere else in
-/// the window — the field never took the keyboard — a key monitor closes the
-/// palette, scoped to this window, since a local monitor sees every window's
-/// keys.
+/// it first. That ordering is what spares the press-and-hold accent popover:
+/// it takes Escape before the field turns it into the cancel command
+/// (`onExitCommand`), and it never shows as marked text, so nothing earlier
+/// can tell it is open (measured, Nov 2026). From anywhere else in the window
+/// — the field never took the keyboard — a key monitor closes the palette,
+/// scoped to this window, since a local monitor sees every window's keys.
+/// It passes Escape on to another text view with marked text, for an input
+/// method that composes (Japanese, say); press-and-hold doesn't.
 private struct CommandPaletteKeyboard: NSViewRepresentable {
     let close: () -> Void
 
@@ -427,18 +439,19 @@ private struct CommandPaletteKeyboard: NSViewRepresentable {
             }
         }
 
-        /// The palette's own text field: the editable one inside this
-        /// view's frame, which is the panel's.
+        /// The palette's own text field: the frontmost editable one over
+        /// this view's centre, which is the field's.
         private func field() -> NSTextField? {
-            guard let root = window?.contentView else { return nil }
-            let panel = convert(bounds, to: nil)
+            guard let root = window?.contentView, bounds.width > 0, bounds.height > 0 else { return nil }
+            let centre = convert(NSPoint(x: bounds.midX, y: bounds.midY), to: nil)
+            // Subviews run back to front, so search them front first.
             func search(_ view: NSView) -> NSTextField? {
-                if let field = view as? NSTextField, field.isEditable,
-                   panel.contains(field.convert(field.bounds, to: nil)) {
-                    return field
-                }
-                for subview in view.subviews {
+                for subview in view.subviews.reversed() where !subview.isHidden {
                     if let found = search(subview) { return found }
+                }
+                if let field = view as? NSTextField, field.isEditable,
+                   field.convert(field.bounds, to: nil).contains(centre) {
+                    return field
                 }
                 return nil
             }
