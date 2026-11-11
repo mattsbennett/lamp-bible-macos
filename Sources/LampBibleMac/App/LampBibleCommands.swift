@@ -31,6 +31,12 @@ struct CommandPaletteActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
+extension Notification.Name {
+    /// ⌘K when no scene has published `commandPaletteAction`: the key
+    /// library window answers it.
+    static let lampToggleCommandPalette = Notification.Name("lampToggleCommandPalette")
+}
+
 extension FocusedValues {
     var commandPaletteAction: (() -> Void)? {
         get { self[CommandPaletteActionKey.self] }
@@ -145,9 +151,17 @@ struct LampBibleCommands: Commands {
         }
 
         CommandGroup(after: .sidebar) {
-            Button("Go to Anything…") { commandPalette?() }
+            // Never disabled: the focused value can be missing while the
+            // window has nothing focused in it, which left ⌘K dead exactly
+            // when it is wanted. Then the key library window is asked.
+            Button("Go to Anything…") {
+                if let commandPalette {
+                    commandPalette()
+                } else {
+                    NotificationCenter.default.post(name: .lampToggleCommandPalette, object: nil)
+                }
+            }
                 .keyboardShortcut("k", modifiers: .command)
-                .disabled(commandPalette == nil)
             Button("Go to Passage or Search…") { goToPassage?() }
                 .keyboardShortcut("l", modifiers: .command)
                 .disabled(goToPassage == nil)

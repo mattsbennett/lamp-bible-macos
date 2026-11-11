@@ -153,11 +153,16 @@ struct CommandPaletteView: View {
             RoundedRectangle(cornerRadius: LampMetrics.cardRadius, style: .continuous)
                 .strokeBorder(Color.lampCardStroke)
         }
+        // Behind the whole panel, so it knows the panel's frame and can find
+        // the field in it: see CommandPaletteKeyboard.
         .background {
-            CommandPaletteEscape(close: close)
-                .frame(width: 0, height: 0)
+            CommandPaletteKeyboard(close: close)
                 .accessibilityHidden(true)
         }
+        // Escape or ⌘. from the field, once an input method has passed it on:
+        // with the press-and-hold accent popover open, Escape closes the
+        // popover and never gets here.
+        .onExitCommand { close() }
         // Asked once the palette is in the window, not as it appears: from
         // onAppear the request was ignored and the reader's text kept the
         // keyboard, so typing and Escape went nowhere.
@@ -372,53 +377,115 @@ struct CommandPaletteView: View {
     }
 }
 
-/// Escape, or ⌘., closes the palette wherever focus is in its window, not
-/// only from the field, which may never have taken the keyboard.
+/// Gives the palette's field the keyboard, and closes the palette on Escape
+/// when the field doesn't have it.
 ///
-/// A key monitor rather than a cancel-action key equivalent, because a
-/// monitor can pass the key on: while an input method is composing (the
-/// press-and-hold accent popover over marked text), Escape is the input
-/// method's to cancel, and the palette stays open. Scoped to this view's
-/// window, since a local monitor sees every window's keys, and installed
-/// only while the palette is in one.
-private struct CommandPaletteEscape: NSViewRepresentable {
+/// Focus is checked against AppKit's first responder, not `@FocusState`,
+/// which can read true while the keyboard is elsewhere: opened by ⌘K, the
+/// field's focus request was lost and nothing noticed. So the field is
+/// handed the keyboard as the palette appears, a few times over its first
+/// moments, after a menu (a key equivalent's flash) finishes tracking, and
+/// when the window becomes key again.
+///
+/// Escape from the field is left to the text system, so an input method sees
+/// it first: the press-and-hold accent popover takes Escape before the field
+/// turns it into the cancel command (`onExitCommand`), and it never shows as
+/// marked text, so nothing earlier can tell it is open. From anywhere else in
+/// the window — the field never took the keyboard — a key monitor closes the
+/// palette, scoped to this window, since a local monitor sees every window's
+/// keys.
+private struct CommandPaletteKeyboard: NSViewRepresentable {
     let close: () -> Void
 
-    final class Monitor: NSView {
+    final class Controller: NSView {
         var close: () -> Void = {}
         private var monitor: Any?
+        private var observers: [NSObjectProtocol] = []
+
+        // Behind the panel, it must never take a click.
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             stop()
-            guard window != nil else { return }
+            guard let window else { return }
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                let isCancel = event.keyCode == 53
-                    || (event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == ".")
-                guard let self, isCancel, event.window === self.window else { return event }
-                if let editor = event.window?.firstResponder as? NSTextView, editor.hasMarkedText() {
-                    return event
+                self?.handle(event) ?? event
+            }
+            let center = NotificationCenter.default
+            observers = [
+                center.addObserver(forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.takeKeyboard() }
+                },
+                center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.takeKeyboard() }
+                },
+            ]
+            takeKeyboard()
+            for delay in [0.0, 0.05, 0.15, 0.35] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.takeKeyboard() }
+            }
+        }
+
+        /// The palette's own text field: the editable one inside this
+        /// view's frame, which is the panel's.
+        private func field() -> NSTextField? {
+            guard let root = window?.contentView else { return nil }
+            let panel = convert(bounds, to: nil)
+            func search(_ view: NSView) -> NSTextField? {
+                if let field = view as? NSTextField, field.isEditable,
+                   panel.contains(field.convert(field.bounds, to: nil)) {
+                    return field
                 }
-                self.close()
+                for subview in view.subviews {
+                    if let found = search(subview) { return found }
+                }
                 return nil
             }
+            return search(root)
+        }
+
+        private func fieldHasKeyboard() -> Bool {
+            guard let field = field(), let editor = field.currentEditor() else { return false }
+            return window?.firstResponder === editor
+        }
+
+        private func takeKeyboard() {
+            guard let window, !fieldHasKeyboard(), let field = field() else { return }
+            window.makeFirstResponder(field)
+            // Typing goes after what is there, not over it all.
+            if let editor = field.currentEditor() {
+                editor.selectedRange = NSRange(location: (field.stringValue as NSString).length, length: 0)
+            }
+        }
+
+        private func handle(_ event: NSEvent) -> NSEvent? {
+            let isCancel = event.keyCode == 53
+                || (event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == ".")
+            guard isCancel, event.window === window, !fieldHasKeyboard() else { return event }
+            if let editor = window?.firstResponder as? NSTextView, editor.hasMarkedText() { return event }
+            close()
+            return nil
         }
 
         private func stop() {
             if let monitor { NSEvent.removeMonitor(monitor) }
             monitor = nil
+            observers.forEach(NotificationCenter.default.removeObserver)
+            observers = []
         }
 
         deinit {
             if let monitor { NSEvent.removeMonitor(monitor) }
+            observers.forEach(NotificationCenter.default.removeObserver)
         }
     }
 
-    func makeNSView(context: Context) -> Monitor {
-        let view = Monitor()
+    func makeNSView(context: Context) -> Controller {
+        let view = Controller()
         view.close = close
         return view
     }
 
-    func updateNSView(_ view: Monitor, context: Context) { view.close = close }
+    func updateNSView(_ view: Controller, context: Context) { view.close = close }
 }

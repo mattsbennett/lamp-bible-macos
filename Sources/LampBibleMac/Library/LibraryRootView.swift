@@ -331,6 +331,7 @@ struct LibraryRootView: View {
         // Window-wide rather than focus-bound: ⌘K must work whatever in the
         // window has focus, the reader's text or nothing at all.
         .focusedSceneValue(\.commandPaletteAction, { showingCommandPalette.toggle() })
+        .modifier(CommandPaletteToggleReceiver(isPalettePresented: $showingCommandPalette))
         .overlay(alignment: .top) {
             if showingCommandPalette {
                 ZStack(alignment: .top) {
@@ -7399,4 +7400,17 @@ extension LibraryRootView {
 
 private extension String {
     var nonEmpty: String? { isEmpty ? nil : self }
+}
+
+/// ⌘K when the menu found no focused value to call (see LampBibleCommands):
+/// only the key window's library answers, so one press opens one palette.
+private struct CommandPaletteToggleReceiver: ViewModifier {
+    @Binding var isPalettePresented: Bool
+    @Environment(\.controlActiveState) private var controlActiveState
+
+    func body(content: Content) -> some View {
+        content.onReceive(NotificationCenter.default.publisher(for: .lampToggleCommandPalette)) { _ in
+            if controlActiveState == .key { isPalettePresented.toggle() }
+        }
+    }
 }
