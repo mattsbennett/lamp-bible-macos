@@ -159,10 +159,16 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             // so what arrives is gathered and taken in by `finishInstalling`.
             try stageWorkspaceFile(from: url, remotePath: path)
             return nil
+        case .noteMedia where LampSyncLocalFiles.isNoteModuleMedia(path):
+            // A notes module's pictures are not inside its .lamp, so they
+            // arrive on their own as a book's do.
+            try installNoteModuleMedia(from: url, remotePath: path)
+            return nil
         case .devotionalMedia, .noteMedia:
-            // Installed by the step that knows where a writing's or a note's
-            // attachments belong. Reported rather than ignored, so nothing
-            // goes missing quietly.
+            // The reader's own notes and writings keep their attachments
+            // with what holds them, installed by the step that knows where
+            // that is. Reported rather than ignored, so nothing goes missing
+            // quietly.
             throw PassError.unsupported(path)
         }
     }
@@ -213,6 +219,26 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
     /// Installed under `Media/Books/<module>/`, which is the root
     /// `BookReaderMediaResolver` checks second and the only one a sync
     /// writes, so what arrives is what the reader finds.
+    /// A notes module's picture, under `Media/Notes/<module>/`, which is
+    /// where `LampLibrary.noteMediaURL` looks for it. Keyed by the module
+    /// rather than a verse: the module declares its pictures once and its
+    /// notes point at them by id.
+    private func installNoteModuleMedia(from url: URL, remotePath: String) throws {
+        let components = remotePath.split(separator: "/").map(String.init)
+        guard components.count == 3,
+              let destination = LampPortableDevotionalMedia.folderURL(
+                  rootURL: library.rootURL, scope: .note, ownerID: components[1]
+              )?.appendingPathComponent(components[2])
+        else { throw PassError.unsupported(remotePath) }
+        try fileManager.createDirectory(
+            at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        if fileManager.fileExists(atPath: destination.path) {
+            try fileManager.removeItem(at: destination)
+        }
+        try fileManager.copyItem(at: url, to: destination)
+    }
+
     private func installBookMedia(from url: URL, remotePath: String) throws {
         let components = remotePath.split(separator: "/").map(String.init)
         guard components.count >= 3 else { throw PassError.unsupported(remotePath) }

@@ -1026,6 +1026,14 @@ extension LibrarySyncController {
         )
         candidates += notePictures.candidates
 
+        // A notes module's pictures, which are not inside its .lamp either.
+        let notesModulePictures = LampSyncLocalFiles.noteModuleMedia(
+            for: try await library.noteModuleMediaFilenames(),
+            inLibraryAt: library.rootURL,
+            fileManager: fileManager
+        )
+        candidates += notesModulePictures.candidates
+
         // A book's pictures, for the books in the library and any the
         // manifest already names — the gate that keeps a picture belonging to
         // something else from going up as a book's.

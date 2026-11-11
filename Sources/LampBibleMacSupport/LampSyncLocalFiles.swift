@@ -76,6 +76,55 @@ extension LampSyncLocalFiles {
     ///
     /// Collected one writing at a time so a single bad one cannot hide the
     /// attachments of the rest.
+    /// Whether a `NoteMedia/...` path belongs to a notes **module** rather
+    /// than to one of the reader's own notes. Three segments to the module's
+    /// own folder, four to a verse's.
+    public static func isNoteModuleMedia(_ path: String) -> Bool {
+        path.split(separator: "/", omittingEmptySubsequences: false).count == 3
+    }
+
+    /// The pictures installed notes modules hold, to publish.
+    ///
+    /// A module's pictures are not inside its `.lamp`, so this library's
+    /// copy is the only one, and a library without them shows the notes
+    /// with their pictures missing. One module at a time, so a module whose
+    /// files have gone cannot hide another's.
+    public static func noteModuleMedia(
+        for modules: [(moduleID: String, filenames: [String])],
+        inLibraryAt libraryRoot: URL,
+        fileManager: FileManager = .default
+    ) -> (candidates: [Candidate], missing: [Unreadable]) {
+        var candidates: [Candidate] = []
+        var missing: [Unreadable] = []
+        for module in modules {
+            for filename in module.filenames {
+                guard let localURL = LampPortableDevotionalMedia.folderURL(
+                    rootURL: libraryRoot, scope: .note, ownerID: module.moduleID
+                )?.appendingPathComponent(filename),
+                    let path = try? LampSyncFolderLayout.noteModuleMediaPath(
+                        moduleID: module.moduleID, filename: filename
+                    )
+                else { continue }
+                guard fileManager.fileExists(atPath: localURL.path),
+                      let values = try? localURL.resourceValues(
+                          forKeys: [.isRegularFileKey, .isSymbolicLinkKey]
+                      ),
+                      values.isRegularFile == true,
+                      values.isSymbolicLink != true
+                else {
+                    missing.append(Unreadable(
+                        path: path,
+                        reason: "A note in \(module.moduleID) refers to a picture "
+                            + "the library does not hold"
+                    ))
+                    continue
+                }
+                candidates.append(Candidate(path: path, kind: .noteMedia, url: localURL))
+            }
+        }
+        return (candidates, missing)
+    }
+
     /// The pictures the reader's notes hold, to publish.
     ///
     /// One note at a time, as writings are, so a single note referring to a
