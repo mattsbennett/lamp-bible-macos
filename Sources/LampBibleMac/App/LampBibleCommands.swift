@@ -15,7 +15,7 @@ private struct ImportStudyDataActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
-struct NewReaderTabActionKey: FocusedValueKey {
+struct NewTabActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
@@ -54,9 +54,13 @@ extension FocusedValues {
         set { self[ImportStudyDataActionKey.self] = newValue }
     }
 
-    var newReaderTabAction: (() -> Void)? {
-        get { self[NewReaderTabActionKey.self] }
-        set { self[NewReaderTabActionKey.self] = newValue }
+    /// A new tab in whichever pane is being used — the reader's asks for a
+    /// passage, Search opens an empty search — and nil in a section that has
+    /// no tabs, which greys the item rather than acting on a pane out of
+    /// sight.
+    var newTabAction: (() -> Void)? {
+        get { self[NewTabActionKey.self] }
+        set { self[NewTabActionKey.self] = newValue }
     }
 
     var goToPassageAction: (() -> Void)? {
@@ -75,7 +79,7 @@ struct LampBibleCommands: Commands {
     @FocusedValue(\.installModuleAction) private var installModule
     @FocusedValue(\.commandPaletteAction) private var commandPalette
     @FocusedValue(\.importStudyDataAction) private var importStudyData
-    @FocusedValue(\.newReaderTabAction) private var newReaderTab
+    @FocusedValue(\.newTabAction) private var newTab
     @FocusedValue(\.goToPassageAction) private var goToPassage
     @FocusedValue(\.writingFind) private var writingFind
     @FocusedObject private var scrollLink: ReaderScrollLink?
@@ -100,11 +104,11 @@ struct LampBibleCommands: Commands {
             .keyboardShortcut("o", modifiers: [.command, .option])
             .disabled(importStudyData == nil)
 
-            Button("New Reader Tab") {
-                newReaderTab?()
+            Button("New Tab") {
+                newTab?()
             }
             .keyboardShortcut("t", modifiers: .command)
-            .disabled(newReaderTab == nil)
+            .disabled(newTab == nil)
 
             Button("New Reader Window") {
                 openWindow(id: "reader")

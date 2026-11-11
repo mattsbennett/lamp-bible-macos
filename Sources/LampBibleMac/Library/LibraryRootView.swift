@@ -337,7 +337,12 @@ struct LibraryRootView: View {
         .navigationSplitViewStyle(.balanced)
         .focusedValue(\.installModuleAction, { showingImporter = true })
         .focusedValue(\.importStudyDataAction, { showingStudyDataImporter = true })
-        .focusedValue(\.newReaderTabAction, { presentNewReaderTabChooser() })
+        // ⌘T opens a tab in the pane being used, which is what it means
+        // everywhere else on this Mac. The reader's asks which passage first;
+        // a search tab has nothing to choose, so it opens and waits for
+        // words. In any other section there is no rank of tabs to add to, so
+        // the command is offered where it does something.
+        .focusedValue(\.newTabAction, newTabAction)
         // Window-wide rather than focus-bound: ⌘K must work whatever in the
         // window has focus, the reader's text or nothing at all.
         .focusedSceneValue(\.commandPaletteAction, { showingCommandPalette.toggle() })
@@ -595,6 +600,21 @@ struct LibraryRootView: View {
     /// restore waits for the library to have loaded, because a tab names a
     /// place in a translation that has to exist; a search names nothing that
     /// needs checking, so this only needs the session.
+    /// What ⌘T does here, or nil where it does nothing.
+    private var newTabAction: (() -> Void)? {
+        switch selection {
+        case .section(.search):
+            return { searchTabs.open() }
+        case .section(.reader), .none:
+            return { presentNewReaderTabChooser() }
+        default:
+            // A tab bar the section does not have: Books, Decks, Settings and
+            // the rest. Returning nil greys the menu item rather than opening
+            // a reader tab behind the pane being looked at.
+            return nil
+        }
+    }
+
     private func restoreSearchTabs() {
         guard !hasRestoredSearchTabs, let readerSession else { return }
         searchTabs = SearchTabSessionStore.load(

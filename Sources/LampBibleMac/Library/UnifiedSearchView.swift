@@ -81,6 +81,15 @@ struct UnifiedSearchView: View {
         )
     }
 
+    /// The analysis filter, which is the tab's own like the rest of what it
+    /// shows.
+    private var strongsFilterField: Binding<LampStrongsFilter?> {
+        Binding(
+            get: { tabViewState[tabs.selectedID]?.strongsFilter },
+            set: { value in tabViewState[tabs.selectedID, default: TabViewState()].strongsFilter = value }
+        )
+    }
+
     /// The book range, which the tab keeps as its `rawValue` so the scope
     /// stays this pane's own type.
     private var bookScopeField: Binding<BookSearchScope> {
@@ -97,25 +106,58 @@ struct UnifiedSearchView: View {
     /// search to scripture. Switching tabs changes all nine at once, so
     /// without this the act of looking at another tab would edit it.
     private var isSwitchingTabs: Bool { shownTabID != tabs.selectedID }
-    /// Not kept: which row was selected belongs to a list that no longer
-    /// exists, and the search is run again on return anyway.
-    @State private var selectedResultID: String?
+    /// What a tab is showing, as against what it is searching for: the row
+    /// picked out, the previews open on it, the trail of keys followed in it,
+    /// and the analysis filter set on it.
+    ///
+    /// Per tab and in memory only. Per tab because looking at another search
+    /// and coming back should find this one as it was left — the alternative
+    /// is that switching tabs quietly undoes your place in both. In memory
+    /// because none of it outlives the results it points into: the rows are
+    /// fetched afresh for whichever tab is shown, so a row id saved to disk
+    /// would name a list that no launch has yet built.
+    private struct TabViewState {
+        var selectedResultID: String?
+        var previewedResult: LampModuleSearchResult?
+        var previewedOccurrence: Int?
+        var strongsTrail: [String] = []
+        var strongsFilter: LampStrongsFilter?
+    }
+
+    @State private var tabViewState: [UUID: TabViewState] = [:]
+
+    private var selectedResultID: String? {
+        get { tabViewState[tabs.selectedID]?.selectedResultID }
+        nonmutating set { tabViewState[tabs.selectedID, default: TabViewState()].selectedResultID = newValue }
+    }
     /// The occurrence whose preview is open, by reference. A Strong's search
     /// shows these rows rather than the module results, which is why fixing
     /// the other list did nothing for it.
-    @State private var previewedOccurrence: Int?
+    private var previewedOccurrence: Int? {
+        get { tabViewState[tabs.selectedID]?.previewedOccurrence }
+        nonmutating set { tabViewState[tabs.selectedID, default: TabViewState()].previewedOccurrence = newValue }
+    }
     @State private var strongsLoader = StrongsAnalysisLoader()
-    @State private var strongsFilter: LampStrongsFilter?
+    private var strongsFilter: LampStrongsFilter? {
+        get { tabViewState[tabs.selectedID]?.strongsFilter }
+        nonmutating set { tabViewState[tabs.selectedID, default: TabViewState()].strongsFilter = newValue }
+    }
     /// The keys a companion was followed from, the last most recent: Back
     /// returns to it. Any other change of key — typed, from history, from a
     /// dictionary hit — starts again, so Back never leads somewhere the reader
     /// did not come from.
-    @State private var strongsTrail: [String] = []
+    private var strongsTrail: [String] {
+        get { tabViewState[tabs.selectedID]?.strongsTrail ?? [] }
+        nonmutating set { tabViewState[tabs.selectedID, default: TabViewState()].strongsTrail = newValue }
+    }
     /// Set while a change of key comes from following or going back, which
     /// keeps the trail; read and cleared by the key's change handler.
     @State private var isWalkingStrongsTrail = false
     /// The hit being previewed, if any.
-    @State private var previewedResult: LampModuleSearchResult?
+    private var previewedResult: LampModuleSearchResult? {
+        get { tabViewState[tabs.selectedID]?.previewedResult }
+        nonmutating set { tabViewState[tabs.selectedID, default: TabViewState()].previewedResult = newValue }
+    }
 
     let showImporter: () -> Void
     /// Opens a reference, in the translation it was found in when the result
@@ -258,7 +300,12 @@ struct UnifiedSearchView: View {
             selectedID: tabs.selectedID,
             title: { searchTabTitle($0) },
             select: { tabs.select($0) },
-            close: { tabs.close($0) },
+            close: { id in
+                tabs.close(id)
+                // What that tab was showing goes with it, so the dictionary
+                // holds the open tabs and not every tab this window ever had.
+                tabViewState[id] = nil
+            },
             duplicate: { tabs.duplicate($0) },
             rename: { tabs.rename($0, to: $1) },
             newTab: { tabs.open() }
@@ -363,14 +410,11 @@ struct UnifiedSearchView: View {
         .task(id: tabs.selectedID) {
             guard shownTabID != tabs.selectedID else { return }
             shownTabID = tabs.selectedID
-            // A tab keeps nothing of the list it showed: the rows are gone
-            // with the view's state, and the trail belonged to the key that
-            // was being followed in the tab we left.
-            selectedResultID = nil
-            previewedResult = nil
-            previewedOccurrence = nil
-            strongsTrail = []
-            strongsFilter = nil
+            // Nothing is cleared here. What a tab was showing — its row, its
+            // previews, its trail, its filter — is the tab's own and waits in
+            // tabViewState for it to be looked at again. Only the results
+            // themselves are refetched, because the model holds one list for
+            // whichever search ran last.
             runSearch()
             // Nothing here starts the analysis: `showsStrongsAnalysis` is
             // derived from the tab's own kind and key, and the loader's task
@@ -499,7 +543,7 @@ struct UnifiedSearchView: View {
                 StrongsOccurrenceHeading(
                     analysis: analysis,
                     shown: occurrences.count,
-                    filter: $strongsFilter
+                    filter: strongsFilterField
                 )
                 Divider()
             }
@@ -611,7 +655,7 @@ struct UnifiedSearchView: View {
             StrongsAnalysisPane(
                 key: strongsRequest.key,
                 loader: strongsLoader,
-                filter: $strongsFilter,
+                filter: strongsFilterField,
                 analyse: followCompanion,
                 // Search's own module picker is the choice of translation,
                 // so opening another one sets it, where it can be undone.
