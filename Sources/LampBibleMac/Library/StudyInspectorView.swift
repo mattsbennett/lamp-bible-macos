@@ -399,7 +399,10 @@ private struct NotesInspectorView: View {
                         }
                     }
                     if let installed = group.installedNotes.first {
-                        Text(installed.content)
+                        // The note as a reader would hear it, not as it is
+                        // written: three lines of raw Markdown spend one of
+                        // them on a picture's filename.
+                        Text(WritingStatistics.snippet(from: installed.content, limit: 200))
                             .font(.callout)
                             .foregroundStyle(Color.lampSecondaryText)
                             .lineLimit(3)
@@ -629,6 +632,68 @@ private struct NotesInspectorView: View {
     }
 }
 
+/// A module's note drawn as it was written.
+///
+/// It was printed as its source — `![tomb](media/TOMB)`, `[Romans
+/// 8:1](lampbible://…)`, `**weight**` — because a note was one `Text`. A
+/// notes module is written the way a writing is, so it is shown by the same
+/// renderer: its pictures appear, its scripture links are links, and its
+/// headings and lists have their shape back.
+///
+/// The pictures resolve against the module rather than a verse. A module
+/// declares them once at its root and its notes point at them by id, which is
+/// what `noteMediaOwnerID(of:)` answers; a note of the reader's own is one
+/// per verse and keyed by it.
+private struct InstalledNoteContent: View {
+    let note: LampVerseNote
+    let libraryRootURL: URL
+
+    /// The pane's own text, not the reader's prose settings: this is a panel
+    /// beside the chapter rather than something read at length, and a note
+    /// set two sizes above the labels around it fights them.
+    private static let fontSize = 13.0
+    private static let lineSpacing = 3.0
+
+    var body: some View {
+        // Markers are shown as ¹ ² ³ in reading order, whatever the module
+        // labelled them, with the definitions beneath. Not linked: a link
+        // needs somewhere to scroll to, and each note here is a few lines
+        // with its notes already in view.
+        let numbered = LampDevotionalFootnotes.numbered(
+            content: note.content,
+            footnotes: note.footnotes.isEmpty
+                ? nil
+                : LampPersonalMarkdownWriter.footnoteDefinitions(
+                    note.footnotes.map { (id: $0.id, content: $0.content) }
+                )
+        )
+        VStack(alignment: .leading, spacing: 10) {
+            DevotionalContentView(
+                markdown: LampDevotionalFootnotes.displayContent(numbered),
+                libraryRootURL: libraryRootURL,
+                devotionalID: LampLibrary.noteMediaOwnerID(of: note),
+                // Decoded one entry at a time, so a reference this Lamp
+                // cannot read costs its own picture and not the rest.
+                mediaReferences: LampMediaReference.list(fromJSON: note.mediaJSON),
+                mediaScope: .note,
+                fontSize: Self.fontSize,
+                lineSpacing: Self.lineSpacing,
+                typeface: .sansSerif,
+                // The title is already the line above this.
+                titleShownAbove: note.title
+            )
+            if !numbered.footnotes.isEmpty {
+                DevotionalFootnoteList(
+                    footnotes: numbered.footnotes,
+                    fontSize: Self.fontSize - 1,
+                    lineSpacing: Self.lineSpacing,
+                    typeface: .sansSerif
+                )
+            }
+        }
+    }
+}
+
 private struct PersonalNoteEditor: View {
     @EnvironmentObject private var model: LibraryModel
     @EnvironmentObject private var scrollLink: ReaderScrollLink
@@ -788,8 +853,10 @@ private struct PersonalNoteEditor: View {
                                 Text(title)
                                     .font(.headline)
                             }
-                            Text(note.content)
-                                .textSelection(.enabled)
+                            InstalledNoteContent(
+                                note: note,
+                                libraryRootURL: model.library.rootURL
+                            )
                         }
                     }
                 }

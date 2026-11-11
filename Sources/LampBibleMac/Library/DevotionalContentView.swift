@@ -12,6 +12,11 @@ struct DevotionalContentView: View {
     let libraryRootURL: URL
     var devotionalID: String? = nil
     var mediaReferences: [LampDevotionalMediaReference] = []
+    /// Which media folder `devotionalID` names. A writing's, unless this is a
+    /// note: a note's pictures sit beside the other notes' rather than beside
+    /// the writings', and the id above names a verse or a module instead of a
+    /// devotional.
+    var mediaScope: LampMediaScope = .devotional
     var fontSize: Double = 17
     var lineSpacing: Double = 6
     var typeface: ProseTypeface = .serif
@@ -275,7 +280,8 @@ struct DevotionalContentView: View {
     private func resolvedURL(_ url: URL) -> URL {
         LampPortableDevotionalMedia.libraryURL(
             for: url, rootURL: libraryRootURL,
-            devotionalID: devotionalID, references: mediaReferences
+            devotionalID: devotionalID, references: mediaReferences,
+            scope: mediaScope
         )
     }
 
