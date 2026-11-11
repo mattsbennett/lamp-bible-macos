@@ -374,6 +374,25 @@ private struct CommandPaletteField: NSViewRepresentable {
         /// Set while the palette is closing, so ending the edit then doesn't
         /// take the keyboard back.
         var isLeaving = false
+        /// What had the keyboard before the palette, given back when it
+        /// closes: a window left with nothing focused has no focused values,
+        /// and menu commands gated on them (⌘L) go grey.
+        private weak var previousResponder: NSResponder?
+
+        override func viewWillMove(toWindow newWindow: NSWindow?) {
+            super.viewWillMove(toWindow: newWindow)
+            guard newWindow == nil, let window else { return }
+            isLeaving = true
+            let previous = previousResponder
+            // A turn later, and only if nothing has taken the keyboard since:
+            // a route that focuses something (Search's field) keeps it.
+            DispatchQueue.main.async {
+                let current = window.firstResponder
+                guard current == nil || current === window,
+                      let view = previous as? NSView, view.window === window else { return }
+                window.makeFirstResponder(view)
+            }
+        }
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
@@ -401,7 +420,17 @@ private struct CommandPaletteField: NSViewRepresentable {
 
         func takeKeyboard() {
             guard let window, !isLeaving, !hasKeyboard else { return }
+            let before = window.firstResponder
             guard window.makeFirstResponder(self) else { return }
+            if previousResponder == nil, before !== window {
+                // A text field being edited answers through the window's
+                // shared field editor; what to give back is the field.
+                if let editor = before as? NSTextView, editor.isFieldEditor {
+                    previousResponder = editor.delegate as? NSResponder
+                } else {
+                    previousResponder = before
+                }
+            }
             // Typing goes after what is there, not over it all.
             currentEditor()?.selectedRange = NSRange(location: (stringValue as NSString).length, length: 0)
         }
@@ -444,6 +473,7 @@ private struct CommandPaletteField: NSViewRepresentable {
             case #selector(NSResponder.moveDown(_:)):
                 parent.onMove(1)
             case #selector(NSResponder.insertNewline(_:)):
+                (control as? Field)?.isLeaving = true
                 parent.onSubmit()
             default:
                 return false
