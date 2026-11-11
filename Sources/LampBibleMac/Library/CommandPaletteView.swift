@@ -152,21 +152,22 @@ struct CommandPaletteView: View {
             RoundedRectangle(cornerRadius: LampMetrics.cardRadius, style: .continuous)
                 .strokeBorder(Color.lampCardStroke)
         }
-        // Escape closes the palette wherever focus is, not only from the
-        // field: a key equivalent reaches it before any responder does.
         .background {
-            Button("Close", action: close)
-                .keyboardShortcut(.cancelAction)
-                .hidden()
+            CommandPaletteEscape(close: close)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
         }
-        .onAppear {
-            // A turn later: when the palette first appears it is not yet in
-            // the window's focus system, so asking now is ignored and the
-            // reader's text keeps the keyboard. Typing and Escape then went
-            // nowhere.
-            DispatchQueue.main.async { isFieldFocused = true }
-            restingPointer = NSEvent.mouseLocation
+        // Asked once the palette is in the window, not as it appears: from
+        // onAppear the request was ignored and the reader's text kept the
+        // keyboard, so typing and Escape went nowhere.
+        .task { isFieldFocused = true }
+        // And asked again if the field loses it while the palette is open,
+        // as a click on a row or the panel would take it: there is nothing
+        // else in the palette to type into.
+        .onChange(of: isFieldFocused) { _, focused in
+            if !focused { isFieldFocused = true }
         }
+        .onAppear { restingPointer = NSEvent.mouseLocation }
         .task(id: trimmed) {
             let words = trimmed
             // A passage or a Strong's key is a place, and a full-text match
@@ -366,4 +367,53 @@ struct CommandPaletteView: View {
         close()
         item.perform(placement)
     }
+}
+
+/// Escape closes the palette wherever focus is in its window, not only from
+/// the field, which may never have taken the keyboard.
+///
+/// A key monitor rather than a cancel-action key equivalent, because a
+/// monitor can pass the key on: while an input method is composing (the
+/// press-and-hold accent popover over marked text), Escape is the input
+/// method's to cancel, and the palette stays open. Scoped to this view's
+/// window, since a local monitor sees every window's keys, and installed
+/// only while the palette is in one.
+private struct CommandPaletteEscape: NSViewRepresentable {
+    let close: () -> Void
+
+    final class Monitor: NSView {
+        var close: () -> Void = {}
+        private var monitor: Any?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            stop()
+            guard window != nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self, event.keyCode == 53, event.window === self.window else { return event }
+                if let editor = event.window?.firstResponder as? NSTextView, editor.hasMarkedText() {
+                    return event
+                }
+                self.close()
+                return nil
+            }
+        }
+
+        private func stop() {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+        }
+
+        deinit {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+        }
+    }
+
+    func makeNSView(context: Context) -> Monitor {
+        let view = Monitor()
+        view.close = close
+        return view
+    }
+
+    func updateNSView(_ view: Monitor, context: Context) { view.close = close }
 }
