@@ -421,8 +421,12 @@ private struct CommandPaletteKeyboard: NSViewRepresentable {
             super.viewDidMoveToWindow()
             stop()
             guard let window else { return }
+            // Not `self?.handle(event) ?? event`: that turns handle's nil,
+            // "consumed", back into the event, and Escape went on to cancel
+            // something else after closing the palette.
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                self?.handle(event) ?? event
+                guard let self else { return event }
+                return self.handle(event)
             }
             let center = NotificationCenter.default
             observers = [
