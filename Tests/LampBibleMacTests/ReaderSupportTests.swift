@@ -833,6 +833,54 @@ struct ReaderSupportTests {
         ])
     }
 
+    /// A picture inside a sentence, which is how a note carries one.
+    ///
+    /// A note's media is an *annotation*: it marks a run of words, so it is
+    /// written `![those words](media/<id>)` with prose either side. Both
+    /// patterns above are anchored to a whole line, so a note's picture was
+    /// parsed into the paragraph and silently never drawn — the words were
+    /// there and the picture was not. The words stay where they were written
+    /// and the picture follows the line, as the phone draws it.
+    @Test func aPictureInsideASentenceIsStillDrawn() throws {
+        let blocks = DevotionalMarkdownParser.parse(
+            "He wept at the ![the tomb](media/TOMB), and then called "
+                + "[Lazarus](lampbible://verse/43011043) out."
+        )
+
+        #expect(blocks.count == 2)
+        #expect(blocks[0] == .text(
+            "He wept at the the tomb, and then called "
+                + "[Lazarus](lampbible://verse/43011043) out."
+        ), "the sentence still reads, and the ordinary link is left a link")
+        #expect(blocks[1] == .image(
+            caption: "", url: try #require(URL(string: "media/TOMB"))
+        ), "no caption: the words above it are the caption")
+    }
+
+    /// Two pictures in a line keep the order they were written in, and a
+    /// recording in a sentence comes out the same way a picture does.
+    @Test func inlineMediaKeepsItsOrder() throws {
+        let blocks = DevotionalMarkdownParser.parse(
+            "First ![one](media/A) then ![two](media/B) and [a prayer](media/C)."
+        )
+
+        #expect(blocks[0] == .text("First one then two and a prayer."))
+        #expect(blocks.dropFirst() == [
+            .image(caption: "", url: try #require(URL(string: "media/A"))),
+            .image(caption: "", url: try #require(URL(string: "media/B"))),
+            .audio(label: "a prayer", url: try #require(URL(string: "media/C"))),
+        ])
+    }
+
+    /// A line that is nothing but a picture is still one block, not a block
+    /// and an empty paragraph: that is how a writing carries its pictures and
+    /// it must not change.
+    @Test func aPictureOnItsOwnLineIsUnchanged() throws {
+        #expect(DevotionalMarkdownParser.parse("![Sunrise](media/S)") == [
+            .image(caption: "Sunrise", url: try #require(URL(string: "media/S"))),
+        ])
+    }
+
     @Test func navigationHistoryMovesBackForwardAndBranches() {
         let first = ReaderLocation(translationID: "A", bookNumber: 1, chapterNumber: 1)
         let second = ReaderLocation(translationID: "A", bookNumber: 1, chapterNumber: 2)

@@ -984,11 +984,71 @@ public enum DevotionalMarkdownParser {
                     url: url
                 ))
             } else {
-                textLines.append(line)
+                // A picture or a recording inside a sentence, which is how a
+                // note carries one: the annotation marks a run of words, so
+                // its Markdown is `![those words](media/<id>)` with prose
+                // either side of it. Whole-line patterns step straight over
+                // that, and the picture was parsed into the paragraph and
+                // never drawn — on the Mac only, since the phone already
+                // shows it.
+                //
+                // The words stay in the sentence they were written in and the
+                // picture follows the line, which is what the phone does.
+                let (prose, media) = splittingInlineMedia(from: line)
+                textLines.append(prose)
+                if !media.isEmpty {
+                    flushText()
+                    result.append(contentsOf: media)
+                }
             }
         }
         flushText()
         return result
+    }
+
+    private static let inlineMediaPattern = try! NSRegularExpression(
+        pattern: #"(!?)\[([^\]]*)\]\(([^)\s]+)\)"#
+    )
+
+    /// A line with its inline pictures and recordings taken out: what is left
+    /// to read, and what to draw after it.
+    ///
+    /// Only a picture or a recording is taken: an ordinary link is part of the
+    /// sentence and stays one. What the annotation marked is left where it was
+    /// written, so the sentence still reads, and the picture carries no caption
+    /// because those same words are the line above it.
+    private static func splittingInlineMedia(
+        from line: String
+    ) -> (prose: String, media: [DevotionalMarkdownBlock]) {
+        guard line.contains("](") else { return (line, []) }
+        let found: [(range: NSRange, label: String, block: DevotionalMarkdownBlock)] =
+            inlineMediaPattern.matches(
+                in: line, range: NSRange(line.startIndex..<line.endIndex, in: line)
+            ).compactMap { match in
+                guard let labelRange = Range(match.range(at: 2), in: line),
+                      let urlRange = Range(match.range(at: 3), in: line),
+                      let url = URL(string: String(line[urlRange])) else { return nil }
+                let label = String(line[labelRange])
+                if match.range(at: 1).length == 1 {
+                    return (match.range, label, .image(caption: "", url: url))
+                }
+                guard isAudioURL(url) || label.contains("\u{25B6}") else { return nil }
+                return (match.range, label, .audio(
+                    label: label
+                        .replacingOccurrences(of: "\u{25B6}\u{FE0E}", with: "")
+                        .trimmingCharacters(in: .whitespaces),
+                    url: url
+                ))
+            }
+        guard !found.isEmpty else { return (line, []) }
+
+        // Replaced right to left, so that one replacement cannot move the
+        // next; drawn left to right, which is the order they were written in.
+        let prose = NSMutableString(string: line)
+        for item in found.reversed() {
+            prose.replaceCharacters(in: item.range, with: item.label)
+        }
+        return (prose as String, found.map(\.block))
     }
 
     private static func isAudioURL(_ url: URL) -> Bool {
