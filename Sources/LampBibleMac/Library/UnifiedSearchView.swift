@@ -15,19 +15,88 @@ struct UnifiedSearchView: View {
     @AppStorage("reader.fontSize") private var readerFontSize = LampTextScale.readerText.defaultValue
     /// Verses either side of a hit in its preview.
     @AppStorage("search.previewContext") private var previewContext = 2
-    // Held by the scene rather than the view. Opening a result moves the
-    // window to the reader, which takes this view down and took the search
-    // with it — so coming back meant typing the query and setting every
-    // filter again, having gone to look at one of its own results.
-    @SceneStorage("search.query") private var query = ""
-    @SceneStorage("search.kind") private var selectedKind: LampModuleKind?
-    @SceneStorage("search.moduleID") private var selectedModuleID: String?
-    @SceneStorage("search.devotionalDate") private var devotionalDate = ""
-    @SceneStorage("search.devotionalTag") private var devotionalTag = ""
-    @SceneStorage("search.devotionalCategory") private var devotionalCategory = ""
-    @SceneStorage("search.bookScope") private var bookScope: BookSearchScope = .all
-    @SceneStorage("search.strongsKey") private var strongsKey = ""
-    @SceneStorage("search.highlightColor") private var highlightColor = ""
+    /// The searches this window is keeping, and which is shown. Owned by the
+    /// window (`LibraryRootView`), which saves them per window session.
+    ///
+    /// These were nine `@SceneStorage` values. The scene was right about one
+    /// thing — opening a result moves the window to the reader, which takes
+    /// this view down and took the search with it, so coming back meant
+    /// typing the query and setting every filter again. But a scene is wiped
+    /// by a clean quit, so a search never saw the next launch, and one bag of
+    /// values per scene meant one search at a time. Tabs and remembering are
+    /// the same change because both were decided by where this lived.
+    @Binding var tabs: SearchTabCollection
+
+    /// Which tab's search is on screen. It trails `tabs.selectedID` by one
+    /// update, which is what tells the filter handlers below that a value
+    /// changed because the reader switched tabs rather than typed — see
+    /// `isSwitchingTabs`.
+    @State private var shownTabID: UUID?
+
+    private var query: String {
+        get { tabs.selected.query }
+        nonmutating set { tabs.updateSelected { $0.query = newValue } }
+    }
+    private var selectedKind: LampModuleKind? {
+        get { tabs.selected.kind }
+        nonmutating set { tabs.updateSelected { $0.kind = newValue } }
+    }
+    private var selectedModuleID: String? {
+        get { tabs.selected.moduleID }
+        nonmutating set { tabs.updateSelected { $0.moduleID = newValue } }
+    }
+    private var devotionalDate: String {
+        get { tabs.selected.devotionalDate }
+        nonmutating set { tabs.updateSelected { $0.devotionalDate = newValue } }
+    }
+    private var devotionalTag: String {
+        get { tabs.selected.devotionalTag }
+        nonmutating set { tabs.updateSelected { $0.devotionalTag = newValue } }
+    }
+    private var devotionalCategory: String {
+        get { tabs.selected.devotionalCategory }
+        nonmutating set { tabs.updateSelected { $0.devotionalCategory = newValue } }
+    }
+    private var bookScope: BookSearchScope {
+        get { BookSearchScope(rawValue: tabs.selected.bookScopeRawValue) ?? .all }
+        nonmutating set { tabs.updateSelected { $0.bookScopeRawValue = newValue.rawValue } }
+    }
+    private var strongsKey: String {
+        get { tabs.selected.strongsKey }
+        nonmutating set { tabs.updateSelected { $0.strongsKey = newValue } }
+    }
+    private var highlightColor: String {
+        get { tabs.selected.highlightColor }
+        nonmutating set { tabs.updateSelected { $0.highlightColor = newValue } }
+    }
+
+    /// A binding onto one of the selected tab's fields, for the controls that
+    /// need to write as well as read. `$query` and its like are gone with the
+    /// scene storage they belonged to; a computed property has no projected
+    /// value, so the binding is made here.
+    private func field<Value>(_ keyPath: WritableKeyPath<SearchTab, Value>) -> Binding<Value> {
+        Binding(
+            get: { tabs.selected[keyPath: keyPath] },
+            set: { value in tabs.updateSelected { $0[keyPath: keyPath] = value } }
+        )
+    }
+
+    /// The book range, which the tab keeps as its `rawValue` so the scope
+    /// stays this pane's own type.
+    private var bookScopeField: Binding<BookSearchScope> {
+        Binding(
+            get: { BookSearchScope(rawValue: tabs.selected.bookScopeRawValue) ?? .all },
+            set: { value in tabs.updateSelected { $0.bookScopeRawValue = value.rawValue } }
+        )
+    }
+
+    /// Whether the filters changed because another tab was selected.
+    ///
+    /// Every filter below runs the search when it changes, and two of them do
+    /// more than that — a new Strong's key clears the trail and can move the
+    /// search to scripture. Switching tabs changes all nine at once, so
+    /// without this the act of looking at another tab would edit it.
+    private var isSwitchingTabs: Bool { shownTabID != tabs.selectedID }
     /// Not kept: which row was selected belongs to a list that no longer
     /// exists, and the search is run again on return anyway.
     @State private var selectedResultID: String?
@@ -137,11 +206,11 @@ struct UnifiedSearchView: View {
     private var devotionalFilters: some View {
         if selectedKind == .devotional {
             HStack(spacing: 8) {
-                TextField("Date (YYYY-MM-DD or MM-DD)", text: $devotionalDate)
+                TextField("Date (YYYY-MM-DD or MM-DD)", text: field(\.devotionalDate))
                     .frame(width: 170)
-                TextField("Tag", text: $devotionalTag)
+                TextField("Tag", text: field(\.devotionalTag))
                     .frame(width: 110)
-                TextField("Category", text: $devotionalCategory)
+                TextField("Category", text: field(\.devotionalCategory))
                     .frame(width: 110)
                 if hasActiveDevotionalFilter {
                     Button("Clear", action: clearDevotionalFilters)
@@ -182,6 +251,19 @@ struct UnifiedSearchView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+        // Above the filters, because the filters belong to the tab: the rank
+        // reads as what each page of filters is for.
+        SearchTabBar(
+            tabs: tabs.tabs,
+            selectedID: tabs.selectedID,
+            title: { searchTabTitle($0) },
+            select: { tabs.select($0) },
+            close: { tabs.close($0) },
+            duplicate: { tabs.duplicate($0) },
+            rename: { tabs.rename($0, to: $1) },
+            newTab: { tabs.open() }
+        )
+        Divider()
         refineFilters
         devotionalFilters
         Group {
@@ -222,7 +304,7 @@ struct UnifiedSearchView: View {
         // Short enough to stay whole once the Strong's key field joins the
         // toolbar: the longer "Search Bibles and modules" was cut to
         // "Search Bibles and n…" at the default window size.
-        .searchable(text: $query, placement: .toolbar, prompt: "Search Library")
+        .searchable(text: field(\.query), placement: .toolbar, prompt: "Search Library")
         .onSubmit(of: .search) {
             // On submit rather than as it is typed: "H7" is a plausible key
             // while someone is still typing "H7225", and moving the text out
@@ -233,8 +315,16 @@ struct UnifiedSearchView: View {
                 saveSearch()
             }
         }
-        .onChange(of: query) { _, _ in runSearch() }
+        // Each of these guards on isSwitchingTabs: selecting another tab
+        // changes every filter at once, and a handler cannot tell that from
+        // the reader editing one. The tab being shown runs its own search,
+        // once, in the .task below.
+        .onChange(of: query) { _, _ in
+            guard !isSwitchingTabs else { return }
+            runSearch()
+        }
         .onChange(of: selectedKind) { _, _ in
+            guard !isSwitchingTabs else { return }
             // Only when it no longer belongs. Clearing unconditionally threw
             // away the module a history entry had just restored, because
             // restoring an entry sets the kind as well.
@@ -245,12 +335,53 @@ struct UnifiedSearchView: View {
             if selectedKind != .devotional { clearDevotionalFilters() }
             runSearch()
         }
-        .onChange(of: selectedModuleID) { _, _ in runSearch() }
-        .onChange(of: devotionalDate) { _, _ in runSearch() }
-        .onChange(of: devotionalTag) { _, _ in runSearch() }
-        .onChange(of: devotionalCategory) { _, _ in runSearch() }
-        .onChange(of: bookScope) { _, _ in runSearch() }
+        .onChange(of: selectedModuleID) { _, _ in
+            guard !isSwitchingTabs else { return }
+            runSearch()
+        }
+        .onChange(of: devotionalDate) { _, _ in
+            guard !isSwitchingTabs else { return }
+            runSearch()
+        }
+        .onChange(of: devotionalTag) { _, _ in
+            guard !isSwitchingTabs else { return }
+            runSearch()
+        }
+        .onChange(of: devotionalCategory) { _, _ in
+            guard !isSwitchingTabs else { return }
+            runSearch()
+        }
+        .onChange(of: bookScope) { _, _ in
+            guard !isSwitchingTabs else { return }
+            runSearch()
+        }
+        // The tab on screen catches up with the selection after the update
+        // in which it changed, so the handlers above see the mismatch for
+        // exactly that update. A .task rather than another .onChange,
+        // because onChange order between modifiers is not defined and this
+        // one has to be last.
+        .task(id: tabs.selectedID) {
+            guard shownTabID != tabs.selectedID else { return }
+            shownTabID = tabs.selectedID
+            // A tab keeps nothing of the list it showed: the rows are gone
+            // with the view's state, and the trail belonged to the key that
+            // was being followed in the tab we left.
+            selectedResultID = nil
+            previewedResult = nil
+            previewedOccurrence = nil
+            strongsTrail = []
+            strongsFilter = nil
+            runSearch()
+            // Nothing here starts the analysis: `showsStrongsAnalysis` is
+            // derived from the tab's own kind and key, and the loader's task
+            // is keyed on the request those make, so a tab holding a key
+            // shows its analysis by being shown. Calling `analyse` would have
+            // been worse than redundant — it *writes* the kind, the key and
+            // an empty query, so looking at a tab would have edited it, which
+            // is the very thing `isSwitchingTabs` is here to prevent.
+        }
         .onChange(of: strongsKey) { _, key in
+            guard !isSwitchingTabs else { return }
             if isWalkingStrongsTrail {
                 isWalkingStrongsTrail = false
             } else {
@@ -1014,7 +1145,7 @@ struct UnifiedSearchView: View {
     @ToolbarContentBuilder
     private var searchToolbar: some ToolbarContent {
         ToolbarItem {
-            Picker("Content", selection: $selectedKind) {
+            Picker("Content", selection: field(\.kind)) {
                 Text("All Content").tag(LampModuleKind?.none)
                 ForEach(LampModuleKind.allCases, id: \.self) { kind in
                     Text(kind.displayName).tag(Optional(kind))
@@ -1024,7 +1155,7 @@ struct UnifiedSearchView: View {
         }
 
         ToolbarItem {
-            Picker("Module", selection: $selectedModuleID) {
+            Picker("Module", selection: field(\.moduleID)) {
                 Text("All Modules").tag(String?.none)
                 if selectedKind == .translation {
                     // By language, as every translation picker lists them.
@@ -1062,7 +1193,7 @@ struct UnifiedSearchView: View {
             HStack(spacing: 8) {
                 if showsBooks {
                     Menu {
-                        Picker("Books", selection: $bookScope) {
+                        Picker("Books", selection: bookScopeField) {
                             ForEach(BookSearchScope.allCases, id: \.self) { scope in
                                 Text(scope.rawValue).tag(scope)
                             }
@@ -1083,7 +1214,7 @@ struct UnifiedSearchView: View {
                             .foregroundStyle(Color.lampSecondaryText)
                         TextField(
                             "Strong's key",
-                            text: $strongsKey,
+                            text: field(\.strongsKey),
                             prompt: Text("Strong’s number, e.g. G26")
                                 .foregroundStyle(Color.lampSecondaryText)
                         )
@@ -1138,7 +1269,7 @@ struct UnifiedSearchView: View {
 
                         TextField(
                             "Hex",
-                            text: $highlightColor,
+                            text: field(\.highlightColor),
                             prompt: Text("Hex").foregroundStyle(Color.lampSecondaryText)
                         )
                         .textFieldStyle(.plain)
@@ -1704,5 +1835,174 @@ private struct SearchDictionaryEntry<Fallback: View>: View {
         .task(id: "\(moduleID)|\(key)") {
             entries = (try? await model.library.dictionaryEntries(keys: [key], moduleIDs: [moduleID])) ?? []
         }
+    }
+}
+
+extension UnifiedSearchView {
+    /// What a tab is called: the name the reader gave it, else the words it
+    /// is searching for, else the key or colour it is filtered by, else the
+    /// kind it is narrowed to — and "New Search" for a tab with nothing in
+    /// it yet. A tab is named after what you would recognise it by.
+    func searchTabTitle(_ tab: SearchTab) -> String {
+        if let name = tab.name { return name }
+        let words = tab.query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !words.isEmpty { return words }
+        let key = tab.strongsKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !key.isEmpty { return key }
+        if !tab.highlightColor.isEmpty { return "Highlights" }
+        if !tab.devotionalDate.isEmpty { return tab.devotionalDate }
+        if !tab.devotionalTag.isEmpty { return tab.devotionalTag }
+        if !tab.devotionalCategory.isEmpty { return tab.devotionalCategory }
+        if let kind = tab.kind { return kind.displayName }
+        return "New Search"
+    }
+}
+
+/// The Search pane's rank of tabs.
+///
+/// Its chrome is `LibraryTabStrip`, shared with the reader's bar so the two
+/// cannot drift; its cells are its own, because what a search tab offers is
+/// not what a reader tab offers. A new tab opens here and then: there is no
+/// passage to choose first, which is what the reader's popover is for.
+private struct SearchTabBar: View {
+    let tabs: [SearchTab]
+    let selectedID: UUID
+    let title: (SearchTab) -> String
+    let select: (UUID) -> Void
+    let close: (UUID) -> Void
+    let duplicate: (UUID) -> Void
+    let rename: (UUID, String?) -> Void
+    let newTab: () -> Void
+
+    @State private var hoveredTabID: UUID?
+    @State private var isHoveringNewTab = false
+    @State private var renamingTabID: UUID?
+    @State private var draftName = ""
+
+    var body: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 0) {
+                ForEach(tabs) { tab in
+                    cell(tab)
+                    LibraryTabStripSeparator()
+                }
+                newTabButton
+                LibraryTabStripSeparator()
+            }
+        }
+        .scrollIndicators(.never)
+        .frame(height: LibraryTabStrip.height)
+    }
+
+    private func cell(_ tab: SearchTab) -> some View {
+        let isSelected = tab.id == selectedID
+        let isHovered = hoveredTabID == tab.id
+        // Siblings rather than a close button inside the tab's own button: a
+        // Button inside another Button's label is a fight over the click.
+        return HStack(spacing: 5) {
+            Button { select(tab.id) } label: {
+                Text(title(tab))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(height: LibraryTabStrip.height)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if tabs.count > 1 {
+                Button("Close \(title(tab))", systemImage: "xmark") { close(tab.id) }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.plain)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    // Revealed on approach, so idle tabs stay titles rather
+                    // than a row of crosses.
+                    .opacity(isSelected || isHovered ? 1 : 0)
+                    .help("Close tab")
+            }
+        }
+        .font(.subheadline)
+        .foregroundStyle(isSelected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+        .padding(.horizontal, 10)
+        .frame(minWidth: LibraryTabStrip.minimumCellWidth, maxWidth: LibraryTabStrip.maximumCellWidth)
+        .frame(height: LibraryTabStrip.height)
+        // A shape style fills the safe area too unless told not to, and the
+        // bar sits under the toolbar: the open tab's fill would rise behind it.
+        .background(
+            LibraryTabStrip.cellBackground(isSelected: isSelected, isHovered: isHovered),
+            ignoresSafeAreaEdges: []
+        )
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Color.accentColor)
+                .frame(height: 2)
+                .opacity(isSelected ? 1 : 0)
+        }
+        .onHover { isHovering in
+            hoveredTabID = isHovering ? tab.id : (hoveredTabID == tab.id ? nil : hoveredTabID)
+        }
+        .help(title(tab))
+        .contextMenu {
+            Button("Rename Tab…") {
+                draftName = tab.name ?? ""
+                renamingTabID = tab.id
+            }
+            if tab.name != nil {
+                Button("Use the Search's Words") { rename(tab.id, nil) }
+            }
+            Button("Duplicate Tab") { duplicate(tab.id) }
+            if tabs.count > 1 {
+                Divider()
+                Button("Close Tab") { close(tab.id) }
+            }
+        }
+        .popover(isPresented: Binding(
+            get: { renamingTabID == tab.id },
+            set: { if !$0, renamingTabID == tab.id { renamingTabID = nil } }
+        )) {
+            renamePopover(tab)
+        }
+    }
+
+    private func renamePopover(_ tab: SearchTab) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Name this tab")
+                .font(.subheadline.weight(.semibold))
+            TextField("Name", text: $draftName)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 220)
+                .onSubmit {
+                    rename(tab.id, draftName)
+                    renamingTabID = nil
+                }
+            HStack {
+                Spacer()
+                Button("Cancel") { renamingTabID = nil }
+                Button("Rename") {
+                    rename(tab.id, draftName)
+                    renamingTabID = nil
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(14)
+    }
+
+    private var newTabButton: some View {
+        Button(action: newTab) {
+            Image(systemName: "plus")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 30, height: LibraryTabStrip.height)
+                .background(
+                    isHoveringNewTab ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear),
+                    ignoresSafeAreaEdges: []
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHoveringNewTab = $0 }
+        .help("New search tab")
     }
 }

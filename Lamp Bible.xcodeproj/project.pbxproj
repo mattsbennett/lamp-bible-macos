@@ -51,8 +51,10 @@
 		A1000000000000000000000D /* DevotionalsAndQuizzesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000C /* DevotionalsAndQuizzesView.swift */; };
 		A1000000000000000000000E /* bundled_modules.db.zlib in Resources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000D /* bundled_modules.db.zlib */; };
 		A1000000000000000000000F /* UnifiedSearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000E /* UnifiedSearchView.swift */; };
+		A1000000000000000000B004 /* LibraryTabStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000B004 /* LibraryTabStrip.swift */; };
 		A1000000000000000000022E /* StrongsAnalysisView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000021F /* StrongsAnalysisView.swift */; };
 		A10000000000000000000010 /* ReaderSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000F /* ReaderSupport.swift */; };
+		A1000000000000000000B003 /* SearchTabSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000B003 /* SearchTabSupport.swift */; };
 		A10000000000000000000011 /* DevotionalEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000010 /* DevotionalEditorView.swift */; };
 		A10000000000000000000012 /* ReadAloudController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000011 /* ReadAloudController.swift */; };
 		A10000000000000000000013 /* VerseHighlightEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000012 /* VerseHighlightEditorView.swift */; };
@@ -181,8 +183,10 @@
 		B1000000000000000000000C /* DevotionalsAndQuizzesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/DevotionalsAndQuizzesView.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000000D /* bundled_modules.db.zlib */ = {isa = PBXFileReference; lastKnownFileType = file; name = bundled_modules.db.zlib; path = ../lamp-bible-modules/modules_db/bundled_modules.db.zlib; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000000E /* UnifiedSearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/UnifiedSearchView.swift; sourceTree = SOURCE_ROOT; };
+		B1000000000000000000B004 /* LibraryTabStrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/LibraryTabStrip.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000021F /* StrongsAnalysisView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/StrongsAnalysisView.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000000F /* ReaderSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/ReaderSupport.swift; sourceTree = SOURCE_ROOT; };
+		B1000000000000000000B003 /* SearchTabSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/SearchTabSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000010 /* DevotionalEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/DevotionalEditorView.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000011 /* ReadAloudController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/ReadAloudController.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000012 /* VerseHighlightEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/VerseHighlightEditorView.swift; sourceTree = SOURCE_ROOT; };
@@ -401,6 +405,7 @@
 				B10000000000000000000011 /* ReadAloudController.swift */,
 				B10000000000000000000012 /* VerseHighlightEditorView.swift */,
 				B1000000000000000000000E /* UnifiedSearchView.swift */,
+				B1000000000000000000B004 /* LibraryTabStrip.swift */,
 				B1000000000000000000021F /* StrongsAnalysisView.swift */,
 				B10000000000000000000005 /* ReadingPlansView.swift */,
 				B10000000000000000000220 /* NewReadingPlanSheet.swift */,
@@ -414,6 +419,7 @@
 				B10000000000000000000009 /* ModuleStudioView.swift */,
 				B1000000000000000000000A /* StudioDocument.swift */,
 				B1000000000000000000000F /* ReaderSupport.swift */,
+				B1000000000000000000B003 /* SearchTabSupport.swift */,
 				B10000000000000000000014 /* SyncSupport.swift */,
 				B1000000000000000000001A /* ScrollLinkSupport.swift */,
 				B10000000000000000000019 /* ReaderScrollLink.swift */,
@@ -699,8 +705,10 @@
 				A1000000000000000000000A /* StudioDocument.swift in Sources */,
 				A1000000000000000000000D /* DevotionalsAndQuizzesView.swift in Sources */,
 				A1000000000000000000000F /* UnifiedSearchView.swift in Sources */,
+				A1000000000000000000B004 /* LibraryTabStrip.swift in Sources */,
 				A1000000000000000000022E /* StrongsAnalysisView.swift in Sources */,
 				A10000000000000000000010 /* ReaderSupport.swift in Sources */,
+				A1000000000000000000B003 /* SearchTabSupport.swift in Sources */,
 				A10000000000000000000015 /* SyncSupport.swift in Sources */,
 				A1000000000000000000001B /* ScrollLinkSupport.swift in Sources */,
 				A1000000000000000000001A /* ReaderScrollLink.swift in Sources */,

@@ -86,6 +86,11 @@ struct LibraryRootView: View {
     @State private var showingStudyDataImporter = false
     @State private var readerTabs = ReaderTabCollection()
     @State private var hasRestoredReaderTabs = false
+    /// The window's searches, kept under the same session as its reader tabs
+    /// (`SearchTabSessionStore`). Not `@SceneStorage`, which a clean quit
+    /// wipes — remembering them past a relaunch is most of the point.
+    @State private var searchTabs = SearchTabCollection()
+    @State private var hasRestoredSearchTabs = false
     /// Whether this window is picking up where the app left off, which decides
     /// whether it opens on the last tabs any window saved or on a fresh one.
     @State private var isResumingReaderSession = false
@@ -201,6 +206,7 @@ struct LibraryRootView: View {
                 isResumingReaderSession = claimed.resuming
             }
             restoreReaderTabs()
+            restoreSearchTabs()
         }
         .onChange(of: model.hasLoadedInitialContent, initial: true) { _, loaded in
             guard loaded else { return }
@@ -214,6 +220,10 @@ struct LibraryRootView: View {
         .onChange(of: readerTabs) { _, tabs in
             guard hasRestoredReaderTabs, let readerSession else { return }
             ReaderTabSessionStore.save(tabs, session: readerSession)
+        }
+        .onChange(of: searchTabs) { _, tabs in
+            guard hasRestoredSearchTabs, let readerSession else { return }
+            SearchTabSessionStore.save(tabs, session: readerSession)
         }
         .onChange(of: readerSidebar) { _, _ in ensureSelectedTabHasChat() }
         // Turned off, the chat's column closes; turned on, old chats are
@@ -581,6 +591,19 @@ struct LibraryRootView: View {
     /// Opens this window's tabs, and its reader at the tab chosen in them,
     /// once the library has been read: which translations remain, for the
     /// tabs, and which note and highlight modules the chapter is read with.
+    /// The window's searches, once it holds a session. The reader's own
+    /// restore waits for the library to have loaded, because a tab names a
+    /// place in a translation that has to exist; a search names nothing that
+    /// needs checking, so this only needs the session.
+    private func restoreSearchTabs() {
+        guard !hasRestoredSearchTabs, let readerSession else { return }
+        searchTabs = SearchTabSessionStore.load(
+            session: readerSession,
+            resumingLastSession: isResumingReaderSession
+        )
+        hasRestoredSearchTabs = true
+    }
+
     private func restoreReaderTabs() {
         guard !hasRestoredReaderTabs, let readerSession,
               model.hasReadLibrary, !model.isRefreshing else { return }
@@ -1105,6 +1128,7 @@ struct LibraryRootView: View {
             )
         case .section(.search):
             UnifiedSearchView(
+                tabs: $searchTabs,
                 showImporter: { showingImporter = true },
                 openReference: { reference, translationID in
                     workspace.openReference(reference, translationID: translationID)
@@ -1282,7 +1306,9 @@ private struct ReaderTabBar: View {
     @State private var renamingTabID: UUID?
     @State private var draftName = ""
 
-    private static let height: CGFloat = 30
+    /// Shared with the Search pane's bar, so the two ranks cannot drift
+    /// apart in height or dividers (`LibraryTabStrip`).
+    private static let height = LibraryTabStrip.height
 
     var body: some View {
         ScrollView(.horizontal) {
@@ -1321,22 +1347,7 @@ private struct ReaderTabBar: View {
         }
     }
 
-    /// Fades out toward the top, so the hairline rises out of the bar rather
-    /// than stopping short against the toolbar above it, which has no border
-    /// for it to meet. A gradient of the colour rather than a mask over
-    /// `.separator`: in dark mode the masked style drew nothing at all.
-    private var separator: some View {
-        let line = Color(nsColor: .separatorColor)
-        return Rectangle()
-            .fill(
-                LinearGradient(
-                    stops: [.init(color: line.opacity(0), location: 0), .init(color: line, location: 0.75)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            )
-            .frame(width: 1)
-    }
+    private var separator: some View { LibraryTabStripSeparator() }
 
     private func tabCell(_ tab: ReaderTab) -> some View {
         let isSelected = tab.id == selectedID
@@ -1373,7 +1384,7 @@ private struct ReaderTabBar: View {
         .font(.subheadline)
         .foregroundStyle(isSelected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
         .padding(.horizontal, 10)
-        .frame(minWidth: 104, maxWidth: 190)
+        .frame(minWidth: LibraryTabStrip.minimumCellWidth, maxWidth: LibraryTabStrip.maximumCellWidth)
         .frame(height: Self.height)
         // A shape style fills the safe area too unless told not to, and the
         // bar sits right under the toolbar: the open tab's fill would rise
@@ -1409,11 +1420,7 @@ private struct ReaderTabBar: View {
     }
 
     private func cellBackground(isSelected: Bool, isHovered: Bool) -> some ShapeStyle {
-        if isSelected {
-            // The content colour, so the open tab reads as the page below it.
-            return AnyShapeStyle(.background)
-        }
-        return isHovered ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear)
+        LibraryTabStrip.cellBackground(isSelected: isSelected, isHovered: isHovered)
     }
 
     private var newTabButton: some View {
