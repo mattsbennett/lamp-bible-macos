@@ -89,14 +89,36 @@ public struct SearchTab: Codable, Identifiable, Equatable, Sendable {
         devotionalCategory = ((try? values.decodeIfPresent(String.self, forKey: .devotionalCategory)) ?? nil) ?? ""
     }
 
-    /// Whether this tab is searching for anything at all. A tab with nothing
-    /// in it is the one a new tab starts as, and the one worth reusing rather
-    /// than opening a second of.
+    /// Whether there is anything in this tab anyone would mind losing.
+    ///
+    /// Words, a key, a colour or a devotional facet obviously count. So does
+    /// a kind or a module chosen with nothing typed yet: someone narrowing
+    /// to Commentaries before searching has set that up on purpose, and a
+    /// search arriving from the reader should open its own tab rather than
+    /// take theirs (macos-9d's point, reviewing the palette's route). A book
+    /// range alone is left out: it comes with a kind in practice, and a tab
+    /// holding nothing but a range is not a setup worth protecting.
     public var isEmpty: Bool {
         query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && strongsKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && highlightColor.isEmpty
             && devotionalDate.isEmpty && devotionalTag.isEmpty && devotionalCategory.isEmpty
+            && kind == nil && moduleID == nil
+    }
+
+    /// Whether this tab is already showing the search `other` asks for.
+    ///
+    /// By what was asked for — the words, the key and the kind that came
+    /// with them — and not by the filters narrowed down afterwards: a tab
+    /// where "grace" has since been narrowed to one commentary is still the
+    /// tab that search belongs in.
+    public func isShowing(_ other: SearchTab) -> Bool {
+        query.trimmingCharacters(in: .whitespacesAndNewlines)
+            == other.query.trimmingCharacters(in: .whitespacesAndNewlines)
+            && strongsKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                == other.strongsKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            && kind == other.kind
+            && !other.isEmpty
     }
 
     /// A name worth keeping, or nil, as `ReaderTab.trimmedName`.
@@ -204,12 +226,23 @@ public struct SearchTabCollection: Codable, Equatable, Sendable {
     /// Shows a search asked for from somewhere else — the reader's ⌘L, a
     /// word looked up, a Strong's key followed from the text.
     ///
-    /// Into the open tab when that one is empty, and a tab of its own
-    /// otherwise. An empty tab is the one worth reusing; taking over a
-    /// search someone is in the middle of would be worse than opening a tab,
-    /// and opening one for every lookup would pile them up. A reused tab
-    /// keeps its own id and the name it was given — it is still that tab.
+    /// A tab already showing this very search is selected rather than
+    /// opened again: asking for "grace" while "grace" is open, or following
+    /// one key from two verses, should take you to it. Otherwise into the
+    /// open tab when that one has nothing in it, and a tab of its own when
+    /// it has — taking over a search someone is in the middle of would be
+    /// worse than opening a tab, and a tab per lookup would pile them up.
+    /// A reused tab keeps its own id and the name it was given: it is still
+    /// that tab.
+    ///
+    /// Following a *chain* of different keys does get a tab each, on
+    /// purpose: every key is a place you might want to go back to, and
+    /// closing a tab is cheap (macos-9d, reviewing the palette's route).
     public mutating func show(_ tab: SearchTab) {
+        if let existing = tabs.first(where: { $0.isShowing(tab) }) {
+            selectedID = existing.id
+            return
+        }
         guard selected.isEmpty else {
             open(tab)
             return

@@ -207,9 +207,13 @@ struct SearchTabTests {
     @Test func anEmptyTabIsTheOneWorthReusing() {
         #expect(SearchTab().isEmpty)
         #expect(SearchTab(query: "   ").isEmpty)
-        // A kind alone is not a search: it is the filter a new tab opens with
-        // when one was chosen in the pane.
-        #expect(SearchTab(kind: .commentary).isEmpty)
+        // A kind or a module alone is not a *search*, but it is a setup: it
+        // was narrowed on purpose before anything was typed, so a search
+        // arriving from the reader opens its own tab rather than take it.
+        #expect(!SearchTab(kind: .commentary).isEmpty)
+        #expect(!SearchTab(moduleID: "nic").isEmpty)
+        // A book range alone is not worth protecting; it comes with a kind.
+        #expect(SearchTab(bookScopeRawValue: "New Testament").isEmpty)
         #expect(!SearchTab(query: "grace").isEmpty)
         #expect(!SearchTab(strongsKey: "G5485").isEmpty)
         #expect(!SearchTab(highlightColor: "#ffcc00").isEmpty)
@@ -239,16 +243,82 @@ struct SearchTabTests {
         #expect(tabs.tabs[0].query == "grace")
     }
 
-    @Test func aReusedTabKeepsItsNameAndLosesTheFiltersItHadNone() {
-        var tabs = SearchTabCollection(tabs: [SearchTab(name: "Kept", kind: .commentary)])
+    @Test func aReusedTabKeepsItsName() {
+        // Named but otherwise untouched: the name is the reader's, the tab
+        // is still theirs, and the search goes into it.
+        var tabs = SearchTabCollection(tabs: [SearchTab(name: "Kept")])
         let id = tabs.selectedID
-        // A kind alone is not a search, so this tab is still the empty one.
         tabs.show(SearchTab(query: "grace", kind: .translation))
         #expect(tabs.tabs.count == 1)
         #expect(tabs.selectedID == id)
         #expect(tabs.selected.name == "Kept")
         #expect(tabs.selected.query == "grace")
-        // The kind came with the search, replacing the one that was set.
         #expect(tabs.selected.kind == .translation)
+    }
+
+    /// Asking for a search already open takes you to it rather than opening
+    /// a second identical tab: ⌘K "grace" while "grace" is showing, or
+    /// following one key from two different verses, which is what someone
+    /// going down a chain does (macos-9d, reviewing the palette's route).
+    @Test func aSearchAlreadyOpenIsSelectedRatherThanOpenedAgain() {
+        var tabs = SearchTabCollection()
+        tabs.show(SearchTab(query: "grace"))
+        tabs.open(SearchTab(query: "faith"))
+        #expect(tabs.tabs.count == 2)
+
+        tabs.show(SearchTab(query: "grace"))
+        #expect(tabs.tabs.count == 2, "no second tab for a search already open")
+        #expect(tabs.selected.query == "grace")
+
+        // The same key from another verse lands in the tab that key is in.
+        tabs.show(SearchTab(query: "G5485", kind: .translation, strongsKey: "G5485"))
+        #expect(tabs.tabs.count == 3)
+        let keyTab = tabs.selectedID
+        tabs.select(tabs.tabs[0].id)
+        tabs.show(SearchTab(query: "G5485", kind: .translation, strongsKey: "G5485"))
+        #expect(tabs.tabs.count == 3)
+        #expect(tabs.selectedID == keyTab)
+    }
+
+    @Test func aTabIsStillTheSameSearchAfterItsFiltersAreNarrowed() {
+        var tabs = SearchTabCollection()
+        tabs.show(SearchTab(query: "grace"))
+        // Narrowed in the pane afterwards: still where "grace" belongs.
+        tabs.updateSelected { $0.moduleID = "nic"; $0.bookScopeRawValue = "New Testament" }
+        let narrowed = tabs.selectedID
+        tabs.open(SearchTab(query: "faith"))
+
+        tabs.show(SearchTab(query: "grace"))
+        #expect(tabs.selectedID == narrowed)
+        #expect(tabs.tabs.count == 2)
+    }
+
+    /// A chain of different keys gets a tab each: every key is a place you
+    /// might want to go back to.
+    @Test func followingDifferentKeysOpensATabEach() {
+        var tabs = SearchTabCollection()
+        for key in ["G5485", "G26", "G4102"] {
+            tabs.show(SearchTab(query: key, kind: .translation, strongsKey: key))
+        }
+        #expect(tabs.tabs.count == 3)
+        #expect(tabs.tabs.map(\.strongsKey) == ["G5485", "G26", "G4102"])
+    }
+
+    /// A kind or a module chosen with nothing typed is a setup worth
+    /// keeping, so a search from the reader opens its own tab instead.
+    @Test func aTabNarrowedButNotTypedInIsNotTakenOver() {
+        var tabs = SearchTabCollection()
+        tabs.updateSelected { $0.kind = .commentary }
+        let narrowed = tabs.selectedID
+
+        tabs.show(SearchTab(query: "grace"))
+        #expect(tabs.tabs.count == 2, "the Commentaries setup is left alone")
+        #expect(tabs.selected.query == "grace")
+        #expect(tabs.tabs.first { $0.id == narrowed }?.kind == .commentary)
+
+        // A truly untouched tab is still the one worth reusing.
+        var fresh = SearchTabCollection()
+        fresh.show(SearchTab(query: "grace"))
+        #expect(fresh.tabs.count == 1)
     }
 }

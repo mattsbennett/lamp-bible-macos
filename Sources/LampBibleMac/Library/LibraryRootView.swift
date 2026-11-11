@@ -588,20 +588,9 @@ struct LibraryRootView: View {
         }
     }
 
-    /// Opens this window's tabs, and its reader at the tab chosen in them,
-    /// once the library has been read: which translations remain, for the
-    /// tabs, and which note and highlight modules the chapter is read with.
-    /// The window's searches, once it holds a session. The reader's own
-    /// restore waits for the library to have loaded, because a tab names a
-    /// place in a translation that has to exist; a search names nothing that
-    /// needs checking, so this only needs the session.
     /// Shows a search asked for from somewhere else — the reader's ⌘L, a
-    /// word looked up, a Strong's key followed.
-    ///
-    /// Into the open tab when it is empty, and a tab of its own otherwise.
-    /// An empty tab is the one worth reusing; taking over a search someone
-    /// is in the middle of would be worse than opening a tab, and opening a
-    /// tab for every lookup would pile them up.
+    /// word looked up, a Strong's key followed, the palette's Search route.
+    /// Which tab it lands in is `SearchTabCollection.show`.
     ///
     /// These used to be written to `@SceneStorage("search.query")` and its
     /// key, which the pane read. The pane reads its tabs now, so those
@@ -627,6 +616,10 @@ struct LibraryRootView: View {
         }
     }
 
+    /// The window's searches, once it holds a session. The reader's own
+    /// restore waits for the library to have been read, because a tab names
+    /// a place in a translation that has to still exist; a search names
+    /// nothing that needs checking, so this only needs the session.
     private func restoreSearchTabs() {
         guard !hasRestoredSearchTabs, let readerSession else { return }
         searchTabs = SearchTabSessionStore.load(
@@ -636,6 +629,9 @@ struct LibraryRootView: View {
         hasRestoredSearchTabs = true
     }
 
+    /// Opens this window's tabs, and its reader at the tab chosen in them,
+    /// once the library has been read: which translations remain, for the
+    /// tabs, and which note and highlight modules the chapter is read with.
     private func restoreReaderTabs() {
         guard !hasRestoredReaderTabs, let readerSession,
               model.hasReadLibrary, !model.isRefreshing else { return }
