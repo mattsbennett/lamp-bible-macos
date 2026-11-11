@@ -2479,7 +2479,7 @@ private struct SeptuagintWordGroup: View {
                 if let snippet = english.snippet {
                     (Text(snippet.isTrimmedAtStart ? "…" : "")
                         + Text(snippet.before)
-                        + Text.lampListMatch(snippet.word)
+                        + Text.lampFindMatch(snippet.word)
                         + Text(snippet.after)
                         + Text(snippet.isTrimmedAtEnd ? "…" : ""))
                         .font(.system(size: fontSize))
@@ -3321,7 +3321,7 @@ struct StrongsOccurrenceLabel: View {
     /// The verse with the tagged word picked out, so a row reads as the
     /// sentence it came from rather than as a word on its own.
     ///
-    /// Marked as a listed match (`lampListMatch`), as Search's rows mark
+    /// Marked as a find match (`lampFindMatch`), as Search's rows mark
     /// theirs: the thing searched for, in a list of results. Accent text reads
     /// as a link or a selection, which ColorRules.md names as the thing to
     /// avoid, and search rows have always drawn matches this way.
@@ -3333,7 +3333,7 @@ struct StrongsOccurrenceLabel: View {
         )
         return Text(snippet.isTrimmedAtStart ? "…" : "")
             + Text(snippet.before)
-            + Text.lampListMatch(snippet.word)
+            + Text.lampFindMatch(snippet.word)
             + Text(snippet.after)
             + Text(snippet.isTrimmedAtEnd ? "…" : "")
     }

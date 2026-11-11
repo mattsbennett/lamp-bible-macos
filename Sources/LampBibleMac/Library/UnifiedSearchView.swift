@@ -1265,7 +1265,7 @@ struct UnifiedSearchView: View {
     }
 
     private func snippetText(_ source: String) -> Text {
-        Text.lampMarkedSnippet(source)
+        Text.lampMarked(source)
     }
 
     /// The palette's name for the chosen colour, where it has one.
@@ -1528,7 +1528,7 @@ private struct SearchHitPreview: View {
 /// A verse with the searched words marked, as the result list marks them —
 /// so the preview, the detail pane and the row agree about what was found.
 private func searchMarkedText(_ text: String, query: String) -> Text {
-    Text.lampMarkedPassage(LampSearchQuery(query).markedSnippet(text, limit: .max))
+    Text.lampMarked(LampSearchQuery(query).markedSnippet(text, limit: .max))
 }
 
 /// A scripture hit set in its passage, in the detail pane.

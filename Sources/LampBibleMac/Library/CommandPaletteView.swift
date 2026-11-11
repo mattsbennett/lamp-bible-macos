@@ -277,7 +277,7 @@ struct CommandPaletteView: View {
                 if let subtitle = item.subtitle, !subtitle.isEmpty {
                     // A library match's snippet marks the words it found,
                     // as Search's rows do, cut so the row never truncates it.
-                    Text.lampMarkedSnippet(CommandPaletteSnippet.clipped(subtitle, droppingLeading: item.title))
+                    Text.lampMarked(CommandPaletteSnippet.clipped(subtitle, droppingLeading: item.title))
                         .font(.system(size: Self.snippetSize))
                         .foregroundStyle(Color.lampSecondaryText)
                         .lineLimit(1)

@@ -15,6 +15,11 @@ import SwiftUI
 // text is blue, and follows the rule if the rule changes.
 
 extension NSColor {
+    /// One of core's sRGB values, the same in either appearance.
+    convenience init(_ rgb: LampRGB) {
+        self.init(srgbRed: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 1)
+    }
+
     /// A colour that resolves against the appearance it is drawn in, from
     /// core's values. For the roles that have no system colour to ask for.
     convenience init(_ themed: LampThemedColor) {
@@ -40,23 +45,21 @@ extension NSColor {
     /// Behind the words searched for.
     ///
     /// On white, the system yellow at core's `findMatchOpacity`, behind text
-    /// that keeps its own colour. On the dark window that same wash composited
-    /// to a muddy olive with light text over it, which read as dirt rather
-    /// than as a mark. There the match is a solid ground with dark text
-    /// (`lampOnFindMatch`), the way a highlighter marks a page — a soft,
-    /// low-saturation gold rather than the system yellow, which at full
-    /// strength glared off charcoal and made a list of matches look stamped.
+    /// that keeps its own colour.
+    ///
+    /// On the dark window, core's solid deep amber (`findMatchDarkGround`)
+    /// under cream words (`lampOnFindMatch`): see ColorRules.md.
     static let lampFindMatch = NSColor(name: nil) { appearance in
         appearance.lampIsDark
-            ? NSColor(srgbRed: 0.80, green: 0.69, blue: 0.40, alpha: 1)
+            ? NSColor(LampColorRole.findMatchDarkGround)
             : NSColor.systemYellow.withAlphaComponent(LampColorRole.findMatchOpacity)
     }
 
-    /// The words on a find match's ground: their own colour on white, near
-    /// black on the dark window's luminous yellow.
+    /// The words on a find match's ground: their own colour on white, core's
+    /// cream (`findMatchDarkText`) on the dark window's deep amber.
     static let lampOnFindMatch = NSColor(name: nil) { appearance in
         appearance.lampIsDark
-            ? NSColor(srgbRed: 0.09, green: 0.08, blue: 0.05, alpha: 1)
+            ? NSColor(LampColorRole.findMatchDarkText)
             : NSColor.labelColor
     }
 
@@ -309,9 +312,9 @@ extension View {
 
 extension Text {
     /// Words searched for, marked as Safari marks a find: on a yellow ground,
-    /// in label colour on white and near black on the dark window's luminous
-    /// yellow (see `lampFindMatch`), and bold. Not bold *accent*, which reads
-    /// as a link — the colour is what that rule is about.
+    /// in label colour on white and in cream on the dark window's
+    /// deep amber (see `lampFindMatch`), and bold. Not bold *accent*, which
+    /// reads as a link — the colour is what that rule is about.
     static func lampFindMatch<S: StringProtocol>(_ text: S) -> Text {
         var marked = AttributedString(String(text))
         marked.backgroundColor = .lampFindMatch
@@ -325,39 +328,18 @@ extension Text {
         return Text(marked)
     }
 
-    /// A word searched for, in a row that lists a result: semibold in the
-    /// label colour, on no ground, as Raycast and Spotlight mark theirs. The
-    /// words round it keep their own, quieter colour, so the match stands up
-    /// from them without a block of yellow out-shouting the row's title (the
-    /// design panel's finding, Nov 2026). The yellow ground is for a find
-    /// inside the text being read (`lampFindMatch`); the iPhone matches.
-    static func lampListMatch<S: StringProtocol>(_ text: S) -> Text {
-        Text(String(text))
-            .fontWeight(.semibold)
-            .foregroundColor(.primary)
-    }
-
-    /// A passage with core's `<mark>` tags drawn as a find inside the text
-    /// (`lampFindMatch`): Search's detail pane, where the hit is read in its
-    /// place rather than listed.
-    static func lampMarkedPassage(_ source: String) -> Text {
-        marked(source, as: { Text.lampFindMatch($0) })
-    }
-
-    /// A search snippet with core's `<mark>` tags drawn as listed matches
-    /// (`lampListMatch`), wherever a result is listed.
-    static func lampMarkedSnippet(_ source: String) -> Text {
-        marked(source, as: { Text.lampListMatch($0) })
-    }
-
-    private static func marked(_ source: String, as match: (Substring) -> Text) -> Text {
+    /// Text with core's `<mark>` tags drawn as find matches (`lampFindMatch`),
+    /// wherever a match is shown: a listed result, the ⌘K palette and
+    /// Search's detail passage alike. Rows once marked theirs in semibold
+    /// alone, which the owner found too easy to miss as a hit (Nov 2026).
+    static func lampMarked(_ source: String) -> Text {
         var remaining = source[...]
         var rendered = Text("")
         while let opening = remaining.range(of: LampSearchSnippet.openingMark),
               let closing = remaining[opening.upperBound...]
                   .range(of: LampSearchSnippet.closingMark) {
             rendered = rendered + Text(String(remaining[..<opening.lowerBound]))
-            rendered = rendered + match(remaining[opening.upperBound..<closing.lowerBound])
+            rendered = rendered + Text.lampFindMatch(remaining[opening.upperBound..<closing.lowerBound])
             remaining = remaining[closing.upperBound...]
         }
         return rendered + Text(String(remaining))
