@@ -7426,14 +7426,16 @@ private struct CommandPaletteToggleReceiver: ViewModifier {
 /// The library windows open now, so ⌘K can name one when the menu has no
 /// focused value to call: the key window if it is a library, otherwise the
 /// frontmost library, brought forward; with none open, the next one to
-/// open (`opensPaletteInNextWindow`). Never nobody — an enabled ⌘K that
+/// open (`paletteRequestedForNextWindow`). Never nobody — an enabled ⌘K that
 /// does nothing is worse than a greyed one.
 @MainActor
 enum CommandPaletteWindows {
     private static let windows = NSHashTable<NSWindow>.weakObjects()
-    /// ⌘K found no library window and opened one: the first to register
-    /// opens its palette.
-    static var opensPaletteInNextWindow = false
+    /// When ⌘K, finding no library window, opened one: the first to
+    /// register within a few seconds opens its palette. Past that the
+    /// request is stale, so a window opened later for another reason
+    /// doesn't inherit it.
+    static var paletteRequestedForNextWindow: Date?
 
     static func target() -> NSWindow? {
         if let key = NSApp.keyWindow, windows.contains(key) { return key }
@@ -7455,8 +7457,9 @@ enum CommandPaletteWindows {
                 host?.window = window
                 guard let window else { return }
                 CommandPaletteWindows.windows.add(window)
-                if CommandPaletteWindows.opensPaletteInNextWindow {
-                    CommandPaletteWindows.opensPaletteInNextWindow = false
+                if let requested = CommandPaletteWindows.paletteRequestedForNextWindow {
+                    CommandPaletteWindows.paletteRequestedForNextWindow = nil
+                    guard Date().timeIntervalSince(requested) < 5 else { return }
                     // A turn later, once the receiver is listening.
                     DispatchQueue.main.async {
                         NotificationCenter.default.post(name: .lampToggleCommandPalette, object: window)

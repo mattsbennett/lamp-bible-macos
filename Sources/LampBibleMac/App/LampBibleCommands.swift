@@ -164,7 +164,7 @@ struct LampBibleCommands: Commands {
                     window.makeKeyAndOrderFront(nil)
                     NotificationCenter.default.post(name: .lampToggleCommandPalette, object: window)
                 } else {
-                    CommandPaletteWindows.opensPaletteInNextWindow = true
+                    CommandPaletteWindows.paletteRequestedForNextWindow = Date()
                     openWindow(id: "reader")
                 }
             }
