@@ -1002,6 +1002,7 @@ private struct PersonalNoteEditor: View {
                 // A note's own media folder, named for the verse — one
                 // personal note per verse, and its id holds a colon.
                 mediaScopeID: LampLibrary.noteMediaOwnerID(reference),
+                mediaScope: .note,
                 libraryRootURL: model.library.rootURL,
                 isVisible: true,
                 mediaReferences: noteMediaReferences,
@@ -1044,7 +1045,18 @@ private struct PersonalNoteEditor: View {
     /// its own picture, not the note.
     private var noteMediaReferences: [LampMediaReference] {
         guard let mediaJSON, let data = mediaJSON.data(using: .utf8) else { return [] }
-        return (try? JSONDecoder().decode([LampMediaReference].self, from: data)) ?? []
+        // Entry by entry, which is what the comment always claimed and the
+        // code did not: decoding the array in one go made a single
+        // unreadable entry — a media type this Lamp has no name for — return
+        // nothing at all. Every other picture then lost its id mapping, and
+        // the next save rewrote those links as filenames.
+        guard let entries = (try? JSONSerialization.jsonObject(with: data)) as? [Any] else {
+            return []
+        }
+        return entries.compactMap { entry in
+            guard let body = try? JSONSerialization.data(withJSONObject: entry) else { return nil }
+            return try? JSONDecoder().decode(LampMediaReference.self, from: body)
+        }
     }
 
     /// Puts a picture in the note: copied into the note's own media folder,

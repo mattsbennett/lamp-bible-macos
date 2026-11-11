@@ -57,6 +57,9 @@ struct TipTapEditorView: NSViewRepresentable {
     /// to. A devotional passes its own identifier; a document with no media of
     /// its own passes a scope that simply has no folder.
     let mediaScopeID: String
+    /// Which media folder `mediaScopeID` names. Writing is the default
+    /// because it had media to itself until notes gained it.
+    var mediaScope: LampMediaScope = .devotional
     let libraryRootURL: URL
     let isVisible: Bool
     var mediaReferences: [LampDevotionalMediaReference] = []
@@ -104,6 +107,7 @@ struct TipTapEditorView: NSViewRepresentable {
         coordinator.setFootnoteClicks(footnoteClicks)
         coordinator.setMediaMap(coordinator.mediaMap(
             scopeID: mediaScopeID,
+            scope: mediaScope,
             references: mediaReferences,
             libraryRootURL: libraryRootURL
         ))
@@ -128,6 +132,7 @@ struct TipTapEditorView: NSViewRepresentable {
         coordinator.setFootnoteClicks(footnoteClicks)
         coordinator.setMediaMap(coordinator.mediaMap(
             scopeID: mediaScopeID,
+            scope: mediaScope,
             references: mediaReferences,
             libraryRootURL: libraryRootURL
         ))
@@ -350,11 +355,19 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     /// anything other than Lamp still appears.
     func mediaMap(
         scopeID: String,
-        references: [LampDevotionalMediaReference],
+        scope: LampMediaScope,
+        references: [LampMediaReference],
         libraryRootURL: URL
     ) -> [String: String] {
-        let directory = libraryRootURL
-            .appendingPathComponent("Media/Devotionals", isDirectory: true)
+        // The scope's own folder. This was the third place `Media/Devotionals`
+        // was written out, and the one that decided whether a picture is
+        // found: a note's file is under Media/Notes, so a note reopened after
+        // a save showed a broken image while the two core copies were right.
+        let directory = LampPortableDevotionalMedia.folderURL(
+            rootURL: libraryRootURL, scope: scope, ownerID: scopeID
+        ) ?? libraryRootURL
+            .appendingPathComponent("Media", isDirectory: true)
+            .appendingPathComponent(scope.folder, isDirectory: true)
             .appendingPathComponent(scopeID, isDirectory: true)
         let source = MediaSource(
             directory: directory,
