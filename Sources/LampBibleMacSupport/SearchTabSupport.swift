@@ -201,6 +201,38 @@ public struct SearchTabCollection: Codable, Equatable, Sendable {
         open(copy)
     }
 
+    /// Shows a search asked for from somewhere else — the reader's ⌘L, a
+    /// word looked up, a Strong's key followed from the text.
+    ///
+    /// Into the open tab when that one is empty, and a tab of its own
+    /// otherwise. An empty tab is the one worth reusing; taking over a
+    /// search someone is in the middle of would be worse than opening a tab,
+    /// and opening one for every lookup would pile them up. A reused tab
+    /// keeps its own id and the name it was given — it is still that tab.
+    public mutating func show(_ tab: SearchTab) {
+        guard selected.isEmpty else {
+            open(tab)
+            return
+        }
+        let id = selectedID
+        let name = selected.name
+        update(id) { existing in
+            existing = SearchTab(
+                id: id,
+                name: name,
+                query: tab.query,
+                kind: tab.kind,
+                moduleID: tab.moduleID,
+                bookScopeRawValue: tab.bookScopeRawValue,
+                strongsKey: tab.strongsKey,
+                highlightColor: tab.highlightColor,
+                devotionalDate: tab.devotionalDate,
+                devotionalTag: tab.devotionalTag,
+                devotionalCategory: tab.devotionalCategory
+            )
+        }
+    }
+
     public mutating func rename(_ id: UUID, to name: String?) {
         update(id) { $0.name = SearchTab.trimmedName(name) }
     }

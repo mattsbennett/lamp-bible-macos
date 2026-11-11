@@ -77,8 +77,6 @@ struct LibraryRootView: View {
     @State private var selection: LibrarySelection? = .section(.reader)
     /// The search's own query, so the reader's reference field can hand words
     /// to it. The same key the search reads, in the same scene.
-    @SceneStorage("search.query") private var searchQuery = ""
-    @SceneStorage("search.strongsKey") private var searchStrongsKey = ""
     /// A passage waiting for the reader to say which Bible app to open it in,
     /// because they chose "Ask Each Time".
     @State private var externalBibleRequest: ExternalBibleRequest?
@@ -413,19 +411,16 @@ struct LibraryRootView: View {
             guard let words else { return }
             // Words, not a key: a key left from an analysis would keep the
             // analysis on screen in place of the search.
-            searchStrongsKey = ""
-            searchQuery = words
-            selection = .section(.search)
+            showSearch(SearchTab(query: words))
             workspace.requestedSearch = nil
         }
         .onChange(of: workspace.requestedStrongsKey) { _, key in
             guard let key else { return }
-            // The key and the box; the search sets its own content filter
-            // from the key, since it owns that setting and two writers of
-            // one scene key do not agree.
-            searchQuery = key
-            searchStrongsKey = key
-            selection = .section(.search)
+            // Scripture is named here rather than left to the pane. The pane
+            // moves the search to scripture when a key is typed into it, but
+            // a key arriving with the tab is not typed into anything, and
+            // the analysis only shows on scripture.
+            showSearch(SearchTab(query: key, kind: .translation, strongsKey: key))
             workspace.requestedStrongsKey = nil
         }
         .onChange(of: selection) { _, newValue in
@@ -600,6 +595,23 @@ struct LibraryRootView: View {
     /// restore waits for the library to have loaded, because a tab names a
     /// place in a translation that has to exist; a search names nothing that
     /// needs checking, so this only needs the session.
+    /// Shows a search asked for from somewhere else — the reader's ⌘L, a
+    /// word looked up, a Strong's key followed.
+    ///
+    /// Into the open tab when it is empty, and a tab of its own otherwise.
+    /// An empty tab is the one worth reusing; taking over a search someone
+    /// is in the middle of would be worse than opening a tab, and opening a
+    /// tab for every lookup would pile them up.
+    ///
+    /// These used to be written to `@SceneStorage("search.query")` and its
+    /// key, which the pane read. The pane reads its tabs now, so those
+    /// writes went nowhere and every search asked for from the reader was
+    /// silently dropped — found by a Codex review of the tabs, 2026-11-11.
+    private func showSearch(_ tab: SearchTab) {
+        searchTabs.show(tab)
+        selection = .section(.search)
+    }
+
     /// What ⌘T does here, or nil where it does nothing.
     private var newTabAction: (() -> Void)? {
         switch selection {

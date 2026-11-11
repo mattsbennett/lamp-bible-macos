@@ -27,11 +27,6 @@ struct UnifiedSearchView: View {
     /// the same change because both were decided by where this lived.
     @Binding var tabs: SearchTabCollection
 
-    /// Which tab's search is on screen. It trails `tabs.selectedID` by one
-    /// update, which is what tells the filter handlers below that a value
-    /// changed because the reader switched tabs rather than typed — see
-    /// `isSwitchingTabs`.
-    @State private var shownTabID: UUID?
 
     private var query: String {
         get { tabs.selected.query }
@@ -99,13 +94,29 @@ struct UnifiedSearchView: View {
         )
     }
 
-    /// Whether the filters changed because another tab was selected.
+    /// A filter watched together with the tab it belongs to.
     ///
-    /// Every filter below runs the search when it changes, and two of them do
-    /// more than that — a new Strong's key clears the trail and can move the
-    /// search to scripture. Switching tabs changes all nine at once, so
-    /// without this the act of looking at another tab would edit it.
-    private var isSwitchingTabs: Bool { shownTabID != tabs.selectedID }
+    /// Every filter below runs the search when it changes, and two do more
+    /// than that — a new kind can clear the module and the devotional
+    /// facets, a new Strong's key clears the trail and can move the search to
+    /// scripture. Selecting another tab changes all nine at once, and a
+    /// handler cannot otherwise tell that from the reader editing one, so
+    /// without this the act of looking at a tab would edit it.
+    ///
+    /// `onChange` hands over the old value and the new, so the test is
+    /// simply whether the tab is the same one: if it changed, the selection
+    /// moved and nothing was edited. An earlier version compared against a
+    /// tab id that caught up inside a `.task`, which needed the task to run
+    /// after these handlers — nothing documents that it does, and a Codex
+    /// review was right to call it unproven. This needs no ordering at all.
+    private struct Tabbed<Value: Equatable>: Equatable {
+        var tab: UUID
+        var value: Value
+    }
+
+    private func tabbed<Value: Equatable>(_ value: Value) -> Tabbed<Value> {
+        Tabbed(tab: tabs.selectedID, value: value)
+    }
     /// What a tab is showing, as against what it is searching for: the row
     /// picked out, the previews open on it, the trail of keys followed in it,
     /// and the analysis filter set on it.
@@ -122,6 +133,10 @@ struct UnifiedSearchView: View {
         var previewedOccurrence: Int?
         var strongsTrail: [String] = []
         var strongsFilter: LampStrongsFilter?
+        /// The analysis the filter above was chosen for. A filter means
+        /// nothing for another key or another book range; it means exactly
+        /// what it said for the one it was set on.
+        var strongsFilterRequest: StrongsAnalysisLoader.Request?
     }
 
     @State private var tabViewState: [UUID: TabViewState] = [:]
@@ -366,12 +381,12 @@ struct UnifiedSearchView: View {
         // changes every filter at once, and a handler cannot tell that from
         // the reader editing one. The tab being shown runs its own search,
         // once, in the .task below.
-        .onChange(of: query) { _, _ in
-            guard !isSwitchingTabs else { return }
+        .onChange(of: tabbed(query)) { old, new in
+            guard old.tab == new.tab else { return }
             runSearch()
         }
-        .onChange(of: selectedKind) { _, _ in
-            guard !isSwitchingTabs else { return }
+        .onChange(of: tabbed(selectedKind)) { old, new in
+            guard old.tab == new.tab else { return }
             // Only when it no longer belongs. Clearing unconditionally threw
             // away the module a history entry had just restored, because
             // restoring an entry sets the kind as well.
@@ -382,24 +397,24 @@ struct UnifiedSearchView: View {
             if selectedKind != .devotional { clearDevotionalFilters() }
             runSearch()
         }
-        .onChange(of: selectedModuleID) { _, _ in
-            guard !isSwitchingTabs else { return }
+        .onChange(of: tabbed(selectedModuleID)) { old, new in
+            guard old.tab == new.tab else { return }
             runSearch()
         }
-        .onChange(of: devotionalDate) { _, _ in
-            guard !isSwitchingTabs else { return }
+        .onChange(of: tabbed(devotionalDate)) { old, new in
+            guard old.tab == new.tab else { return }
             runSearch()
         }
-        .onChange(of: devotionalTag) { _, _ in
-            guard !isSwitchingTabs else { return }
+        .onChange(of: tabbed(devotionalTag)) { old, new in
+            guard old.tab == new.tab else { return }
             runSearch()
         }
-        .onChange(of: devotionalCategory) { _, _ in
-            guard !isSwitchingTabs else { return }
+        .onChange(of: tabbed(devotionalCategory)) { old, new in
+            guard old.tab == new.tab else { return }
             runSearch()
         }
-        .onChange(of: bookScope) { _, _ in
-            guard !isSwitchingTabs else { return }
+        .onChange(of: tabbed(bookScope)) { old, new in
+            guard old.tab == new.tab else { return }
             runSearch()
         }
         // The tab on screen catches up with the selection after the update
@@ -407,14 +422,12 @@ struct UnifiedSearchView: View {
         // exactly that update. A .task rather than another .onChange,
         // because onChange order between modifiers is not defined and this
         // one has to be last.
+        // The results belong to whichever search ran last, since the model
+        // holds one list, so the tab being shown asks for its own. Nothing
+        // is cleared: what a tab was showing — its row, its previews, its
+        // trail, its filter — is the tab's own and waits in tabViewState for
+        // it to be looked at again.
         .task(id: tabs.selectedID) {
-            guard shownTabID != tabs.selectedID else { return }
-            shownTabID = tabs.selectedID
-            // Nothing is cleared here. What a tab was showing — its row, its
-            // previews, its trail, its filter — is the tab's own and waits in
-            // tabViewState for it to be looked at again. Only the results
-            // themselves are refetched, because the model holds one list for
-            // whichever search ran last.
             runSearch()
             // Nothing here starts the analysis: `showsStrongsAnalysis` is
             // derived from the tab's own kind and key, and the loader's task
@@ -424,8 +437,9 @@ struct UnifiedSearchView: View {
             // an empty query, so looking at a tab would have edited it, which
             // is the very thing `isSwitchingTabs` is here to prevent.
         }
-        .onChange(of: strongsKey) { _, key in
-            guard !isSwitchingTabs else { return }
+        .onChange(of: tabbed(strongsKey)) { old, new in
+            guard old.tab == new.tab else { return }
+            let key = new.value
             if isWalkingStrongsTrail {
                 isWalkingStrongsTrail = false
             } else {
@@ -440,7 +454,10 @@ struct UnifiedSearchView: View {
             }
             runSearch()
         }
-        .onChange(of: highlightColor) { _, _ in runSearch() }
+        .onChange(of: tabbed(highlightColor)) { old, new in
+            guard old.tab == new.tab else { return }
+            runSearch()
+        }
         .onChange(of: model.moduleSearchResults) { _, results in
             if !results.contains(where: { $0.id == selectedResultID }) {
                 // The first row on screen, which grouping may have moved
@@ -670,8 +687,16 @@ struct UnifiedSearchView: View {
         }
         .task(id: strongsRequest) {
             // A rendering or chapter chosen for the last key means nothing
-            // for this one.
-            strongsFilter = nil
+            // for this one — but this task also restarts when the reader
+            // comes back to a tab, because the request is built from that
+            // tab's own key, module and books. Returning to an analysis is
+            // not a different analysis, so the filter is cleared only when
+            // the request really did change for this tab.
+            if tabViewState[tabs.selectedID]?.strongsFilterRequest != strongsRequest {
+                strongsFilter = nil
+                tabViewState[tabs.selectedID, default: TabViewState()]
+                    .strongsFilterRequest = strongsRequest
+            }
             // A key is typed a character at a time, and "G", "G2", "G26"
             // would each start reading whole translations — about a tenth of
             // a second each, per translation. Waiting for a pause means one

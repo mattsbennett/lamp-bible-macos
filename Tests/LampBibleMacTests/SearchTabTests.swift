@@ -15,6 +15,37 @@ struct SearchTabTests {
         return defaults
     }
 
+    /// Every field set to something of its own, so a field dropped on the
+    /// way to disk or into a copy fails rather than passing unnoticed. A
+    /// Codex review pointed out that the first round trip set three.
+    private func fullyFilledTab(name: String? = "Named") -> SearchTab {
+        SearchTab(
+            name: name,
+            query: "grace",
+            kind: .commentary,
+            moduleID: "nic",
+            bookScopeRawValue: "New Testament",
+            strongsKey: "G5485",
+            highlightColor: "#ffcc00",
+            devotionalDate: "12-25",
+            devotionalTag: "advent",
+            devotionalCategory: "writing"
+        )
+    }
+
+    private func expectSameSearch(_ a: SearchTab, _ b: SearchTab, _ note: String) {
+        #expect(a.name == b.name, "name: \(note)")
+        #expect(a.query == b.query, "query: \(note)")
+        #expect(a.kind == b.kind, "kind: \(note)")
+        #expect(a.moduleID == b.moduleID, "moduleID: \(note)")
+        #expect(a.bookScopeRawValue == b.bookScopeRawValue, "bookScope: \(note)")
+        #expect(a.strongsKey == b.strongsKey, "strongsKey: \(note)")
+        #expect(a.highlightColor == b.highlightColor, "highlightColor: \(note)")
+        #expect(a.devotionalDate == b.devotionalDate, "devotionalDate: \(note)")
+        #expect(a.devotionalTag == b.devotionalTag, "devotionalTag: \(note)")
+        #expect(a.devotionalCategory == b.devotionalCategory, "devotionalCategory: \(note)")
+    }
+
     @Test func aCollectionAlwaysHasATabAndASelectionThatNamesOne() {
         #expect(SearchTabCollection().tabs.count == 1)
 
@@ -70,18 +101,13 @@ struct SearchTabTests {
     }
 
     @Test func aDuplicateIsItsOwnTabWithTheSameSearch() {
-        var tabs = SearchTabCollection(tabs: [
-            SearchTab(name: "Mine", query: "faith", kind: .commentary, strongsKey: "G4102"),
-        ])
+        var tabs = SearchTabCollection(tabs: [fullyFilledTab(name: "Mine")])
         let original = tabs.tabs[0]
         tabs.duplicate(original.id)
         #expect(tabs.tabs.count == 2)
         let copy = tabs.selected
         #expect(copy.id != original.id)
-        #expect(copy.query == "faith")
-        #expect(copy.kind == .commentary)
-        #expect(copy.strongsKey == "G4102")
-        #expect(copy.name == "Mine")
+        expectSameSearch(copy, fullyFilledTab(name: "Mine"), "in a duplicate")
     }
 
     @Test func aBlankNameIsNoName() {
@@ -96,10 +122,7 @@ struct SearchTabTests {
     @Test func tabsComeBackForTheSameWindow() {
         let store = defaults()
         let session = UUID()
-        var saved = SearchTabCollection(tabs: [
-            SearchTab(query: "grace", kind: .commentary),
-            SearchTab(query: "faith", bookScopeRawValue: "New Testament"),
-        ])
+        var saved = SearchTabCollection(tabs: [SearchTab(query: "first"), fullyFilledTab()])
         saved.select(saved.tabs[1].id)
         SearchTabSessionStore.save(saved, session: session, defaults: store)
 
@@ -107,9 +130,8 @@ struct SearchTabTests {
             session: session, resumingLastSession: false, defaults: store
         )
         #expect(loaded == saved)
-        #expect(loaded.selected.query == "faith")
-        #expect(loaded.tabs[0].kind == .commentary)
-        #expect(loaded.selected.bookScopeRawValue == "New Testament")
+        #expect(loaded.selectedID == saved.selectedID)
+        expectSameSearch(loaded.selected, fullyFilledTab(), "after a round trip to disk")
     }
 
     @Test func aWindowResumingTakesTheLastTabsAndASecondWindowStartsFresh() {
@@ -192,5 +214,41 @@ struct SearchTabTests {
         #expect(!SearchTab(strongsKey: "G5485").isEmpty)
         #expect(!SearchTab(highlightColor: "#ffcc00").isEmpty)
         #expect(!SearchTab(devotionalTag: "advent").isEmpty)
+    }
+
+    /// A search asked for from the reader — ⌘L, a word looked up, a key
+    /// followed — is shown without taking over a search in progress. These
+    /// used to be written to the scene storage the pane has stopped reading,
+    /// so every one of them was silently dropped until a Codex review found
+    /// it.
+    @Test func aSearchAskedForElsewhereReusesAnEmptyTabAndOtherwiseOpensOne() {
+        var tabs = SearchTabCollection()
+        let empty = tabs.selectedID
+        tabs.show(SearchTab(query: "grace"))
+        #expect(tabs.tabs.count == 1, "an empty tab is the one worth reusing")
+        #expect(tabs.selectedID == empty, "a reused tab is still that tab")
+        #expect(tabs.selected.query == "grace")
+
+        // Now it holds a search, so the next one gets a tab of its own.
+        tabs.show(SearchTab(query: "faith", kind: .translation, strongsKey: "G4102"))
+        #expect(tabs.tabs.count == 2)
+        #expect(tabs.selected.query == "faith")
+        #expect(tabs.selected.strongsKey == "G4102")
+        #expect(tabs.selected.kind == .translation)
+        // And the search it was opened from is untouched.
+        #expect(tabs.tabs[0].query == "grace")
+    }
+
+    @Test func aReusedTabKeepsItsNameAndLosesTheFiltersItHadNone() {
+        var tabs = SearchTabCollection(tabs: [SearchTab(name: "Kept", kind: .commentary)])
+        let id = tabs.selectedID
+        // A kind alone is not a search, so this tab is still the empty one.
+        tabs.show(SearchTab(query: "grace", kind: .translation))
+        #expect(tabs.tabs.count == 1)
+        #expect(tabs.selectedID == id)
+        #expect(tabs.selected.name == "Kept")
+        #expect(tabs.selected.query == "grace")
+        // The kind came with the search, replacing the one that was set.
+        #expect(tabs.selected.kind == .translation)
     }
 }
