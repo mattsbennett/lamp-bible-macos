@@ -82,6 +82,7 @@ struct CommandPaletteView: View {
     @State private var libraryResults: [CommandPaletteItem] = []
     @State private var libraryResultsQuery = ""
     @FocusState private var isFieldFocused: Bool
+    @Environment(\.controlActiveState) private var activeState
     /// Where the pointer was when the palette opened or the keys last moved
     /// the choice. A row the pointer merely rests on — the palette opened
     /// under it, or the list scrolled beneath it — does not take the choice;
@@ -163,9 +164,11 @@ struct CommandPaletteView: View {
         .task { isFieldFocused = true }
         // And asked again if the field loses it while the palette is open,
         // as a click on a row or the panel would take it: there is nothing
-        // else in the palette to type into.
+        // else in the palette to type into. Not while the app is in the
+        // background, where the field may be unable to take it, and asking
+        // in a loop is not asking once.
         .onChange(of: isFieldFocused) { _, focused in
-            if !focused { isFieldFocused = true }
+            if !focused, activeState != .inactive { isFieldFocused = true }
         }
         .onAppear { restingPointer = NSEvent.mouseLocation }
         .task(id: trimmed) {
@@ -369,8 +372,8 @@ struct CommandPaletteView: View {
     }
 }
 
-/// Escape closes the palette wherever focus is in its window, not only from
-/// the field, which may never have taken the keyboard.
+/// Escape, or ⌘., closes the palette wherever focus is in its window, not
+/// only from the field, which may never have taken the keyboard.
 ///
 /// A key monitor rather than a cancel-action key equivalent, because a
 /// monitor can pass the key on: while an input method is composing (the
@@ -390,7 +393,9 @@ private struct CommandPaletteEscape: NSViewRepresentable {
             stop()
             guard window != nil else { return }
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                guard let self, event.keyCode == 53, event.window === self.window else { return event }
+                let isCancel = event.keyCode == 53
+                    || (event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == ".")
+                guard let self, isCancel, event.window === self.window else { return event }
                 if let editor = event.window?.firstResponder as? NSTextView, editor.hasMarkedText() {
                     return event
                 }
