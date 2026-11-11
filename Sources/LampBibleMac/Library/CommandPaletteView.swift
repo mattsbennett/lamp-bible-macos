@@ -155,8 +155,6 @@ struct CommandPaletteView: View {
         return (shown + library.rows + searchRows, library.showsAll)
     }
 
-    private var rows: [CommandPaletteItem] { layout.rows }
-
     /// The library's matches on the main page, a section a kind under its
     /// name: one of every kind that matched, then more of each in turn while
     /// the list has room. A kind with more than it shows offers "Show All".
