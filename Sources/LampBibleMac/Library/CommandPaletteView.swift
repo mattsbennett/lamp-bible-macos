@@ -109,7 +109,7 @@ struct CommandPaletteView: View {
     @State private var libraryGroups: [CommandPaletteLibraryGroup] = []
     /// What `libraryGroups` answer: the words, and the page they were for.
     @State private var libraryGroupsKey = LibraryKey(words: "", level: nil)
-    /// One kind's page of matches, entered from "More in …"; nil for all.
+    /// One kind's page of matches, entered by Tab or "Show All"; nil for all.
     @State private var level: CommandPaletteLibraryLevel?
     /// Where the pointer was when the palette opened or the keys last moved
     /// the choice. A row the pointer merely rests on — the palette opened
@@ -269,7 +269,13 @@ struct CommandPaletteView: View {
 
     private var emptyMessage: String {
         if let level {
-            return trimmed.count < 2 ? "Type to search \(level.title)." : "No \(level.title) match “\(trimmed)”."
+            if trimmed.count < 2 { return "Type to search \(level.title)." }
+            // Not "no matches" before the page's own search has answered:
+            // entered from a match of this kind, that would be untrue.
+            guard libraryGroupsKey == LibraryKey(words: trimmed, level: level) else {
+                return "Searching \(level.title)…"
+            }
+            return "No \(level.title) match “\(trimmed)”."
         }
         return trimmed.isEmpty ? "Type to go anywhere in Lamp." : "Nothing matches “\(trimmed)”."
     }
@@ -547,8 +553,8 @@ private struct CommandPaletteField: NSViewRepresentable {
     let placeholder: String
     let onMove: (Int) -> Void
     /// Each says whether the palette closed, so the field stops taking the
-    /// keyboard back only then: Escape out of a kind's page, or Return on
-    /// "More in …", leaves it open, and the field must keep the keyboard.
+    /// keyboard back only then: Escape out of a kind's page leaves it open,
+    /// and the field must keep the keyboard.
     let onSubmit: () -> Bool
     let onCancel: () -> Bool
     /// Tab, always kept here: it would otherwise take the keyboard away.

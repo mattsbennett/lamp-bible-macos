@@ -619,6 +619,19 @@ final class LibraryModel: ObservableObject {
         isModuleSearching = false
     }
 
+    /// The modules a search may look in: all of them (nil) unless some are
+    /// hidden, then every module but those, and the reader's own notes,
+    /// writing and highlights. Given to core rather than filtered from its
+    /// answer, so a hidden module's matches never take a place a shared page
+    /// gives out.
+    func searchableModuleIDs() async throws -> Set<String>? {
+        guard !hiddenModuleIDs.isEmpty else { return nil }
+        let personalSetIDs = Set((try await library.highlightSets()).map(\.id))
+        return Set(modules.filter { !hiddenModuleIDs.contains($0.id) }.map(\.id))
+            .union(["personal-notes", "personal-devotionals"])
+            .union(personalSetIDs)
+    }
+
     func searchModules(
         _ query: String,
         kind: LampModuleKind? = nil,
@@ -648,15 +661,8 @@ final class LibraryModel: ObservableObject {
                 let includedModuleIDs: Set<String>?
                 if let moduleID {
                     includedModuleIDs = [moduleID]
-                } else if hiddenModuleIDs.isEmpty {
-                    includedModuleIDs = nil
                 } else {
-                    let personalSetIDs = Set((try await library.highlightSets()).map(\.id))
-                    includedModuleIDs = Set(modules.filter {
-                        !hiddenModuleIDs.contains($0.id)
-                    }.map(\.id))
-                        .union(["personal-notes", "personal-devotionals"])
-                        .union(personalSetIDs)
+                    includedModuleIDs = try await searchableModuleIDs()
                 }
                 // Across every kind, a page shared among the kinds that
                 // matched, each kind's best, a dozen or so each: one merged

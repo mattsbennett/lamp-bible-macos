@@ -676,6 +676,13 @@ struct UnifiedSearchView: View {
             && resultGroups.first { $0.kind == group.kind }?.id == group.id
     }
 
+    /// Whether a group is its kind's only shelf. Scripture has one per
+    /// translation, and a "+" on one of several would claim the more were
+    /// that translation's; with one, they are.
+    private func isOnlyShelf(of group: SearchResultGroup) -> Bool {
+        resultGroups.filter { $0.kind == group.kind }.count == 1
+    }
+
     private func resultGroupHeader(_ group: SearchResultGroup, offersMore: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Image(systemName: icon(for: group.kind))
@@ -689,7 +696,7 @@ struct UnifiedSearchView: View {
                 .font(.subheadline.weight(.semibold))
             // The count in words and in the readable grey, not tracked into
             // the heading's capitals where "SCRIPTURE 19" read as one label.
-            Text(resultCountDescription(group, isCut: offersMore && group.kind != .translation))
+            Text(resultCountDescription(group, isCut: offersMore && isOnlyShelf(of: group)))
                 .font(.subheadline)
                 .foregroundStyle(Color.lampSecondaryText)
                 .monospacedDigit()

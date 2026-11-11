@@ -7172,7 +7172,6 @@ extension LibraryRootView {
     fileprivate func paletteLibraryResults(
         _ words: String, level: CommandPaletteLibraryLevel?
     ) async -> [CommandPaletteLibraryGroup] {
-        let hidden = model.hiddenModuleIDs
         // A module's short name where it has one: "NIC", not its full title.
         let abbreviations = Dictionary(
             model.modules.compactMap { module in module.abbreviation.map { (module.id, $0) } },
@@ -7182,20 +7181,24 @@ extension LibraryRootView {
         let kinds: Set<LampModuleKind>? = kind.map { [$0] }
         // The main page is shared among the kinds that matched, a few each,
         // and the palette shows what fits; a kind's page is all one kind's.
+        // Hidden modules are left out of the search itself, as Search leaves
+        // them: filtered afterwards, their matches had already taken places.
+        // Nil is every module: nothing is hidden.
+        let searchable: Set<String>?
+        do { searchable = try await model.searchableModuleIDs() } catch { return [] }
         let groups = (try? await model.library.searchModulesByKind(
-            query: words, kinds: kinds, limit: kind == nil ? Self.paletteMainPage : Self.paletteKindPage
+            query: words, kinds: kinds, moduleIDs: searchable,
+            limit: kind == nil ? Self.paletteMainPage : Self.paletteKindPage
         )) ?? []
         // Sections in the order Search shelves them, which both apps follow.
         let shelved = groups.sorted {
             (LampModuleSearch.shelfOrder.firstIndex(of: $0.kind) ?? .max)
                 < (LampModuleSearch.shelfOrder.firstIndex(of: $1.kind) ?? .max)
         }
-        return shelved.compactMap { group in
-            let visible = group.results.filter { !hidden.contains($0.moduleID) }
-            guard !visible.isEmpty else { return nil }
-            return CommandPaletteLibraryGroup(
+        return shelved.map { group in
+            CommandPaletteLibraryGroup(
                 level: CommandPaletteLibraryLevel(id: group.kind.rawValue, title: group.kind.displayName),
-                items: visible.map { result in
+                items: group.results.map { result in
                     let opensPlace = result.startReference != nil
                         && ![.devotional, .plan, .quiz, .book, .dictionary].contains(result.kind)
                     return CommandPaletteItem(
@@ -7209,8 +7212,6 @@ extension LibraryRootView {
                         perform: { placement in go(to: .searchResult(result, placement: placement)) }
                     )
                 },
-                // A hidden module's matches dropped here may have been all
-                // the more there was; say so only when core found more.
                 hasMore: group.hasMore
             )
         }
