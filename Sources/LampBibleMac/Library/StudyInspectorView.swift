@@ -647,6 +647,11 @@ private struct PersonalNoteEditor: View {
     @State private var savedContent = ""
     @State private var rangeEndVerse = 0
     @State private var savedRangeEndVerse = 0
+    /// The note's media, as the JSON it is stored as. Kept whole rather
+    /// than decoded and rebuilt, so a field a newer Lamp wrote survives a
+    /// save here (`LampVerseNote.mediaJSON`).
+    @State private var mediaJSON: String?
+    @State private var isAttaching = false
     @State private var personalFootnotes: [NoteFootnoteDraft] = []
     @State private var savedFootnotes: [NoteFootnoteDraft] = []
     @State private var isLoading = false
@@ -868,6 +873,7 @@ private struct PersonalNoteEditor: View {
                 .map { LampBibleReferenceFormatter.components(of: $0).verse }
                 .max() ?? verseNumber
             personalFootnotes = note?.footnotes.map(NoteFootnoteDraft.init) ?? []
+            mediaJSON = note?.mediaJSON
             savedTitle = title
             savedContent = content
             savedRangeEndVerse = rangeEndVerse
@@ -911,7 +917,8 @@ private struct PersonalNoteEditor: View {
                     title: submittedTitle,
                     content: submittedContent,
                     verseReferences: submittedReferences,
-                    footnotes: submittedFootnotes
+                    footnotes: submittedFootnotes,
+                    mediaJSON: mediaJSON
                 )
                 if model.selectedVerseReference == reference {
                     savedTitle = submittedTitle
@@ -976,6 +983,10 @@ private struct PersonalNoteEditor: View {
                         editorCoordinator?.removeLink()
                     }
                 }
+                noteFormatButton("Attach Image", systemImage: "photo", isActive: false) {
+                    attachImage()
+                }
+                .disabled(isAttaching)
                 Spacer()
             }
             .disabled(!editorIsReady)
@@ -988,11 +999,12 @@ private struct PersonalNoteEditor: View {
             TipTapEditorView(
                 markdownContent: $content,
                 fontSize: NoteEditorMetrics.fontSize,
-                // Notes carry no media of their own, so this scope resolves to no
-                // media folder and relative links stay note-local.
-                mediaScopeID: "note-\(reference)",
+                // A note's own media folder, named for the verse — one
+                // personal note per verse, and its id holds a colon.
+                mediaScopeID: LampLibrary.noteMediaOwnerID(reference),
                 libraryRootURL: model.library.rootURL,
                 isVisible: true,
+                mediaReferences: noteMediaReferences,
                 compactLayout: true,
                 placeholder: "Add your notes...",
                 lineBreaks: true,
@@ -1024,6 +1036,68 @@ private struct PersonalNoteEditor: View {
             editorIsReady = false
             editorIsFocused = false
             editorSelection = TipTapSelectionState()
+        }
+    }
+
+    /// The note's media, decoded for the editor. A reference it cannot read
+    /// is left out rather than failing the lot: one bad entry should cost
+    /// its own picture, not the note.
+    private var noteMediaReferences: [LampMediaReference] {
+        guard let mediaJSON, let data = mediaJSON.data(using: .utf8) else { return [] }
+        return (try? JSONDecoder().decode([LampMediaReference].self, from: data)) ?? []
+    }
+
+    /// Puts a picture in the note: copied into the note's own media folder,
+    /// recorded in its media list, and linked where the cursor is.
+    ///
+    /// The same shape as a writing's attach, through the same editor — which
+    /// is why this is short. What notes lacked was a folder to keep the file
+    /// in and a list to record it in, not the means to show it.
+    private func attachImage() {
+        let panel = NSOpenPanel()
+        panel.title = "Attach Image"
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.image]
+        guard panel.runModal() == .OK, let sourceURL = panel.url else { return }
+        isAttaching = true
+        Task {
+            defer { isAttaching = false }
+            do {
+                let stored = try await model.library.storePersonalMedia(
+                    from: sourceURL,
+                    scope: .note,
+                    ownerID: LampLibrary.noteMediaOwnerID(reference)
+                )
+                let label = sourceURL.deletingPathExtension().lastPathComponent
+                let dimensions: (width: Int, height: Int)?
+                if let image = NSImage(contentsOf: stored),
+                   let bitmap = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+                    dimensions = (bitmap.width, bitmap.height)
+                } else {
+                    dimensions = nil
+                }
+                let media = LampMediaReference(
+                    type: .image,
+                    filename: stored.lastPathComponent,
+                    mimeType: UTType(filenameExtension: stored.pathExtension)?.preferredMIMEType
+                        ?? "application/octet-stream",
+                    size: try? stored.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+                    width: dimensions?.width,
+                    height: dimensions?.height,
+                    alt: label
+                )
+                mediaJSON = try LampPortableDevotionalMedia.appending(media, to: mediaJSON)
+                editorCoordinator?.updateRichMediaIDs(Set(noteMediaReferences.map(\.id)))
+                editorCoordinator?.insertImage(
+                    mediaID: media.id, caption: label, localURL: stored
+                )
+                // Saved with the note, so a picture attached and left alone
+                // is still there on the next read.
+                isDirty = true
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 

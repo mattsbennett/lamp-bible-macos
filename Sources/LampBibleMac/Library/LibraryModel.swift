@@ -806,19 +806,23 @@ final class LibraryModel: ObservableObject {
             .first { $0.moduleID == "personal-notes" }
     }
 
+    /// `mediaJSON` nil leaves the note's media as it is, so a caller that
+    /// only edits text cannot take the pictures off it.
     func savePersonalNote(
         reference: Int,
         title: String?,
         content: String,
         verseReferences: [Int],
-        footnotes: [LampVerseFootnote]
+        footnotes: [LampVerseFootnote],
+        mediaJSON: String? = nil
     ) async throws {
         let note = try await library.setPersonalVerseNote(
             reference: reference,
             title: title,
             content: content,
             verseReferences: verseReferences,
-            footnotes: footnotes
+            footnotes: footnotes,
+            mediaJSON: mediaJSON
         )
         if note == nil {
             noteReferences.remove(reference)
