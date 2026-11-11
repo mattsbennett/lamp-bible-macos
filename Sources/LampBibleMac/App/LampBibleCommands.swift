@@ -153,13 +153,19 @@ struct LampBibleCommands: Commands {
         CommandGroup(after: .sidebar) {
             // Never disabled: the focused value can be missing while the
             // window has nothing focused in it, which left ⌘K dead exactly
-            // when it is wanted. Then a library window is named and asked.
+            // when it is wanted. Then a library window is named and asked,
+            // and raised, since the palette lives in it: from Settings, ⌘K
+            // brings the library forward with the palette open. With no
+            // library window at all, it opens one, and the palette with it.
             Button("Go to Anything…") {
                 if let commandPalette {
                     commandPalette()
                 } else if let window = CommandPaletteWindows.target() {
                     window.makeKeyAndOrderFront(nil)
                     NotificationCenter.default.post(name: .lampToggleCommandPalette, object: window)
+                } else {
+                    CommandPaletteWindows.opensPaletteInNextWindow = true
+                    openWindow(id: "reader")
                 }
             }
                 .keyboardShortcut("k", modifiers: .command)
