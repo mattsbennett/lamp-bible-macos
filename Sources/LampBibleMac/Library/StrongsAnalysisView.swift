@@ -538,6 +538,9 @@ struct StrongsAnalysisPane: View {
     /// keys, so someone reading one lexicon keeps reading it as they follow
     /// a companion.
     @State private var definitionDictionaryID: String?
+    /// The standout book's name as drawn, so the canon strip can place it
+    /// by its real width rather than a guess at one.
+    @State private var standoutLabelSize: CGSize = .zero
     @State private var spreadGrouping: LampStrongsSpreadGrouping = .books
     @State private var measure: LampStrongsSpreadMeasure = .occurrences
     @State private var openBook: Int?
@@ -964,6 +967,13 @@ struct StrongsAnalysisPane: View {
     private static let stripHeight: Double = 54
     private static let stripLabelBand: Double = 16
 
+    /// One column's drawn height. Used by the bars and by the standout
+    /// name's placement, so the name clears the bar that is actually there:
+    /// the phone's two disagreed (6 against 4) until they were shared.
+    private static func columnHeight(_ occurrences: Int, of most: Int) -> Double {
+        occurrences == 0 ? 2 : max(5, stripHeight * Double(occurrences) / Double(most))
+    }
+
     /// The key's spread through the canon at a glance: a column for each book
     /// in order, shaded as the Spread's bars are, over the canon's divisions,
     /// with the tallest column's count as the scale and the book that stands
@@ -1008,9 +1018,9 @@ struct StrongsAnalysisPane: View {
                                         .fill(isEmpty
                                             ? AnyShapeStyle(Color.primary.opacity(0.12))
                                             : fill(for: book.expectation))
-                                        .frame(height: isEmpty
-                                            ? 2
-                                            : max(5, Self.stripHeight * Double(book.occurrenceCount) / Double(most)))
+                                        .frame(height: Self.columnHeight(
+                                            book.occurrenceCount, of: most
+                                        ))
                                 }
                                 .frame(maxWidth: .infinity)
                                 .frame(height: Self.stripHeight)
@@ -1024,17 +1034,42 @@ struct StrongsAnalysisPane: View {
                     }
                     .frame(height: Self.stripHeight + Self.stripLabelBand, alignment: .bottom)
                     if let standout {
-                        let centre = (column + gap) * Double(standout.offset) + column / 2
-                        let top = Self.stripLabelBand + Self.stripHeight
-                            - max(5, Self.stripHeight * Double(standout.element.occurrenceCount) / Double(most))
+                        // Placed clear of every column it stands over, not
+                        // just its own. The name is usually wider than one
+                        // column, so centring it over the standout ran it
+                        // through a taller neighbour — ἔθνος G1484 in the
+                        // ESV, where "Romans" crossed Acts' bar. The rule is
+                        // core's, shared with the phone, which found it.
+                        let placed = LampStrongsCanonStripLabel.place(
+                            labelWidth: standoutLabelSize.width,
+                            over: standout.offset,
+                            heights: books.map { Self.columnHeight($0.occurrenceCount, of: most) },
+                            column: column,
+                            spacing: gap,
+                            in: proxy.size.width
+                        )
+                        let columnTop = Self.stripLabelBand + Self.stripHeight - placed.clearing
                         Text(standout.element.name)
                             .font(.system(size: Self.chartFinePrintSize, weight: .bold))
                             .foregroundStyle(.tint)
                             .fixedSize()
+                            // Measured rather than guessed: the old clamp
+                            // held the centre 40pt from each edge, which
+                            // assumed no name wider than 80pt and pushed
+                            // "1 Thessalonians" off the chart.
+                            .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
+                                standoutLabelSize = size
+                            }
                             .position(
-                                x: min(max(centre, 40), proxy.size.width - 40),
-                                y: max(top - 8, 6)
+                                x: placed.x,
+                                y: max(columnTop - 2 - standoutLabelSize.height / 2,
+                                       standoutLabelSize.height / 2)
                             )
+                            // Shown once it has been measured. The first
+                            // layout pass has no size yet, so the name would
+                            // otherwise be drawn at a guess and jump when the
+                            // measurement arrived.
+                            .opacity(standoutLabelSize == .zero ? 0 : 1)
                             .allowsHitTesting(false)
                     }
                 }
