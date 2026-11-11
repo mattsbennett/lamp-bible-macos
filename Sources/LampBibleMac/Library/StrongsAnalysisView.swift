@@ -538,9 +538,14 @@ struct StrongsAnalysisPane: View {
     /// keys, so someone reading one lexicon keeps reading it as they follow
     /// a companion.
     @State private var definitionDictionaryID: String?
-    /// The standout book's name as drawn, so the canon strip can place it
-    /// by its real width rather than a guess at one.
-    @State private var standoutLabelSize: CGSize = .zero
+    /// The standout book's name as drawn, and which name was measured.
+    ///
+    /// The name is kept with the size because a measurement outlives the
+    /// name it was taken for: follow a key whose standout book is called
+    /// something else and the new name would be placed by the old one's
+    /// width until the next measurement arrived (macos-9d's point). Held
+    /// together, a size for another name is simply not used.
+    @State private var standoutLabel: (name: String, size: CGSize)?
     @State private var spreadGrouping: LampStrongsSpreadGrouping = .books
     @State private var measure: LampStrongsSpreadMeasure = .occurrences
     @State private var openBook: Int?
@@ -1040,8 +1045,12 @@ struct StrongsAnalysisPane: View {
                         // through a taller neighbour — ἔθνος G1484 in the
                         // ESV, where "Romans" crossed Acts' bar. The rule is
                         // core's, shared with the phone, which found it.
+                        // Only a measurement of this very name counts.
+                        let measured = standoutLabel?.name == standout.element.name
+                            ? standoutLabel?.size
+                            : nil
                         let placed = LampStrongsCanonStripLabel.place(
-                            labelWidth: standoutLabelSize.width,
+                            labelWidth: Double(measured?.width ?? 0),
                             over: standout.offset,
                             heights: books.map { Self.columnHeight($0.occurrenceCount, of: most) },
                             column: column,
@@ -1058,18 +1067,18 @@ struct StrongsAnalysisPane: View {
                             // assumed no name wider than 80pt and pushed
                             // "1 Thessalonians" off the chart.
                             .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
-                                standoutLabelSize = size
+                                standoutLabel = (standout.element.name, size)
                             }
                             .position(
                                 x: placed.x,
-                                y: max(columnTop - 2 - standoutLabelSize.height / 2,
-                                       standoutLabelSize.height / 2)
+                                y: max(columnTop - 2 - (measured?.height ?? 0) / 2,
+                                       (measured?.height ?? 0) / 2)
                             )
-                            // Shown once it has been measured. The first
-                            // layout pass has no size yet, so the name would
-                            // otherwise be drawn at a guess and jump when the
-                            // measurement arrived.
-                            .opacity(standoutLabelSize == .zero ? 0 : 1)
+                            // Shown once this name has been measured, so it
+                            // is never drawn at a guess and then moved —
+                            // neither on the first draw nor on the first
+                            // draw of a different book's name.
+                            .opacity(measured == nil ? 0 : 1)
                             .allowsHitTesting(false)
                     }
                 }
