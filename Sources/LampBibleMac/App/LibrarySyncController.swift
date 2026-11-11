@@ -1016,6 +1016,16 @@ extension LibrarySyncController {
         )
         candidates += media.candidates
 
+        // A note's pictures, for the notes that have any.
+        let notesWithMedia = try await library.personalNotesWithMedia()
+        let notePictures = LampSyncLocalFiles.noteMedia(
+            for: notesWithMedia,
+            remoteModuleID: LampSyncMacPassLibrary.remoteNotesModuleID,
+            inLibraryAt: library.rootURL,
+            fileManager: fileManager
+        )
+        candidates += notePictures.candidates
+
         // A book's pictures, for the books in the library and any the
         // manifest already names — the gate that keeps a picture belonging to
         // something else from going up as a book's.

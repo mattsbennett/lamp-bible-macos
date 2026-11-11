@@ -292,8 +292,9 @@ struct LampSyncLocalWorkTests {
             // writings or highlights module also lives in the user database,
             // and the personal ledger answers for that.
             return ["Modules", "Databases"]
-        case .devotionalMedia, .bookMedia:
-            // A writing's attachments are saved with the writing and a book's
+        case .devotionalMedia, .noteMedia, .bookMedia:
+            // A writing's and a note's attachments are saved with what holds
+            // them, and a book's
             // pictures arrive with the book, so each is already answered for
             // — by the personal ledger, or by the module folders above.
             return []

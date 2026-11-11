@@ -116,6 +116,7 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             _ = try await library.importPersonalStudyData(
                 from: try named(url, as: path), forSync: true
             )
+            try await downloadNoteMedia(remotePath: path)
             return try await digestOfOwnExport(
                 .notes, adapterKind: .notes,
                 remoteModuleID: Self.remoteNotesModuleID, filename: "notes.lamp"
@@ -158,11 +159,33 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             // so what arrives is gathered and taken in by `finishInstalling`.
             try stageWorkspaceFile(from: url, remotePath: path)
             return nil
-        case .devotionalMedia:
-            // Installed by the step that knows where a writing's attachments
-            // belong. Reported rather than ignored, so nothing goes missing
-            // quietly.
+        case .devotionalMedia, .noteMedia:
+            // Installed by the step that knows where a writing's or a note's
+            // attachments belong. Reported rather than ignored, so nothing
+            // goes missing quietly.
             throw PassError.unsupported(path)
+        }
+    }
+
+    /// Notes arrive with their attachments, as writings do.
+    ///
+    /// Every note the library now holds is asked for, not only the ones in
+    /// the file that arrived: the download skips what is already on disk, so
+    /// asking widely costs a directory check per file and catches a note
+    /// whose picture failed to arrive on an earlier pass.
+    private func downloadNoteMedia(remotePath: String) async throws {
+        let moduleID = LampSyncFolderLayout.remoteModuleID(of: remotePath)
+            ?? Self.remoteNotesModuleID
+        let owners = try await library.personalNotesWithMedia().map {
+            LampSyncDevotionalMedia.Owner(
+                id: LampLibrary.noteMediaOwnerID($0.reference), mediaJSON: $0.mediaJSON
+            )
+        }
+        guard !owners.isEmpty else { return }
+        try await LampSyncDevotionalMedia.downloadToLibrary(
+            scope: .note, owners: owners, from: moduleID, into: library.rootURL
+        ) { path in
+            try await readRemote(path)
         }
     }
 

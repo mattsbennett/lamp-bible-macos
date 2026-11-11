@@ -76,6 +76,46 @@ extension LampSyncLocalFiles {
     ///
     /// Collected one writing at a time so a single bad one cannot hide the
     /// attachments of the rest.
+    /// The pictures the reader's notes hold, to publish.
+    ///
+    /// One note at a time, as writings are, so a single note referring to a
+    /// file the library has lost cannot hide every other note's pictures.
+    public static func noteMedia(
+        for notes: [LampVerseNote],
+        remoteModuleID: String,
+        inLibraryAt libraryRoot: URL,
+        fileManager: FileManager = .default
+    ) -> (candidates: [Candidate], missing: [Unreadable]) {
+        var candidates: [Candidate] = []
+        var missing: [Unreadable] = []
+        for note in notes {
+            let owner = LampSyncDevotionalMedia.Owner(
+                id: LampLibrary.noteMediaOwnerID(note.reference), mediaJSON: note.mediaJSON
+            )
+            do {
+                candidates.append(contentsOf: try LampSyncDevotionalMedia.outgoingFileURLs(
+                    scope: .note, owners: [owner], to: remoteModuleID,
+                    from: libraryRoot, fileManager: fileManager
+                ).map {
+                    Candidate(path: $0.remotePath, kind: .noteMedia, url: $0.localURL)
+                })
+            } catch LampSyncDevotionalMedia.UploadError.invalidLocalFile(let path) {
+                missing.append(Unreadable(
+                    path: path,
+                    reason: "A note on "
+                        + LampPersonalMarkdownWriter.noteHeading(reference: note.reference)
+                        + " refers to a file the library does not hold"
+                ))
+            } catch {
+                missing.append(Unreadable(
+                    path: LampSyncFolderLayout.noteMediaDirectory + "/" + owner.id,
+                    reason: error.localizedDescription
+                ))
+            }
+        }
+        return (candidates, missing)
+    }
+
     public static func devotionalMedia(
         for devotionals: [LampDevotional],
         remoteModuleID: String,
