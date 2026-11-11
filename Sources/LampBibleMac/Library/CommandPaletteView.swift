@@ -375,8 +375,10 @@ private struct CommandPaletteField: NSViewRepresentable {
         /// take the keyboard back.
         var isLeaving = false
         /// What had the keyboard before the palette, given back when it
-        /// closes: a window left with nothing focused has no focused values,
-        /// and menu commands gated on them (⌘L) go grey.
+        /// closes, so the reader's text (arrow-key scrolling, selection)
+        /// answers keys again without a click. Menu commands were measured
+        /// to stay enabled with nothing focused, so this is about the
+        /// keyboard, not the menus.
         private weak var previousResponder: NSResponder?
 
         override func viewWillMove(toWindow newWindow: NSWindow?) {
