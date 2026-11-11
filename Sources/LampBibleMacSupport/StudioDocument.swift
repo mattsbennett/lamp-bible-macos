@@ -61,7 +61,11 @@ public enum StudioDocumentLoader {
 
     public static func inspect(data: Data, sourceURL: URL) -> StudioDocument {
         do {
-            let inspection = try ModuleJSONInspector().inspect(data)
+            // With the filename, so a module that declares no ID — a
+            // commentary volume usually declares none — is checked under
+            // the ID it will actually be built with, which is this file's.
+            let inspection = try ModuleJSONInspector()
+                .inspect(data, sourceFilename: sourceURL.lastPathComponent)
             return StudioDocument(sourceURL: sourceURL, inspection: inspection, failureMessage: nil)
         } catch {
             return StudioDocument(
