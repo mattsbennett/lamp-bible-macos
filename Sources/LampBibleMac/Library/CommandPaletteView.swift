@@ -152,8 +152,19 @@ struct CommandPaletteView: View {
             RoundedRectangle(cornerRadius: LampMetrics.cardRadius, style: .continuous)
                 .strokeBorder(Color.lampCardStroke)
         }
+        // Escape closes the palette wherever focus is, not only from the
+        // field: a key equivalent reaches it before any responder does.
+        .background {
+            Button("Close", action: close)
+                .keyboardShortcut(.cancelAction)
+                .hidden()
+        }
         .onAppear {
-            isFieldFocused = true
+            // A turn later: when the palette first appears it is not yet in
+            // the window's focus system, so asking now is ignored and the
+            // reader's text keeps the keyboard. Typing and Escape then went
+            // nowhere.
+            DispatchQueue.main.async { isFieldFocused = true }
             restingPointer = NSEvent.mouseLocation
         }
         .task(id: trimmed) {
@@ -202,10 +213,6 @@ struct CommandPaletteView: View {
                 }
                 .onKeyPress(.upArrow) {
                     move(by: -1, in: rows)
-                    return .handled
-                }
-                .onKeyPress(.escape) {
-                    close()
                     return .handled
                 }
         }
