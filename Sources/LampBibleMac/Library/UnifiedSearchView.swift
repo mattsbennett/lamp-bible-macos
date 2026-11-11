@@ -635,7 +635,7 @@ struct UnifiedSearchView: View {
                                         .id(result.id)
                                 }
                             } header: {
-                                resultGroupHeader(group)
+                                resultGroupHeader(group, offersMore: offersMore(group))
                             }
                         }
                     }
@@ -668,7 +668,15 @@ struct UnifiedSearchView: View {
         }
     }
 
-    private func resultGroupHeader(_ group: SearchResultGroup) -> some View {
+    /// Whether a group's header offers "More in …": its kind found more than
+    /// the search across every kind kept, and it is that kind's first shelf
+    /// (Scripture has one per translation; the offer is the kind's).
+    private func offersMore(_ group: SearchResultGroup) -> Bool {
+        model.moduleSearchKindsWithMore.contains(group.kind)
+            && resultGroups.first { $0.kind == group.kind }?.id == group.id
+    }
+
+    private func resultGroupHeader(_ group: SearchResultGroup, offersMore: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Image(systemName: icon(for: group.kind))
                 .foregroundStyle(.tint)
@@ -681,11 +689,27 @@ struct UnifiedSearchView: View {
                 .font(.subheadline.weight(.semibold))
             // The count in words and in the readable grey, not tracked into
             // the heading's capitals where "SCRIPTURE 19" read as one label.
-            Text(resultCountDescription(group))
+            Text(resultCountDescription(group, isCut: offersMore && group.kind != .translation))
                 .font(.subheadline)
                 .foregroundStyle(Color.lampSecondaryText)
                 .monospacedDigit()
             Spacer(minLength: 8)
+            if offersMore {
+                // The kind filter is the deeper page: it searches that kind
+                // alone, the whole page of it, rather than cutting from here.
+                Button {
+                    selectedKind = group.kind
+                } label: {
+                    HStack(spacing: 2) {
+                        Text("More in \(group.kind.displayName)")
+                        Image(systemName: "chevron.right").imageScale(.small)
+                    }
+                    .font(.subheadline)
+                    .foregroundStyle(Color.lampLink)
+                }
+                .buttonStyle(.plain)
+                .help("Show only \(group.kind.displayName), searched in full")
+            }
             if let moduleName = group.moduleName {
                 Text(moduleName)
                     .font(.subheadline)
@@ -703,13 +727,15 @@ struct UnifiedSearchView: View {
         }
     }
 
-    private func resultCountDescription(_ group: SearchResultGroup) -> String {
+    /// "12 results", or "20+ results" for a kind cut short: more were found
+    /// than shown, and how many more isn't known, so no number claims it.
+    private func resultCountDescription(_ group: SearchResultGroup, isCut: Bool) -> String {
         let count = group.results.count
         let noun = switch group.kind {
-        case .translation, .highlights: count == 1 ? "verse" : "verses"
-        default: count == 1 ? "result" : "results"
+        case .translation, .highlights: count == 1 && !isCut ? "verse" : "verses"
+        default: count == 1 && !isCut ? "result" : "results"
         }
-        return "\(count) \(noun)"
+        return "\(count)\(isCut ? "+" : "") \(noun)"
     }
 
     /// Scripture is read for its words, so the verse leads and the reference
@@ -1312,13 +1338,8 @@ private struct SearchResultGroup: Identifiable {
     let results: [LampModuleSearchResult]
     let id: String
 
-    /// The order shelves are shown in. Scripture leads because a word search
-    /// in a Bible app is first a search of the Bible; the reader's own notes
-    /// and writing come next, then reference works, then everything else.
-    private static let kindOrder: [LampModuleKind] = [
-        .translation, .highlights, .notes, .devotional,
-        .commentary, .dictionary, .book, .plan, .quiz,
-    ]
+    /// The order shelves are shown in: core's, which both apps follow.
+    private static let kindOrder = LampModuleSearch.shelfOrder
 
     static func groups(
         from results: [LampModuleSearchResult],
@@ -1382,7 +1403,11 @@ private extension LampModuleKind {
     static var allCases: [LampModuleKind] {
         [.translation, .dictionary, .commentary, .book, .devotional, .notes, .plan, .highlights, .quiz]
     }
+}
 
+extension LampModuleKind {
+    /// A kind's name as a heading over its results, in Search and the ⌘K
+    /// palette alike.
     var displayName: String {
         switch self {
         case .translation: "Scripture"

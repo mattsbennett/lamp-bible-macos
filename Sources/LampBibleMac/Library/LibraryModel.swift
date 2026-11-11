@@ -139,6 +139,10 @@ final class LibraryModel: ObservableObject {
     @Published var moduleInstallMessage: String?
     @Published private(set) var isImportingStudyData = false
     @Published private(set) var moduleSearchResults: [LampModuleSearchResult] = []
+    /// The kinds that found more than the search across every kind kept of
+    /// them: Search offers "More in …" for these, which searches that kind
+    /// alone. Not how many more; core doesn't count past its limit.
+    @Published private(set) var moduleSearchKindsWithMore: Set<LampModuleKind> = []
     @Published private(set) var isModuleSearching = false
     @Published private(set) var selectedVerseReference: Int?
     @Published private(set) var dictionaryLookupRequest: DictionaryLookupRequest?
@@ -611,6 +615,7 @@ final class LibraryModel: ObservableObject {
         moduleSearchTask?.cancel()
         moduleSearchTask = nil
         moduleSearchResults = []
+        moduleSearchKindsWithMore = []
         isModuleSearching = false
     }
 
@@ -632,6 +637,7 @@ final class LibraryModel: ObservableObject {
             || highlightColors?.isEmpty == false
             || devotionalCriteria != LampDevotionalSearchCriteria() else {
             moduleSearchResults = []
+            moduleSearchKindsWithMore = []
             isModuleSearching = false
             return
         }
@@ -652,24 +658,50 @@ final class LibraryModel: ObservableObject {
                         .union(["personal-notes", "personal-devotionals"])
                         .union(personalSetIDs)
                 }
-                let results = try await library.searchModules(
-                    query: trimmedQuery,
-                    kinds: kind.map { Set([$0]) },
-                    moduleIDs: includedModuleIDs,
-                    bookRange: bookRange,
-                    strongsKey: strongsKey,
-                    highlightColors: highlightColors,
-                    devotionalCriteria: devotionalCriteria,
-                    limit: 250
-                )
+                // Across every kind, a page shared among the kinds that
+                // matched, each kind's best, a dozen or so each: one merged
+                // list cut at 250 gave a common word's every place to
+                // Scripture, and commentaries and books matched unseen, but a
+                // 250 shared would bury the second shelf fifty rows down (the
+                // phone measured it at 100). "More in …" carries the depth:
+                // one kind, chosen, gets a page of 250 to itself.
+                let results: [LampModuleSearchResult]
+                let kindsWithMore: Set<LampModuleKind>
+                if let kind {
+                    results = try await library.searchModules(
+                        query: trimmedQuery,
+                        kinds: [kind],
+                        moduleIDs: includedModuleIDs,
+                        bookRange: bookRange,
+                        strongsKey: strongsKey,
+                        highlightColors: highlightColors,
+                        devotionalCriteria: devotionalCriteria,
+                        limit: 250
+                    )
+                    kindsWithMore = []
+                } else {
+                    let groups = try await library.searchModulesByKind(
+                        query: trimmedQuery,
+                        moduleIDs: includedModuleIDs,
+                        bookRange: bookRange,
+                        strongsKey: strongsKey,
+                        highlightColors: highlightColors,
+                        devotionalCriteria: devotionalCriteria,
+                        limit: 60
+                    )
+                    results = groups.flatMap(\.results)
+                    kindsWithMore = Set(groups.filter(\.hasMore).map(\.kind))
+                }
                 guard !Task.isCancelled else { return }
                 moduleSearchResults = results
+                moduleSearchKindsWithMore = kindsWithMore
             } catch is CancellationError {
                 return
             } catch {
                 guard !Task.isCancelled else { return }
                 errorMessage = error.localizedDescription
                 moduleSearchResults = []
+                moduleSearchKindsWithMore = []
             }
             if !Task.isCancelled { isModuleSearching = false }
         }

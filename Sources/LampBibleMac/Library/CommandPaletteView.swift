@@ -53,7 +53,32 @@ struct CommandPaletteItem: Identifiable {
     var keywords: [String] = []
     /// Whether ⌘↩ and ⌥↩ open it in a new tab or window: a place in scripture.
     var opensPlaces = false
-    let perform: (CommandPalettePlacement) -> Void
+    /// The heading over it, when not its group's: a library match's kind;
+    /// empty for none.
+    var sectionTitle: String? = nil
+    /// A library match's kind, whose own page Tab opens.
+    var libraryLevel: CommandPaletteLibraryLevel? = nil
+    var perform: (CommandPalettePlacement) -> Void = { _ in }
+
+    var heading: String { sectionTitle ?? group.title }
+}
+
+/// One kind of the library's matches, on a page of its own, pushed over the
+/// palette as Raycast pushes a command's list: the search bar names it and
+/// has a way back, and Escape goes back.
+struct CommandPaletteLibraryLevel: Equatable, Hashable {
+    /// The kind, as the library search names it.
+    let id: String
+    /// Its name as a heading: "Commentaries".
+    let title: String
+}
+
+/// One kind's matches from the library, best first, and whether it found
+/// more than it gave: not how many, which the search doesn't count.
+struct CommandPaletteLibraryGroup {
+    let level: CommandPaletteLibraryLevel
+    let items: [CommandPaletteItem]
+    let hasMore: Bool
 }
 
 /// ⌘K: one field that goes anywhere in Lamp. What is typed decides the top
@@ -71,16 +96,21 @@ struct CommandPaletteView: View {
     let namedItems: [CommandPaletteItem]
     /// Before anything is typed.
     let recentItems: [CommandPaletteItem]
-    /// Matches in the library for what is typed, worked out as typing pauses.
-    let searchLibrary: (String) async -> [CommandPaletteItem]
+    /// Matches in the library for what is typed, worked out as typing
+    /// pauses: a few of every kind that matched, or, on one kind's page
+    /// (`level`), a page of that kind.
+    let searchLibrary: (String, CommandPaletteLibraryLevel?) async -> [CommandPaletteLibraryGroup]
     let close: () -> Void
 
     @State private var query = ""
     /// The chosen row, by what it is rather than where it sits, so library
     /// matches arriving above it do not move the choice to another row.
     @State private var highlightedID: String?
-    @State private var libraryResults: [CommandPaletteItem] = []
-    @State private var libraryResultsQuery = ""
+    @State private var libraryGroups: [CommandPaletteLibraryGroup] = []
+    /// What `libraryGroups` answer: the words, and the page they were for.
+    @State private var libraryGroupsKey = LibraryKey(words: "", level: nil)
+    /// One kind's page of matches, entered from "More in …"; nil for all.
+    @State private var level: CommandPaletteLibraryLevel?
     /// Where the pointer was when the palette opened or the keys last moved
     /// the choice. A row the pointer merely rests on — the palette opened
     /// under it, or the list scrolled beneath it — does not take the choice;
@@ -92,10 +122,17 @@ struct CommandPaletteView: View {
 
     private var trimmed: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
 
-    /// The rows in the order shown, which arrow keys move through.
-    private var rows: [CommandPaletteItem] {
+    private struct LibraryKey: Equatable {
+        var words: String
+        var level: CommandPaletteLibraryLevel?
+    }
+
+    /// The rows in the order shown, which arrow keys move through, and the
+    /// library kinds whose headings offer "Show All".
+    private var layout: (rows: [CommandPaletteItem], showsAll: Set<String>) {
+        if let level { return (levelRows(level), []) }
         guard !trimmed.isEmpty else {
-            return recentItems + namedItems.filter { $0.group == .sections }
+            return (recentItems + namedItems.filter { $0.group == .sections }, [])
         }
         let named = namedItems
             .compactMap { item in
@@ -106,15 +143,66 @@ struct CommandPaletteView: View {
         let typed = typedItems(trimmed)
         // A passage or a key first; then what is named so, so that "line
         // spacing" goes to its setting and "new" to New Writing; then the
-        // library's matches for the words; the search for them last.
+        // library's matches for the words, a section a kind; the search for
+        // them last.
         var shown = typed.filter { $0.group != .search }
         for group in [CommandPaletteItem.Group.open, .commands, .sections, .settings] {
             shown += named.filter { $0.0.group == group }.prefix(Self.perGroup).map(\.0)
         }
-        if libraryResultsQuery == trimmed {
-            shown += libraryResults.prefix(Self.perGroup)
+        let searchRows = typed.filter { $0.group == .search }
+        guard libraryGroupsKey == LibraryKey(words: trimmed, level: nil) else { return (shown + searchRows, []) }
+        let library = Self.libraryRows(libraryGroups, above: shown, below: searchRows)
+        return (shown + library.rows + searchRows, library.showsAll)
+    }
+
+    private var rows: [CommandPaletteItem] { layout.rows }
+
+    /// The library's matches on the main page, a section a kind under its
+    /// name: one of every kind that matched, then more of each in turn while
+    /// the list has room. A kind with more than it shows offers "Show All".
+    private static func libraryRows(
+        _ groups: [CommandPaletteLibraryGroup],
+        above: [CommandPaletteItem],
+        below: [CommandPaletteItem]
+    ) -> (rows: [CommandPaletteItem], showsAll: Set<String>) {
+        var counts = groups.map { $0.items.isEmpty ? 0 : 1 }
+        func arranged() -> [CommandPaletteItem] {
+            groups.indices.flatMap { index in
+                groups[index].items.prefix(counts[index]).map { item in
+                    var item = item
+                    item.sectionTitle = groups[index].level.title
+                    item.libraryLevel = groups[index].level
+                    return item
+                }
+            }
         }
-        return shown + typed.filter { $0.group == .search }
+        var grew = true
+        while grew {
+            grew = false
+            for index in groups.indices where counts[index] < groups[index].items.count {
+                counts[index] += 1
+                if estimatedHeight(of: above + arranged() + below) > maxListHeight {
+                    counts[index] -= 1
+                } else {
+                    grew = true
+                }
+            }
+        }
+        let showsAll = groups.indices
+            .filter { counts[$0] > 0 && (groups[$0].hasMore || counts[$0] < groups[$0].items.count) }
+            .map { groups[$0].level.id }
+        return (arranged(), Set(showsAll))
+    }
+
+    /// One kind's page: its matches, searched afresh for the page. The
+    /// search bar names the kind, so no heading repeats it.
+    private func levelRows(_ level: CommandPaletteLibraryLevel) -> [CommandPaletteItem] {
+        guard libraryGroupsKey == LibraryKey(words: trimmed, level: level) else { return [] }
+        return (libraryGroups.first { $0.level == level }?.items ?? []).map { item in
+            var item = item
+            item.sectionTitle = ""
+            return item
+        }
     }
 
     /// Where the chosen row sits now: the top row until one is chosen, or
@@ -124,18 +212,19 @@ struct CommandPaletteView: View {
     }
 
     var body: some View {
-        let rows = rows
+        let layout = layout
+        let rows = layout.rows
         VStack(spacing: 0) {
             field(rows)
             Divider()
             if rows.isEmpty {
-                Text(trimmed.isEmpty ? "Type to go anywhere in Lamp." : "Nothing matches “\(trimmed)”.")
+                Text(emptyMessage)
                     .font(.callout)
                     .foregroundStyle(Color.lampSecondaryText)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 24)
             } else {
-                list(rows)
+                list(rows, showsAll: layout.showsAll)
             }
             footer(rows)
         }
@@ -152,41 +241,73 @@ struct CommandPaletteView: View {
                 .strokeBorder(Color.lampCardStroke)
         }
         .onAppear { restingPointer = NSEvent.mouseLocation }
-        .task(id: trimmed) {
-            let words = trimmed
+        .task(id: LibraryKey(words: trimmed, level: level)) {
+            let key = LibraryKey(words: trimmed, level: level)
             // A passage or a Strong's key is a place, and a full-text match
-            // for "john 3:16" or "g26" is only noise under it.
-            let isPlace = typedItems(words).contains { $0.group == .suggested }
-            guard words.count >= 2, !isPlace else {
-                libraryResults = []
-                libraryResultsQuery = words
+            // for "john 3:16" or "g26" is only noise under it; on a kind's
+            // own page the words are searched in that kind whatever they are.
+            let isPlace = level == nil && typedItems(key.words).contains { $0.group == .suggested }
+            guard key.words.count >= 2, !isPlace else {
+                libraryGroups = []
+                libraryGroupsKey = key
                 return
             }
             // As typing pauses, not on every key: a library search reads the
             // database, and the rows for what is typed are already showing.
             try? await Task.sleep(for: .milliseconds(180))
             guard !Task.isCancelled else { return }
-            let found = await searchLibrary(words)
+            let found = await searchLibrary(key.words, key.level)
             guard !Task.isCancelled else { return }
-            libraryResults = found
-            libraryResultsQuery = words
+            libraryGroups = found
+            libraryGroupsKey = key
         }
         .onChange(of: trimmed) { _, _ in highlightedID = nil }
+        .onChange(of: level) { _, _ in highlightedID = nil }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Go to anything")
     }
 
+    private var emptyMessage: String {
+        if let level {
+            return trimmed.count < 2 ? "Type to search \(level.title)." : "No \(level.title) match “\(trimmed)”."
+        }
+        return trimmed.isEmpty ? "Type to go anywhere in Lamp." : "Nothing matches “\(trimmed)”."
+    }
+
+    /// On a kind's page the search bar says which, as Raycast's names the
+    /// command it is in: a way back where the magnifying glass was, and the
+    /// kind beside the words.
     private func field(_ rows: [CommandPaletteItem]) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(Color.lampSecondaryText)
+            if let level {
+                Button { self.level = nil } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color.lampSecondaryText)
+                        .frame(width: 26, height: 26)
+                        .background(Color.lampTileFill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .help("Back to all results (esc)")
+                .accessibilityLabel("Back to all results")
+                Text(level.title)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Color.lampTileFill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            } else {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(Color.lampSecondaryText)
+            }
             CommandPaletteField(
                 text: $query,
-                placeholder: "Passage, word, writing, command or setting",
+                placeholder: level.map { "Search \($0.title)" } ?? "Passage, word, writing, command or setting",
                 onMove: { move(by: $0, in: rows) },
                 onSubmit: { perform(rows, at: highlightedIndex(in: rows)) },
-                onCancel: close
+                onCancel: cancel,
+                onTab: { showAll(of: rows) }
             )
         }
         .padding(.horizontal, 18)
@@ -200,15 +321,14 @@ struct CommandPaletteView: View {
         restingPointer = NSEvent.mouseLocation
     }
 
-    private func list(_ rows: [CommandPaletteItem]) -> some View {
+    private func list(_ rows: [CommandPaletteItem], showsAll: Set<String>) -> some View {
         let highlighted = highlightedIndex(in: rows)
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(rows.enumerated()), id: \.element.id) { index, item in
-                        if index == 0 || rows[index - 1].group != item.group {
-                            Text(item.group.title)
-                                .lampSectionHeading()
+                        if !item.heading.isEmpty, index == 0 || rows[index - 1].heading != item.heading {
+                            sectionHeading(item, showsAll: item.libraryLevel.map { showsAll.contains($0.id) } ?? false)
                                 .padding(.horizontal, 18)
                                 .padding(.top, index == 0 ? 10 : 14)
                                 .padding(.bottom, 4)
@@ -244,7 +364,39 @@ struct CommandPaletteView: View {
         }
     }
 
+    /// A section's name, and for a library kind with more than it shows, a
+    /// quiet way to see them all, as Raycast puts an accessory by a heading.
+    private func sectionHeading(_ item: CommandPaletteItem, showsAll: Bool) -> some View {
+        HStack(spacing: 6) {
+            Text(item.heading)
+                .lampSectionHeading()
+            Spacer(minLength: 8)
+            if showsAll, let level = item.libraryLevel {
+                Button { enter(level) } label: {
+                    HStack(spacing: 2) {
+                        Text("Show All")
+                        Image(systemName: "chevron.right").imageScale(.small)
+                    }
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color.lampSecondaryText)
+                }
+                .buttonStyle(.plain)
+                .help("All \(level.title) matching “\(trimmed)” (⇥)")
+            }
+        }
+    }
+
     private func row(_ item: CommandPaletteItem, isHighlighted: Bool) -> some View {
+        resultRow(item)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 8)
+            .background(LampListSelection(isSelected: isHighlighted))
+            .contentShape(Rectangle())
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(isHighlighted ? [.isButton, .isSelected] : .isButton)
+    }
+
+    private func resultRow(_ item: CommandPaletteItem) -> some View {
         HStack(spacing: 12) {
             Image(systemName: item.systemImage)
                 .font(.system(size: 15))
@@ -272,12 +424,6 @@ struct CommandPaletteView: View {
                     .frame(maxWidth: 150, alignment: .trailing)
             }
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 8)
-        .background(LampListSelection(isSelected: isHighlighted))
-        .contentShape(Rectangle())
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(isHighlighted ? [.isButton, .isSelected] : .isButton)
     }
 
     /// A launcher's rows read at a glance, a step above a list's.
@@ -290,13 +436,16 @@ struct CommandPaletteView: View {
             && rows[highlightedIndex(in: rows)].opensPlaces
         return HStack(spacing: 14) {
             hint("↩", "Open")
+            if level == nil, let kind = highlightedLevel(in: rows) {
+                hint("⇥", "All \(kind.title)")
+            }
             if opensPlaces {
                 hint("⌘↩", "New Tab")
                 hint("⌥↩", "New Window")
             }
             Spacer()
             hint("↑↓", "Move")
-            hint("esc", "Close")
+            hint("esc", level == nil ? "Close" : "Back")
         }
         .padding(.horizontal, 18)
         .frame(height: 38)
@@ -326,18 +475,49 @@ struct CommandPaletteView: View {
     private static func estimatedHeight(of rows: [CommandPaletteItem]) -> CGFloat {
         var height: CGFloat = 8
         for (index, item) in rows.enumerated() {
-            if index == 0 || rows[index - 1].group != item.group { height += index == 0 ? 28 : 32 }
+            if !item.heading.isEmpty, index == 0 || rows[index - 1].heading != item.heading {
+                height += index == 0 ? 28 : 32
+            }
             height += (item.subtitle?.isEmpty == false) ? 52 : 36
         }
         return height
     }
 
-    private func perform(_ rows: [CommandPaletteItem], at index: Int) {
-        guard rows.indices.contains(index) else { return }
+    /// Does the row, and says whether the palette closed.
+    @discardableResult
+    private func perform(_ rows: [CommandPaletteItem], at index: Int) -> Bool {
+        guard rows.indices.contains(index) else { return false }
         let item = rows[index]
         let placement = item.opensPlaces ? CommandPalettePlacement.current : .here
         close()
         item.perform(placement)
+        return true
+    }
+
+    private func enter(_ next: CommandPaletteLibraryLevel) {
+        level = next
+    }
+
+    private func highlightedLevel(in rows: [CommandPaletteItem]) -> CommandPaletteLibraryLevel? {
+        let index = highlightedIndex(in: rows)
+        return rows.indices.contains(index) ? rows[index].libraryLevel : nil
+    }
+
+    /// Tab: the highlighted match's kind, all of it, on its own page.
+    private func showAll(of rows: [CommandPaletteItem]) {
+        guard level == nil, let kind = highlightedLevel(in: rows) else { return }
+        enter(kind)
+    }
+
+    /// Escape: out of a kind's page, or, from the main page, closed. Says
+    /// whether it closed.
+    private func cancel() -> Bool {
+        if level != nil {
+            level = nil
+            return false
+        }
+        close()
+        return true
     }
 }
 
@@ -366,8 +546,13 @@ private struct CommandPaletteField: NSViewRepresentable {
     @Binding var text: String
     let placeholder: String
     let onMove: (Int) -> Void
-    let onSubmit: () -> Void
-    let onCancel: () -> Void
+    /// Each says whether the palette closed, so the field stops taking the
+    /// keyboard back only then: Escape out of a kind's page, or Return on
+    /// "More in …", leaves it open, and the field must keep the keyboard.
+    let onSubmit: () -> Bool
+    let onCancel: () -> Bool
+    /// Tab, always kept here: it would otherwise take the keyboard away.
+    let onTab: () -> Void
 
     final class Field: NSTextField {
         private var observers: [NSObjectProtocol] = []
@@ -468,15 +653,15 @@ private struct CommandPaletteField: NSViewRepresentable {
         func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
             switch selector {
             case #selector(NSResponder.cancelOperation(_:)):
-                (control as? Field)?.isLeaving = true
-                parent.onCancel()
+                if parent.onCancel() { (control as? Field)?.isLeaving = true }
             case #selector(NSResponder.moveUp(_:)):
                 parent.onMove(-1)
             case #selector(NSResponder.moveDown(_:)):
                 parent.onMove(1)
+            case #selector(NSResponder.insertTab(_:)), #selector(NSResponder.insertBacktab(_:)):
+                parent.onTab()
             case #selector(NSResponder.insertNewline(_:)):
-                (control as? Field)?.isLeaving = true
-                parent.onSubmit()
+                if parent.onSubmit() { (control as? Field)?.isLeaving = true }
             default:
                 return false
             }
@@ -500,10 +685,7 @@ private struct CommandPaletteField: NSViewRepresentable {
         field.cell?.isScrollable = true
         field.cell?.wraps = false
         // The system's placeholder grey is too faint at this size.
-        field.placeholderAttributedString = NSAttributedString(string: placeholder, attributes: [
-            .foregroundColor: NSColor.lampSecondaryText,
-            .font: NSFont.systemFont(ofSize: 19),
-        ])
+        field.placeholderAttributedString = Self.placeholder(placeholder)
         field.setAccessibilityLabel("Go to anything")
         field.setContentHuggingPriority(.defaultLow, for: .horizontal)
         field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -516,5 +698,15 @@ private struct CommandPaletteField: NSViewRepresentable {
         // Only when it differs: setting it on every keystroke would move the
         // caret and loop through controlTextDidChange.
         if field.stringValue != text { field.stringValue = text }
+        if field.placeholderAttributedString?.string != placeholder {
+            field.placeholderAttributedString = Self.placeholder(placeholder)
+        }
+    }
+
+    private static func placeholder(_ text: String) -> NSAttributedString {
+        NSAttributedString(string: text, attributes: [
+            .foregroundColor: NSColor.lampSecondaryText,
+            .font: NSFont.systemFont(ofSize: 19),
+        ])
     }
 }

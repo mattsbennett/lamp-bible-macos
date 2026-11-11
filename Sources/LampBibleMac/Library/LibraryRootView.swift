@@ -343,7 +343,7 @@ struct LibraryRootView: View {
                         typedItems: paletteTypedItems,
                         namedItems: paletteNamedItems(decks: paletteDecks),
                         recentItems: paletteRecentItems(),
-                        searchLibrary: paletteLibraryResults,
+                        searchLibrary: { await paletteLibraryResults($0, level: $1) },
                         close: { showingCommandPalette = false }
                     )
                     .padding(.top, 72)
@@ -7165,36 +7165,62 @@ extension LibraryRootView {
     }
 
     /// Matches in the library, a few of each kind, as Search would open them.
-    fileprivate func paletteLibraryResults(_ words: String) async -> [CommandPaletteItem] {
+    /// The library's matches for the palette, by kind: on the main page the
+    /// best few of every kind that matched, so a common word shows each kind
+    /// rather than whichever won a merged list's ties; on one kind's page, a
+    /// page of that kind, searched afresh rather than cut from the few.
+    fileprivate func paletteLibraryResults(
+        _ words: String, level: CommandPaletteLibraryLevel?
+    ) async -> [CommandPaletteLibraryGroup] {
         let hidden = model.hiddenModuleIDs
         // A module's short name where it has one: "NIC", not its full title.
         let abbreviations = Dictionary(
             model.modules.compactMap { module in module.abbreviation.map { (module.id, $0) } },
             uniquingKeysWith: { first, _ in first }
         )
-        let results = (try? await model.library.searchModules(query: words, limit: 60)) ?? []
-        var perKind: [LampModuleKind: Int] = [:]
-        return results
-            .filter { !hidden.contains($0.moduleID) }
-            .filter { result in
-                perKind[result.kind, default: 0] += 1
-                return perKind[result.kind]! <= 2
-            }
-            .map { result in
-                let opensPlace = result.startReference != nil
-                    && ![.devotional, .plan, .quiz, .book, .dictionary].contains(result.kind)
-                return CommandPaletteItem(
-                    id: "result:\(result.id)",
-                    group: .results,
-                    title: result.title,
-                    subtitle: result.snippet,
-                    detail: abbreviations[result.moduleID] ?? result.moduleName,
-                    systemImage: Self.paletteIcon(for: result.kind),
-                    opensPlaces: opensPlace,
-                    perform: { placement in go(to: .searchResult(result, placement: placement)) }
-                )
-            }
+        let kind = level.flatMap { LampModuleKind(rawValue: $0.id) }
+        let kinds: Set<LampModuleKind>? = kind.map { [$0] }
+        // The main page is shared among the kinds that matched, a few each,
+        // and the palette shows what fits; a kind's page is all one kind's.
+        let groups = (try? await model.library.searchModulesByKind(
+            query: words, kinds: kinds, limit: kind == nil ? Self.paletteMainPage : Self.paletteKindPage
+        )) ?? []
+        // Sections in the order Search shelves them, which both apps follow.
+        let shelved = groups.sorted {
+            (LampModuleSearch.shelfOrder.firstIndex(of: $0.kind) ?? .max)
+                < (LampModuleSearch.shelfOrder.firstIndex(of: $1.kind) ?? .max)
+        }
+        return shelved.compactMap { group in
+            let visible = group.results.filter { !hidden.contains($0.moduleID) }
+            guard !visible.isEmpty else { return nil }
+            return CommandPaletteLibraryGroup(
+                level: CommandPaletteLibraryLevel(id: group.kind.rawValue, title: group.kind.displayName),
+                items: visible.map { result in
+                    let opensPlace = result.startReference != nil
+                        && ![.devotional, .plan, .quiz, .book, .dictionary].contains(result.kind)
+                    return CommandPaletteItem(
+                        id: "result:\(result.id)",
+                        group: .results,
+                        title: result.title,
+                        subtitle: result.snippet,
+                        detail: abbreviations[result.moduleID] ?? result.moduleName,
+                        systemImage: Self.paletteIcon(for: result.kind),
+                        opensPlaces: opensPlace,
+                        perform: { placement in go(to: .searchResult(result, placement: placement)) }
+                    )
+                },
+                // A hidden module's matches dropped here may have been all
+                // the more there was; say so only when core found more.
+                hasMore: group.hasMore
+            )
+        }
     }
+
+    /// The main page's matches, shared among the kinds; the palette shows
+    /// one of each and more while there is room (CommandPaletteView's fill).
+    private static let paletteMainPage = 36
+    /// One kind's own page.
+    private static let paletteKindPage = 50
 
     /// Things to open by name, commands, sections and settings.
     fileprivate func paletteNamedItems(decks: [LampPresentationDeck]) -> [CommandPaletteItem] {
