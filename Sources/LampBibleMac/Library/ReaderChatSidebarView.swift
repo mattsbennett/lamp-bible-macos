@@ -603,9 +603,18 @@ private struct ReaderChatChooser: View {
         searching = Task {
             try? await Task.sleep(for: .milliseconds(200))
             guard !Task.isCancelled else { return }
-            let found = await Task.detached(priority: .userInitiated) {
+            // The scan itself is cancelled, not merely its result
+            // discarded: it reads every transcript, and several of those
+            // running at once because the typing paused is the cost this
+            // was moved off the main actor to avoid.
+            let scan = Task.detached(priority: .userInitiated) {
                 ReaderChatWorkspaceStore.search(wanted, libraryRootURL: libraryRootURL)
-            }.value
+            }
+            let found = await withTaskCancellationHandler {
+                await scan.value
+            } onCancel: {
+                scan.cancel()
+            }
             guard !Task.isCancelled, wanted == query else { return }
             matches = found
         }

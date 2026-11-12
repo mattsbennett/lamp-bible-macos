@@ -492,3 +492,37 @@ struct AgentChatRecordFixTests {
         #expect(forked.value(for: AgentChatChoices.providerKey) == "claude")
     }
 }
+
+/// What a review of the fixes found, held so it stays found.
+struct AgentChatQueueDurabilityTests {
+    /// A queued message is sent under **its own id**, so the transcript
+    /// carrying that id is what says it was taken.
+    ///
+    /// Without this, a quit between the question reaching the transcript
+    /// and the queue being rewritten left it waiting, and the next launch
+    /// sent it again — a second copy of a question, or for a writing agent
+    /// a second run of whatever it was asked to do.
+    @Test func aMessageAlreadyInTheConversationStopsWaiting() throws {
+        var queue = AgentChatQueue()
+        queue.add("Check Romans 8:1")
+        queue.add("And the Greek")
+        let sent = try #require(queue.messages.first)
+        let stillWaiting = try #require(queue.messages.last)
+
+        let transcript = AgentChatTranscript(messages: [
+            AgentChatTranscript.Message(
+                id: sent.id, role: .user, text: "Check Romans 8:1",
+                date: Date(timeIntervalSince1970: 10)
+            ),
+        ])
+        queue.removeAlreadySaid(in: transcript)
+        #expect(queue.messages.map(\.id) == [stillWaiting.id])
+
+        // A conversation that holds nothing of the queue leaves it alone,
+        // rather than reading an empty transcript as "all sent".
+        var untouched = AgentChatQueue()
+        untouched.add("Nothing has been sent")
+        untouched.removeAlreadySaid(in: AgentChatTranscript())
+        #expect(untouched.messages.count == 1)
+    }
+}

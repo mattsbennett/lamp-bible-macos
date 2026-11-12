@@ -463,6 +463,10 @@ public enum ReaderChatWorkspaceStore {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
         var matches: [Match] = []
         for name in names {
+            // A long search is abandoned when the typing moves on. Without
+            // this the work ran to the end whatever the caller did, and a
+            // few pauses while typing set several full scans going at once.
+            if Task.isCancelled { return [] }
             guard let id = UUID(uuidString: name) else { continue }
             let workspace = workspaceURL(libraryRootURL: libraryRootURL, chatID: id)
             // Each chat's transcripts are decoded **once**, for the match
@@ -473,12 +477,17 @@ public enum ReaderChatWorkspaceStore {
                 id: id, lastSpoken: found.lastSpoken,
                 snippet: found.line, saidByReader: found.saidByReader
             ))
-            if matches.count >= limit { break }
         }
-        return matches.sorted {
-            ($0.lastSpoken ?? .distantPast, $0.id.uuidString)
-                > ($1.lastSpoken ?? .distantPast, $1.id.uuidString)
-        }
+        // Ordered first, **then** cut. A folder lists its contents in no
+        // order worth relying on, so stopping at the limit while reading
+        // and sorting afterwards could drop the most recent conversation
+        // and keep fifty older ones.
+        return Array(
+            matches.sorted {
+                ($0.lastSpoken ?? .distantPast, $0.id.uuidString)
+                    > ($1.lastSpoken ?? .distantPast, $1.id.uuidString)
+            }.prefix(limit)
+        )
     }
 
     /// The first line in a chat holding these words, and who said it.

@@ -51,11 +51,19 @@ struct AgentCLIProcessResult: Sendable {
     let exitCode: Int32
     let output: String
     let launchError: String?
+
+    /// Stopped in the moment before the provider was launched, so it never
+    /// ran at all. Read as a stop rather than a failure: nothing went
+    /// wrong, and nothing was done.
+    static let stoppedBeforeStarting = AgentCLIProcessResult(
+        exitCode: 0, output: "", launchError: nil
+    )
 }
 
 final class AgentCLIProcessRunner: @unchecked Sendable {
     private let lock = NSLock()
     private var activeProcess: Process?
+    private var cancelled = false
 
     /// Runs the provider, handing `onLine` each line of its output as it
     /// arrives. `onLine` is called off the main thread, in the order the lines
@@ -81,9 +89,23 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
 
     func cancel() {
         lock.lock()
+        // Recorded as well as acted on. Resolving the executable takes a
+        // moment, and for that moment there is no process to terminate — so
+        // a Stop pressed then found nothing, and the run started afterwards
+        // and did whatever it had been asked to do. For a writing agent
+        // that is work on the person's draft after they said stop.
+        cancelled = true
         let process = activeProcess
         lock.unlock()
         if process?.isRunning == true { process?.terminate() }
+    }
+
+    /// Whether this runner has been stopped, read at each point a run can
+    /// still be abandoned cheaply.
+    private var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
     }
 
     private func runSynchronously(
@@ -93,7 +115,12 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
         onLine: (@Sendable (String) -> Void)? = nil
     ) -> AgentCLIProcessResult {
         do {
+            lock.lock()
+            // A new run clears the last one's stop.
+            cancelled = false
+            lock.unlock()
             let executableURL = try resolveExecutable(named: executableName)
+            guard !isCancelled else { return .stoppedBeforeStarting }
             let process = Process()
             let output = Pipe()
             process.executableURL = executableURL
@@ -121,6 +148,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                 lock.unlock()
             }
 
+            guard !isCancelled else { return .stoppedBeforeStarting }
             try process.run()
             // Read the pipe as it fills rather than at the end. Reading to the
             // end of the file first is what left a chat with nothing to show
@@ -683,6 +711,8 @@ private struct TurnStepsRow: View {
 /// with a queued thought is to reword it once the reply has arrived.
 private struct QueuedMessagesView: View {
     let messages: [AgentChatQueue.Message]
+    /// Whether a message has been handed over and can no longer be changed.
+    let isReserved: (UUID) -> Bool
     let edit: (UUID, String) -> Void
     let remove: (UUID) -> Void
     let moveUp: (UUID) -> Void
@@ -696,6 +726,7 @@ private struct QueuedMessagesView: View {
                 ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
                     QueuedMessageRow(
                         message: message,
+                        sending: isReserved(message.id),
                         canMoveUp: index > 0,
                         edit: { edit(message.id, $0) },
                         remove: { remove(message.id) },
@@ -713,6 +744,7 @@ private struct QueuedMessagesView: View {
 
 private struct QueuedMessageRow: View {
     let message: AgentChatQueue.Message
+    let sending: Bool
     let canMoveUp: Bool
     let edit: (String) -> Void
     let remove: () -> Void
@@ -727,7 +759,15 @@ private struct QueuedMessageRow: View {
             Image(systemName: "clock")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
-            if isEditing {
+            if sending {
+                Text(message.text)
+                    .font(.callout)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text("Sending…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if isEditing {
                 TextField("Message", text: $draft, axis: .vertical)
                     .textFieldStyle(.plain)
                     .lineLimit(1...4)
@@ -745,7 +785,9 @@ private struct QueuedMessageRow: View {
                         editing = true
                     }
             }
-            if isEditing {
+            if sending {
+                EmptyView()
+            } else if isEditing {
                 Button("Done", action: commit)
                     .buttonStyle(.plain)
                     .font(.caption)
@@ -837,7 +879,7 @@ private final class NativeAgentChatModel: ObservableObject {
     private let runner = AgentCLIProcessRunner()
     private let installID = LampInstallIdentity.current()
     private var sessionID: String?
-    private var conversationID: UUID?
+    private(set) var conversationID: UUID?
     private var conversationStartedAt: Date?
     private var didLoad = false
     /// The transcript as this chat last read or wrote it. Others write it too —
@@ -895,7 +937,18 @@ private final class NativeAgentChatModel: ObservableObject {
         guard !didLoad else { return }
         didLoad = true
         knownModificationDate = transcriptModificationDate()
-        queued = AgentChatQueueStore.load(providerID: provider.rawValue, in: workspace).messages
+        var waiting = AgentChatQueueStore.load(providerID: provider.rawValue, in: workspace)
+        // Anything already in the conversation was sent before the app
+        // closed, however it closed. The question carries the queued
+        // message's own id, so this is an answer rather than a guess.
+        let before = waiting.messages.count
+        waiting.removeAlreadySaid(
+            in: AgentChatTranscriptStore.load(providerID: provider.rawValue, in: workspace)
+        )
+        if waiting.messages.count != before {
+            try? AgentChatQueueStore.save(waiting, providerID: provider.rawValue, in: workspace)
+        }
+        queued = waiting.messages
         show(AgentChatTranscriptStore.load(providerID: provider.rawValue, in: workspace))
     }
 
@@ -931,9 +984,29 @@ private final class NativeAgentChatModel: ObservableObject {
         return (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
     }
 
-    func send(_ rawPrompt: String, contextualPrompt: String) async {
+    /// Sends a message, saying whether it was taken.
+    ///
+    /// `messageID` is the queued message's own id where this came from the
+    /// queue, so that the conversation itself records which queued message
+    /// it was. That is the only durable answer to "was this one already
+    /// sent?" — a reservation lives in memory and dies with the app, and a
+    /// message whose text reached the transcript under some unrelated id
+    /// could be found waiting again after a quit and sent twice.
+    ///
+    /// `inConversation` is the conversation the caller meant. Preparing a
+    /// prompt waits, and New Chat is allowed during that wait, so without
+    /// this a question asked of the old conversation lands in its
+    /// replacement.
+    @discardableResult
+    func send(
+        _ rawPrompt: String,
+        contextualPrompt: String,
+        messageID: UUID? = nil,
+        inConversation expected: UUID? = nil
+    ) async -> Bool {
         let prompt = rawPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty, !isRunning else { return }
+        guard !prompt.isEmpty, !isRunning else { return false }
+        if let expected, expected != conversationID { return false }
         // Turns from Terminal or another Mac may have arrived since this chat
         // last looked; the message carries on from them.
         reloadIfChangedOnDisk()
@@ -954,7 +1027,7 @@ private final class NativeAgentChatModel: ObservableObject {
         }
 
         let userMessage = NativeAgentChatMessage(
-            id: UUID(),
+            id: messageID ?? UUID(),
             user: person,
             messageKind: .custom(PersonMessageContent(text: prompt)),
             isSender: true,
@@ -976,6 +1049,11 @@ private final class NativeAgentChatModel: ObservableObject {
             date: Date()
         ))
         persistTranscript()
+        // Written down, so it is no longer waiting. Done here rather than
+        // when the run returns: by now the question is in the transcript
+        // under the queued message's own id, which is what says it was
+        // taken, and a quit during the run must not find it waiting again.
+        if let messageID { completeQueued(messageID) }
 
         streamTask?.cancel()
         streamTask = showReplyAsItArrives()
@@ -1000,6 +1078,7 @@ private final class NativeAgentChatModel: ObservableObject {
             )
         }
         finish(outcome)
+        return true
     }
 
     func cancel() {
@@ -1451,8 +1530,17 @@ private final class NativeAgentChatModel: ObservableObject {
     }
 
     func enqueue(_ text: String) { changeQueue { $0.add(text) } }
-    func removeQueued(_ id: UUID) { changeQueue { $0.remove(id) } }
-    func updateQueued(_ id: UUID, text: String) { changeQueue { $0.update(id, text: text) } }
+    /// Refused for a message already being sent: taking it out of the
+    /// queue would not take it out of the conversation.
+    func removeQueued(_ id: UUID) {
+        guard !isReserved(id) else { return }
+        changeQueue { $0.remove(id) }
+    }
+
+    func updateQueued(_ id: UUID, text: String) {
+        guard !isReserved(id) else { return }
+        changeQueue { $0.update(id, text: text) }
+    }
     func sendQueuedSooner(_ id: UUID) { changeQueue { $0.sendSooner(id) } }
 
     /// The next message waiting, **reserved rather than removed**.
@@ -1473,6 +1561,15 @@ private final class NativeAgentChatModel: ObservableObject {
         reservedQueued = next.id
         return next
     }
+
+    /// Whether a waiting message has been handed over and can no longer be
+    /// changed.
+    ///
+    /// Its words were taken by value when it was reserved, so an edit made
+    /// afterwards would be dropped silently: the old text sent, the new
+    /// text deleted by the completion that follows. The row says so
+    /// instead.
+    func isReserved(_ id: UUID) -> Bool { reservedQueued == id }
 
     /// The reserved message reached the conversation, so it stops waiting.
     func completeQueued(_ id: UUID) {
@@ -1600,6 +1697,9 @@ struct NativeAgentChatView: View {
             return false
         }
         isPreparing = true
+        // The conversation this message was written in. Preparing waits,
+        // and New Chat is allowed during that wait.
+        let conversation = model.conversationID
         // Started now, and on the main actor until it first waits, so the
         // reader's place is read at Send and not after a navigation.
         Task {
@@ -1608,9 +1708,16 @@ struct NativeAgentChatView: View {
                 let contextualPrompt = try await preparePrompt(prompt)
                 submissionError = nil
                 isPreparing = false
-                await model.send(prompt, contextualPrompt: contextualPrompt)
-                // In the conversation now, so it stops waiting.
-                if let queued { model.completeQueued(queued) }
+                let taken = await model.send(
+                    prompt, contextualPrompt: contextualPrompt,
+                    messageID: queued, inConversation: conversation
+                )
+                // Taken means it is in the transcript, which is where the
+                // model takes it out of the queue. Refused — the pane was
+                // reopened and something else is running, or New Chat
+                // happened while this was being prepared — it goes back to
+                // waiting rather than being dropped as sent.
+                if !taken, let queued { model.releaseQueued(queued) }
                 scrollToBottom = true
             } catch {
                 submissionError = error.localizedDescription
@@ -1684,6 +1791,7 @@ struct NativeAgentChatView: View {
             Divider()
             QueuedMessagesView(
                 messages: model.queued,
+                isReserved: { model.isReserved($0) },
                 edit: { model.updateQueued($0, text: $1) },
                 remove: { model.removeQueued($0) },
                 moveUp: { model.sendQueuedSooner($0) }

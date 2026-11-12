@@ -350,6 +350,20 @@ public struct AgentChatQueue: Codable, Equatable, Sendable {
         messages.removeAll { $0.id == id }
     }
 
+    /// Drops anything the conversation already holds.
+    ///
+    /// A queued message is sent under **its own id**, so the transcript
+    /// carrying that id is what says it was taken. Without this, a quit
+    /// between the question reaching the transcript and the queue being
+    /// written would leave it waiting, and the next launch would send it
+    /// again — a second copy of a question, or for a writing agent a second
+    /// run of whatever it was asked to do.
+    public mutating func removeAlreadySaid(in transcript: AgentChatTranscript) {
+        let said = Set(transcript.messages.map(\.id))
+        guard !said.isEmpty else { return }
+        messages.removeAll { said.contains($0.id) }
+    }
+
     /// Rewrites a waiting message, or drops it where the rewrite empties it:
     /// clearing the words is how a person takes one back.
     public mutating func update(_ id: UUID, text: String) {
