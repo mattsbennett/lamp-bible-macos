@@ -1080,6 +1080,14 @@ struct StrongsAnalysisPane: View {
                             // draw of a different book's name.
                             .opacity(measured == nil ? 0 : 1)
                             .allowsHitTesting(false)
+                            // A fresh view per name, so each one measures
+                            // itself. A geometry observer reports a *change*:
+                            // two standout names that happen to draw the
+                            // same size would never report the second, and
+                            // the guard above — which trusts a measurement
+                            // only for the name it was taken from — would
+                            // then hold the label at nothing for good.
+                            .id(standout.element.name)
                     }
                 }
             }

@@ -116,7 +116,14 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             _ = try await library.importPersonalStudyData(
                 from: try named(url, as: path), forSync: true
             )
-            try await downloadNoteMedia(remotePath: path)
+            // The reader's own notes, which are always published under the
+            // collection's own name. Taking the module ID from the path
+            // instead asked a third-party notes module — which arrives in
+            // this same folder and is merged into the collection — for the
+            // reader's pictures at `NoteMedia/<that module>/<verse>/…`,
+            // where nothing has ever been, and the failure stopped its
+            // install on every pass.
+            try await downloadNoteMedia()
             return try await digestOfOwnExport(
                 .notes, adapterKind: .notes,
                 remoteModuleID: Self.remoteNotesModuleID, filename: "notes.lamp"
@@ -164,11 +171,21 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             // arrive on their own as a book's do.
             try installNoteModuleMedia(from: url, remotePath: path)
             return nil
-        case .devotionalMedia, .noteMedia:
-            // The reader's own notes and writings keep their attachments
-            // with what holds them, installed by the step that knows where
-            // that is. Reported rather than ignored, so nothing goes missing
-            // quietly.
+        case .noteMedia:
+            // One of the reader's own note pictures, arriving on its own.
+            // It used to be refused here, on the grounds that the notes
+            // collection fetches its own attachments — but that step runs
+            // only when the collection file itself arrives. A picture that
+            // failed to come down once, with the notes unchanged since, was
+            // then planned every pass and refused every pass, for ever. The
+            // path says which verse it belongs to, which is all that is
+            // needed to put it away.
+            try installNoteMedia(from: url, remotePath: path)
+            return nil
+        case .devotionalMedia:
+            // A writing's attachments are installed by the step that takes
+            // the writing in. Reported rather than ignored, so nothing goes
+            // missing quietly.
             throw PassError.unsupported(path)
         }
     }
@@ -179,9 +196,7 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
     /// the file that arrived: the download skips what is already on disk, so
     /// asking widely costs a directory check per file and catches a note
     /// whose picture failed to arrive on an earlier pass.
-    private func downloadNoteMedia(remotePath: String) async throws {
-        let moduleID = LampSyncFolderLayout.remoteModuleID(of: remotePath)
-            ?? Self.remoteNotesModuleID
+    private func downloadNoteMedia() async throws {
         let owners = try await library.personalNotesWithMedia().map {
             LampSyncDevotionalMedia.Owner(
                 id: LampLibrary.noteMediaOwnerID($0.reference), mediaJSON: $0.mediaJSON
@@ -189,7 +204,7 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
         }
         guard !owners.isEmpty else { return }
         try await LampSyncDevotionalMedia.downloadToLibrary(
-            scope: .note, owners: owners, from: moduleID, into: library.rootURL
+            scope: .note, owners: owners, from: Self.remoteNotesModuleID, into: library.rootURL
         ) { path in
             try await readRemote(path)
         }
@@ -223,13 +238,30 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
     /// where `LampLibrary.noteMediaURL` looks for it. Keyed by the module
     /// rather than a verse: the module declares its pictures once and its
     /// notes point at them by id.
+    /// One of the reader's own note pictures, under `Media/Notes/<verse>/`,
+    /// which is where `LampLibrary.noteMediaURL` looks for it.
+    private func installNoteMedia(from url: URL, remotePath: String) throws {
+        let components = remotePath.split(separator: "/").map(String.init)
+        guard components.count == 4,
+              let destination = LampPortableDevotionalMedia.folderURL(
+                  rootURL: library.rootURL, scope: .note, ownerID: components[2]
+              )?.appendingPathComponent(components[3])
+        else { throw PassError.unsupported(remotePath) }
+        try place(url, at: destination)
+    }
+
     private func installNoteModuleMedia(from url: URL, remotePath: String) throws {
         let components = remotePath.split(separator: "/").map(String.init)
         guard components.count == 3,
               let destination = LampPortableDevotionalMedia.folderURL(
-                  rootURL: library.rootURL, scope: .note, ownerID: components[1]
+                  rootURL: library.rootURL, scope: .note,
+                  ownerID: LampLibrary.noteModuleMediaOwnerID(components[1])
               )?.appendingPathComponent(components[2])
         else { throw PassError.unsupported(remotePath) }
+        try place(url, at: destination)
+    }
+
+    private func place(_ url: URL, at destination: URL) throws {
         try fileManager.createDirectory(
             at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
         )

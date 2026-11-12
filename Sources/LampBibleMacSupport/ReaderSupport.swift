@@ -963,7 +963,23 @@ public enum DevotionalMarkdownParser {
             textLines.removeAll()
         }
 
+        // A fenced block is the author's literal text, whatever it holds.
+        // Without this a `![map](media/M)` written *as an example* inside
+        // one became a picture, and the flush that put the picture after
+        // its line cut the fence in half as well.
+        var fence: DevotionalProseParser.Fence?
+
         for line in markdown.components(separatedBy: .newlines) {
+            if let open = fence {
+                textLines.append(line)
+                if DevotionalProseParser.isFenceClosing(line, fence: open) { fence = nil }
+                continue
+            }
+            if let open = DevotionalProseParser.fenceOpening(line) {
+                fence = open
+                textLines.append(line)
+                continue
+            }
             let range = NSRange(line.startIndex..<line.endIndex, in: line)
             if let match = imagePattern.firstMatch(in: line, range: range),
                let captionRange = Range(match.range(at: 1), in: line),
@@ -1021,10 +1037,14 @@ public enum DevotionalMarkdownParser {
         from line: String
     ) -> (prose: String, media: [DevotionalMarkdownBlock]) {
         guard line.contains("](") else { return (line, []) }
+        // A code span is the author's literal text too, in the small.
+        let code = codeSpans(in: line)
         let found: [(range: NSRange, label: String, block: DevotionalMarkdownBlock)] =
             inlineMediaPattern.matches(
                 in: line, range: NSRange(line.startIndex..<line.endIndex, in: line)
             ).compactMap { match in
+                guard !code.contains(where: { NSIntersectionRange($0, match.range).length > 0 })
+                else { return nil }
                 guard let labelRange = Range(match.range(at: 2), in: line),
                       let urlRange = Range(match.range(at: 3), in: line),
                       let url = URL(string: String(line[urlRange])) else { return nil }
@@ -1049,6 +1069,50 @@ public enum DevotionalMarkdownParser {
             prose.replaceCharacters(in: item.range, with: item.label)
         }
         return (prose as String, found.map(\.block))
+    }
+
+    /// The parts of a line inside backticks, which are quoted rather than
+    /// written: a run of N backticks opens a span that the next run of
+    /// exactly N closes, as Markdown has it.
+    private static func codeSpans(in line: String) -> [NSRange] {
+        guard line.contains("`") else { return [] }
+        let characters = Array(line.utf16)
+        let tick = UInt16(UInt8(ascii: "`"))
+        var spans: [NSRange] = []
+        var index = 0
+        while index < characters.count {
+            guard characters[index] == tick else {
+                index += 1
+                continue
+            }
+            var length = 0
+            while index + length < characters.count, characters[index + length] == tick {
+                length += 1
+            }
+            let openStart = index
+            var search = index + length
+            var closed = false
+            while search < characters.count {
+                guard characters[search] == tick else {
+                    search += 1
+                    continue
+                }
+                var run = 0
+                while search + run < characters.count, characters[search + run] == tick {
+                    run += 1
+                }
+                if run == length {
+                    spans.append(NSRange(location: openStart, length: search + run - openStart))
+                    index = search + run
+                    closed = true
+                    break
+                }
+                search += run
+            }
+            // An unmatched run opens nothing; the rest of the line is prose.
+            if !closed { index = openStart + length }
+        }
+        return spans
     }
 
     private static func isAudioURL(_ url: URL) -> Bool {
@@ -1118,13 +1182,13 @@ public enum DevotionalHeadingMatch {
 
 public enum DevotionalProseParser {
     /// An opening fence: how it was drawn, and what it says the code is.
-    private struct Fence {
+    fileprivate struct Fence {
         let marker: Character
         let length: Int
         let language: String?
     }
 
-    private static func fenceOpening(_ line: String) -> Fence? {
+    fileprivate static func fenceOpening(_ line: String) -> Fence? {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         guard let marker = trimmed.first, marker == "`" || marker == "~" else { return nil }
         let length = trimmed.prefix { $0 == marker }.count
@@ -1140,7 +1204,7 @@ public enum DevotionalProseParser {
     }
 
     /// A closing fence is the same character, at least as long, and says nothing.
-    private static func isFenceClosing(_ line: String, fence: Fence) -> Bool {
+    fileprivate static func isFenceClosing(_ line: String, fence: Fence) -> Bool {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         guard trimmed.allSatisfy({ $0 == fence.marker }) else { return false }
         return trimmed.count >= fence.length

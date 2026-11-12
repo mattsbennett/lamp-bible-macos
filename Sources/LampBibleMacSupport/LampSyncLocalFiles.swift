@@ -99,7 +99,8 @@ extension LampSyncLocalFiles {
         for module in modules {
             for filename in module.filenames {
                 guard let localURL = LampPortableDevotionalMedia.folderURL(
-                    rootURL: libraryRoot, scope: .note, ownerID: module.moduleID
+                    rootURL: libraryRoot, scope: .note,
+                    ownerID: LampLibrary.noteModuleMediaOwnerID(module.moduleID)
                 )?.appendingPathComponent(filename),
                     let path = try? LampSyncFolderLayout.noteModuleMediaPath(
                         moduleID: module.moduleID, filename: filename

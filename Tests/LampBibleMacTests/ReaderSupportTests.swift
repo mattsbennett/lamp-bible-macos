@@ -872,6 +872,38 @@ struct ReaderSupportTests {
         ])
     }
 
+    /// Markdown shown *as* Markdown is left alone.
+    ///
+    /// A writing explaining how a picture is written would have had its own
+    /// example turned into a picture, and the flush that puts a picture
+    /// after its line cut the fence in half besides.
+    @Test func mediaWrittenInsideCodeIsLeftAsWritten() {
+        let fenced = """
+            Write it like this:
+
+            ```markdown
+            ![the tomb](media/TOMB)
+            He wept at the ![tomb](media/TOMB), and then left.
+            ```
+
+            Then it draws.
+            """
+        let blocks = DevotionalMarkdownParser.parse(fenced)
+        #expect(blocks.count == 1, "one run of prose, no pictures")
+        guard case .text(let text)? = blocks.first else {
+            Issue.record("expected one text block")
+            return
+        }
+        #expect(text.contains("```markdown"))
+        #expect(text.contains("![the tomb](media/TOMB)"), "the example survives verbatim")
+        #expect(text.hasSuffix("Then it draws."), "and the fence still closes")
+
+        // The same in the small: a code span inside a sentence.
+        #expect(DevotionalMarkdownParser.parse(
+            "Write `![tomb](media/TOMB)` to place one."
+        ) == [.text("Write `![tomb](media/TOMB)` to place one.")])
+    }
+
     /// A line that is nothing but a picture is still one block, not a block
     /// and an empty paragraph: that is how a writing carries its pictures and
     /// it must not change.

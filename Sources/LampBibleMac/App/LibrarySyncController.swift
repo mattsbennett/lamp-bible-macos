@@ -1025,6 +1025,9 @@ extension LibrarySyncController {
             fileManager: fileManager
         )
         candidates += notePictures.candidates
+        result.gaps += LampSyncLocalFiles.unresolved(
+            notePictures.missing, candidates: notePictures.candidates, manifest: manifest
+        )
 
         // A notes module's pictures, which are not inside its .lamp either.
         let notesModulePictures = LampSyncLocalFiles.noteModuleMedia(
@@ -1033,6 +1036,14 @@ extension LibrarySyncController {
             fileManager: fileManager
         )
         candidates += notesModulePictures.candidates
+        // Said rather than swallowed, as a writing's are: a picture a note
+        // refers to and the library does not hold is published as a
+        // reference to bytes that were never sent, and the other device has
+        // no way to find out.
+        result.gaps += LampSyncLocalFiles.unresolved(
+            notesModulePictures.missing,
+            candidates: notesModulePictures.candidates, manifest: manifest
+        )
 
         // A book's pictures, for the books in the library and any the
         // manifest already names — the gate that keeps a picture belonging to
