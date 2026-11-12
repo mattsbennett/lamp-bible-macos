@@ -651,8 +651,13 @@ struct LibraryRootView: View {
         // at its verse: ⌥↩ on John 3:16 in the palette opens a new window
         // there, not at the top of John 3.
         let pending = model.takePendingReaderLocation()
+        // The open tab as it was left: where it was scrolled, and its
+        // selected verse. A place asked for instead goes to its verse.
+        if pending == nil { workspace.scrollMemory.prepare(tab: readerTabs.selectedID) }
         workspace.start(model: model, at: pending ?? readerTabs.selectedTab?.location)
-        if let verse = pending?.verseReference { workspace.focusVerse(verse) }
+        if let verse = (pending ?? readerTabs.selectedTab?.location)?.verseReference {
+            workspace.focusVerse(verse)
+        }
         model.activeReader = workspace
     }
 
@@ -669,8 +674,10 @@ struct LibraryRootView: View {
     /// are.
     private func duplicateReaderTab(_ id: UUID) {
         readerTabs.updateSelected(location: workspace.currentLocation)
+        workspace.scrollMemory.save(tab: readerTabs.selectedID)
         recordTabSidebar()
         guard let location = readerTabs.duplicate(id) else { return }
+        workspace.scrollMemory.prepare(tab: readerTabs.selectedID)
         adoptTabSidebar()
         workspace.openTab(at: location)
         selection = .section(.reader)
@@ -682,8 +689,9 @@ struct LibraryRootView: View {
 
     private func openReaderTab(at location: ReaderLocation) {
         readerTabs.updateSelected(location: workspace.currentLocation)
+        workspace.scrollMemory.save(tab: readerTabs.selectedID)
         recordTabSidebar()
-        readerTabs.add(location: location)
+        workspace.scrollMemory.prepare(tab: readerTabs.add(location: location))
         adoptTabSidebar()
         workspace.openTab(at: location)
         selection = .section(.reader)
@@ -1897,7 +1905,11 @@ private struct ReaderScrollViewLink: NSViewRepresentable {
         override func layout() {
             super.layout()
             if let scrollView = enclosingScrollView { memory?.register(scrollView, passage: passage) }
-            // After the pass that laid the passage out, not during it.
+            // In this layout, before the passage is first drawn: put back
+            // after it, the page showed at its top for a frame and jumped.
+            memory?.restoreIfReady(passage: passage)
+            // And once more after the pass, for a passage whose document
+            // was not yet its full height when this view was laid out.
             let passage = passage
             DispatchQueue.main.async { [weak self] in
                 self?.memory?.restoreIfReady(passage: passage)
@@ -4661,6 +4673,9 @@ private struct TranslationReaderView: View, Equatable {
                     if !oldPhase.isUserDriven, newPhase.isUserDriven {
                         scrollLink.readerUserScrollDidBegin()
                     }
+                    // Where the open tab is, each time a scroll settles, so
+                    // quitting keeps it.
+                    if newPhase == .idle { workspace.scrollMemory.saveCurrent() }
                     guard oldPhase.isScrolling,
                           !newPhase.isScrolling,
                           readerReachedBottom(context.geometry) else { return }
@@ -4675,6 +4690,10 @@ private struct TranslationReaderView: View, Equatable {
                     proxy.scrollTo(scrollTarget(for: reference, in: chapters), anchor: .top)
                 }
                 .onAppear { scrollToReaderLocation(proxy, chapters: chapters) }
+                // And when the app quits, for a place no settled scroll noted.
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                    workspace.scrollMemory.saveCurrent()
+                }
                 .onChange(of: workspace.selectedVerseReference) { _, _ in
                     // Selecting a verse by clicking it in the reader must not move
                     // the reader: the verse is already under the pointer. This
@@ -6472,6 +6491,11 @@ private struct TranslationReaderView: View, Equatable {
             withAnimation(.easeInOut(duration: 0.2)) {
                 proxy.scrollTo(target, anchor: .center)
             }
+        }
+        // Where this put the page is where the tab now is: an older place
+        // in the same chapter must not win when the app is opened again.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [scrollMemory = workspace.scrollMemory] in
+            scrollMemory.saveCurrent()
         }
     }
 

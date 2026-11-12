@@ -425,74 +425,115 @@ struct ReaderRecentChapters {
 ///
 /// Choosing a tab used to open its chapter as a jump from search does,
 /// scrolling to its selected verse with an animation, so every switch moved
-/// the page. Each tab now goes back to the exact offset it was left at.
+/// the page. Each tab now goes back to the exact offset it was left at, and
+/// so does the window's open tab when the app is opened again.
 ///
-/// A plain class, read and written only on a switch: nothing observes it, so
-/// scrolling invalidates nothing. The offset is the reader's own scroll
-/// view's, read from it and given back to it, so no coordinate is converted.
+/// A plain class: nothing observes it, so scrolling invalidates nothing. The
+/// offset is the reader's own scroll view's, read from it and given back to
+/// it, so no coordinate is converted. It is put back during the layout that
+/// sizes the passage, before the passage is first drawn; put back after,
+/// the page showed at its top for a frame and then jumped.
 @MainActor
 final class ReaderScrollMemory {
-    private struct Place {
+    private struct Place: Codable {
         /// The passage the offset was taken in: an offset means nothing in
         /// another chapter.
         let passage: String
-        let y: CGFloat
+        let y: Double
     }
 
+    private struct Pending {
+        let place: Place
+        let asked: Date
+        /// When its passage first appeared. A launch can take seconds to
+        /// show a chapter; only once it is there does the wait begin.
+        var seen: Date?
+    }
+
+    private let defaults: UserDefaults
     private weak var scrollView: NSScrollView?
     private var scrollPassage: String?
     private var places: [UUID: Place] = [:]
-    private var pending: (place: Place, asked: Date)?
+    private var pending: Pending?
+    /// The tab the reader is showing, whose place a settled scroll records.
+    private var currentTab: UUID?
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
 
     /// The reader's scroll view, from inside the passage it is showing.
     func register(_ scrollView: NSScrollView, passage: String) {
         self.scrollView = scrollView
         scrollPassage = passage
+        if pending?.place.passage == passage, pending?.seen == nil { pending?.seen = Date() }
     }
 
-    /// Notes where the tab being left is scrolled.
+    /// Notes where a tab is scrolled: the tab being left, or the one being
+    /// read when its scrolling settles. Kept across launches.
     func save(tab: UUID) {
+        // Not while a tab is being put back: the passage is still at the top
+        // it opened at, which is not where anyone left it.
+        if let pending, !isStale(pending) { return }
         guard let scrollView, let scrollPassage else { return }
-        places[tab] = Place(passage: scrollPassage, y: scrollView.contentView.bounds.origin.y)
+        let place = Place(passage: scrollPassage, y: scrollView.contentView.bounds.origin.y)
+        guard places[tab]?.passage != place.passage || places[tab]?.y != place.y else { return }
+        places[tab] = place
+        if let data = try? JSONEncoder().encode(place) {
+            defaults.set(data, forKey: Self.key(for: tab))
+        }
     }
 
-    /// Readies the tab being chosen to go back to where it was left. False
-    /// when it has no place to go back to — its first showing.
+    /// Records the open tab's place once a scroll has settled, so quitting
+    /// — or a crash — keeps it.
+    func saveCurrent() {
+        if let currentTab { save(tab: currentTab) }
+    }
+
+    /// Readies a tab being shown to go back to where it was left: chosen in
+    /// the bar, or opened with the window. False when it has no place yet.
     @discardableResult
     func prepare(tab: UUID) -> Bool {
-        pending = places[tab].map { ($0, Date()) }
+        currentTab = tab
+        pending = place(of: tab).map { Pending(place: $0, asked: Date()) }
         return pending != nil
     }
 
-    func forget(tab: UUID) { places[tab] = nil }
+    func forget(tab: UUID) {
+        places[tab] = nil
+        defaults.removeObject(forKey: Self.key(for: tab))
+    }
 
     /// Whether `passage` is about to be put back where it was left, so the
     /// reader should not scroll it anywhere itself.
     func isRestoring(_ passage: String) -> Bool {
-        guard let pending, Date().timeIntervalSince(pending.asked) < Self.patience else { return false }
+        guard let pending, !isStale(pending) else { return false }
         return pending.place.passage == passage
     }
 
     /// Puts the passage back where it was left, once its scroll view is
-    /// there and laid out. Asked again at each layout until it happens;
-    /// given up after a moment, so a late layout never jumps the page.
+    /// there and laid out. Asked at each layout until it happens; given up
+    /// a moment after the passage appears, so a late layout never jumps the
+    /// page.
     func restoreIfReady(passage: String) {
-        guard let pending, pending.place.passage == passage, scrollPassage == passage,
+        guard let current = pending, current.place.passage == passage, scrollPassage == passage,
               let scrollView, let document = scrollView.documentView else { return }
-        guard Date().timeIntervalSince(pending.asked) < Self.patience else {
-            self.pending = nil
+        guard !isStale(current) else {
+            pending = nil
             return
         }
         // Not until the passage has laid out: before, there is nothing to
         // scroll. A passage now shorter (a wider window) stops at its end.
         let clip = scrollView.contentView
         guard document.frame.height > clip.bounds.height else {
-            if document.frame.height > 0 { self.pending = nil }
+            if document.frame.height > 0 { pending = nil }
             return
         }
-        self.pending = nil
+        pending = nil
         let bottom = max(document.frame.height - clip.bounds.height, 0)
-        clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: min(pending.place.y, bottom)))
+        let y = min(CGFloat(current.place.y), bottom)
+        guard clip.bounds.origin.y != y else { return }
+        clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: y))
         scrollView.reflectScrolledClipView(clip)
     }
 
@@ -502,6 +543,18 @@ final class ReaderScrollMemory {
         if let scrollPassage { restoreIfReady(passage: scrollPassage) }
     }
 
-    /// How long a switch waits for its passage to lay out.
-    private static let patience: TimeInterval = 1.5
+    private func place(of tab: UUID) -> Place? {
+        if let place = places[tab] { return place }
+        guard let data = defaults.data(forKey: Self.key(for: tab)),
+              let place = try? JSONDecoder().decode(Place.self, from: data) else { return nil }
+        places[tab] = place
+        return place
+    }
+
+    private func isStale(_ pending: Pending) -> Bool {
+        if let seen = pending.seen { return Date().timeIntervalSince(seen) > 1.5 }
+        return Date().timeIntervalSince(pending.asked) > 30
+    }
+
+    static func key(for tab: UUID) -> String { "reader.tabs.scroll.\(tab.uuidString)" }
 }
