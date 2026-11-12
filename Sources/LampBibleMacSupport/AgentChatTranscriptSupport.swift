@@ -355,12 +355,21 @@ public struct AgentChatTranscript: Codable, Equatable, Sendable {
             result.sessionID = nil
             result.sessionInstallID = nil
         }
-        // Undoing a turn is something that happened in this conversation.
-        // Left out, the conversation's last activity went *backwards* when
-        // a turn was undone, and a cleared conversation from another Mac
-        // then won or lost by the order the copies happened to be merged
-        // in — with the loser's turns thrown away either way.
-        result.removedAt = [removedAt, date].compactMap { $0 }.max()
+        // Undoing a turn is something that happened in this conversation,
+        // and so is everything the undo took out of it. Left out, the
+        // conversation's last activity went *backwards* when a turn was
+        // undone, and a cleared conversation from another Mac then won or
+        // lost by the order the copies happened to be merged in — with the
+        // loser's turns thrown away either way.
+        //
+        // The times of what is removed are kept, not only the moment of
+        // removing: a turn answered on the Mac that was still running it
+        // arrives later than the undo, and dropping that answer would
+        // lower the conversation's activity again every time it was met.
+        let removedDates = all
+            .filter { union.contains($0.id) }
+            .flatMap { $0.events.map(\.date) }
+        result.removedAt = ([removedAt, date] + removedDates).compactMap { $0 }.max()
         return result
     }
 

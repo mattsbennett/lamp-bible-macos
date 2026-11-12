@@ -1412,7 +1412,11 @@ struct DevotionalAgentWorkspaceView: View {
             writeEditorFocus(editorFocus)
 
             apply(try reconciler(for: workspace).prepare(
-                writing: draftMarkdown, provider: activeProvider?.shortName
+                writing: draftMarkdown,
+                provider: activeProvider?.shortName,
+                // A run outlives its pane, so reopening is when its work
+                // is found — and it belongs to the turn that asked for it.
+                turnID: chatTurn
             ), in: workspace)
             refreshWorkspaceMetadata(in: workspace)
             Task { await importPresentationArtifactIfNeeded(in: workspace) }
@@ -1457,7 +1461,11 @@ struct DevotionalAgentWorkspaceView: View {
         switch outcome {
         case .unchanged:
             break
-        case .take(let draft):
+        case .take(let draft), .adopt(let draft):
+            // `.adopt` is another window's doing, already in the history
+            // under its name. This pane takes the text and records
+            // nothing — but it does have to take it, or its own next save
+            // writes the older copy back over the newer one.
             importDraft(draft)
         case .keep(let note):
             contextNote = note
@@ -1637,6 +1645,13 @@ struct DevotionalAgentWorkspaceView: View {
             guard let loaded = try? await DevotionalAgentRevisionHistory.shared.revisions(
                 in: workspace
             ) else { return }
+            // Only while this read is still the newest one asked for. A
+            // restore writes the history and installs its own result
+            // while a poll's read is in flight; assigning unconditionally
+            // put the older list back, and because the token had moved on
+            // with it, no later pass read again — the restore stayed
+            // missing from the history until the pane was reopened.
+            guard loadedRevisionsToken == token else { return }
             if loaded != revisions { revisions = loaded }
         }
     }

@@ -2348,7 +2348,15 @@ struct DevotionalEditorView: View {
     /// and left that file as the turn had made it. The set is the one the
     /// editor opens, so the two cannot drift apart again.
     private func supportsRevisionHistory(_ url: URL) -> Bool {
-        WorkspaceTextFileStore.supportedExtensions.contains(url.pathExtension.lowercased())
+        if WorkspaceTextFileStore.supportedExtensions.contains(url.pathExtension.lowercased()) {
+            return true
+        }
+        // Anything hand-opened counts too. `openableSnapshot` takes any
+        // readable text file at any extension, so a `notes.rst` opened
+        // deliberately was edited here like the rest and recorded like
+        // none of them — and a turn that changed it passed the undo's
+        // "it also changed something else" refusal.
+        return workspaceDocuments.contains { $0.url == url }
     }
 
     /// Writes transitions to a document's history, in the order they happened.
@@ -2535,13 +2543,27 @@ struct DevotionalEditorView: View {
         guard let externalText = workspaceDocuments[index].externalText else { return }
         let localText = workspaceDocuments[index].text
         if supportsRevisionHistory(workspaceDocuments[index].url) {
+            var pending: [PendingWorkspaceRevision] = []
+            // What the writer had typed and is now giving up. Recorded as
+            // theirs, and first: the agent's arrival is already in the
+            // history by now, so a record of this transition *to* it adds
+            // nothing the duplicate rule will keep — and their words would
+            // be in neither the file nor the history.
+            if localText != workspaceDocuments[index].persistedText {
+                pending.append(PendingWorkspaceRevision(
+                    kind: .userEdit,
+                    before: workspaceDocuments[index].persistedText,
+                    after: localText
+                ))
+            }
+            pending.append(PendingWorkspaceRevision(
+                kind: .agentEdit,
+                before: localText,
+                after: externalText,
+                turnID: agentChatTurn
+            ))
             recordWorkspaceRevisions(
-                [PendingWorkspaceRevision(
-                    kind: .agentEdit,
-                    before: localText,
-                    after: externalText,
-                    turnID: agentChatTurn
-                )],
+                pending,
                 documentPath: documentID,
                 failureNote: "Revision history could not be updated"
             )

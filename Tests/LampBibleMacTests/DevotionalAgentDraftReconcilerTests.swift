@@ -125,7 +125,9 @@ struct DevotionalAgentDraftReconcilerTests {
         // sentence.
         let turn = UUID()
         let outcome = try two.reconcile(writing: "Base", turnID: turn)
-        #expect(outcome == .unchanged)
+        // Taken up, since this window is behind — but recorded by nobody,
+        // which is the point: it is the person's typing, not a turn's.
+        #expect(outcome == .adopt("Base, and a new sentence"))
         #expect(
             try history(in: workspace).isEmpty,
             "the typing is the person's, and belongs to no agent turn"
@@ -230,6 +232,61 @@ struct DevotionalAgentDraftReconcilerTests {
             try history(in: workspace).contains { $0.beforeMarkdown == "Mine, with a new paragraph" },
             "the paragraph written between the two restores is recoverable"
         )
+    }
+
+    /// A second window has to take up what the first accounted for. It
+    /// records nothing — that is the first window's to record — but it
+    /// cannot go on holding the older text, or its own next save writes
+    /// that back over the newer one.
+    @Test func theOtherWindowTakesUpWhatThisOneAccountedFor() throws {
+        let workspace = try workspace()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let one = reconciler(workspace), two = reconciler(workspace)
+        try writeDraft("Base", to: workspace)
+        try one.synchronize(writing: "Base")
+
+        try one.synchronize(writing: "Base, and a new sentence")
+        let outcome = try two.reconcile(writing: "Base")
+        #expect(outcome == .adopt("Base, and a new sentence"))
+        #expect(try history(in: workspace).isEmpty, "and records nothing of its own")
+    }
+
+    /// A run outlives its pane, so reopening is when its work is found —
+    /// and that work belongs to the turn that asked for it.
+    @Test func workFoundOnReopeningKeepsItsTurn() throws {
+        let workspace = try workspace()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        try writeDraft("Base", to: workspace)
+        try reconciler(workspace).synchronize(writing: "Base")
+
+        // The pane closes mid-run; the run writes; the pane reopens.
+        try writeDraft("What the run wrote", to: workspace)
+        let turn = UUID()
+        let outcome = try reconciler(workspace).prepare(writing: "Base", turnID: turn)
+
+        #expect(outcome == .take("What the run wrote"))
+        #expect(
+            try history(in: workspace).contains { $0.turnID == turn },
+            "found late is not found unowned"
+        )
+    }
+
+    /// A restore writes the history, then the draft, then the writing. A
+    /// crash in the last step used to look exactly like the writer having
+    /// edited while the pane was closed — so the undone work was put back,
+    /// with its turn already gone from the conversation.
+    @Test func anInterruptedRestoreIsFinishedRatherThanReversed() throws {
+        let workspace = try workspace()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        try writeDraft("The agent's", to: workspace)
+        try reconciler(workspace).synchronize(writing: "The agent's")
+        _ = try reconciler(workspace).restore("Mine", writing: "The agent's")
+        // The draft and the mark are "Mine"; Lamp never got it.
+        #expect(try draft(in: workspace) == "Mine")
+
+        let outcome = try reconciler(workspace).prepare(writing: "The agent's")
+        #expect(outcome == .take("Mine"), "the history says what the restore was doing")
+        #expect(try draft(in: workspace) == "Mine")
     }
 
     /// The marker is read from the workspace every time, so a reconciler

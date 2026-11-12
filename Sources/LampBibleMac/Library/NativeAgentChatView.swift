@@ -925,6 +925,11 @@ final class NativeAgentChatModel: ObservableObject {
     /// from another Mac — which may have been written by a Lamp that drops
     /// what it has no name for — does not put them back.
     private var removedTurns: [UUID] = []
+    /// When a turn was last undone here. Held beside the list for the
+    /// same reason, and written out with it: built in `revert` and left
+    /// out of the save, the whole record of *when* an undo happened
+    /// lasted until the next write, which is to say no time at all.
+    private var removedAt: Date?
     /// Messages written while a reply was still arriving, in the order they
     /// will be sent.
     @Published private(set) var queued: [AgentChatQueue.Message] = []
@@ -1062,8 +1067,12 @@ final class NativeAgentChatModel: ObservableObject {
         // conversation, and what was undone in its predecessor says
         // nothing about it.
         let undone = transcript.conversationID == conversationID ? removedTurns : []
-        let transcript = transcript.removing(turns: undone)
+        let transcript = transcript.removing(
+            turns: undone,
+            at: transcript.conversationID == conversationID ? removedAt : nil
+        )
         removedTurns = transcript.removedTurns ?? []
+        removedAt = transcript.removedAt
         knownTranscript = transcript
         events = transcript.events ?? []
         conversationID = transcript.conversationID
@@ -1217,6 +1226,7 @@ final class NativeAgentChatModel: ObservableObject {
         // With the conversation they named. A list of undone turns outlives
         // the turns, not the conversation.
         removedTurns = []
+        removedAt = nil
         currentTurn = nil
         stepsRowIDs = [:]
         // The waiting messages were written to **this** conversation, and
@@ -1678,6 +1688,28 @@ final class NativeAgentChatModel: ObservableObject {
     func enqueue(_ text: String) {
         changeQueue { [conversationID] in $0.add(text, conversation: conversationID) }
     }
+
+    /// Whether this waiting message still belongs to the conversation it
+    /// was written to.
+    ///
+    /// Asked again at the moment of sending, not only when the queue was
+    /// read: a New Chat can arrive from another Mac while a message is
+    /// being prepared, and the retry that follows would otherwise pick up
+    /// the new conversation as though the message had always been meant
+    /// for it.
+    func stillBelongs(_ message: AgentChatQueue.Message) -> Bool {
+        guard let written = message.conversation, let conversationID else { return true }
+        return written == conversationID
+    }
+
+    /// Takes out what was written to a conversation that has since been
+    /// put away somewhere else.
+    func dropMessagesWrittenElsewhere() {
+        guard let conversationID else { return }
+        guard queued.contains(where: { $0.conversation.map { $0 != conversationID } ?? false })
+        else { return }
+        changeQueue { $0.removeWrittenElsewhere(than: conversationID) }
+    }
     /// Refused for a message already being sent: taking it out of the
     /// queue would not take it out of the conversation.
     func removeQueued(_ id: UUID) {
@@ -1705,7 +1737,14 @@ final class NativeAgentChatModel: ObservableObject {
     /// them was refused by the running guard after its queue entry had
     /// already gone.
     func reserveNextQueued() -> AgentChatQueue.Message? {
-        guard reservedQueued == nil, let next = queued.first else { return nil }
+        guard reservedQueued == nil else { return nil }
+        // Checked here, every time, rather than once when the queue was
+        // read. A New Chat can arrive from another Mac while a message is
+        // being prepared; the send is refused, the message goes back to
+        // waiting, and the next attempt would otherwise take the new
+        // conversation as the one it had always been meant for.
+        dropMessagesWrittenElsewhere()
+        guard let next = queued.first, stillBelongs(next) else { return nil }
         reservedQueued = next.id
         return next
     }
@@ -1828,7 +1867,8 @@ final class NativeAgentChatModel: ObservableObject {
             // reaching for the old ones wrote the cleared questions back
             // under a new conversation's id.
             events: events,
-            removedTurns: removedTurns.isEmpty ? nil : removedTurns
+            removedTurns: removedTurns.isEmpty ? nil : removedTurns,
+            removedAt: removedAt
         )
         let onDisk = AgentChatTranscriptStore.load(providerID: provider.rawValue, in: workspace)
         if onDisk != knownTranscript {

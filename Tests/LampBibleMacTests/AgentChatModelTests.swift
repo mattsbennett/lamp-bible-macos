@@ -259,6 +259,60 @@ struct AgentChatModelTests {
         #expect(model.queued.isEmpty, "those were written to the conversation being put away")
     }
 
+    /// The date an undo happened has to reach the file. Built in `revert`
+    /// and left out of the save, it lasted until the next write — and the
+    /// test that checked it drove the transcript directly, so it passed
+    /// while the path the reader takes dropped it every time.
+    @Test func whenATurnWasUndoneIsWrittenDown() throws {
+        let workspace = try workspace()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let second = UUID()
+        try AgentChatTranscriptStore.save(
+            conversation(UUID(), [(UUID(), 10, "One"), (second, 20, "Two")]),
+            providerID: providerID, in: workspace
+        )
+        let model = NativeAgentChatModel(provider: .claude, workspace: workspace, mode: .writing)
+        model.load()
+        #expect(model.revert(turns: model.turnsUndoneBy(second)))
+
+        let saved = onDisk(in: workspace)
+        let removedAt = try #require(saved.removedAt)
+        #expect(saved.lastActivity >= removedAt, "the undo is the newest thing in this conversation")
+        #expect(
+            saved.lastActivity > Date(timeIntervalSince1970: 21),
+            "and the conversation did not become older by having a turn taken out"
+        )
+
+        // And it survives an ordinary save that changes nothing else.
+        model.load()
+        #expect(onDisk(in: workspace).removedAt != nil)
+    }
+
+    /// A message waiting for a conversation that is put away *while it is
+    /// being prepared* must not be taken up by its replacement.
+    @Test func aMessageIsNotHandedToAConversationThatReplacedItsOwn() throws {
+        let workspace = try workspace()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        try AgentChatTranscriptStore.save(
+            conversation(UUID(), [(UUID(), 10, "One")]),
+            providerID: providerID, in: workspace
+        )
+        let model = NativeAgentChatModel(provider: .claude, workspace: workspace, mode: .writing)
+        model.load()
+        model.enqueue("Ask about Hebrews 4")
+        #expect(model.queued.count == 1)
+
+        // The other Mac starts again, and it syncs before the message goes.
+        try AgentChatTranscriptStore.save(
+            conversation(UUID(), [(UUID(), 40, "A fresh start")]),
+            providerID: providerID, in: workspace
+        )
+        model.reloadIfChangedOnDisk()
+
+        #expect(model.reserveNextQueued() == nil, "not into a conversation it was never written to")
+        #expect(model.queued.isEmpty)
+    }
+
     /// Every pane on a workspace is one chat, and every pane is told which
     /// turn is running — including one that opened while it already was.
     @Test func everyPaneSharesTheChatAndIsToldWhereItStands() throws {

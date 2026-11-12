@@ -46,6 +46,13 @@ struct DevotionalAgentDraftReconciler {
         /// Take this text into the writing: an agent wrote it, and the
         /// writing had not moved under it.
         case take(String)
+        /// Take this text, and record nothing: somebody else — another
+        /// window on the same writing — has already accounted for it.
+        ///
+        /// Without this, a second pane advanced its mark to the
+        /// workspace's and left its editor holding the older text, which
+        /// the next save then wrote back over the newer one.
+        case adopt(String)
         /// Keep the writing as it is. The draft that arrived is in the
         /// history instead, and this says so.
         case keep(note: String)
@@ -92,7 +99,12 @@ struct DevotionalAgentDraftReconciler {
         turnID: UUID? = nil
     ) throws -> Outcome {
         let diskDraft = try draftOnDisk()
-        guard let marker = marker(), diskDraft != marker else { return .unchanged }
+        guard let marker = marker(), diskDraft != marker else {
+            // Accounted for already. By this pane on an earlier pass, or
+            // by another window on the same writing — and in the second
+            // case this one is still holding the older text.
+            return diskDraft == writing ? .unchanged : .adopt(diskDraft)
+        }
         return try takeOrKeep(
             diskDraft: diskDraft, writing: writing, previous: marker,
             provider: provider, turnID: turnID
@@ -101,7 +113,9 @@ struct DevotionalAgentDraftReconciler {
 
     /// Opening the pane, where the two may have moved apart while it was
     /// closed — including by a run that outlived it.
-    func prepare(writing: String, provider: String? = nil) throws -> Outcome {
+    func prepare(
+        writing: String, provider: String? = nil, turnID: UUID? = nil
+    ) throws -> Outcome {
         let diskDraft = try draftOnDisk()
         let persisted = marker()
         if diskDraft == writing {
@@ -109,6 +123,23 @@ struct DevotionalAgentDraftReconciler {
             return .unchanged
         }
         if persisted == diskDraft {
+            // A restore that never reached the writing looks exactly like
+            // this: the draft and the mark agree on the restored text
+            // while Lamp still holds what was undone. Taking the writing
+            // as the newer side put the undone work back — and the undo
+            // had already taken its turn out of the conversation, so
+            // nothing was left to say it had happened.
+            //
+            // The history is what tells them apart. It is written before
+            // the draft, so a restore that was interrupted anywhere after
+            // it still says what it was doing.
+            if let latest = try? DevotionalAgentRevisionStore.revisions(in: workspace).first,
+               latest.kind == .restoration,
+               latest.afterMarkdown == diskDraft,
+               latest.beforeMarkdown == writing {
+                try markSynced(diskDraft)
+                return .take(diskDraft)
+            }
             // The writing changed while the pane was closed, so its
             // current text is the newer side of the live workspace.
             try DevotionalAgentWorkspaceStore.writeDraftContent(writing, to: workspace)
@@ -125,7 +156,11 @@ struct DevotionalAgentDraftReconciler {
             writing: writing,
             previous: persisted,
             provider: provider,
-            turnID: nil,
+            // The run can still be going: a pane closing does not stop it,
+            // and reopening is exactly when its work is found. Recorded
+            // with no turn, that work belonged to nothing, and undoing the
+            // turn that asked for it left it in the writing.
+            turnID: turnID,
             writingMovedSince: persisted.map { $0 != writing } ?? false
         )
     }
@@ -296,7 +331,7 @@ struct DevotionalAgentDraftReconciler {
     /// says what the writing holds afterwards.
     private func adopted(_ writing: String, provider: String?) throws -> String {
         switch try reconcile(writing: writing, provider: provider) {
-        case .take(let draft): return draft
+        case .take(let draft), .adopt(let draft): return draft
         case .unchanged, .keep: return writing
         }
     }
