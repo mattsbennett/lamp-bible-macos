@@ -1462,11 +1462,20 @@ struct DevotionalAgentWorkspaceView: View {
         case .keep(let note):
             contextNote = note
         }
-        if let draft = try? DevotionalAgentWorkspaceStore.readDraft(from: workspace) {
+        // Assigned only on a real change: this runs several times a
+        // second, and assigning `@State` at all redraws the pane whether
+        // or not the value differs.
+        if let draft = try? DevotionalAgentWorkspaceStore.readDraft(from: workspace),
+           draft != workspaceDraft {
             workspaceDraft = draft
         }
-        lastSyncedDraft = reconciler(for: workspace).marker() ?? lastSyncedDraft
-        revisions = (try? DevotionalAgentRevisionStore.revisions(in: workspace)) ?? revisions
+        if let marker = reconciler(for: workspace).marker(), marker != lastSyncedDraft {
+            lastSyncedDraft = marker
+        }
+        // The history is **not** read here. Reading it decodes every file
+        // in the folder, and this is the polling path: that read belongs
+        // to `refreshWorkspaceMetadata`, which lists the folder first and
+        // only reads when the listing says it has moved.
     }
 
     private func synchronizeEditorDraft(_ draft: String) {
@@ -1477,9 +1486,8 @@ struct DevotionalAgentWorkspaceView: View {
                 provider: activeProvider?.shortName,
                 turnID: chatTurn
             )
-            lastSyncedDraft = draft
-            workspaceDraft = draft
-            revisions = (try? DevotionalAgentRevisionStore.revisions(in: workspaceURL)) ?? revisions
+            if lastSyncedDraft != draft { lastSyncedDraft = draft }
+            if workspaceDraft != draft { workspaceDraft = draft }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -1575,11 +1583,21 @@ struct DevotionalAgentWorkspaceView: View {
 
     /// What this pane holds about a workspace it has just written to.
     private func refreshAfterWriting(in workspace: URL) {
-        lastSyncedDraft = reconciler(for: workspace).marker() ?? lastSyncedDraft
-        if let draft = try? DevotionalAgentWorkspaceStore.readDraft(from: workspace) {
+        if let marker = reconciler(for: workspace).marker(), marker != lastSyncedDraft {
+            lastSyncedDraft = marker
+        }
+        if let draft = try? DevotionalAgentWorkspaceStore.readDraft(from: workspace),
+           draft != workspaceDraft {
             workspaceDraft = draft
         }
-        revisions = (try? DevotionalAgentRevisionStore.revisions(in: workspace)) ?? revisions
+        // Read here, and only here: this ran because something was just
+        // written, so the history has moved and the reader is looking at
+        // it. The polling path leaves it to the folder listing.
+        if let loaded = try? DevotionalAgentRevisionStore.revisions(in: workspace),
+           loaded != revisions {
+            revisions = loaded
+            loadedRevisionsToken = DevotionalAgentRevisionStore.historyToken(in: workspace)
+        }
     }
 
     /// Runs several times a second, so everything here is assigned only on a real
