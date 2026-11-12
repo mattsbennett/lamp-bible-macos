@@ -803,12 +803,68 @@ struct AgentChatUndoDurabilityTests {
         #expect(merged.turns.map(\.question) == ["One"])
     }
 
+    /// An answer written after the undo, on the Mac that was still
+    /// running the turn, is removed **and named** — or a later copy
+    /// without events reads it as a turn of its own and keeps it.
+    @Test func anAnswerThatArrivesAfterTheUndoIsNamedToo() throws {
+        let id = UUID(), turn = UUID()
+        let question = conversation(id, [(turn, 10, "One")])
+        let undone = try #require(question.trimmed(from: turn))
+
+        // The Mac that ran it finishes and records the answer.
+        var answered = question
+        let late = [event(turn, 40, AgentChatTranscript.Event.said, role: .assistant, text: "Late.")]
+        answered.events = (answered.events ?? []) + late
+        answered.messages += AgentChatTranscript.messages(from: late)
+
+        let merged = AgentChatTranscriptMerge.merge(local: undone, incoming: answered)
+        #expect(merged.turns.isEmpty)
+        let lateID = try #require(late.first?.id)
+        #expect(merged.removedTurns?.contains(lateID) == true, "the late answer is named")
+
+        // And a copy rewritten without events cannot bring it back.
+        var stripped = answered
+        stripped.events = nil
+        let again = AgentChatTranscriptMerge.merge(local: merged, incoming: stripped)
+        #expect(again.messages.isEmpty)
+    }
+
+    /// Undoing a turn is something that happened, so a conversation does
+    /// not become *less* recent by having one taken out of it — which
+    /// decided, by merge order alone, whether it survived a clear from
+    /// another Mac.
+    @Test func anUndoDoesNotMakeAConversationOlder() throws {
+        let id = UUID(), first = UUID(), second = UUID()
+        let full = conversation(id, [(first, 10, "One"), (second, 30, "Two")])
+        // The undo happens at 50; the clear on the other Mac at 20, before
+        // it. The undo is the more recent thing to have happened.
+        let undone = try #require(
+            full.trimmed(from: second, at: Date(timeIntervalSince1970: 50))
+        )
+        var cleared = conversation(UUID(), [(UUID(), 15, "Fresh")])
+        cleared.startedAt = Date(timeIntervalSince1970: 20)
+
+        let oneWay = AgentChatTranscriptMerge.merge(
+            local: AgentChatTranscriptMerge.merge(local: full, incoming: undone),
+            incoming: cleared
+        )
+        let other = AgentChatTranscriptMerge.merge(
+            local: AgentChatTranscriptMerge.merge(local: full, incoming: cleared),
+            incoming: undone
+        )
+        #expect(oneWay.conversationID == other.conversationID, "the same conversation survives either way")
+    }
+
     /// A conversation that was cleared is a different conversation, and what
     /// was undone in the one before says nothing about it.
     @Test func clearingIsNotHeldToAnEarlierUndo() throws {
         let first = UUID(), second = UUID()
         let full = conversation(UUID(), [(first, 10, "One"), (second, 20, "Two")])
-        let trimmed = try #require(full.trimmed(from: second))
+        // Undone at 25, and cleared on the other Mac at 40 — after it, so
+        // the clear is what happened last and the one that spreads.
+        let trimmed = try #require(
+            full.trimmed(from: second, at: Date(timeIntervalSince1970: 25))
+        )
         let fresh = conversation(UUID(), [(second, 40, "Asked again")])
 
         let merged = AgentChatTranscriptMerge.merge(local: trimmed, incoming: fresh)

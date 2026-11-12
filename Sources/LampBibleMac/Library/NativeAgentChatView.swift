@@ -1008,9 +1008,14 @@ private final class NativeAgentChatModel: ObservableObject {
         // closed, however it closed. The question carries the queued
         // message's own id, so this is an answer rather than a guess.
         let before = waiting.messages.count
-        waiting.removeAlreadySaid(
-            in: AgentChatTranscriptStore.load(providerID: provider.rawValue, in: workspace)
-        )
+        let stored = AgentChatTranscriptStore.load(providerID: provider.rawValue, in: workspace)
+        waiting.removeAlreadySaid(in: stored)
+        // And anything written to a conversation that has since been put
+        // away somewhere else. A New Chat here throws the queue away; one
+        // that arrives through sync had nothing here to throw it away, so
+        // the messages were drained into a conversation they were never
+        // written to.
+        waiting.removeWrittenElsewhere(than: stored.conversationID)
         if waiting.messages.count != before {
             try? AgentChatQueueStore.save(waiting, providerID: provider.rawValue, in: workspace)
         }
@@ -1670,7 +1675,9 @@ private final class NativeAgentChatModel: ObservableObject {
         try? AgentChatQueueStore.save(queue, providerID: provider.rawValue, in: workspace)
     }
 
-    func enqueue(_ text: String) { changeQueue { $0.add(text) } }
+    func enqueue(_ text: String) {
+        changeQueue { [conversationID] in $0.add(text, conversation: conversationID) }
+    }
     /// Refused for a message already being sent: taking it out of the
     /// queue would not take it out of the conversation.
     func removeQueued(_ id: UUID) {
@@ -1743,7 +1750,10 @@ private final class NativeAgentChatModel: ObservableObject {
             ?? AgentChatTranscriptStore.load(providerID: provider.rawValue, in: workspace)
         let names = base.names(of: Set(turns))
         guard !names.isEmpty else { return false }
-        show(base.removing(turns: names))
+        // Dated, because undoing a turn is activity in this conversation:
+        // without it the conversation reads as older than before, and a
+        // clear from another Mac then wins or loses by merge order alone.
+        show(base.removing(turns: names, at: Date()))
         return persistTranscript()
     }
 

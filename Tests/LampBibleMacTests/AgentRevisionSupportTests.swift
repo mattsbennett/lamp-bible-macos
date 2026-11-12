@@ -793,6 +793,32 @@ struct AgentRevisionDemotionSafetyTests {
         #expect(Set(kept.map(\.id)) == [abc.id, cd.id])
     }
 
+    /// What tidying may lose is an **intermediate** of a run somebody
+    /// already merged. What it may never leave is a gap: a kept record
+    /// starting from a version no kept record ends at.
+    @Test func whatSurvivesIsStillAChain() {
+        let a = DevotionalAgentRevision(
+            createdAt: Date(timeIntervalSince1970: 10), kind: .agentEdit,
+            beforeMarkdown: "A", afterMarkdown: "B", turnID: UUID()
+        )
+        let bID = UUID(), c = UUID(), d = UUID()
+        let b = DevotionalAgentRevision(
+            id: bID, createdAt: Date(timeIntervalSince1970: 20), kind: .agentEdit,
+            beforeMarkdown: "B", afterMarkdown: "C"
+        )
+        let ab = merge("A", "C", covering: [a.id, bID], at: 10)
+        let bcd = merge("B", "E", covering: [bID, c, d], at: 20)
+
+        let kept = DevotionalAgentRevisionCompactor.removingReplaced([a, b, ab, bcd])
+            .sorted { $0.createdAt < $1.createdAt }
+        let ends = Set(kept.map(\.afterMarkdown))
+        let starts = kept.dropFirst().map(\.beforeMarkdown)
+        #expect(
+            starts.allSatisfy(ends.contains),
+            "every record left starts where another one finished: \(kept.map { "\($0.beforeMarkdown)->\($0.afterMarkdown)" })"
+        )
+    }
+
     /// Which record a directory happens to list first must not decide
     /// whether a turn keeps its name.
     @Test func theAnswerDoesNotDependOnTheOrderTheyAreRead() {

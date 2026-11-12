@@ -118,6 +118,9 @@ public struct AgentChatTranscript: Codable, Equatable, Sendable {
     /// question away and left the answer to it — as a turn, in the
     /// conversation, and in the next recap.
     public var removedTurns: [UUID]?
+    /// When a turn was last undone here, so that undoing one counts as
+    /// activity in this conversation rather than as less of it.
+    public var removedAt: Date?
 
     public init(
         conversationID: UUID? = nil,
@@ -126,7 +129,8 @@ public struct AgentChatTranscript: Codable, Equatable, Sendable {
         sessionInstallID: String? = nil,
         messages: [Message] = [],
         events: [Event]? = nil,
-        removedTurns: [UUID]? = nil
+        removedTurns: [UUID]? = nil,
+        removedAt: Date? = nil
     ) {
         self.conversationID = conversationID
         self.startedAt = startedAt
@@ -135,12 +139,17 @@ public struct AgentChatTranscript: Codable, Equatable, Sendable {
         self.messages = messages
         self.events = events
         self.removedTurns = removedTurns
+        self.removedAt = removedAt
     }
 
     /// The most recent thing that happened in this conversation, including it
     /// being cleared.
     public var lastActivity: Date {
-        max(startedAt ?? .distantPast, messages.map(\.date).max() ?? .distantPast)
+        max(
+            startedAt ?? .distantPast,
+            messages.map(\.date).max() ?? .distantPast,
+            removedAt ?? .distantPast
+        )
     }
 
     /// The conversation as turns: each user message with everything that
@@ -290,10 +299,10 @@ public struct AgentChatTranscript: Codable, Equatable, Sendable {
         return kept[cut...].map(\.id)
     }
 
-    public func trimmed(from turn: UUID) -> AgentChatTranscript? {
+    public func trimmed(from turn: UUID, at date: Date = Date()) -> AgentChatTranscript? {
         let kept = turns
         guard let cut = kept.firstIndex(where: { $0.id == turn }) else { return nil }
-        return removing(turns: names(of: Set(kept[cut...].map(\.id))))
+        return removing(turns: names(of: Set(kept[cut...].map(\.id))), at: date)
     }
 
     /// Every id these turns are recorded under: each turn's own, and each
@@ -320,12 +329,23 @@ public struct AgentChatTranscript: Codable, Equatable, Sendable {
     /// session is one line of talk in that provider's own store: it still
     /// holds the turn that was taken out, and resuming it would carry on
     /// from work this conversation no longer has.
-    public func removing(turns removed: [UUID]) -> AgentChatTranscript {
+    public func removing(turns removed: [UUID], at date: Date? = nil) -> AgentChatTranscript {
         var union = Set(removedTurns ?? [])
         union.formUnion(removed)
         guard !union.isEmpty else { return self }
         let all = turns
         let kept = all.filter { !union.contains($0.id) }
+        // What is being removed is named as it is met. A turn can still be
+        // answered on the Mac that ran it after another has undone it, and
+        // that answer's message was not in the list the undo wrote. Removed
+        // here by the turn it belongs to, and then named — or a copy
+        // rewritten without events, where it stands as a turn of its own,
+        // would be the one thing the list could not take out.
+        for going in all where union.contains(going.id) {
+            for event in going.events where event.kind == Event.said {
+                union.insert(event.id)
+            }
+        }
         let events = kept.flatMap(\.events)
         var result = self
         result.events = events
@@ -335,6 +355,12 @@ public struct AgentChatTranscript: Codable, Equatable, Sendable {
             result.sessionID = nil
             result.sessionInstallID = nil
         }
+        // Undoing a turn is something that happened in this conversation.
+        // Left out, the conversation's last activity went *backwards* when
+        // a turn was undone, and a cleared conversation from another Mac
+        // then won or lost by the order the copies happened to be merged
+        // in — with the loser's turns thrown away either way.
+        result.removedAt = [removedAt, date].compactMap { $0 }.max()
         return result
     }
 
@@ -437,11 +463,31 @@ public struct AgentChatQueue: Codable, Equatable, Sendable {
         public let id: UUID
         public var text: String
         public let written: Date
+        /// The conversation it was written in.
+        ///
+        /// A New Chat here throws away what was waiting — those messages
+        /// were written to the conversation being put away, and sending
+        /// them into its replacement answers a question nobody asked
+        /// there. A New Chat made on **another** Mac arrives as a
+        /// different conversation through sync, where there is nothing to
+        /// throw anything away, so the same messages were drained into it
+        /// after a relaunch. Written down, they can be told apart.
+        ///
+        /// Missing on anything queued before this was recorded, which
+        /// belongs to whatever conversation is open: that is what it meant
+        /// then, and reading it any other way would drop someone's words.
+        public var conversation: UUID?
 
-        public init(id: UUID = UUID(), text: String, written: Date = Date()) {
+        public init(
+            id: UUID = UUID(),
+            text: String,
+            written: Date = Date(),
+            conversation: UUID? = nil
+        ) {
             self.id = id
             self.text = text
             self.written = written
+            self.conversation = conversation
         }
     }
 
@@ -452,10 +498,21 @@ public struct AgentChatQueue: Codable, Equatable, Sendable {
     }
 
     /// Adds a message, ignoring one that is only whitespace.
-    public mutating func add(_ text: String) {
+    public mutating func add(_ text: String, conversation: UUID? = nil) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        messages.append(Message(text: trimmed))
+        messages.append(Message(text: trimmed, conversation: conversation))
+    }
+
+    /// Drops what was written to a conversation that is no longer here.
+    ///
+    /// For a New Chat that arrived from another Mac: the conversation
+    /// those messages were written to has been put away, and this is the
+    /// same answer the local New Chat gives, reached when the clearing
+    /// happened somewhere else.
+    public mutating func removeWrittenElsewhere(than conversation: UUID?) {
+        guard let conversation else { return }
+        messages.removeAll { $0.conversation.map { $0 != conversation } ?? false }
     }
 
     public mutating func remove(_ id: UUID) {
@@ -577,16 +634,19 @@ public enum AgentChatTranscriptMerge {
         // undo was reversed by the save that followed it — on this Mac
         // immediately, and on the other as soon as it synced.
         let removed = (local.removedTurns ?? []) + (incoming.removedTurns ?? [])
+        let removedAt = [local.removedAt, incoming.removedAt].compactMap { $0 }.max()
         let localIDs = Set(local.messages.map(\.id))
         let incomingIDs = Set(incoming.messages.map(\.id))
         if incomingIDs.isSubset(of: localIDs) {
             var kept = local
             kept.events = events
+            kept.removedAt = removedAt
             return kept.removing(turns: removed)
         }
         if localIDs.isSubset(of: incomingIDs) {
             var kept = incoming
             kept.events = events
+            kept.removedAt = removedAt
             return kept.removing(turns: removed)
         }
 
@@ -601,7 +661,8 @@ public enum AgentChatTranscriptMerge {
             sessionID: nil,
             sessionInstallID: nil,
             messages: messages,
-            events: events
+            events: events,
+            removedAt: removedAt
         ).removing(turns: removed)
     }
 

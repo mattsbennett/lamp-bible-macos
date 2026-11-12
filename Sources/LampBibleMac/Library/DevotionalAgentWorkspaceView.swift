@@ -1444,11 +1444,25 @@ struct DevotionalAgentWorkspaceView: View {
         guard let workspaceURL else { return }
         do {
             let diskDraft = try DevotionalAgentWorkspaceStore.readDraft(from: workspaceURL)
-            if let lastSyncedDraft, diskDraft != lastSyncedDraft {
+            // The marker as the **workspace** holds it, not as this pane
+            // last left it. The same writing can be open in two windows,
+            // and a draft one of them has already accounted for — the
+            // person typing into it — read here as a change nobody had
+            // seen. This pane recorded it as the agent's work, under
+            // whatever turn was running, so undoing that turn took away
+            // what the person had typed in the other window.
+            let marker = (try? DevotionalAgentRevisionStore.lastSyncedDraft(in: workspaceURL))
+                ?? lastSyncedDraft
+            if let marker, diskDraft != marker {
                 try takeOrKeep(
-                    diskDraft: diskDraft, in: workspaceURL, previous: lastSyncedDraft
+                    diskDraft: diskDraft, in: workspaceURL, previous: marker
                 )
             } else {
+                if let marker, marker != lastSyncedDraft {
+                    // Settled by the other window. Nothing to record, and
+                    // this pane carries on from where the workspace is.
+                    lastSyncedDraft = marker
+                }
                 workspaceDraft = diskDraft
             }
             refreshWorkspaceMetadata(in: workspaceURL)

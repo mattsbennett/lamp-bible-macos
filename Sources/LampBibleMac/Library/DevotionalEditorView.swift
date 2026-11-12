@@ -693,6 +693,14 @@ struct DevotionalEditorView: View {
                                 editorFocus: editorFocus,
                                 importDraft: { importedDraft in
                                     content = importedDraft
+                                    // Saved now rather than on the next
+                                    // autosave. A crash in between left
+                                    // the library holding the version the
+                                    // workspace had just moved away from,
+                                    // and the next open read that as the
+                                    // writer's newer text and put it back
+                                    // — undoing the undo.
+                                    save()
                                 },
                                 chatTurn: Binding(
                                     get: { agentChatTurn },
@@ -2232,16 +2240,30 @@ struct DevotionalEditorView: View {
         guard content != markdown else { return }
         // Recorded before the draft is replaced, so an interrupted restore leaves
         // the version it moved away from recoverable rather than lost.
-        let restored = PendingWorkspaceRevision(
-            kind: .restoration,
-            before: content,
-            after: markdown
+        //
+        // **Including whatever is in the file.** A run outlives the agent
+        // pane, so `draft.md` can hold something this editor has not taken
+        // up yet — and with the pane closed there is nothing polling for
+        // it. Recording only what this view holds wrote that version out
+        // of existence. The same two steps a save makes: what arrived
+        // first, then the restore on top of it.
+        let onDisk = try? WorkspaceTextFileStore.openableSnapshot(
+            at: workspaceURL.appendingPathComponent(
+                DevotionalAgentRevisionStore.primaryDocumentPath
+            ),
+            in: workspaceURL
+        ).contents
+        let restored = savedRevisions(
+            persisted: content,
+            onDisk: onDisk,
+            submitted: markdown,
+            changeKind: .restoration
         )
         let workspace = workspaceURL
         Task {
             do {
                 try await recordWorkspaceRevisions(
-                    [restored],
+                    restored,
                     documentPath: DevotionalAgentRevisionStore.primaryDocumentPath
                 )
                 try WorkspaceTextFileStore.write(
@@ -2316,8 +2338,17 @@ struct DevotionalEditorView: View {
         if let opened { selectWorkspaceDocument(opened) }
     }
 
+    /// Every document this editor manages has a history, not only the
+    /// Markdown ones.
+    ///
+    /// `.txt` and `.text` are listed as tabs and edited here like the
+    /// rest, and were the one kind an agent could change with nothing
+    /// recorded — so a turn that wrote one passed the undo's "it also
+    /// changed something else" refusal, and undoing it put the draft back
+    /// and left that file as the turn had made it. The set is the one the
+    /// editor opens, so the two cannot drift apart again.
     private func supportsRevisionHistory(_ url: URL) -> Bool {
-        ["md", "markdown"].contains(url.pathExtension.lowercased())
+        WorkspaceTextFileStore.supportedExtensions.contains(url.pathExtension.lowercased())
     }
 
     /// Writes transitions to a document's history, in the order they happened.
@@ -2584,6 +2615,14 @@ struct DevotionalEditorView: View {
                         documents[index].wasRemovedExternally = false
                         documents[index].errorMessage = nil
                     } else if document.isDirty {
+                        // Not applied — the writer has unsaved work in this
+                        // tab — but still recorded. The record is how an
+                        // undo of the turn knows the turn touched this
+                        // file: without it the undo saw only the draft,
+                        // put that back, and left this change in place
+                        // while taking away the question that made it.
+                        pending[path] = externalRevisions(for: document, after: snapshot.contents)
+                        documents[index].persistedText = snapshot.contents
                         documents[index].externalText = snapshot.contents
                         documents[index].wasRemovedExternally = false
                         documents[index].errorMessage = nil
@@ -2617,6 +2656,22 @@ struct DevotionalEditorView: View {
             }
 
             for index in documents.indices where !snapshotIDs.contains(documents[index].id) {
+                // A file the agent removed is a change that turn made, and
+                // one an undo cannot put back — so it has to be in the
+                // history for the undo to refuse rather than restore the
+                // draft and leave the writing a document short. Recorded
+                // when the absence is first seen, not when the reader
+                // accepts it: until they do, there was no record at all.
+                if !documents[index].wasRemovedExternally,
+                   supportsRevisionHistory(documents[index].url),
+                   !documents[index].persistedText.isEmpty {
+                    pending[documents[index].id] = [PendingWorkspaceRevision(
+                        kind: .agentEdit,
+                        before: documents[index].persistedText,
+                        after: "",
+                        turnID: agentChatTurn
+                    )]
+                }
                 documents[index].wasRemovedExternally = true
                 documents[index].externalText = nil
                 documents[index].errorMessage = nil
