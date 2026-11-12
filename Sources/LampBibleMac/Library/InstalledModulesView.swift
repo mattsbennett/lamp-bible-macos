@@ -467,6 +467,41 @@ extension LampInstalledModule {
     }
 }
 
+/// A menu's translations as buttons, grouped by language the way
+/// `TranslationPickerOptions` groups a picker's: the same sections, in the
+/// same order, with the same Strong's badge. For a menu that acts on the
+/// translation chosen rather than holding a selection.
+struct TranslationMenuOptions: View {
+    let translations: [LampInstalledModule]
+    let choose: (LampInstalledModule) -> Void
+
+    var body: some View {
+        let groups = LampTranslationLanguages.grouped(translations, language: \.language)
+        if groups.count > 1 {
+            ForEach(groups) { group in
+                Section(group.title) { rows(group.items) }
+            }
+        } else {
+            rows(translations)
+        }
+    }
+
+    private func rows(_ items: [LampInstalledModule]) -> some View {
+        ForEach(items) { translation in
+            Button { choose(translation) } label: {
+                Text(translation.name)
+                    .badge(translation.strongsMenuBadge)
+            }
+        }
+    }
+
+    /// Whether the menu shows language sections, so a caller with a heading
+    /// of its own knows whether its heading can be a section's title.
+    static func isGrouped(_ translations: [LampInstalledModule]) -> Bool {
+        LampTranslationLanguages.grouped(translations, language: \.language).count > 1
+    }
+}
+
 /// A picker's translations under the languages they are written in —
 /// English, any other modern language, then the biblical languages — or one
 /// plain list when they share a language. Each carries its Strong's badge.

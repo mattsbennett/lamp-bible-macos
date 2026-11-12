@@ -5070,13 +5070,21 @@ private struct TranslationReaderView: View, Equatable {
     private func parallelTranslationOffer(reading chapter: LampChapter) -> some View {
         let others = model.translations.filter { $0.id != chapter.translationID }
         if readerLayoutMode != .sideBySide, !others.isEmpty {
+            let heading = "Read Beside \(translationName(chapter.translationID))"
+            let choose: (LampInstalledModule) -> Void = { translation in
+                chooseCompanions([translation.id])
+                readsSideBySide.wrappedValue = true
+            }
             Menu {
-                Section("Read Beside \(translationName(chapter.translationID))") {
-                    ForEach(others) { translation in
-                        Button(translation.name) {
-                            chooseCompanions([translation.id])
-                            readsSideBySide.wrappedValue = true
-                        }
+                // Grouped by language as ⌘L's translation picker is. With
+                // language sections the heading stands above them on its own;
+                // with one language it is the one section's title.
+                if TranslationMenuOptions.isGrouped(others) {
+                    Text(heading)
+                    TranslationMenuOptions(translations: others, choose: choose)
+                } else {
+                    Section(heading) {
+                        TranslationMenuOptions(translations: others, choose: choose)
                     }
                 }
             } label: {
