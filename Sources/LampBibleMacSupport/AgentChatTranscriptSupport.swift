@@ -135,7 +135,13 @@ public struct AgentChatTranscript: Codable, Equatable, Sendable {
         // only one side's events. Drawing from the events alone dropped
         // those from the pane — and the next send wrote the thinned list
         // back, which is how reading a record destroys it.
-        let recorded = Set((events ?? []).map(\.id))
+        // Only a **said** event stands for a message. Suppressing on any
+        // event's id meant a tool or activity event that happened to carry
+        // a message's id would take that message out of the conversation —
+        // the record deciding the floor it exists to protect.
+        let recorded = Set(
+            (events ?? []).filter { $0.kind == Event.said }.map(\.id)
+        )
         let loose = messages.filter { !recorded.contains($0.id) }.map { message in
             Event(
                 id: message.id, turn: message.id, date: message.date,
@@ -145,6 +151,12 @@ public struct AgentChatTranscript: Codable, Equatable, Sendable {
         let all = (events ?? []) + loose
         guard !all.isEmpty else { return [] }
 
+        // Ordered by when each turn began, and a loose message is a turn
+        // of its own. So a message whose time falls inside a recorded
+        // turn's span follows that whole turn rather than being dropped
+        // into the middle of its tool calls — which is deliberate: a turn
+        // is one thing that happened, and splitting it to interleave a
+        // message from elsewhere would make both harder to read.
         var order: [UUID] = []
         var grouped: [UUID: [Event]] = [:]
         for event in all.sorted(by: Self.inOrder) {

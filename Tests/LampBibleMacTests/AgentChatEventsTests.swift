@@ -526,3 +526,32 @@ struct AgentChatQueueDurabilityTests {
         #expect(untouched.messages.count == 1)
     }
 }
+
+/// Only a *said* event stands for a message.
+struct AgentChatTurnProjectionTests {
+    @Test func anEventThatIsNotSpeechCannotTakeAMessageAway() {
+        let turn = UUID(), message = UUID()
+        let transcript = AgentChatTranscript(
+            messages: [
+                AgentChatTranscript.Message(
+                    id: message, role: .user, text: "Still mine",
+                    date: Date(timeIntervalSince1970: 20)
+                ),
+            ],
+            events: [
+                AgentChatTranscript.Event(
+                    id: turn, turn: turn, date: Date(timeIntervalSince1970: 10),
+                    kind: AgentChatTranscript.Event.said, role: .user, text: "Asked"
+                ),
+                // A tool event carrying a message's id. Suppressing on any
+                // event's id let the record take away the floor it exists
+                // to protect.
+                AgentChatTranscript.Event(
+                    id: message, turn: turn, date: Date(timeIntervalSince1970: 11),
+                    kind: AgentChatTranscript.Event.tool, name: "read_passage"
+                ),
+            ]
+        )
+        #expect(transcript.turns.map(\.question) == ["Asked", "Still mine"])
+    }
+}

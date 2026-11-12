@@ -906,6 +906,9 @@ private final class NativeAgentChatModel: ObservableObject {
     /// Not persisted: an unfinished reservation is simply a message still
     /// waiting the next time the app opens, which is what it is.
     private var reservedQueued: UUID?
+    /// The identity each turn's steps row is drawn under, kept so it is the
+    /// same row across redraws.
+    private var stepsRowIDs: [UUID: UUID] = [:]
     private var knownModificationDate: Date?
     private var cancelRequested = false
     private var loadingMessageID: UUID?
@@ -1411,6 +1414,10 @@ private final class NativeAgentChatModel: ObservableObject {
     /// A transcript from before events has no steps to show and reads as it
     /// always did.
     private func rows(of transcript: AgentChatTranscript) -> [NativeAgentChatMessage] {
+        // Every identity the conversation itself uses, so a steps row is
+        // never given one of them.
+        let taken = Set(transcript.turns.flatMap(\.events).map(\.id))
+            .union(transcript.messages.map(\.id))
         return transcript.turns.flatMap { turn -> [NativeAgentChatMessage] in
             var rows: [NativeAgentChatMessage] = []
             for event in turn.events {
@@ -1428,7 +1435,7 @@ private final class NativeAgentChatModel: ObservableObject {
                         // under the turn's id, so giving the steps row the
                         // same one put two rows with one id into the list
                         // SwiftyChat draws and scrolls by.
-                        id: Self.stepsRowID(for: turn.id),
+                        id: stepsRowID(for: turn.id, avoiding: taken),
                         user: agentUser,
                         messageKind: .custom(TurnStepsContent(steps: turn.toolsUsed)),
                         isSender: false,
@@ -1440,13 +1447,27 @@ private final class NativeAgentChatModel: ObservableObject {
         }
     }
 
-    /// A turn's steps row, derived from the turn so it is the same across
-    /// redraws rather than new each time.
-    static func stepsRowID(for turn: UUID) -> UUID {
-        var bytes = turn.uuid
-        // One bit, flipped: derived from the turn, and never equal to it.
-        bytes.15 ^= 0x01
-        return UUID(uuid: bytes)
+    /// A turn's steps row, the same across redraws and never another
+    /// row's.
+    ///
+    /// It was derived by flipping a bit of the turn's own id, which shares
+    /// a namespace with real message ids: a message whose id was a turn's
+    /// with that bit flipped would collide, and in a list SwiftUI draws and
+    /// scrolls by identity, two rows with one id is a row that cannot be
+    /// reached. Nothing produced such a pair, which is a reason it had not
+    /// happened rather than a reason it could not.
+    ///
+    /// Given out once per turn and remembered instead, avoiding every id
+    /// the conversation already uses. Remembering is what makes it stable;
+    /// avoiding is what makes it safe.
+    private func stepsRowID(for turn: UUID, avoiding taken: Set<UUID>) -> UUID {
+        if let known = stepsRowIDs[turn], !taken.contains(known) { return known }
+        var candidate = UUID()
+        while taken.contains(candidate) || stepsRowIDs.values.contains(candidate) {
+            candidate = UUID()
+        }
+        stepsRowIDs[turn] = candidate
+        return candidate
     }
 
     private func makeChatMessage(_ message: AgentChatTranscript.Message) -> NativeAgentChatMessage {
