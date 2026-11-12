@@ -692,11 +692,18 @@ struct LibraryRootView: View {
     private func selectReaderTab(_ id: UUID) {
         guard id != readerTabs.selectedID else { return }
         readerTabs.updateSelected(location: workspace.currentLocation)
+        workspace.scrollMemory.save(tab: readerTabs.selectedID)
+        workspace.scrollMemory.prepare(tab: id)
         recordTabSidebar()
         let location = readerTabs.select(id)
         adoptTabSidebar()
         if let location {
             workspace.openTab(at: location)
+        }
+        // Two tabs on one chapter lay nothing out anew, so nothing else
+        // would put this one back where it was left.
+        DispatchQueue.main.async { [scrollMemory = workspace.scrollMemory] in
+            scrollMemory.restoreIfReady()
         }
         selection = .section(.reader)
     }
@@ -707,8 +714,10 @@ struct LibraryRootView: View {
         let chat = readerTabs.tabs.first { $0.id == id }?.chatID
         if wasSelected { readerTabs.updateSelected(location: workspace.currentLocation) }
         let destination = readerTabs.close(id)
+        workspace.scrollMemory.forget(tab: id)
         if let chat { letGoOfChat(chat) }
         if wasSelected {
+            workspace.scrollMemory.prepare(tab: readerTabs.selectedID)
             adoptTabSidebar()
             if let destination { workspace.openTab(at: destination) }
         }
@@ -1853,6 +1862,49 @@ private final class ReaderParagraphAnchorStore {
         }
         let progress = -frame.minY / max(frame.height, 1)
         return ReaderParagraphAnchorResolver.reference(at: progress, in: segments)
+    }
+}
+
+/// The reader's scroll view, handed to the window's `ReaderScrollMemory`
+/// from inside the passage it scrolls, which then puts a chosen tab back
+/// where it was left as soon as the passage has laid out.
+private struct ReaderScrollViewLink: NSViewRepresentable {
+    let memory: ReaderScrollMemory
+    let passage: String
+
+    func makeNSView(context: Context) -> LinkView {
+        let view = LinkView()
+        view.memory = memory
+        view.passage = passage
+        return view
+    }
+
+    // Runs on every update of the reader: it only notes the passage.
+    func updateNSView(_ view: LinkView, context: Context) {
+        if view.passage != passage { view.passage = passage }
+    }
+
+    final class LinkView: NSView {
+        weak var memory: ReaderScrollMemory?
+        var passage = ""
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard window != nil, let scrollView = enclosingScrollView else { return }
+            memory?.register(scrollView, passage: passage)
+        }
+
+        override func layout() {
+            super.layout()
+            if let scrollView = enclosingScrollView { memory?.register(scrollView, passage: passage) }
+            // After the pass that laid the passage out, not during it.
+            let passage = passage
+            DispatchQueue.main.async { [weak self] in
+                self?.memory?.restoreIfReady(passage: passage)
+            }
+        }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 }
 
@@ -4558,6 +4610,9 @@ private struct TranslationReaderView: View, Equatable {
                             }
                             .accessibilityHidden(true)
                     }
+                    // Hands the scroll view to the window's scroll memory, and
+                    // puts a chosen tab back where it was left once laid out.
+                    .background(ReaderScrollViewLink(memory: workspace.scrollMemory, passage: passageIdentity))
                     // Side by side, each column gets about the measure one
                     // column has on its own.
                     .frame(maxWidth: passageWidth(for: chapters), alignment: .leading)
@@ -6401,6 +6456,13 @@ private struct TranslationReaderView: View, Equatable {
     }
 
     private func scrollToReaderLocation(_ proxy: ScrollViewProxy, chapters: [LampChapter]) {
+        // A tab chosen again goes back to where it was left, not to its
+        // selected verse: every switch used to scroll the page.
+        let passage = chapters.map { ReaderPassageChapter(chapter: $0).id }.joined(separator: ",")
+        if workspace.scrollMemory.isRestoring(passage) {
+            workspace.scrollMemory.restoreIfReady(passage: passage)
+            return
+        }
         guard let reference = workspace.selectedVerseReference else { return }
         // Plan readings deliberately start with the passage header visible. The
         // fresh scroll container already has the correct natural top position.
