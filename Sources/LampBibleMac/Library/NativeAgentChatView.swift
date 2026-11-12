@@ -1042,7 +1042,10 @@ private final class NativeAgentChatModel: ObservableObject {
     /// app next opened. So the file is put right at the same time.
     private func adopt(_ onDisk: AgentChatTranscript) {
         show(onDisk)
-        guard knownTranscript != onDisk else { return }
+        guard knownTranscript != onDisk else {
+            knownModificationDate = transcriptModificationDate()
+            return
+        }
         persistTranscript()
     }
 
@@ -1727,14 +1730,20 @@ private final class NativeAgentChatModel: ObservableObject {
     /// The files are the caller's to put back — this is the conversation's
     /// half. Returns false where the turn is no longer there, or a reply is
     /// arriving, which is not a moment to rewrite what it is replying to.
-    func revert(turn: UUID) -> Bool {
-        guard canRevert(turn: turn),
-              let trimmed = knownTranscript?.trimmed(from: turn)
-                ?? AgentChatTranscriptStore
-                    .load(providerID: provider.rawValue, in: workspace)
-                    .trimmed(from: turn)
-        else { return false }
-        show(trimmed)
+    /// Takes **these** turns out, and nothing else.
+    ///
+    /// The list is the one the host was given and has just put the writing
+    /// back for. Worked out again here, it could have grown: a turn can
+    /// arrive from another Mac between the two, and trimming from the
+    /// named turn would then take that one too — removing work nobody
+    /// checked and nothing put back. An undo removes what was agreed.
+    func revert(turns: [UUID]) -> Bool {
+        guard !isRunning, !turns.isEmpty else { return false }
+        let base = knownTranscript
+            ?? AgentChatTranscriptStore.load(providerID: provider.rawValue, in: workspace)
+        let names = base.names(of: Set(turns))
+        guard !names.isEmpty else { return false }
+        show(base.removing(turns: names))
         return persistTranscript()
     }
 
@@ -1754,10 +1763,7 @@ private final class NativeAgentChatModel: ObservableObject {
         // it any more. Found out afterwards, the draft would already have
         // been put back for a turn the conversation no longer had.
         let onDisk = AgentChatTranscriptStore.load(providerID: provider.rawValue, in: workspace)
-        if onDisk != knownTranscript {
-            show(onDisk)
-            knownModificationDate = transcriptModificationDate()
-        }
+        if onDisk != knownTranscript { adopt(onDisk) }
         return canFork(from: turn)
     }
 
@@ -1787,11 +1793,25 @@ private final class NativeAgentChatModel: ObservableObject {
 
     @discardableResult
     private func persistTranscript() -> Bool {
+        // A session this Mac cannot resume is still somebody's session.
+        // `sessionID` here is what *this* install may hand back to its
+        // provider, which is nil for a session another Mac holds — so
+        // writing that out replaced a session that Mac is still in the
+        // middle of with nothing, and its next message started from a
+        // recap for no reason. Kept as it was read, within the same
+        // conversation; a cleared one is a different conversation and
+        // takes no session with it.
+        let held = knownTranscript.flatMap { known -> AgentChatTranscript? in
+            guard sessionID == nil, known.sessionID != nil,
+                  known.conversationID == conversationID
+            else { return nil }
+            return known
+        }
         var transcript = AgentChatTranscript(
             conversationID: conversationID,
             startedAt: conversationStartedAt,
-            sessionID: sessionID,
-            sessionInstallID: sessionID == nil ? nil : installID,
+            sessionID: sessionID ?? held?.sessionID,
+            sessionInstallID: sessionID == nil ? held?.sessionInstallID : installID,
             messages: transcriptMessages(),
             // No falling back to what was on disk: after New Chat the
             // events are empty *because the conversation was cleared*, and
@@ -2189,13 +2209,16 @@ struct NativeAgentChatView: View {
                 guard model.canRevert(turn: turn) else { return }
                 let going = model.turnsUndoneBy(turn)
                 guard !going.isEmpty else { return }
+                // One agreed list: what the host puts back is what the
+                // conversation loses.
+
                 // Then the draft, and only then the conversation. Putting
                 // the writing back is the half that can fail; trimmed
                 // first, a failure would leave the question gone and its
                 // work still in the draft, with nothing left to undo it
                 // from.
                 guard revertTurn?(going) == true else { return }
-                _ = model.revert(turn: turn)
+                _ = model.revert(turns: going)
             }
             Button("Cancel", role: .cancel) { turnToUndo = nil }
         } message: { _ in

@@ -764,6 +764,28 @@ struct AgentChatUndoDurabilityTests {
         #expect(loaded.turns.map(\.question) == ["One"])
     }
 
+    /// An undo removes what was agreed, not what the conversation has
+    /// grown into since. A turn arriving from another Mac between the
+    /// check and the trim is work nobody put back.
+    @Test func onlyTheAgreedTurnsAreTaken() throws {
+        let id = UUID(), first = UUID(), second = UUID(), arrived = UUID()
+        let checked = conversation(id, [(first, 10, "One"), (second, 20, "Two")])
+        // What the host was asked about, and put the writing back for.
+        let agreed = [second]
+
+        var grown = checked
+        let added = [
+            event(arrived, 30, AgentChatTranscript.Event.said, role: .user, text: "Three"),
+            event(arrived, 31, AgentChatTranscript.Event.said, role: .assistant, text: "Done."),
+        ]
+        grown.events = (grown.events ?? []) + added
+        grown.messages += AgentChatTranscript.messages(from: added)
+
+        let trimmed = grown.removing(turns: grown.names(of: Set(agreed)))
+        #expect(trimmed.turns.map(\.question) == ["One", "Three"])
+        #expect(trimmed.removedTurns?.contains(arrived) != true)
+    }
+
     /// A Lamp from before events rewrites the file with the messages and
     /// without what grouped them. Every message then reads as a turn of
     /// its own — so a tombstone naming the question alone took the

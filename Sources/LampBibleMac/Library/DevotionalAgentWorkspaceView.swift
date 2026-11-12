@@ -1672,8 +1672,11 @@ struct DevotionalAgentWorkspaceView: View {
         // it having existed.
         refreshWorkspace()
         do {
+            // In the conversation's order, which is what decides the
+            // baseline: two Macs' clocks disagree, and the times cannot
+            // say which turn followed which.
             let before = try DevotionalAgentRevisionStore.stateBefore(
-                turns: Set(turns), in: workspaceURL
+                turns: turns, in: workspaceURL
             )
             let primary = DevotionalAgentRevisionStore.primaryDocumentPath
             let others = before.keys.filter { $0 != primary }.sorted()

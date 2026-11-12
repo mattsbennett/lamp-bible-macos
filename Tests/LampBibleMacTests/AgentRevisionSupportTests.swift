@@ -750,3 +750,98 @@ struct AgentRevisionTurnOwnershipTests {
         #expect(revisions.first?.turnID == turn)
     }
 }
+
+/// Tidying history must never take a version with it.
+struct AgentRevisionDemotionSafetyTests {
+    private func merge(
+        _ before: String, _ after: String, covering: [UUID],
+        turn: UUID? = nil, at seconds: Double = 10
+    ) -> DevotionalAgentRevision {
+        DevotionalAgentRevision(
+            createdAt: Date(timeIntervalSince1970: seconds), kind: .agentEdit,
+            beforeMarkdown: before, afterMarkdown: after,
+            updatedAt: Date(timeIntervalSince1970: seconds + 1),
+            replacedRevisionIDs: covering, turnID: turn
+        )
+    }
+
+    /// Overlapping legacy merges can each find one of the others holding
+    /// what they need. Demoted together, a version that was in none of the
+    /// survivors is gone for good.
+    @Test func overlappingLegacyMergesDoNotJustifyEachOther() {
+        let a = DevotionalAgentRevision(
+            createdAt: Date(timeIntervalSince1970: 10), kind: .agentEdit,
+            beforeMarkdown: "A", afterMarkdown: "B", turnID: UUID()
+        )
+        let d = DevotionalAgentRevision(
+            createdAt: Date(timeIntervalSince1970: 40), kind: .agentEdit,
+            beforeMarkdown: "D", afterMarkdown: "E", turnID: UUID()
+        )
+        let b = UUID(), c = UUID()
+        let ab = merge("A", "C", covering: [a.id, b], at: 10)
+        let abc = merge("A", "D", covering: [a.id, b, c], at: 11)
+        let cd = merge("C", "E", covering: [c, d.id], at: 30)
+
+        let kept = DevotionalAgentRevisionCompactor.removingReplaced([a, d, ab, abc, cd])
+        #expect(
+            kept.contains { $0.afterMarkdown == "C" } || kept.contains { $0.beforeMarkdown == "C" },
+            "the version between the merges is still somewhere in the history"
+        )
+        // Demotion takes none of them: each is justified only by another
+        // that the same pass could remove. What is left is the ordinary
+        // replacement rule's answer, which covers every change end to end.
+        #expect(Set(kept.map(\.id)) == [abc.id, cd.id])
+    }
+
+    /// Which record a directory happens to list first must not decide
+    /// whether a turn keeps its name.
+    @Test func theAnswerDoesNotDependOnTheOrderTheyAreRead() {
+        let turn = UUID()
+        let first = DevotionalAgentRevision(
+            createdAt: Date(timeIntervalSince1970: 10), kind: .agentEdit,
+            beforeMarkdown: "A", afterMarkdown: "B", turnID: turn
+        )
+        let second = DevotionalAgentRevision(
+            createdAt: Date(timeIntervalSince1970: 20), kind: .agentEdit,
+            beforeMarkdown: "B", afterMarkdown: "C"
+        )
+        let legacy = merge("A", "C", covering: [first.id, second.id], at: 10)
+
+        let orders: [[DevotionalAgentRevision]] = [
+            [first, second, legacy], [legacy, first, second], [second, legacy, first],
+            [legacy, second, first], [first, legacy, second], [second, first, legacy],
+        ]
+        let answers = Set(orders.map { order in
+            DevotionalAgentRevisionCompactor.removingReplaced(order)
+                .map(\.id.uuidString).sorted().joined(separator: ",")
+        })
+        #expect(answers.count == 1, "one answer, whatever order they were read in")
+    }
+}
+
+/// Which turn followed which is the conversation's to say, not a clock's.
+struct AgentTurnBaselineOrderTests {
+    @Test func theBaselineComesFromTheEarliestTurnInTheConversation() throws {
+        let workspace = FileManager.default.temporaryDirectory
+            .appendingPathComponent("baseline-order-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workspace) }
+
+        let first = UUID(), second = UUID()
+        // The second turn's change carries the earlier time: it was made on
+        // a Mac whose clock is behind.
+        _ = try DevotionalAgentRevisionStore.record(
+            kind: .agentEdit, turnID: second, before: "B", after: "C",
+            in: workspace, createdAt: Date(timeIntervalSince1970: 160)
+        )
+        _ = try DevotionalAgentRevisionStore.record(
+            kind: .agentEdit, turnID: first, before: "A", after: "B",
+            in: workspace, createdAt: Date(timeIntervalSince1970: 200)
+        )
+
+        let before = try DevotionalAgentRevisionStore.stateBefore(
+            turns: [first, second], in: workspace
+        )
+        #expect(before[DevotionalAgentRevisionStore.primaryDocumentPath] == "A")
+    }
+}

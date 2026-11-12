@@ -293,9 +293,19 @@ public struct AgentChatTranscript: Codable, Equatable, Sendable {
     public func trimmed(from turn: UUID) -> AgentChatTranscript? {
         let kept = turns
         guard let cut = kept.firstIndex(where: { $0.id == turn }) else { return nil }
-        return removing(turns: kept[cut...].flatMap { going in
-            [going.id] + going.events.filter { $0.kind == Event.said }.map(\.id)
-        })
+        return removing(turns: names(of: Set(kept[cut...].map(\.id))))
+    }
+
+    /// Every id these turns are recorded under: each turn's own, and each
+    /// message in it.
+    ///
+    /// What a removal has to name. A copy rewritten without events reads
+    /// every message as a turn of its own, so a question's id alone leaves
+    /// the answer to it standing as a turn.
+    public func names(of ids: Set<UUID>) -> [UUID] {
+        turns.filter { ids.contains($0.id) }.flatMap { turn in
+            [turn.id] + turn.events.filter { $0.kind == Event.said }.map(\.id)
+        }
     }
 
     /// This conversation without the turns named, and with their names kept
