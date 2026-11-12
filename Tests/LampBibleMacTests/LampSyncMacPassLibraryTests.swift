@@ -192,7 +192,6 @@ struct LampSyncMacPassLibraryTests {
     @Test(arguments: [
         "Workspaces/Presentations/deleted-decks.json",
         "lamp-bible.lampsync",
-        "DevotionalMedia/devotionals/writing-1/photo.jpg",
         // The copy the old sync left under notes' former ID. Installed, it
         // would arrive as a second notes module holding old notes.
         "Notes/bible-notes.lamp",
@@ -206,6 +205,59 @@ struct LampSyncMacPassLibraryTests {
         await #expect(throws: LampSyncMacPassLibrary.PassError.unsupported(path)) {
             try await passLibrary(library, workspace: workspace).install(path, from: incoming)
         }
+    }
+
+    /// One of the reader's own attachments, arriving on its own.
+    ///
+    /// These were refused, on the grounds that the collection that holds
+    /// them fetches its own — but that step runs only when the collection
+    /// file arrives. A picture that failed to come down once, with nothing
+    /// written since, was planned every pass and refused every pass: the
+    /// only way out was an edit on the *other* device, which republishes the
+    /// collection and sets the fetch going again. Editing it on this Mac was
+    /// no help at all — this Mac has no copy to publish.
+    @Test(arguments: [
+        ("NoteMedia/notes/43011035/tomb.png", "Media/Notes/43011035/tomb.png"),
+        ("DevotionalMedia/devotionals/writing-1/photo.jpg",
+         "Media/Devotionals/writing-1/photo.jpg"),
+    ])
+    func anAttachmentArrivingOnItsOwnIsPutAway(
+        remote: String, local: String
+    ) async throws {
+        let (library, root, workspace) = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let incoming = workspace.appendingPathComponent("incoming")
+        try Data("the picture".utf8).write(to: incoming)
+
+        try await passLibrary(library, workspace: workspace).install(remote, from: incoming)
+
+        #expect(
+            try Data(contentsOf: root.appendingPathComponent(local)) == Data("the picture".utf8),
+            "put away where the resolver looks"
+        )
+    }
+
+    /// A notes module's picture is keyed by the module rather than a verse,
+    /// so it goes somewhere a verse can never be named — and never through
+    /// the path above.
+    @Test func aModulesPictureIsKeptApartFromAVersesS() async throws {
+        let (library, root, workspace) = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let incoming = workspace.appendingPathComponent("incoming")
+        try Data("a module's picture".utf8).write(to: incoming)
+
+        try await passLibrary(library, workspace: workspace)
+            .install("NoteMedia/43011035/tomb.png", from: incoming)
+
+        #expect(try Data(
+            contentsOf: root.appendingPathComponent("Media/Notes/module-43011035/tomb.png")
+        ) == Data("a module's picture".utf8))
+        #expect(
+            !FileManager.default.fileExists(
+                atPath: root.appendingPathComponent("Media/Notes/43011035/tomb.png").path
+            ),
+            "a module named like a verse never lands in that verse's folder"
+        )
     }
 
     /// The library decides what a file is by its extension, and a pass

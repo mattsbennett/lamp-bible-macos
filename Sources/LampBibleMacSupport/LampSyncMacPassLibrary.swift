@@ -171,22 +171,20 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             // arrive on their own as a book's do.
             try installNoteModuleMedia(from: url, remotePath: path)
             return nil
-        case .noteMedia:
-            // One of the reader's own note pictures, arriving on its own.
-            // It used to be refused here, on the grounds that the notes
-            // collection fetches its own attachments — but that step runs
+        case .noteMedia, .devotionalMedia:
+            // One of the reader's own attachments, arriving on its own.
+            //
+            // Both used to be refused here, on the grounds that the notes
+            // and writings collections fetch their own — but those steps run
             // only when the collection file itself arrives. A picture that
-            // failed to come down once, with the notes unchanged since, was
-            // then planned every pass and refused every pass, for ever. The
-            // path says which verse it belongs to, which is all that is
-            // needed to put it away.
-            try installNoteMedia(from: url, remotePath: path)
+            // failed to come down once, with nothing written since, was then
+            // planned every pass and refused every pass, for ever: the only
+            // way out was somebody editing the writing on the *other*
+            // device, which republishes the collection and sets the fetch
+            // going again. The path says which owner it belongs to, which is
+            // all that is needed to put it away.
+            try installPersonalMedia(from: url, remotePath: path, kind: kind)
             return nil
-        case .devotionalMedia:
-            // A writing's attachments are installed by the step that takes
-            // the writing in. Reported rather than ignored, so nothing goes
-            // missing quietly.
-            throw PassError.unsupported(path)
         }
     }
 
@@ -238,13 +236,22 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
     /// where `LampLibrary.noteMediaURL` looks for it. Keyed by the module
     /// rather than a verse: the module declares its pictures once and its
     /// notes point at them by id.
-    /// One of the reader's own note pictures, under `Media/Notes/<verse>/`,
-    /// which is where `LampLibrary.noteMediaURL` looks for it.
-    private func installNoteMedia(from url: URL, remotePath: String) throws {
+    /// One of the reader's own attachments, under `Media/<scope>/<owner>/`,
+    /// which is where the resolvers look for it: a verse for a note, a
+    /// writing for a writing.
+    ///
+    /// Both kinds carry the owner in the same place —
+    /// `<Dir>/<module>/<owner>/<file>` — so one routine serves them, and
+    /// anything else of that kind (a module's pictures, keyed differently)
+    /// does not reach here.
+    private func installPersonalMedia(
+        from url: URL, remotePath: String, kind: LampSyncFileKind
+    ) throws {
+        let scope: LampMediaScope = kind == .noteMedia ? .note : .devotional
         let components = remotePath.split(separator: "/").map(String.init)
         guard components.count == 4,
               let destination = LampPortableDevotionalMedia.folderURL(
-                  rootURL: library.rootURL, scope: .note, ownerID: components[2]
+                  rootURL: library.rootURL, scope: scope, ownerID: components[2]
               )?.appendingPathComponent(components[3])
         else { throw PassError.unsupported(remotePath) }
         try place(url, at: destination)
