@@ -151,6 +151,8 @@ final class LibraryModel: ObservableObject {
     /// translation, or the one with the most matches where it had none.
     @Published private(set) var moduleSearchScripture: ModuleSearchScripture?
     @Published private(set) var isModuleSearching = false
+    /// The last few searches and what they found, most recent last.
+    private var recentModuleSearches: [(request: ModuleSearchRequest, answer: ModuleSearchAnswer)] = []
     @Published private(set) var selectedVerseReference: Int?
     @Published private(set) var dictionaryLookupRequest: DictionaryLookupRequest?
     @Published private(set) var highlightsByReference: [Int: [LampVerseHighlight]] = [:]
@@ -660,15 +662,34 @@ final class LibraryModel: ObservableObject {
             || devotionalCriteria != LampDevotionalSearchCriteria() else {
             moduleSearchResults = []
             moduleSearchKindsWithMore = []
-        moduleSearchCutKinds = []
-        moduleSearchScripture = nil
+            moduleSearchCutKinds = []
+            moduleSearchScripture = nil
             isModuleSearching = false
             return
         }
-        isModuleSearching = true
+        // Scripture from the reading translation, on the page of every kind.
+        let reading = kind == nil ? readingTranslationID : nil
+        let request = ModuleSearchRequest(
+            query: trimmedQuery, kind: kind, moduleID: moduleID, bookRange: bookRange,
+            strongsKey: strongsKey, highlightColors: highlightColors,
+            devotionalCriteria: devotionalCriteria, readingTranslationID: reading
+        )
+        // A search asked again — a Search tab chosen again, mostly — shows
+        // what it found last time at once, then runs again quietly in case a
+        // note or a writing has changed since. Switching tabs used to leave
+        // the last tab's results up for the typing delay, then swap them.
+        let recent = recentModuleSearches.last { $0.request == request }
+        if let recent {
+            show(recent.answer)
+            isModuleSearching = false
+        } else {
+            isModuleSearching = true
+        }
         moduleSearchTask = Task {
             do {
-                try await Task.sleep(for: .milliseconds(250))
+                // The delay is for typing; a search already on screen is only
+                // being checked.
+                if recent == nil { try await Task.sleep(for: .milliseconds(250)) }
                 let includedModuleIDs: Set<String>?
                 if let moduleID {
                     includedModuleIDs = [moduleID]
@@ -704,7 +725,6 @@ final class LibraryModel: ObservableObject {
                     // translation searched together put the same verse on
                     // the page once per translation. "More in Scripture" has
                     // them all.
-                    let reading = readingTranslationID
                     let groups = try await library.searchModulesByKind(
                         query: trimmedQuery,
                         moduleIDs: includedModuleIDs,
@@ -727,10 +747,13 @@ final class LibraryModel: ObservableObject {
                     }
                 }
                 guard !Task.isCancelled else { return }
-                moduleSearchResults = results
-                moduleSearchKindsWithMore = kindsWithMore
-                moduleSearchCutKinds = cutKinds
-                moduleSearchScripture = scripture
+                let answer = ModuleSearchAnswer(
+                    results: results, kindsWithMore: kindsWithMore, cutKinds: cutKinds, scripture: scripture
+                )
+                recentModuleSearches.removeAll { $0.request == request }
+                recentModuleSearches.append((request, answer))
+                if recentModuleSearches.count > 8 { recentModuleSearches.removeFirst() }
+                show(answer)
             } catch is CancellationError {
                 return
             } catch {
@@ -743,6 +766,16 @@ final class LibraryModel: ObservableObject {
             }
             if !Task.isCancelled { isModuleSearching = false }
         }
+    }
+
+    /// Puts a search's answer on screen, publishing only what changed: a
+    /// search shown from the recent ones and run again unchanged would
+    /// otherwise lay the list out twice.
+    private func show(_ answer: ModuleSearchAnswer) {
+        if moduleSearchResults != answer.results { moduleSearchResults = answer.results }
+        if moduleSearchKindsWithMore != answer.kindsWithMore { moduleSearchKindsWithMore = answer.kindsWithMore }
+        if moduleSearchCutKinds != answer.cutKinds { moduleSearchCutKinds = answer.cutKinds }
+        if moduleSearchScripture != answer.scripture { moduleSearchScripture = answer.scripture }
     }
 
     /// The translation being read: the reader's open one, else the last
@@ -1456,4 +1489,24 @@ struct ModuleSearchScripture: Equatable {
     let readingTranslationID: String?
     /// The other translations that matched, for "also in …".
     let alsoIn: [String]
+}
+
+/// Everything a module search was asked, to know it when asked again.
+struct ModuleSearchRequest: Equatable {
+    let query: String
+    let kind: LampModuleKind?
+    let moduleID: String?
+    let bookRange: ClosedRange<Int>?
+    let strongsKey: String?
+    let highlightColors: Set<String>?
+    let devotionalCriteria: LampDevotionalSearchCriteria
+    let readingTranslationID: String?
+}
+
+/// What a module search found, as Search shows it.
+struct ModuleSearchAnswer: Equatable {
+    let results: [LampModuleSearchResult]
+    let kindsWithMore: Set<LampModuleKind>
+    let cutKinds: Set<LampModuleKind>
+    let scripture: ModuleSearchScripture?
 }
