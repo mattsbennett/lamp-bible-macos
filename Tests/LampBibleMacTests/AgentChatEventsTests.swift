@@ -106,6 +106,40 @@ struct AgentChatEventsTests {
         #expect(withSilence.events?.count == 1, "silence is not an empty list")
     }
 
+    /// What a turn did, for reading the conversation back.
+    ///
+    /// The tool calls were shown while the turn ran and then gone. A week
+    /// later the conversation said what was asked and what came back, and
+    /// nothing about where the answer came from — which for study is the
+    /// difference between a claim and a cited one.
+    @Test func aTurnSaysWhichToolsItUsed() {
+        let turn = UUID()
+        let transcript = AgentChatTranscript(events: [
+            event(turn, 10, AgentChatTranscript.Event.said, role: .user, text: "Did Jesus weep?"),
+            event(turn, 11, AgentChatTranscript.Event.tool, name: "read_passage", text: "John 11"),
+            event(turn, 12, AgentChatTranscript.Event.activity, text: "Thinking"),
+            event(turn, 13, AgentChatTranscript.Event.tool, name: "read_passage", text: "John 11:35"),
+            event(turn, 14, AgentChatTranscript.Event.tool, name: "search", text: "wept"),
+            event(turn, 15, AgentChatTranscript.Event.said, role: .assistant, text: "Yes."),
+        ])
+
+        let used = try? #require(transcript.turns.first).toolsUsed
+        #expect(
+            used == ["read_passage", "search"],
+            "named once each, in the order first used — a run reports the same tool many times"
+        )
+    }
+
+    @Test func aTurnThatUsedNothingSaysNothing() {
+        let turn = UUID()
+        let transcript = AgentChatTranscript(events: [
+            event(turn, 10, AgentChatTranscript.Event.said, role: .user, text: "Hello"),
+            event(turn, 11, AgentChatTranscript.Event.activity, text: "Thinking"),
+            event(turn, 12, AgentChatTranscript.Event.said, role: .assistant, text: "Hello."),
+        ])
+        #expect(transcript.turns.first?.toolsUsed.isEmpty == true)
+    }
+
     /// A tangent followed without losing the thread it was followed from.
     @Test func forkingKeepsEverythingUpToTheTurnAndNoSession() throws {
         let first = UUID(), second = UUID(), third = UUID()

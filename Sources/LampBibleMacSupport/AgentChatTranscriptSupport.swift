@@ -156,6 +156,20 @@ public struct AgentChatTranscript: Codable, Equatable, Sendable {
         public var question: String? {
             events.first { $0.kind == Event.said && $0.role == .user }?.text
         }
+
+        /// The tools this turn used, named once each and in the order they
+        /// were first used.
+        ///
+        /// A run reports the same tool many times, so a list that said
+        /// "Read · Read · Read" would be a record of the reporting rather
+        /// than of the work.
+        public var toolsUsed: [String] {
+            var seen = Set<String>()
+            return events.compactMap { event in
+                guard event.kind == Event.tool, let name = event.name else { return nil }
+                return seen.insert(name).inserted ? name : nil
+            }
+        }
     }
 
     /// Two devices order the same events the same way.

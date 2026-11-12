@@ -245,6 +245,17 @@ final class StreamingAgentMessage: ObservableObject {
     }
 }
 
+/// What the agent did during one turn, for reading the conversation back.
+///
+/// A turn's tool calls were shown while it ran and then gone. A week
+/// later the conversation said what was asked and what came back, and
+/// nothing about where the answer came from — whether it had read the
+/// passage, searched, or answered from the model alone. For study that is
+/// the difference between a claim and a cited one.
+struct TurnStepsContent {
+    let steps: [String]
+}
+
 /// What the person typed. Lamp draws it rather than SwiftyChat, whose text cell
 /// can't be selected.
 struct PersonMessageContent {
@@ -646,6 +657,25 @@ private struct NativeAgentChatInputView: View {
     }
 }
 
+/// A quiet line saying what the agent did for a turn.
+private struct TurnStepsRow: View {
+    let steps: [String]
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "wrench.and.screwdriver")
+                .font(.caption2)
+            Text(steps.joined(separator: " · "))
+                .font(.caption)
+                .lineLimit(2)
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+        .help("What \(steps.count == 1 ? "tool" : "tools") this answer used")
+    }
+}
+
 /// What is waiting to be sent, above the composer.
 ///
 /// Shown rather than merely held: a message the reader cannot see is one
@@ -880,7 +910,7 @@ private final class NativeAgentChatModel: ObservableObject {
         // conversation on from a recap instead.
         sessionID = transcript.resumableSessionID(forInstall: installID)
         let loading = messages.filter { $0.id == loadingMessageID }
-        messages = transcript.messages.map(makeChatMessage) + loading
+        messages = rows(of: transcript) + loading
         continuityNotice = transcript.sessionID != nil && sessionID == nil
             ? "This chat continues from an earlier session that can’t be resumed on this Mac. \(provider.shortName) will be given a recap of the conversation."
             : nil
@@ -1259,6 +1289,40 @@ private final class NativeAgentChatModel: ObservableObject {
         recordSaid(id: id, role: .assistant, text: markdown, at: date)
     }
 
+    /// The conversation as rows: each question, what the agent did, and what
+    /// it said.
+    ///
+    /// A transcript from before events has no steps to show and reads as it
+    /// always did.
+    private func rows(of transcript: AgentChatTranscript) -> [NativeAgentChatMessage] {
+        guard let events = transcript.events, !events.isEmpty else {
+            return transcript.messages.map(makeChatMessage)
+        }
+        return transcript.turns.flatMap { turn -> [NativeAgentChatMessage] in
+            var rows: [NativeAgentChatMessage] = []
+            for event in turn.events {
+                guard event.kind == AgentChatTranscript.Event.said,
+                      let role = event.role, let text = event.text
+                else { continue }
+                rows.append(makeChatMessage(AgentChatTranscript.Message(
+                    id: event.id, role: role, text: text, date: event.date
+                )))
+                // The steps go under the question, where they happened,
+                // rather than under the answer they produced.
+                if role == .user, !turn.toolsUsed.isEmpty {
+                    rows.append(NativeAgentChatMessage(
+                        id: turn.id,
+                        user: agentUser,
+                        messageKind: .custom(TurnStepsContent(steps: turn.toolsUsed)),
+                        isSender: false,
+                        date: event.date
+                    ))
+                }
+            }
+            return rows
+        }
+    }
+
     private func makeChatMessage(_ message: AgentChatTranscript.Message) -> NativeAgentChatMessage {
         let isSender = message.role == .user
         return NativeAgentChatMessage(
@@ -1577,6 +1641,8 @@ struct NativeAgentChatView: View {
                         AgentReplyBubble(markdown: content.markdown)
                     } else if let content = payload as? StreamingAgentMessage {
                         StreamingAgentReplyBubble(content: content)
+                    } else if let content = payload as? TurnStepsContent {
+                        TurnStepsRow(steps: content.steps)
                     }
                 }
                 .environment(\.chatStyle, chatStyle)
