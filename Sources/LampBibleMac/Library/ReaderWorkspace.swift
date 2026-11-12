@@ -462,10 +462,16 @@ final class ReaderScrollMemory {
     /// The tab the reader is showing, whose place a settled scroll records.
     private var currentTab: UUID?
 
-    init(defaults: UserDefaults = .standard, keyPrefix: String = "reader.tabs.scroll.") {
+    init(defaults: UserDefaults = ReaderScrollMemory.store, keyPrefix: String = "reader.tabs.scroll.") {
         self.defaults = defaults
         self.keyPrefix = keyPrefix
     }
+
+    /// Offsets are kept apart from the app's settings. Written to those,
+    /// each tab switch woke every view that reads a setting, measured at a
+    /// tenth of a switch on the owner's Mac.
+    static let store = UserDefaults(suiteName: (Bundle.main.bundleIdentifier ?? "Lamp") + ".scroll-positions")
+        ?? .standard
 
     /// The reader's scroll view, from inside the passage it is showing.
     func register(_ scrollView: NSScrollView, passage: String) {

@@ -69,6 +69,9 @@ struct LibraryTabBar<NewTabPopover: View>: View {
     @State private var renamingID: UUID?
     @State private var draftName = ""
     @State private var targetedID: UUID?
+    /// The tab just clicked, drawn as the open one at once: the pane behind
+    /// it takes a moment to lay out, and the click should not wait on it.
+    @State private var choosingID: UUID?
     /// The tabs as last drawn, for the ⌃Tab shortcuts. A shortcut keeps the
     /// action it was first given, which captured the tabs of that moment, so
     /// ⌃Tab went from the first tab to the second and then stayed there.
@@ -136,19 +139,43 @@ struct LibraryTabBar<NewTabPopover: View>: View {
     }
 
     private func step(by offset: Int) {
-        if let id = current.neighbour(offset) { select(id) }
+        if let id = current.neighbour(offset, from: choosingID) { choose(id) }
+    }
+
+    /// The tab drawn as the open one: the one just clicked, until the pane
+    /// has caught up with it.
+    private var shownSelectedID: UUID { choosingID ?? selectedID }
+
+    /// Shows the tab chosen at once and opens it after: the tab bar answers
+    /// the click, and any wait is the content's. Opened in the same turn,
+    /// the click showed nothing until the passage behind it had laid out,
+    /// about a quarter of a second (owner, 2026-11-12).
+    ///
+    /// Opened once the run loop has drawn the highlight, not on its next
+    /// turn or after a short delay: both ran before the drawing pass, and
+    /// the highlight waited for the content as before. Measured in a test
+    /// window by counting drawing passes between the press and the switch.
+    private func choose(_ id: UUID) {
+        // The open tab as last drawn, not `selectedID`: a shortcut calls this
+        // through the first copy of the bar it was given.
+        guard id != (choosingID ?? current.selectedID) else { return }
+        choosingID = id
+        afterNextDraw {
+            select(id)
+            choosingID = nil
+        }
     }
 
     private func cell(_ item: LibraryTabStripItem, at index: Int, width: CGFloat) -> some View {
-        let isSelected = item.id == selectedID
+        let isSelected = item.id == shownSelectedID
         let isHovered = hoveredID == item.id
         // A separator only between two resting tabs: beside the raised tab
         // or a hovered one, it would cut into that tab's shape.
         let next = index + 1 < items.count ? items[index + 1].id : nil
         let showsSeparator = next != nil && !isSelected && !isHovered
-            && next != selectedID && next != hoveredID
+            && next != shownSelectedID && next != hoveredID
         return ZStack {
-            Button { select(item.id) } label: {
+            Button { choose(item.id) } label: {
                 Text(item.title)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -283,19 +310,36 @@ struct LibraryTabBar<NewTabPopover: View>: View {
     }
 }
 
+/// Runs `work` once the main run loop has drawn the pending frame.
+///
+/// The run loop draws in its before-waiting pass: SwiftUI renders, then
+/// Core Animation commits. A one-shot observer ordered after both sees the
+/// frame on its way to the screen, and hands `work` to the next turn.
+@MainActor
+func afterNextDraw(_ work: @escaping @MainActor () -> Void) {
+    let observer = CFRunLoopObserverCreateWithHandler(
+        nil, CFRunLoopActivity.beforeWaiting.rawValue, false, CFIndex.max
+    ) { _, _ in
+        DispatchQueue.main.async { work() }
+    }
+    CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
+}
+
 /// The tab order and open tab as last drawn, read by the ⌃Tab shortcuts.
 private final class CurrentTabs {
     private var ids: [UUID] = []
-    private var selectedID: UUID?
+    private(set) var selectedID: UUID?
 
     func update(ids: [UUID], selectedID: UUID) {
         self.ids = ids
         self.selectedID = selectedID
     }
 
-    /// The tab `offset` along from the open one, wrapping at either end.
-    func neighbour(_ offset: Int) -> UUID? {
-        guard ids.count > 1, let index = ids.firstIndex(where: { $0 == selectedID }) else { return nil }
+    /// The tab `offset` along from the open one — or from `chosen`, a tab
+    /// clicked whose pane has not yet caught up — wrapping at either end.
+    func neighbour(_ offset: Int, from chosen: UUID? = nil) -> UUID? {
+        let start = chosen ?? selectedID
+        guard ids.count > 1, let index = ids.firstIndex(where: { $0 == start }) else { return nil }
         return ids[((index + offset) % ids.count + ids.count) % ids.count]
     }
 }
