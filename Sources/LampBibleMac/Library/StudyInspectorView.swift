@@ -49,8 +49,39 @@ extension EnvironmentValues {
 ///
 /// Observed per property, so a view that only sets the tool — the reader,
 /// opening a verse's notes — is not redrawn as the dictionary is typed into.
+/// Results a study tool looked up lately, most recent last, by what was
+/// asked. Nothing observes it: it is read when a tool is asked for something,
+/// and written when an answer arrives.
+@MainActor
+final class StudyPaneRecents {
+    private let capacity: Int
+    private var entries: [(key: AnyHashable, value: Any)] = []
+
+    init(capacity: Int) {
+        self.capacity = capacity
+    }
+
+    func value<Value>(for key: AnyHashable, as type: Value.Type = Value.self) -> Value? {
+        entries.last { $0.key == key }?.value as? Value
+    }
+
+    func keep(_ value: Any, for key: AnyHashable) {
+        entries.removeAll { $0.key == key }
+        entries.append((key, value))
+        if entries.count > capacity { entries.removeFirst(entries.count - capacity) }
+    }
+}
+
 @MainActor @Observable
 final class StudyPaneState {
+    /// What the tools looked up lately, so a tab chosen again shows its
+    /// entry or its commentary at once rather than looking it up afresh.
+    @ObservationIgnored let recents = StudyPaneRecents(capacity: 24)
+    /// Analyses apart, and fewer: one holds the verses of a common key,
+    /// about a megabyte.
+    @ObservationIgnored let recentAnalyses = StudyPaneRecents(capacity: 4)
+    /// Where each tab's dictionary entry or analysis was scrolled.
+    @ObservationIgnored let scrollMemory = ReaderScrollMemory(keyPrefix: "reader.tabs.studyScroll.")
     var tool = "commentary"
     var dictionaryQuery = ""
     var dictionaryLookup: DictionaryLookup?
@@ -1315,7 +1346,7 @@ private struct DictionaryLookupRequestKey: Hashable {
 
 /// One source lexicon key and its exact entries, including entries reached
 /// through a bundled lexicon mapping such as Strong's Hebrew to BDB.
-private struct DictionaryKeySection: Identifiable {
+private struct DictionaryKeySection: Identifiable, Equatable {
     let id: String
     let entries: [LampDictionaryResult]
     /// Entries that only mention the key in their definition text. Kept, but folded
@@ -1325,6 +1356,7 @@ private struct DictionaryKeySection: Identifiable {
 
 private struct DictionaryInspectorView: View {
     @EnvironmentObject private var model: LibraryModel
+    @Environment(StudyPaneState.self) private var studyPane
     @Binding var query: String
     @Binding var lookup: DictionaryLookup?
     /// Opens a Strong's key's analysis over the entry.
@@ -1436,6 +1468,14 @@ private struct DictionaryInspectorView: View {
             // Emptying the field for a lookup is not typing.
             guard newValue != seededQuery else { return }
             clearLookup(keepingQuery: true)
+        }
+        // A tab chosen again shows its entry in this update, from the recent
+        // ones, rather than the last tab's until a lookup returns.
+        .onChange(of: lookupRequest, initial: true) { _, request in
+            showRecentLookup(request)
+        }
+        .onChange(of: searchRequest, initial: true) { _, request in
+            showRecentSearch(request)
         }
         .task(id: lookupRequest) {
             await loadLookup()
@@ -1681,6 +1721,11 @@ private struct DictionaryInspectorView: View {
                     }
                     .padding(StudyPaneMetrics.contentInset)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    // A tab chosen again goes back to where its entry was read.
+                    .background(ScrollMemoryLink(
+                        memory: studyPane.scrollMemory,
+                        passage: "dictionary:" + ((displayedLookup ?? lookup)?.keys.joined(separator: ",") ?? "")
+                    ))
                 }
                 .modifier(SupersededContent(isSuperseded: isAwaitingLookup))
             }
@@ -1820,6 +1865,12 @@ private struct DictionaryInspectorView: View {
             return
         }
         let request = lookupRequest
+        // Already on screen from the recent lookups: the entries cannot have
+        // changed, since a dictionary installed or removed is another request.
+        if let request, completedLookupRequest == request,
+           studyPane.recents.value(for: request, as: [DictionaryKeySection].self) != nil {
+            return
+        }
         // No in-flight guard here, deliberately. `.task(id:)` fires twice for one
         // unchanged id, and skipping the second pass left the pane spinning for
         // good whenever the first was then cancelled: nothing set
@@ -1856,6 +1907,7 @@ private struct DictionaryInspectorView: View {
             sections = loaded
             displayedLookup = lookup
             completedLookupRequest = request
+            if let request { studyPane.recents.keep(loaded, for: request) }
         } catch is CancellationError {
             return
         } catch {
@@ -1893,12 +1945,37 @@ private struct DictionaryInspectorView: View {
                 ))
             }
             sections = refined
+            if let request { studyPane.recents.keep(refined, for: request) }
         } catch is CancellationError {
             return
         } catch {
             // The definitions stand on their own; a failed cross-reference search
             // is not worth replacing them with an error.
         }
+    }
+
+    /// Puts a lookup made lately back on screen at once.
+    private func showRecentLookup(_ request: DictionaryLookupRequestKey?) {
+        guard let request, let lookup, completedLookupRequest != request,
+              let recent = studyPane.recents.value(for: request, as: [DictionaryKeySection].self)
+        else { return }
+        // As a lookup does: the field is emptied, which is not typing.
+        seededQuery = ""
+        if !query.isEmpty { query = "" }
+        errorMessage = nil
+        sections = recent
+        displayedLookup = lookup
+        completedLookupRequest = request
+    }
+
+    /// Puts a search made lately back on screen at once.
+    private func showRecentSearch(_ request: DictionarySearchRequest) {
+        guard lookup == nil, completedSearchRequest != request,
+              let recent = studyPane.recents.value(for: request, as: [LampDictionaryResult].self)
+        else { return }
+        errorMessage = nil
+        results = recent
+        completedSearchRequest = request
     }
 
     private func loadSearch() async {
@@ -1913,6 +1990,11 @@ private struct DictionaryInspectorView: View {
             completedSearchRequest = searchRequest
             return
         }
+        let request = searchRequest
+        if completedSearchRequest == request,
+           studyPane.recents.value(for: request, as: [LampDictionaryResult].self) != nil {
+            return
+        }
         errorMessage = nil
         do {
             try await Task.sleep(for: .milliseconds(200))
@@ -1923,6 +2005,7 @@ private struct DictionaryInspectorView: View {
                 moduleIDs: activeDictionaryIDs(for: [trimmedQuery]),
                 limit: 100
             )
+            studyPane.recents.keep(results, for: request)
         } catch is CancellationError {
             return
         } catch {
@@ -2638,6 +2721,9 @@ private struct CommentaryRequest: Hashable {
 
 private struct CommentaryInspectorView: View {
     @EnvironmentObject private var model: LibraryModel
+    @Environment(StudyPaneState.self) private var studyPane
+    /// The request `units` answers, when it was put up from the recent ones.
+    @State private var shownRequest: CommentaryRequest?
     @AppStorage("studyInspector.commentaryModuleID") private var preferredModuleID = ""
     @AppStorage("commentary.fontSize") private var fontSize = LampTextScale.commentaryText.defaultValue
     @AppStorage("commentary.lineSpacing") private var lineSpacing = LampTextScale.commentaryLineSpacing.defaultValue
@@ -2710,6 +2796,18 @@ private struct CommentaryInspectorView: View {
 
             panelContent
         }
+        // A tab chosen again shows its chapter's commentary in this update,
+        // from the recent ones, rather than the last tab's until it is read.
+        .onChange(of: request, initial: true) { _, request in
+            guard let recent = studyPane.recents.value(for: request, as: [LampCommentaryUnit].self) else {
+                shownRequest = nil
+                return
+            }
+            units = recent
+            errorMessage = nil
+            isLoading = false
+            shownRequest = request
+        }
         .task(id: request) {
             guard let book = request.bookNumber,
                   let chapter = request.chapterNumber,
@@ -2717,14 +2815,19 @@ private struct CommentaryInspectorView: View {
                 units = []
                 return
             }
+            // Already up from the recent ones: a chapter's commentary cannot
+            // change without the module, which would be another request.
+            guard shownRequest != request else { return }
             isLoading = true
             errorMessage = nil
             do {
-                units = try await model.library.commentary(
+                let read = try await model.library.commentary(
                     bookNumber: book,
                     chapterNumber: chapter,
                     moduleIDs: [moduleID]
                 )
+                units = read
+                studyPane.recents.keep(read, for: request)
             } catch {
                 errorMessage = error.localizedDescription
                 units = []

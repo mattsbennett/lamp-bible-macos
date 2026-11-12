@@ -3,6 +3,7 @@ import LampBibleMacSupport
 #endif
 import AppKit
 import Foundation
+import SwiftUI
 import LampCore
 
 /// Where one reader window is in scripture, and what it has read for that
@@ -451,6 +452,9 @@ final class ReaderScrollMemory {
     }
 
     private let defaults: UserDefaults
+    /// Where its offsets are kept: the reader's and the study pane's are
+    /// separate memories, one place per tab each.
+    private let keyPrefix: String
     private weak var scrollView: NSScrollView?
     private var scrollPassage: String?
     private var places: [UUID: Place] = [:]
@@ -458,8 +462,9 @@ final class ReaderScrollMemory {
     /// The tab the reader is showing, whose place a settled scroll records.
     private var currentTab: UUID?
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, keyPrefix: String = "reader.tabs.scroll.") {
         self.defaults = defaults
+        self.keyPrefix = keyPrefix
     }
 
     /// The reader's scroll view, from inside the passage it is showing.
@@ -480,7 +485,7 @@ final class ReaderScrollMemory {
         guard places[tab]?.passage != place.passage || places[tab]?.y != place.y else { return }
         places[tab] = place
         if let data = try? JSONEncoder().encode(place) {
-            defaults.set(data, forKey: Self.key(for: tab))
+            defaults.set(data, forKey: key(for: tab))
         }
     }
 
@@ -501,7 +506,7 @@ final class ReaderScrollMemory {
 
     func forget(tab: UUID) {
         places[tab] = nil
-        defaults.removeObject(forKey: Self.key(for: tab))
+        defaults.removeObject(forKey: key(for: tab))
     }
 
     /// Whether `passage` is about to be put back where it was left, so the
@@ -545,7 +550,7 @@ final class ReaderScrollMemory {
 
     private func place(of tab: UUID) -> Place? {
         if let place = places[tab] { return place }
-        guard let data = defaults.data(forKey: Self.key(for: tab)),
+        guard let data = defaults.data(forKey: key(for: tab)),
               let place = try? JSONDecoder().decode(Place.self, from: data) else { return nil }
         places[tab] = place
         return place
@@ -556,5 +561,72 @@ final class ReaderScrollMemory {
         return Date().timeIntervalSince(pending.asked) > 30
     }
 
-    static func key(for tab: UUID) -> String { "reader.tabs.scroll.\(tab.uuidString)" }
+    private func key(for tab: UUID) -> String { keyPrefix + tab.uuidString }
+}
+
+/// A scroll view, handed to a `ReaderScrollMemory` from inside the content it
+/// scrolls, which then puts a chosen tab back where it was left as soon as
+/// that content has laid out, and notes where it is each time a scroll by
+/// hand ends. `passage` names the content, so an offset is only ever put
+/// back on what it was taken from.
+struct ScrollMemoryLink: NSViewRepresentable {
+    let memory: ReaderScrollMemory
+    let passage: String
+
+    func makeNSView(context: Context) -> LinkView {
+        let view = LinkView()
+        view.memory = memory
+        view.passage = passage
+        return view
+    }
+
+    // Runs on every update of the view around it: it only notes the passage.
+    func updateNSView(_ view: LinkView, context: Context) {
+        if view.passage != passage { view.passage = passage }
+    }
+
+    final class LinkView: NSView {
+        weak var memory: ReaderScrollMemory?
+        var passage = ""
+        private weak var observed: NSScrollView?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard window != nil, let scrollView = enclosingScrollView else { return }
+            memory?.register(scrollView, passage: passage)
+            observe(scrollView)
+        }
+
+        override func layout() {
+            super.layout()
+            if let scrollView = enclosingScrollView { memory?.register(scrollView, passage: passage) }
+            // In this layout, before the content is first drawn: put back
+            // after it, the page showed at its top for a frame and jumped.
+            memory?.restoreIfReady(passage: passage)
+            // And once more after the pass, for content whose document was
+            // not yet its full height when this view was laid out.
+            let passage = passage
+            DispatchQueue.main.async { [weak self] in
+                self?.memory?.restoreIfReady(passage: passage)
+            }
+        }
+
+        /// A scroll by hand that has ended is where the tab now is.
+        private func observe(_ scrollView: NSScrollView) {
+            guard observed !== scrollView else { return }
+            if let observed {
+                NotificationCenter.default.removeObserver(self, name: NSScrollView.didEndLiveScrollNotification, object: observed)
+            }
+            observed = scrollView
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(scrollEnded), name: NSScrollView.didEndLiveScrollNotification, object: scrollView
+            )
+        }
+
+        @objc private func scrollEnded() {
+            memory?.saveCurrent()
+        }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
 }

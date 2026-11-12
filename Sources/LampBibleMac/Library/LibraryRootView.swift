@@ -654,6 +654,7 @@ struct LibraryRootView: View {
         // The open tab as it was left: where it was scrolled, and its
         // selected verse. A place asked for instead goes to its verse.
         if pending == nil { workspace.scrollMemory.prepare(tab: readerTabs.selectedID) }
+        studyPane.scrollMemory.prepare(tab: readerTabs.selectedID)
         workspace.start(model: model, at: pending ?? readerTabs.selectedTab?.location)
         if let verse = (pending ?? readerTabs.selectedTab?.location)?.verseReference {
             workspace.focusVerse(verse)
@@ -675,9 +676,11 @@ struct LibraryRootView: View {
     private func duplicateReaderTab(_ id: UUID) {
         readerTabs.updateSelected(location: workspace.currentLocation)
         workspace.scrollMemory.save(tab: readerTabs.selectedID)
+        studyPane.scrollMemory.save(tab: readerTabs.selectedID)
         recordTabSidebar()
         guard let location = readerTabs.duplicate(id) else { return }
         workspace.scrollMemory.prepare(tab: readerTabs.selectedID)
+        studyPane.scrollMemory.prepare(tab: readerTabs.selectedID)
         adoptTabSidebar()
         workspace.openTab(at: location)
         selection = .section(.reader)
@@ -690,8 +693,11 @@ struct LibraryRootView: View {
     private func openReaderTab(at location: ReaderLocation) {
         readerTabs.updateSelected(location: workspace.currentLocation)
         workspace.scrollMemory.save(tab: readerTabs.selectedID)
+        studyPane.scrollMemory.save(tab: readerTabs.selectedID)
         recordTabSidebar()
-        workspace.scrollMemory.prepare(tab: readerTabs.add(location: location))
+        let added = readerTabs.add(location: location)
+        workspace.scrollMemory.prepare(tab: added)
+        studyPane.scrollMemory.prepare(tab: added)
         adoptTabSidebar()
         workspace.openTab(at: location)
         selection = .section(.reader)
@@ -702,6 +708,8 @@ struct LibraryRootView: View {
         readerTabs.updateSelected(location: workspace.currentLocation)
         workspace.scrollMemory.save(tab: readerTabs.selectedID)
         workspace.scrollMemory.prepare(tab: id)
+        studyPane.scrollMemory.save(tab: readerTabs.selectedID)
+        studyPane.scrollMemory.prepare(tab: id)
         recordTabSidebar()
         let location = readerTabs.select(id)
         adoptTabSidebar()
@@ -723,9 +731,11 @@ struct LibraryRootView: View {
         if wasSelected { readerTabs.updateSelected(location: workspace.currentLocation) }
         let destination = readerTabs.close(id)
         workspace.scrollMemory.forget(tab: id)
+        studyPane.scrollMemory.forget(tab: id)
         if let chat { letGoOfChat(chat) }
         if wasSelected {
             workspace.scrollMemory.prepare(tab: readerTabs.selectedID)
+            studyPane.scrollMemory.prepare(tab: readerTabs.selectedID)
             adoptTabSidebar()
             if let destination { workspace.openTab(at: destination) }
         }
@@ -1870,53 +1880,6 @@ private final class ReaderParagraphAnchorStore {
         }
         let progress = -frame.minY / max(frame.height, 1)
         return ReaderParagraphAnchorResolver.reference(at: progress, in: segments)
-    }
-}
-
-/// The reader's scroll view, handed to the window's `ReaderScrollMemory`
-/// from inside the passage it scrolls, which then puts a chosen tab back
-/// where it was left as soon as the passage has laid out.
-private struct ReaderScrollViewLink: NSViewRepresentable {
-    let memory: ReaderScrollMemory
-    let passage: String
-
-    func makeNSView(context: Context) -> LinkView {
-        let view = LinkView()
-        view.memory = memory
-        view.passage = passage
-        return view
-    }
-
-    // Runs on every update of the reader: it only notes the passage.
-    func updateNSView(_ view: LinkView, context: Context) {
-        if view.passage != passage { view.passage = passage }
-    }
-
-    final class LinkView: NSView {
-        weak var memory: ReaderScrollMemory?
-        var passage = ""
-
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            guard window != nil, let scrollView = enclosingScrollView else { return }
-            memory?.register(scrollView, passage: passage)
-        }
-
-        override func layout() {
-            super.layout()
-            if let scrollView = enclosingScrollView { memory?.register(scrollView, passage: passage) }
-            // In this layout, before the passage is first drawn: put back
-            // after it, the page showed at its top for a frame and jumped.
-            memory?.restoreIfReady(passage: passage)
-            // And once more after the pass, for a passage whose document
-            // was not yet its full height when this view was laid out.
-            let passage = passage
-            DispatchQueue.main.async { [weak self] in
-                self?.memory?.restoreIfReady(passage: passage)
-            }
-        }
-
-        override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 }
 
@@ -4624,7 +4587,7 @@ private struct TranslationReaderView: View, Equatable {
                     }
                     // Hands the scroll view to the window's scroll memory, and
                     // puts a chosen tab back where it was left once laid out.
-                    .background(ReaderScrollViewLink(memory: workspace.scrollMemory, passage: passageIdentity))
+                    .background(ScrollMemoryLink(memory: workspace.scrollMemory, passage: passageIdentity))
                     // Side by side, each column gets about the measure one
                     // column has on its own.
                     .frame(maxWidth: passageWidth(for: chapters), alignment: .leading)

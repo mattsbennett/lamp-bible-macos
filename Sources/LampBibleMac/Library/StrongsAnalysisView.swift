@@ -14,7 +14,7 @@ import SwiftUI
 /// behind them.
 @MainActor @Observable
 final class StrongsAnalysisLoader {
-    struct Request: Equatable {
+    struct Request: Hashable {
         var key: String
         var activeTranslationID: String?
         var bookRange: ClosedRange<Int>?
@@ -66,6 +66,25 @@ final class StrongsAnalysisLoader {
     func cancel() {
         task?.cancel()
         task = nil
+    }
+
+    /// The request whose analyses are complete: every translation asked and
+    /// answered. Nil while any is still coming.
+    var completedRequest: Request? {
+        isLoadingFirst || isFillingRest || errorMessage != nil ? nil : requested
+    }
+
+    /// Takes up analyses already worked out for `request` — a reader tab
+    /// chosen again — in place of working them out afresh.
+    func adopt(_ request: Request, analyses: [LampStrongsAnalysis], entries: [String: LampStrongsHeadword]) {
+        task?.cancel()
+        task = nil
+        requested = request
+        self.analyses = analyses
+        self.entries = entries
+        errorMessage = nil
+        isLoadingFirst = false
+        isFillingRest = false
     }
 
     private func run(_ request: Request, library: LampLibrary) async {
@@ -524,6 +543,9 @@ struct StrongsAnalysisPane: View {
     /// The way back to the key a companion was followed from, shown before
     /// the key. Nil where there is none, or where the host draws its own.
     var back: Back? = nil
+    /// Where a reader tab's analysis was scrolled, for the study pane: a tab
+    /// chosen again goes back to it. Nil in Search.
+    var scrollMemory: ReaderScrollMemory? = nil
 
     struct Back {
         let title: String
@@ -619,6 +641,11 @@ struct StrongsAnalysisPane: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
                         card(analysis)
+                            .background {
+                                if let scrollMemory {
+                                    ScrollMemoryLink(memory: scrollMemory, passage: "analysis:\(key)")
+                                }
+                            }
                             .task(id: analysis.translationID) {
                                 let id = analysis.translationID
                                 guard translationSources?.id != id else { return }
@@ -3393,6 +3420,13 @@ struct StrongsOccurrenceLabel: View {
 
 // MARK: - In the study pane
 
+/// A word's analyses as the study pane worked them out, kept for a tab
+/// chosen again.
+struct StudyRecentAnalysis {
+    let analyses: [LampStrongsAnalysis]
+    let entries: [String: LampStrongsHeadword]
+}
+
 /// A Strong's analysis in the reader's sidebar, opened over a dictionary entry.
 ///
 /// Here rather than in Search so the passage stays beside it: Search takes the
@@ -3410,6 +3444,7 @@ struct StudyAnalysisView: View {
     @EnvironmentObject private var model: LibraryModel
     @Environment(\.readerReferenceActions) private var referenceActions
     @AppStorage("reader.fontSize") private var readerFontSize = LampTextScale.readerText.defaultValue
+    @Environment(StudyPaneState.self) private var studyPane
     @State private var loader = StrongsAnalysisLoader()
     @State private var filter: LampStrongsFilter?
     /// A translation put first from the pane, TAGNT for its forms, in place
@@ -3467,13 +3502,31 @@ struct StudyAnalysisView: View {
                 verseRow: { occurrence, analysis in
                     AnyView(occurrenceRow(occurrence, in: analysis))
                 },
-                pinnedFill: Color.lampInspectorFill
+                pinnedFill: Color.lampInspectorFill,
+                scrollMemory: studyPane.scrollMemory
             )
         }
+        // A tab chosen again shows its analysis in this update, from the
+        // recent ones, rather than working every translation out again.
+        .onChange(of: request, initial: true) { _, request in
+            guard let recent = studyPane.recentAnalyses.value(for: request, as: StudyRecentAnalysis.self)
+            else { return }
+            filter = nil
+            loader.adopt(request, analyses: recent.analyses, entries: recent.entries)
+        }
         .task(id: request) {
+            // Taken up from the recent ones above.
+            guard loader.completedRequest != request else { return }
             // A rendering chosen for the last key means nothing for this one.
             filter = nil
             loader.load(request, library: model.library)
+        }
+        // Kept once every translation has answered.
+        .onChange(of: loader.completedRequest) { _, completed in
+            guard let completed, completed == request else { return }
+            studyPane.recentAnalyses.keep(
+                StudyRecentAnalysis(analyses: loader.analyses, entries: loader.entries), for: completed
+            )
         }
         .onChange(of: key) { openedTranslationID = nil }
         .onDisappear { loader.cancel() }
