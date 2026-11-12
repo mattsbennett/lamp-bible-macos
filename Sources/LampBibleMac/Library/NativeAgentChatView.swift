@@ -858,6 +858,33 @@ private struct QueuedMessageRow: View {
 enum KeptAgentChats {
     private static var models: [String: NativeAgentChatModel] = [:]
 
+    /// Lets go of a chat nobody will ask for again — a reader tab closed,
+    /// a writing's workspace removed.
+    ///
+    /// Kept chats are held for the life of the process on purpose: a run
+    /// has to outlive the pane that started it, and a second pane on the
+    /// same workspace must find the *same* conversation rather than open a
+    /// second one over the same files. The cost is that nothing was ever
+    /// let go, so a long session with many tabs kept every transcript,
+    /// every event and every process runner it had ever opened.
+    ///
+    /// **Refused while it is still in use**, and the request is remembered
+    /// rather than dropped: a chat with a reply arriving finishes it, a
+    /// chat with a pane still on screen keeps it, and the letting-go
+    /// happens as soon as both are true. So this is called once and needs
+    /// no retrying.
+    static func release(provider: AIProviderCLI, workspace: URL) {
+        existing(provider: provider, workspace: workspace)?.requestRelease()
+    }
+
+    /// Takes a model out, by identity rather than by key, so a chat that
+    /// has since been replaced under the same key is left alone.
+    static func drop(_ model: NativeAgentChatModel) {
+        if let key = models.first(where: { $0.value === model })?.key {
+            models.removeValue(forKey: key)
+        }
+    }
+
     /// The chat already running on this workspace, if any, without
     /// starting one.
     ///
@@ -977,6 +1004,23 @@ final class NativeAgentChatModel: ObservableObject {
 
     func stopObservingTurn(for token: AnyHashable) {
         turnObservers.removeValue(forKey: token)
+        // The last pane may have just gone, which is one of the two things
+        // a pending release was waiting for.
+        letGoIfFinishedWith()
+    }
+
+    /// Asked to let this chat go once it is no longer in use.
+    func requestRelease() {
+        releaseRequested = true
+        letGoIfFinishedWith()
+    }
+
+    /// A chat is in use while a reply is arriving or a pane is showing it.
+    /// Both have to be over, and the observers are the panes: each
+    /// registers on appearing and goes on disappearing.
+    private func letGoIfFinishedWith() {
+        guard releaseRequested, !isRunning, turnObservers.isEmpty else { return }
+        KeptAgentChats.drop(self)
     }
 
     /// The turn that has just ended and may not have been seen.
@@ -996,6 +1040,9 @@ final class NativeAgentChatModel: ObservableObject {
     /// So the host pulls this as well as being pushed to. Taken once:
     /// whoever asks is about to account for what that turn left.
     private var endedTurn: UUID?
+    /// Somebody has done with this chat, and it goes as soon as it is no
+    /// longer in use.
+    private var releaseRequested = false
 
     #if DEBUG
     /// Drives the turn from a test, which otherwise cannot: a real one is
@@ -1556,6 +1603,9 @@ final class NativeAgentChatModel: ObservableObject {
                 releaseQueued(reserved)
             }
         }
+        // A reply arriving was the other thing a pending release waited
+        // for, and this is where it stops arriving.
+        defer { letGoIfFinishedWith() }
         // The turn is over. What happens before the next question is the
         // app's business, not the conversation's.
         currentTurn = nil

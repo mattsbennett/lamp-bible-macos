@@ -313,6 +313,62 @@ struct AgentChatModelTests {
         #expect(model.queued.isEmpty)
     }
 
+    /// A chat nobody will ask for again is let go — but not while it is
+    /// in use, and the request is remembered rather than dropped.
+    ///
+    /// Kept chats are held for the life of the process on purpose, so a
+    /// run outlives its pane and two panes find one conversation. Nothing
+    /// released them, so a long session kept every transcript and every
+    /// runner it had opened.
+    @Test func aChatIsLetGoOnceNobodyIsUsingIt() throws {
+        let workspace = try workspace()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let model = KeptAgentChats.model(provider: .claude, workspace: workspace, mode: .writing)
+
+        // A pane is showing it: each registers an observer on appearing.
+        model.observeTurn(for: "pane") { _ in }
+        KeptAgentChats.release(provider: .claude, workspace: workspace)
+        #expect(
+            KeptAgentChats.existing(provider: .claude, workspace: workspace) === model,
+            "refused while a pane is still showing it"
+        )
+
+        // The pane goes, which is what it was waiting for.
+        model.stopObservingTurn(for: "pane")
+        #expect(
+            KeptAgentChats.existing(provider: .claude, workspace: workspace) == nil,
+            "and let go without being asked twice"
+        )
+
+        // Asked for again, it is a new chat reading the same files.
+        let reopened = KeptAgentChats.model(provider: .claude, workspace: workspace, mode: .writing)
+        #expect(reopened !== model)
+    }
+
+    /// Releasing a chat with no pane showing it happens at once.
+    @Test func aChatWithNoPaneGoesImmediately() throws {
+        let workspace = try workspace()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        _ = KeptAgentChats.model(provider: .claude, workspace: workspace, mode: .writing)
+        KeptAgentChats.release(provider: .claude, workspace: workspace)
+        #expect(KeptAgentChats.existing(provider: .claude, workspace: workspace) == nil)
+    }
+
+    /// Releasing one leaves the others alone — they are keyed per
+    /// workspace, and a reader tab's chat is its own.
+    @Test func lettingOneGoLeavesTheRest() throws {
+        let first = try workspace(), second = try workspace()
+        defer {
+            try? FileManager.default.removeItem(at: first)
+            try? FileManager.default.removeItem(at: second)
+        }
+        let kept = KeptAgentChats.model(provider: .claude, workspace: second, mode: .writing)
+        _ = KeptAgentChats.model(provider: .claude, workspace: first, mode: .writing)
+        KeptAgentChats.release(provider: .claude, workspace: first)
+        #expect(KeptAgentChats.existing(provider: .claude, workspace: first) == nil)
+        #expect(KeptAgentChats.existing(provider: .claude, workspace: second) === kept)
+    }
+
     /// A turn that ends can still be asked for once.
     ///
     /// SwiftUI delivers two state changes in one update cycle as their
