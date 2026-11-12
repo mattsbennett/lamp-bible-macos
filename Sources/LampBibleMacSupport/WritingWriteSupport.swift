@@ -197,6 +197,95 @@ public enum LampWritingWrite {
         )
     }
 
+    // MARK: - A restore in progress
+
+    /// A restore written to the workspace that may not have reached the
+    /// writing yet.
+    ///
+    /// Putting a version back is three writes — the history, the draft,
+    /// then the writing — and a crash between the second and the third
+    /// leaves the draft and the mark holding the restored text while Lamp
+    /// still holds what was undone. That looks exactly like the writer
+    /// having edited while the pane was closed, and reading it that way
+    /// put the undone work back, with its turn already gone from the
+    /// conversation.
+    ///
+    /// A revision cannot tell the two apart: it says what happened, not
+    /// what is still outstanding. This does, and is torn up as soon as the
+    /// writing is seen to hold the restored text.
+    ///
+    /// Kept beside the write notes in Application Support, deliberately
+    /// outside the library: it describes an operation **this** Mac began,
+    /// and another Mac finishing it on this one's behalf is the opposite
+    /// of what it is for.
+    public enum Restore {
+        public struct Receipt: Codable, Equatable, Sendable {
+            public let restored: String
+            public let writtenAt: Date
+
+            public init(restored: String, writtenAt: Date = Date()) {
+                self.restored = restored
+                self.writtenAt = writtenAt
+            }
+        }
+
+        static func url(applicationSupportURL: URL, writingID: String) -> URL {
+            LampAgentDescriptorStore.directoryURL(inApplicationSupport: applicationSupportURL)
+                .appendingPathComponent("WritingRestores", isDirectory: true)
+                .appendingPathComponent(
+                    "\(LampWritingWorkspace.directoryName(for: writingID)).json"
+                )
+        }
+
+        public static func begin(
+            restored: String,
+            applicationSupportURL: URL,
+            writingID: String,
+            now: Date = Date(),
+            fileManager: FileManager = .default
+        ) throws {
+            let destination = url(
+                applicationSupportURL: applicationSupportURL, writingID: writingID
+            )
+            try fileManager.createDirectory(
+                at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            encoder.dateEncodingStrategy = .iso8601
+            let receipt = Receipt(restored: fingerprint(restored), writtenAt: now)
+            try encoder.encode(receipt).write(to: destination, options: .atomic)
+        }
+
+        public static func outstanding(
+            applicationSupportURL: URL, writingID: String
+        ) -> Receipt? {
+            let source = url(
+                applicationSupportURL: applicationSupportURL, writingID: writingID
+            )
+            guard let data = try? Data(contentsOf: source) else { return nil }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try? decoder.decode(Receipt.self, from: data)
+        }
+
+        public static func finish(
+            applicationSupportURL: URL,
+            writingID: String,
+            fileManager: FileManager = .default
+        ) {
+            try? fileManager.removeItem(
+                at: url(applicationSupportURL: applicationSupportURL, writingID: writingID)
+            )
+        }
+
+        /// Whether this text is the one the outstanding restore was
+        /// putting back.
+        public static func matches(_ receipt: Receipt, _ text: String) -> Bool {
+            receipt.restored == fingerprint(text)
+        }
+    }
+
     // MARK: - Importing
 
     /// What the import should do with a draft an outside app wrote.

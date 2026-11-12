@@ -1416,7 +1416,16 @@ struct DevotionalAgentWorkspaceView: View {
                 provider: activeProvider?.shortName,
                 // A run outlives its pane, so reopening is when its work
                 // is found — and it belongs to the turn that asked for it.
+                //
+                // Asked of the chat itself, not of what this view was last
+                // told: the pane that would tell it has not mounted yet at
+                // this point, so the turn running right now was reliably
+                // nil here, and work found on reopening belonged to
+                // nothing.
                 turnID: chatTurn
+                    ?? KeptAgentChats.existing(
+                        provider: selectedProvider, workspace: workspace
+                    )?.currentTurn
             ), in: workspace)
             refreshWorkspaceMetadata(in: workspace)
             Task { await importPresentationArtifactIfNeeded(in: workspace) }
@@ -1491,6 +1500,10 @@ struct DevotionalAgentWorkspaceView: View {
         do {
             try reconciler(for: workspaceURL).synchronize(
                 writing: draft,
+                // Where this pane last saw the two agree, so that text
+                // another window has put there since is filed rather than
+                // written over.
+                lastKnownMarker: lastSyncedDraft,
                 provider: activeProvider?.shortName,
                 turnID: chatTurn
             )

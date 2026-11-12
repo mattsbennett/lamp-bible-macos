@@ -855,8 +855,49 @@ struct AgentChatUndoDurabilityTests {
         #expect(oneWay.conversationID == other.conversationID, "the same conversation survives either way")
     }
 
-    /// A conversation that was cleared is a different conversation, and what
-    /// was undone in the one before says nothing about it.
+    /// What was undone outlives the conversation that recorded it. A copy
+    /// of the old conversation can still arrive from a third Mac after it
+    /// was put away — and beat the replacement on activity, bringing back
+    /// the very turns somebody took out.
+    @Test func whatWasUndoneSurvivesTheConversationBeingReplaced() throws {
+        let id = UUID(), first = UUID(), second = UUID()
+        let full = conversation(id, [(first, 10, "One"), (second, 20, "Two")])
+        let undone = try #require(
+            full.trimmed(from: second, at: Date(timeIntervalSince1970: 25))
+        )
+        var fresh = conversation(UUID(), [(UUID(), 30, "A fresh start")])
+        fresh.startedAt = Date(timeIntervalSince1970: 30)
+
+        // The replacement wins, and carries the record with it.
+        let replaced = AgentChatTranscriptMerge.merge(local: undone, incoming: fresh)
+        #expect(replaced.conversationID == fresh.conversationID)
+        #expect(replaced.removedTurns?.contains(second) == true, "the record came across")
+
+        // The third Mac's untrimmed copy, later again, does not bring the
+        // turn back with it.
+        var late = full
+        let answer = [
+            event(second, 40, AgentChatTranscript.Event.said, role: .assistant, text: "Late."),
+        ]
+        late.events = (late.events ?? []) + answer
+        late.messages += AgentChatTranscript.messages(from: answer)
+
+        let merged = AgentChatTranscriptMerge.merge(local: replaced, incoming: late)
+        #expect(
+            merged.turns.allSatisfy { $0.id != second },
+            "an undone turn stays undone, whichever conversation survives"
+        )
+    }
+
+    /// A conversation that was cleared is a different conversation, and
+    /// its own turns are its own: what was undone in the one before names
+    /// turns and messages that are not in it.
+    ///
+    /// This test used to give the new conversation the **same** turn id as
+    /// the undone one, and passed because the record was thrown away with
+    /// the conversation that held it. Keeping that record is what stops an
+    /// undone turn coming back from a third Mac — and ids are made per
+    /// message, so the reuse was the fiction, not the rule.
     @Test func clearingIsNotHeldToAnEarlierUndo() throws {
         let first = UUID(), second = UUID()
         let full = conversation(UUID(), [(first, 10, "One"), (second, 20, "Two")])
@@ -865,10 +906,11 @@ struct AgentChatUndoDurabilityTests {
         let trimmed = try #require(
             full.trimmed(from: second, at: Date(timeIntervalSince1970: 25))
         )
-        let fresh = conversation(UUID(), [(second, 40, "Asked again")])
+        let fresh = conversation(UUID(), [(UUID(), 40, "Asked again")])
 
         let merged = AgentChatTranscriptMerge.merge(local: trimmed, incoming: fresh)
         #expect(merged.conversationID == fresh.conversationID)
         #expect(merged.turns.map(\.question) == ["Asked again"])
+        #expect(merged.removedTurns?.contains(second) == true, "and the record came with it")
     }
 }

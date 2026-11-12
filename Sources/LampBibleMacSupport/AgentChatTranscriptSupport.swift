@@ -273,7 +273,13 @@ public struct AgentChatTranscript: Codable, Equatable, Sendable {
         guard !events.isEmpty else { return nil }
         return AgentChatTranscript(
             conversationID: UUID(),
-            startedAt: startedAt ?? events.first?.date,
+            // Begun **now**. The turns it keeps are as old as they are,
+            // but the conversation is new — and housekeeping reads a
+            // conversation's last activity to decide what to scrub. Given
+            // the original's start, a fork taken from a turn older than
+            // the retention period was already past it the moment it was
+            // made, and the next launch deleted it.
+            startedAt: Date(),
             sessionID: nil,
             sessionInstallID: nil,
             messages: Self.messages(from: events),
@@ -620,13 +626,27 @@ public enum AgentChatTranscriptMerge {
         incoming: AgentChatTranscript
     ) -> AgentChatTranscript {
         if local.conversationID != incoming.conversationID {
+            let winner: AgentChatTranscript
             if local.lastActivity != incoming.lastActivity {
-                return incoming.lastActivity > local.lastActivity ? incoming : local
+                winner = incoming.lastActivity > local.lastActivity ? incoming : local
+            } else {
+                // A dead heat is decided the same way on every Mac.
+                let localKey = local.conversationID?.uuidString ?? ""
+                let incomingKey = incoming.conversationID?.uuidString ?? ""
+                winner = incomingKey > localKey ? incoming : local
             }
-            // A dead heat is decided the same way on every Mac.
-            let localKey = local.conversationID?.uuidString ?? ""
-            let incomingKey = incoming.conversationID?.uuidString ?? ""
-            return incomingKey > localKey ? incoming : local
+            // The loser's conversation goes; what it recorded as **undone**
+            // does not. Those ids name turns and messages, which are unique
+            // wherever they appear, and a copy of the old conversation can
+            // still arrive from a third Mac after this one was put away —
+            // at which point it beats the replacement on activity and
+            // brings back the very turns somebody had taken out. Carried
+            // across, the record outlives the conversation that held it.
+            let removed = (local.removedTurns ?? []) + (incoming.removedTurns ?? [])
+            guard !removed.isEmpty else { return winner }
+            var kept = winner
+            kept.removedAt = [local.removedAt, incoming.removedAt].compactMap { $0 }.max()
+            return kept.removing(turns: removed)
         }
 
         // Events are reconciled in **every** branch, including the two

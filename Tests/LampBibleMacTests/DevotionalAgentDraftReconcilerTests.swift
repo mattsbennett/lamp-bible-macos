@@ -18,11 +18,15 @@ struct DevotionalAgentDraftReconcilerTests {
         return url
     }
 
-    private func reconciler(_ workspace: URL) -> DevotionalAgentDraftReconciler {
-        // No Application Support: a draft with no note, which is the rule
-        // this workspace's own agent has always followed.
+    /// No note is left anywhere, which is the rule this workspace's own
+    /// agent has always followed. `support` is where a restore's receipt
+    /// goes — a folder of this test's own, so one test cannot finish
+    /// another's restore.
+    private func reconciler(
+        _ workspace: URL, support: URL? = nil
+    ) -> DevotionalAgentDraftReconciler {
         DevotionalAgentDraftReconciler(
-            workspace: workspace, writingID: "writing-1", applicationSupportURL: nil
+            workspace: workspace, writingID: "writing-1", applicationSupportURL: support
         )
     }
 
@@ -276,17 +280,66 @@ struct DevotionalAgentDraftReconcilerTests {
     /// edited while the pane was closed — so the undone work was put back,
     /// with its turn already gone from the conversation.
     @Test func anInterruptedRestoreIsFinishedRatherThanReversed() throws {
+        let support = try workspace()
         let workspace = try workspace()
-        defer { try? FileManager.default.removeItem(at: workspace) }
+        defer {
+            try? FileManager.default.removeItem(at: workspace)
+            try? FileManager.default.removeItem(at: support)
+        }
         try writeDraft("The agent's", to: workspace)
-        try reconciler(workspace).synchronize(writing: "The agent's")
-        _ = try reconciler(workspace).restore("Mine", writing: "The agent's")
+        try reconciler(workspace, support: support).synchronize(writing: "The agent's")
+        _ = try reconciler(workspace, support: support).restore("Mine", writing: "The agent's")
         // The draft and the mark are "Mine"; Lamp never got it.
         #expect(try draft(in: workspace) == "Mine")
 
-        let outcome = try reconciler(workspace).prepare(writing: "The agent's")
-        #expect(outcome == .take("Mine"), "the history says what the restore was doing")
+        let outcome = try reconciler(workspace, support: support).prepare(writing: "The agent's")
+        #expect(outcome == .take("Mine"), "the receipt says the restore was still outstanding")
         #expect(try draft(in: workspace) == "Mine")
+    }
+
+    /// The same shape, from a restore that **finished**: the person
+    /// undoes, then deliberately types the old version back while the
+    /// pane is closed. Read as an interrupted restore, their typing was
+    /// thrown away.
+    @Test func typingTheOldVersionBackIsNotAnInterruptedRestore() throws {
+        let support = try workspace()
+        let workspace = try workspace()
+        defer {
+            try? FileManager.default.removeItem(at: workspace)
+            try? FileManager.default.removeItem(at: support)
+        }
+        try writeDraft("The agent's", to: workspace)
+        try reconciler(workspace, support: support).synchronize(writing: "The agent's")
+        _ = try reconciler(workspace, support: support).restore("Mine", writing: "The agent's")
+        // The restore reached the writing: the next pass sees Lamp
+        // holding it, and the receipt is torn up.
+        #expect(try reconciler(workspace, support: support).reconcile(writing: "Mine") == .unchanged)
+
+        // Now they type the agent's version back in, with the pane closed.
+        let outcome = try reconciler(workspace, support: support).prepare(writing: "The agent's")
+        #expect(outcome == .unchanged, "their text is the newer side and stays")
+        #expect(try draft(in: workspace) == "The agent's")
+    }
+
+    /// Two windows, both typing. The second overwrites what the first put
+    /// in the workspace before the first had saved it — so the first
+    /// window's sentence is filed before it goes.
+    @Test func theOtherWindowsUnsavedTextIsFiledBeforeItIsReplaced() throws {
+        let workspace = try workspace()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        try writeDraft("A", to: workspace)
+        try reconciler(workspace).synchronize(writing: "A", lastKnownMarker: nil)
+
+        // Window one types, and has not autosaved yet.
+        try reconciler(workspace).synchronize(writing: "A and B", lastKnownMarker: "A")
+        // Window two types, still believing the two agreed at "A".
+        try reconciler(workspace).synchronize(writing: "A and C", lastKnownMarker: "A")
+
+        #expect(try draft(in: workspace) == "A and C")
+        #expect(
+            try history(in: workspace).contains { $0.afterMarkdown == "A and B" },
+            "the first window's sentence is recoverable"
+        )
     }
 
     /// The marker is read from the workspace every time, so a reconciler

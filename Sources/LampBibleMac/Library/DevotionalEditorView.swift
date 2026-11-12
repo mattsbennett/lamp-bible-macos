@@ -2523,7 +2523,26 @@ struct DevotionalEditorView: View {
                 // Nowhere left to report a failure once the tab closes, and the
                 // deletion is the agent's own: losing the record of it costs
                 // history, not work.
-                Task { [workspace = workspaceURL, text = document.text, turn = agentChatTurn] in
+                //
+                // The writer's unsaved text is another matter. The removal
+                // is already in the history by the time this runs — it is
+                // recorded when the absence is first seen — so a record of
+                // going from their buffer to nothing adds nothing the
+                // duplicate rule keeps, and their words would be in no
+                // file and no history. Theirs is filed as theirs, first.
+                Task { [
+                    workspace = workspaceURL, text = document.text,
+                    persisted = document.persistedText, turn = agentChatTurn
+                ] in
+                    if text != persisted {
+                        try? await DevotionalAgentRevisionHistory.shared.record(
+                            kind: .userEdit,
+                            documentPath: documentID,
+                            before: persisted,
+                            after: text,
+                            in: workspace
+                        )
+                    }
                     try? await DevotionalAgentRevisionHistory.shared.record(
                         kind: .agentEdit,
                         turnID: turn,

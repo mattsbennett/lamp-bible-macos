@@ -98,6 +98,7 @@ struct DevotionalAgentDraftReconciler {
         provider: String? = nil,
         turnID: UUID? = nil
     ) throws -> Outcome {
+        clearFinishedRestore(given: writing)
         let diskDraft = try draftOnDisk()
         guard let marker = marker(), diskDraft != marker else {
             // Accounted for already. By this pane on an earlier pass, or
@@ -116,6 +117,7 @@ struct DevotionalAgentDraftReconciler {
     func prepare(
         writing: String, provider: String? = nil, turnID: UUID? = nil
     ) throws -> Outcome {
+        clearFinishedRestore(given: writing)
         let diskDraft = try draftOnDisk()
         let persisted = marker()
         if diskDraft == writing {
@@ -130,14 +132,14 @@ struct DevotionalAgentDraftReconciler {
             // had already taken its turn out of the conversation, so
             // nothing was left to say it had happened.
             //
-            // The history is what tells them apart. It is written before
-            // the draft, so a restore that was interrupted anywhere after
-            // it still says what it was doing.
-            if let latest = try? DevotionalAgentRevisionStore.revisions(in: workspace).first,
-               latest.kind == .restoration,
-               latest.afterMarkdown == diskDraft,
-               latest.beforeMarkdown == writing {
+            // Only an outstanding receipt says so. The history cannot: it
+            // records what happened, not what is still in progress, and
+            // reading a finished restoration as an unfinished one threw
+            // away the text of somebody who had deliberately typed the
+            // old version back.
+            if outstandingRestore(matching: diskDraft) {
                 try markSynced(diskDraft)
+                finishRestore()
                 return .take(diskDraft)
             }
             // The writing changed while the pane was closed, so its
@@ -166,11 +168,19 @@ struct DevotionalAgentDraftReconciler {
     }
 
     /// The writer's own change, on its way to the workspace.
+    /// `lastKnownMarker` is where **this** caller last saw the workspace
+    /// and the writing agree. Where the workspace has moved on from it,
+    /// another window on the same writing put that text there — and it is
+    /// about to be written over by this one, so it is filed first. The
+    /// person typing in that window had not reached an autosave yet, and
+    /// without this their sentence was in no file and no history.
     func synchronize(
         writing: String,
+        lastKnownMarker: String? = nil,
         provider: String? = nil,
         turnID: UUID? = nil
     ) throws {
+        clearFinishedRestore(given: writing)
         let marker = marker()
         guard writing != marker else { return }
         // If the writer and the agent changed during the same interval,
@@ -186,6 +196,17 @@ struct DevotionalAgentDraftReconciler {
             // this workspace's own agent could have written it; an outside
             // app can write at any moment, including this one.
             try record(before: diskDraft, after: diskDraft, provider: provider, turnID: turnID)
+        } else if let marker, let lastKnownMarker,
+                  marker != lastKnownMarker, marker != writing {
+            // Another window's typing, accounted for by that window and
+            // not yet saved by it. Filed as the person's own, which is
+            // what it is, before this window's text replaces it.
+            _ = try DevotionalAgentRevisionStore.record(
+                kind: .userEdit,
+                before: lastKnownMarker,
+                after: marker,
+                in: workspace
+            )
         }
         try DevotionalAgentWorkspaceStore.writeDraftContent(writing, to: workspace)
         try markSynced(writing)
@@ -320,9 +341,43 @@ struct DevotionalAgentDraftReconciler {
             after: markdown,
             in: workspace
         )
+        // Before the draft, so that an interruption anywhere after this
+        // leaves something saying what was being done. Torn up on the
+        // first pass that sees the writing holding it.
+        if let applicationSupportURL {
+            try? LampWritingWrite.Restore.begin(
+                restored: markdown,
+                applicationSupportURL: applicationSupportURL,
+                writingID: writingID
+            )
+        }
         try DevotionalAgentWorkspaceStore.writeDraftContent(markdown, to: workspace)
         try markSynced(markdown)
         return markdown
+    }
+
+    /// Whether a restore this Mac began is still outstanding, and this is
+    /// the text it was putting back.
+    private func outstandingRestore(matching draft: String) -> Bool {
+        guard let applicationSupportURL,
+              let receipt = LampWritingWrite.Restore.outstanding(
+                  applicationSupportURL: applicationSupportURL, writingID: writingID
+              )
+        else { return false }
+        return LampWritingWrite.Restore.matches(receipt, draft)
+    }
+
+    private func finishRestore() {
+        guard let applicationSupportURL else { return }
+        LampWritingWrite.Restore.finish(
+            applicationSupportURL: applicationSupportURL, writingID: writingID
+        )
+    }
+
+    /// The writing holds what was being restored, so the restore is done.
+    private func clearFinishedRestore(given writing: String) {
+        guard outstandingRestore(matching: writing) else { return }
+        finishRestore()
     }
 
     // MARK: - Pieces

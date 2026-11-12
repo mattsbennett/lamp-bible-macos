@@ -858,6 +858,16 @@ private struct QueuedMessageRow: View {
 enum KeptAgentChats {
     private static var models: [String: NativeAgentChatModel] = [:]
 
+    /// The chat already running on this workspace, if any, without
+    /// starting one.
+    ///
+    /// For a host that needs to know which turn is in progress *before*
+    /// its chat pane has mounted and registered to be told — which is
+    /// exactly when a pane reopens on a run that outlived it.
+    static func existing(provider: AIProviderCLI, workspace: URL) -> NativeAgentChatModel? {
+        models["\(provider.rawValue)|\(workspace.standardizedFileURL.path)"]
+    }
+
     static func model(
         provider: AIProviderCLI,
         workspace: URL,
@@ -1497,6 +1507,19 @@ final class NativeAgentChatModel: ObservableObject {
             appendAgentMarkdown(notice)
         }
         persistTranscript()
+        // A reservation outlives nothing. If the save that should have
+        // completed the receipt failed earlier, the message is still held
+        // — unsendable, unremovable, and uneditable — while the reply it
+        // asked for has already arrived. The transcript is the receipt, so
+        // it is asked now: in the conversation means sent, and absent
+        // means it goes back to waiting.
+        if let reserved = reservedQueued {
+            if knownTranscript?.messages.contains(where: { $0.id == reserved }) == true {
+                completeQueued(reserved)
+            } else {
+                releaseQueued(reserved)
+            }
+        }
         // The turn is over. What happens before the next question is the
         // app's business, not the conversation's.
         currentTurn = nil
