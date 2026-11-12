@@ -478,9 +478,19 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
         return (candidates, skipped)
     }
 
-    /// One editable collection, exported and rewritten into the phone's
-    /// format — which is the canonical one, so the digest is taken over the
-    /// adapter's output rather than the Mac's own export.
+    /// One editable collection, as the file it is published as.
+    ///
+    /// **Notes** are written under their travelling name in one pass, by
+    /// core, which is what lets the phone produce the same bytes from the
+    /// same notes.
+    ///
+    /// **Writings** still go out through the adapter, and not merely out of
+    /// caution: for writings that step does more than rename. It turns each
+    /// entry's stored blocks into the portable Markdown a second device
+    /// reads, gathers the media that Markdown refers to, and refuses the
+    /// file outright if a referenced picture is not on this Mac. Writing
+    /// the name in from the start would skip all of that. It moves when
+    /// that normalisation moves into `LampPersonalWritingFile`, not before.
     private func exportPersonal(
         _ module: LampPersonalModule,
         adapterKind: LampWebDAVPersonalArchiveKind,
@@ -488,6 +498,12 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
         filename: String
     ) async throws -> URL {
         try fileManager.createDirectory(at: workspace, withIntermediateDirectories: true)
+        let destination = workspace.appendingPathComponent(filename)
+        if module == .notes {
+            try await library.personalArchive(module, moduleID: remoteModuleID)
+                .write(to: destination, options: .atomic)
+            return destination
+        }
         let exported = workspace.appendingPathComponent("export-\(filename)")
         try await library.exportPersonalModule(module, format: .lamp, to: exported)
         let rewritten = try LampWebDAVPersonalArchiveAdapter.archive(
@@ -497,7 +513,6 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             mediaRootURL: library.rootURL,
             fileManager: fileManager
         )
-        let destination = workspace.appendingPathComponent(filename)
         try rewritten.write(to: destination, options: .atomic)
         return destination
     }
