@@ -263,7 +263,8 @@ struct ReaderChatSidebarView: View {
                             chats: ReaderChatWorkspaceStore
                                 .chats(libraryRootURL: libraryModel.library.rootURL)
                                 .filter { $0.id != chatID },
-                            inUse: OpenReaderChats.inUse
+                            inUse: OpenReaderChats.inUse,
+                            libraryRootURL: libraryModel.library.rootURL
                         ) { chosen in
                             isChoosingChat = false
                             resume(chosen)
@@ -502,10 +503,24 @@ struct ReaderChatSidebarView: View {
 private struct ReaderChatChooser: View {
     let chats: [ReaderChatWorkspaceStore.Chat]
     let inUse: Set<UUID>
+    /// Where to look for words said in any chat. Nil where the list is all
+    /// there is to search.
+    var libraryRootURL: URL?
     let pick: (UUID?) -> Void
 
     /// Beyond this many, the list scrolls rather than growing the popover.
     private static let shownWhole = 6
+
+    @State private var query = ""
+    @State private var matches: [ReaderChatWorkspaceStore.Match] = []
+
+    /// A chat is found by what was said in it, not only by how it opened.
+    /// The list reads by its opening line, which answers "where was that
+    /// conversation about Romans 8" only when the conversation began with
+    /// it — and it rarely did.
+    private var isSearching: Bool {
+        !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -517,9 +532,31 @@ private struct ReaderChatChooser: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
 
+            if libraryRootURL != nil {
+                Divider()
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField("Search what was said", text: $query)
+                        .textFieldStyle(.plain)
+                    if isSearching {
+                        Button("Clear", systemImage: "xmark.circle.fill") { query = "" }
+                            .labelStyle(.iconOnly)
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .font(.callout)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .onChange(of: query) { _, _ in runSearch() }
+            }
+
             Divider()
 
-            if chats.isEmpty {
+            if isSearching {
+                searchResults
+            } else if chats.isEmpty {
                 // Said rather than left blank, so the list looks the same
                 // whether or not there is anything in it yet.
                 VStack(alignment: .leading, spacing: 3) {
@@ -548,6 +585,64 @@ private struct ReaderChatChooser: View {
             }
         }
         .frame(width: 320)
+    }
+
+    private func runSearch() {
+        guard let libraryRootURL, isSearching else {
+            matches = []
+            return
+        }
+        matches = ReaderChatWorkspaceStore.search(query, libraryRootURL: libraryRootURL)
+    }
+
+    @ViewBuilder private var searchResults: some View {
+        if matches.isEmpty {
+            Text("Nothing said in any chat matches that.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+        } else {
+            let list = VStack(alignment: .leading, spacing: 0) {
+                ForEach(matches) { match in
+                    Button { pick(match.id) } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(match.snippet)
+                                .lineLimit(2)
+                            HStack(spacing: 6) {
+                                // Whose words these are, because finding
+                                // your own question and finding the answer
+                                // to it are different findings.
+                                Text(match.saidByReader ? "You" : "Reply")
+                                if let lastSpoken = match.lastSpoken {
+                                    Text("·")
+                                    Text(lastSpoken.formatted(.relative(presentation: .named)))
+                                }
+                                if inUse.contains(match.id) {
+                                    Text("·")
+                                    Text("Open in another tab")
+                                }
+                            }
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(inUse.contains(match.id))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    if match.id != matches.last?.id { Divider().padding(.leading, 12) }
+                }
+            }
+            if matches.count <= Self.shownWhole {
+                list
+            } else {
+                ScrollView { list }.frame(height: 360)
+            }
+        }
     }
 
     private var rows: some View {

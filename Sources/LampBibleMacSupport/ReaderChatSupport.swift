@@ -415,6 +415,76 @@ public enum ReaderChatWorkspaceStore {
         return (transcripts.map(\.lastActivity).max(), opening, !files.isEmpty)
     }
 
+    /// A chat holding something that was said, with the line it was said in.
+    public struct Match: Equatable, Identifiable, Sendable {
+        public let id: UUID
+        public let lastSpoken: Date?
+        /// The line the words were found in, as a list shows it.
+        public let snippet: String
+        /// Whether the reader said it, rather than the agent.
+        public let saidByReader: Bool
+
+        public init(id: UUID, lastSpoken: Date?, snippet: String, saidByReader: Bool) {
+            self.id = id
+            self.lastSpoken = lastSpoken
+            self.snippet = snippet
+            self.saidByReader = saidByReader
+        }
+    }
+
+    /// The chats holding these words, most recently spoken in first.
+    ///
+    /// Both sides of the conversation are searched. "What did I conclude
+    /// about Romans 8?" is as often answered by something the agent said as
+    /// by the question that prompted it, and a search that found only your
+    /// own words would make you remember how you had asked.
+    ///
+    /// Matching ignores case and accents, so *Gethsemane* finds
+    /// *Gethsémané*. Every chat's transcripts are read, which is bounded by
+    /// the retention the reader chose rather than by the life of the app.
+    public static func search(
+        _ query: String, libraryRootURL: URL, limit: Int = 50
+    ) -> [Match] {
+        let wanted = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !wanted.isEmpty else { return [] }
+        var matches: [Match] = []
+        for chat in chats(libraryRootURL: libraryRootURL) {
+            let workspace = workspaceURL(libraryRootURL: libraryRootURL, chatID: chat.id)
+            guard let found = firstMention(of: wanted, in: workspace) else { continue }
+            matches.append(Match(
+                id: chat.id, lastSpoken: chat.lastSpoken,
+                snippet: found.line, saidByReader: found.saidByReader
+            ))
+            if matches.count >= limit { break }
+        }
+        return matches
+    }
+
+    /// The first line in a chat holding these words, and who said it.
+    private static func firstMention(
+        of wanted: String, in workspace: URL
+    ) -> (line: String, saidByReader: Bool)? {
+        let folder = AgentChatTranscriptStore.directory(in: workspace)
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+        for name in names.filter(AgentChatTranscriptStore.isTranscriptFilename) {
+            guard let data = try? Data(contentsOf: folder.appendingPathComponent(name)),
+                  let transcript = try? AgentChatTranscriptStore.decode(data)
+            else { continue }
+            for message in transcript.messages {
+                // Found by the line it is in rather than the whole message:
+                // a reply runs to paragraphs, and showing all of them to say
+                // where one word is buries the answer in the evidence.
+                for line in message.text.split(whereSeparator: \.isNewline) {
+                    guard line.range(
+                        of: wanted, options: [.caseInsensitive, .diacriticInsensitive]
+                    ) != nil else { continue }
+                    return (label(String(line)), message.role == .user)
+                }
+            }
+        }
+        return nil
+    }
+
     /// Something said, as a list shows it: one line, trimmed, and cut at a
     /// word where it is too long to read at a glance.
     static func label(_ text: String, limit: Int = 80) -> String {

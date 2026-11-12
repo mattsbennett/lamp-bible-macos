@@ -312,3 +312,78 @@ struct AgentChatQueueTests {
         #expect(AgentChatQueueStore.load(providerID: "claude", in: workspace).messages.isEmpty)
     }
 }
+
+/// Finding a conversation again.
+///
+/// "What did I conclude about Romans 8 last month?" — the chat list is read
+/// by its opening line, which answers that only when the conversation began
+/// with it.
+struct ReaderChatSearchTests {
+    private func library() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("chat-search-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    private func chat(
+        _ id: UUID, in library: URL, _ exchanges: [(AgentChatTranscript.Role, String, Double)]
+    ) throws {
+        let workspace = ReaderChatWorkspaceStore.workspaceURL(libraryRootURL: library, chatID: id)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        let messages = exchanges.map {
+            AgentChatTranscript.Message(
+                role: $0.0, text: $0.1, date: Date(timeIntervalSince1970: $0.2)
+            )
+        }
+        try AgentChatTranscriptStore.save(
+            AgentChatTranscript(conversationID: UUID(), messages: messages),
+            providerID: "claude", in: workspace
+        )
+    }
+
+    @Test func bothSidesOfTheConversationAreSearched() throws {
+        let library = try library()
+        defer { try? FileManager.default.removeItem(at: library) }
+        let asked = UUID(), answered = UUID(), unrelated = UUID()
+
+        try chat(asked, in: library, [(.user, "What is Romans 8 about?", 10), (.assistant, "Life in the Spirit.", 11)])
+        // Here the words are the agent's: a search that found only the
+        // reader's own would make them remember how they had asked.
+        try chat(answered, in: library, [(.user, "Say more", 20), (.assistant, "Paul turns to Romans 8 next.", 21)])
+        try chat(unrelated, in: library, [(.user, "Who wrote Hebrews?", 30)])
+
+        let found = ReaderChatWorkspaceStore.search("romans 8", libraryRootURL: library)
+        #expect(Set(found.map(\.id)) == [asked, answered], "case does not matter")
+        #expect(!found.map(\.id).contains(unrelated))
+
+        let byReader = try #require(found.first { $0.id == asked })
+        #expect(byReader.saidByReader)
+        #expect(byReader.snippet == "What is Romans 8 about?")
+        let byAgent = try #require(found.first { $0.id == answered })
+        #expect(!byAgent.saidByReader)
+        #expect(byAgent.snippet == "Paul turns to Romans 8 next.")
+    }
+
+    /// The line it was said in, not the whole reply: showing paragraphs to
+    /// say where one word is buries the answer in the evidence.
+    @Test func theSnippetIsTheLineTheWordsAreIn() throws {
+        let library = try library()
+        defer { try? FileManager.default.removeItem(at: library) }
+        let id = UUID()
+        try chat(id, in: library, [
+            (.assistant, "First, some background.\nGethsémané is across the Kidron.\nThen the arrest.", 10),
+        ])
+
+        // Accents do not matter either.
+        let found = ReaderChatWorkspaceStore.search("gethsemane", libraryRootURL: library)
+        #expect(found.map(\.snippet) == ["Gethsémané is across the Kidron."])
+    }
+
+    @Test func nothingIsSearchedForNothing() throws {
+        let library = try library()
+        defer { try? FileManager.default.removeItem(at: library) }
+        try chat(UUID(), in: library, [(.user, "Anything", 10)])
+        #expect(ReaderChatWorkspaceStore.search("   ", libraryRootURL: library).isEmpty)
+    }
+}
