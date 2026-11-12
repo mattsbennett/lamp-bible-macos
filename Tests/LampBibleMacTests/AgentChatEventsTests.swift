@@ -207,3 +207,74 @@ struct ReaderChatForkTests {
         )
     }
 }
+
+/// Messages written while a reply was still arriving.
+///
+/// A thought arrives mid-answer, usually *because* of the answer. With
+/// nowhere to put it the reader either interrupts the run or holds it until
+/// the reply lands, and the second is how a question gets lost.
+struct AgentChatQueueTests {
+    @Test func aMessageWaitsItsTurnAndIsTakenWhenItGoes() {
+        var queue = AgentChatQueue()
+        queue.add("Check Romans 8:1")
+        queue.add("   ")
+        queue.add("And the Greek for 'condemnation'")
+        #expect(queue.messages.count == 2, "whitespace is not a message")
+
+        #expect(queue.takeNext() == "Check Romans 8:1")
+        #expect(queue.messages.count == 1, "taken, not read: otherwise it is sent twice")
+        #expect(queue.takeNext() == "And the Greek for 'condemnation'")
+        #expect(queue.takeNext() == nil)
+    }
+
+    @Test func aWaitingMessageCanBeRewordedOrTakenBack() throws {
+        var queue = AgentChatQueue()
+        queue.add("Waht about Apollos")
+        let id = try #require(queue.messages.first?.id)
+
+        queue.update(id, text: "What about Apollos?")
+        #expect(queue.messages.first?.text == "What about Apollos?")
+
+        // Clearing the words is how a person takes one back.
+        queue.update(id, text: "   ")
+        #expect(queue.messages.isEmpty)
+    }
+
+    @Test func oneCanBeSentSooner() throws {
+        var queue = AgentChatQueue()
+        queue.add("first")
+        queue.add("second")
+        let second = try #require(queue.messages.last?.id)
+
+        queue.sendSooner(second)
+        #expect(queue.messages.map(\.text) == ["second", "first"])
+        queue.sendSooner(second)
+        #expect(queue.messages.map(\.text) == ["second", "first"], "already first, and stays")
+    }
+
+    /// A queued message is something the person wrote and expects to be
+    /// sent, so it outlives the app rather than the pane.
+    @Test func whatIsWaitingSurvivesTheApp() throws {
+        let workspace = FileManager.default.temporaryDirectory
+            .appendingPathComponent("queue-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workspace) }
+
+        var queue = AgentChatQueue()
+        queue.add("Check Romans 8:1")
+        try AgentChatQueueStore.save(queue, providerID: "claude", in: workspace)
+        #expect(
+            AgentChatQueueStore.load(providerID: "claude", in: workspace).messages.map(\.text)
+                == ["Check Romans 8:1"]
+        )
+
+        // Worked through, it leaves no file — so a queue that has been
+        // emptied does not read as one that was never written.
+        _ = queue.takeNext()
+        try AgentChatQueueStore.save(queue, providerID: "claude", in: workspace)
+        #expect(!FileManager.default.fileExists(
+            atPath: AgentChatQueueStore.url(providerID: "claude", in: workspace).path
+        ))
+        #expect(AgentChatQueueStore.load(providerID: "claude", in: workspace).messages.isEmpty)
+    }
+}

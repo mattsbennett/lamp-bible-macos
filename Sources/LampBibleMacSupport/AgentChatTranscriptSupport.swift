@@ -286,6 +286,116 @@ public enum AgentChatTranscriptStore {
     }
 }
 
+/// Messages written while a reply was still arriving, waiting their turn.
+///
+/// A thought arrives mid-answer — a verse to check, a follow-up the reply
+/// has just prompted. Without somewhere to put it the reader either
+/// interrupts the run or holds the thought until the reply lands, and the
+/// second is how a question gets lost.
+///
+/// Kept beside the transcript rather than in memory, because a queued
+/// message is something the person wrote and expects to be sent: losing it
+/// when the app quits would be losing their words, not their place.
+public struct AgentChatQueue: Codable, Equatable, Sendable {
+    public struct Message: Codable, Equatable, Identifiable, Sendable {
+        public let id: UUID
+        public var text: String
+        public let written: Date
+
+        public init(id: UUID = UUID(), text: String, written: Date = Date()) {
+            self.id = id
+            self.text = text
+            self.written = written
+        }
+    }
+
+    public var messages: [Message]
+
+    public init(messages: [Message] = []) {
+        self.messages = messages
+    }
+
+    /// Adds a message, ignoring one that is only whitespace.
+    public mutating func add(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        messages.append(Message(text: trimmed))
+    }
+
+    public mutating func remove(_ id: UUID) {
+        messages.removeAll { $0.id == id }
+    }
+
+    /// Rewrites a waiting message, or drops it where the rewrite empties it:
+    /// clearing the words is how a person takes one back.
+    public mutating func update(_ id: UUID, text: String) {
+        guard let index = messages.firstIndex(where: { $0.id == id }) else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            messages.remove(at: index)
+        } else {
+            messages[index].text = trimmed
+        }
+    }
+
+    /// Moves one message a place earlier.
+    ///
+    /// A place at a time rather than a drag: what is waiting was written
+    /// during one reply, so the queue is short by nature, and a drag target
+    /// in a strip this size is harder to hit than a button.
+    public mutating func sendSooner(_ id: UUID) {
+        guard let index = messages.firstIndex(where: { $0.id == id }), index > 0 else { return }
+        messages.swapAt(index, index - 1)
+    }
+
+    /// The next message, taken out.
+    ///
+    /// Taken rather than read: one handed over to be sent is no longer
+    /// waiting, and leaving it in through the run it started is how a
+    /// message gets sent twice.
+    public mutating func takeNext() -> String? {
+        messages.isEmpty ? nil : messages.removeFirst().text
+    }
+}
+
+public enum AgentChatQueueStore {
+    public static let filenamePrefix = "native-chat-queue-"
+
+    public static func url(providerID: String, in workspace: URL) -> URL {
+        AgentChatTranscriptStore.directory(in: workspace)
+            .appendingPathComponent("\(filenamePrefix)\(providerID).json")
+    }
+
+    /// A missing or unreadable queue reads as nothing waiting, so a damaged
+    /// file never stops the chat from opening or from sending.
+    public static func load(providerID: String, in workspace: URL) -> AgentChatQueue {
+        guard let data = try? Data(contentsOf: url(providerID: providerID, in: workspace)),
+              let queue = try? JSONDecoder().decode(AgentChatQueue.self, from: data)
+        else { return AgentChatQueue() }
+        return queue
+    }
+
+    public static func save(
+        _ queue: AgentChatQueue, providerID: String, in workspace: URL
+    ) throws {
+        let url = url(providerID: providerID, in: workspace)
+        // Nothing waiting leaves no file, so a queue that has been worked
+        // through does not look like one that was never read.
+        guard !queue.messages.isEmpty else {
+            try? FileManager.default.removeItem(at: url)
+            return
+        }
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        var data = try encoder.encode(queue)
+        data.append(0x0A)
+        try data.write(to: url, options: .atomic)
+    }
+}
+
 /// Reconciles two copies of one provider's transcript after sync.
 public enum AgentChatTranscriptMerge {
     /// - If they are different conversations — one side cleared it — the one with

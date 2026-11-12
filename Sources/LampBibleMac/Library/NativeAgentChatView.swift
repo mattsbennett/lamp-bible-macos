@@ -646,6 +646,108 @@ private struct NativeAgentChatInputView: View {
     }
 }
 
+/// What is waiting to be sent, above the composer.
+///
+/// Shown rather than merely held: a message the reader cannot see is one
+/// they cannot change their mind about, and the commonest thing to want
+/// with a queued thought is to reword it once the reply has arrived.
+private struct QueuedMessagesView: View {
+    let messages: [AgentChatQueue.Message]
+    let edit: (UUID, String) -> Void
+    let remove: (UUID) -> Void
+    let moveUp: (UUID) -> Void
+
+    var body: some View {
+        if !messages.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(messages.count == 1 ? "1 message waiting" : "\(messages.count) messages waiting")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
+                    QueuedMessageRow(
+                        message: message,
+                        canMoveUp: index > 0,
+                        edit: { edit(message.id, $0) },
+                        remove: { remove(message.id) },
+                        moveUp: { moveUp(message.id) }
+                    )
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(LampChatSurface.conversation)
+        }
+    }
+}
+
+private struct QueuedMessageRow: View {
+    let message: AgentChatQueue.Message
+    let canMoveUp: Bool
+    let edit: (String) -> Void
+    let remove: () -> Void
+    let moveUp: () -> Void
+
+    @State private var draft = ""
+    @State private var isEditing = false
+    @FocusState private var editing: Bool
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "clock")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            if isEditing {
+                TextField("Message", text: $draft, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1...4)
+                    .focused($editing)
+                    .onSubmit(commit)
+            } else {
+                Text(message.text)
+                    .font(.callout)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        draft = message.text
+                        isEditing = true
+                        editing = true
+                    }
+            }
+            if isEditing {
+                Button("Done", action: commit)
+                    .buttonStyle(.plain)
+                    .font(.caption)
+            } else {
+                if canMoveUp {
+                    Button("Send Sooner", systemImage: "arrow.up", action: moveUp)
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.plain)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .help("Send this one before the others")
+                }
+                Button("Remove", systemImage: "xmark", action: remove)
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .help("Take this message out of the queue")
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(SwiftUI.Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 9))
+    }
+
+    private func commit() {
+        isEditing = false
+        editing = false
+        edit(draft)
+    }
+}
+
 /// Reader chats, kept past their pane.
 ///
 /// The reader's chat pane comes and goes: it is closed, swapped for Study, and
@@ -717,6 +819,9 @@ private final class NativeAgentChatModel: ObservableObject {
     /// transcript keeps. The messages below are what is drawn; these are the
     /// record a turn can be undone or forked from.
     @State private var events: [AgentChatTranscript.Event] = []
+    /// Messages written while a reply was still arriving, in the order they
+    /// will be sent.
+    @Published var queued: [AgentChatQueue.Message] = []
     /// The turn being recorded: the id of the user message that began it.
     @State private var recordingTurn: UUID?
     private var knownModificationDate: Date?
@@ -750,6 +855,7 @@ private final class NativeAgentChatModel: ObservableObject {
         guard !didLoad else { return }
         didLoad = true
         knownModificationDate = transcriptModificationDate()
+        queued = AgentChatQueueStore.load(providerID: provider.rawValue, in: workspace).messages
         show(AgentChatTranscriptStore.load(providerID: provider.rawValue, in: workspace))
     }
 
@@ -1222,6 +1328,28 @@ private final class NativeAgentChatModel: ObservableObject {
         }
     }
 
+    // MARK: - Waiting messages
+
+    /// The queue's own rules live in `AgentChatQueue`; this keeps it on
+    /// screen and on disk.
+    private func changeQueue(_ change: (inout AgentChatQueue) -> Void) {
+        var queue = AgentChatQueue(messages: queued)
+        change(&queue)
+        queued = queue.messages
+        try? AgentChatQueueStore.save(queue, providerID: provider.rawValue, in: workspace)
+    }
+
+    func enqueue(_ text: String) { changeQueue { $0.add(text) } }
+    func removeQueued(_ id: UUID) { changeQueue { $0.remove(id) } }
+    func updateQueued(_ id: UUID, text: String) { changeQueue { $0.update(id, text: text) } }
+    func sendQueuedSooner(_ id: UUID) { changeQueue { $0.sendSooner(id) } }
+
+    func takeNextQueued() -> String? {
+        var next: String?
+        changeQueue { next = $0.takeNext() }
+        return next
+    }
+
     /// Whether this message begins a turn the conversation still holds, so
     /// a fork taken from it has something to keep.
     func canFork(from turn: UUID) -> Bool {
@@ -1320,6 +1448,31 @@ struct NativeAgentChatView: View {
             : NativeAgentChatModel(provider: provider, workspace: workspace, mode: mode))
     }
 
+    /// Sends a message now, which is also how a message that was waiting is
+    /// sent when the reply before it lands.
+    @discardableResult
+    private func startSending(_ prompt: String) -> Bool {
+        guard !isPreparing else { return false }
+        isPreparing = true
+        // Started now, and on the main actor until it first waits, so the
+        // reader's place is read at Send and not after a navigation.
+        Task {
+            defer { isPreparing = false }
+            do {
+                let contextualPrompt = try await preparePrompt(prompt)
+                submissionError = nil
+                isPreparing = false
+                await model.send(prompt, contextualPrompt: contextualPrompt)
+                scrollToBottom = true
+            } catch {
+                submissionError = error.localizedDescription
+                // The message goes back where it was written.
+                if draft.isEmpty { draft = prompt }
+            }
+        }
+        return true
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             chatHeader
@@ -1374,34 +1527,30 @@ struct NativeAgentChatView: View {
                 }
             }
             Divider()
+            QueuedMessagesView(
+                messages: model.queued,
+                edit: { model.updateQueued($0, text: $1) },
+                remove: { model.removeQueued($0) },
+                moveUp: { model.sendQueuedSooner($0) }
+            )
             ZStack {
                 ChatView(messages: $model.messages, scrollToBottom: $scrollToBottom) {
                     NativeAgentChatInputView(
                         message: $draft,
                         placeholder: model.isRunning ? "\(provider.shortName) is working…" : "Message \(provider.shortName)"
                     ) { prompt in
-                        guard !isPreparing else { return false }
-                        isPreparing = true
-                        // Started now, and on the main actor until it first
-                        // waits, so the reader's place is read at Send and not
-                        // after a navigation.
-                        Task {
-                            defer { isPreparing = false }
-                            do {
-                                let contextualPrompt = try await preparePrompt(prompt)
-                                submissionError = nil
-                                isPreparing = false
-                                await model.send(prompt, contextualPrompt: contextualPrompt)
-                                scrollToBottom = true
-                            } catch {
-                                submissionError = error.localizedDescription
-                                // The message goes back where it was written.
-                                if draft.isEmpty { draft = prompt }
-                            }
+                        // While a reply is arriving the message waits its
+                        // turn rather than being refused. A thought that
+                        // arrives mid-answer usually arrives *because* of
+                        // the answer, and making the reader hold it until
+                        // the reply lands is how a question gets lost.
+                        if model.isRunning {
+                            model.enqueue(prompt)
+                            return true
                         }
-                        return true
+                        return startSending(prompt)
                     }
-                    .disabled(!canSend || isPreparing || model.isRunning || connectionState != .connected)
+                    .disabled(!canSend || isPreparing || connectionState != .connected)
                 }
                 // SwiftyChat gives every message its own right-click menu,
                 // which hides the one selected text would have.
@@ -1461,6 +1610,12 @@ struct NativeAgentChatView: View {
         }
         .onChange(of: model.isRunning, initial: true) { _, running in
             onRunningChanged(running)
+            // The reply has landed, so the next message waiting goes. One at
+            // a time, because each has to be prepared with the reader's
+            // place as it is *now* — a queued question about this chapter
+            // was written about this chapter.
+            guard !running, !isPreparing else { return }
+            if let next = model.takeNextQueued() { startSending(next) }
         }
         .onDisappear {
             if !outlivesView { model.cancel() }
