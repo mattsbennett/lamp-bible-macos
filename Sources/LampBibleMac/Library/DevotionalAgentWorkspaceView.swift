@@ -1441,7 +1441,14 @@ struct DevotionalAgentWorkspaceView: View {
                 try reconciler(for: workspaceURL).reconcile(
                     writing: writingNow,
                     provider: activeProvider?.shortName,
+                    // Asked for, not waited for. What this pane was last
+                    // told can be a change SwiftUI never delivered — two
+                    // turn changes in one update cycle arrive as one — and
+                    // a run's last write lands exactly then.
                     turnID: chatTurn
+                        ?? KeptAgentChats.existing(
+                            provider: selectedProvider, workspace: workspaceURL
+                        )?.takeTurnForAttribution()
                 ),
                 in: workspaceURL
             )

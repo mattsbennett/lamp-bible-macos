@@ -979,10 +979,46 @@ final class NativeAgentChatModel: ObservableObject {
         turnObservers.removeValue(forKey: token)
     }
 
+    /// The turn that has just ended and may not have been seen.
+    ///
+    /// SwiftUI coalesces state changes between updates: a turn that
+    /// begins and ends before the next one is delivered to a host as its
+    /// net change — which is to say, not at all. Measured, not assumed; a
+    /// hosted-view probe heard nothing for a pair set in one tick, and
+    /// both for the same pair a cycle apart.
+    ///
+    /// A run cannot finish that fast, but a **pane opening** as one ends
+    /// can: it is told the running turn on registering and nil
+    /// immediately after, and those two coalesce. The host would then
+    /// never flush for that turn, and its last write — the one that lands
+    /// just before a run exits — would be recorded belonging to nothing.
+    ///
+    /// So the host pulls this as well as being pushed to. Taken once:
+    /// whoever asks is about to account for what that turn left.
+    private var endedTurn: UUID?
+
+    #if DEBUG
+    /// Drives the turn from a test, which otherwise cannot: a real one is
+    /// set by a run starting and cleared by it ending.
+    func setCurrentTurnForTesting(_ turn: UUID?) { currentTurn = turn }
+    #endif
+
+    /// The turn a change found on disk now should be recorded under.
+    func takeTurnForAttribution() -> UUID? {
+        if let recordingTurn { return recordingTurn }
+        defer { endedTurn = nil }
+        return endedTurn
+    }
+
     /// The turn in progress, nil between turns.
     private(set) var currentTurn: UUID? {
         get { recordingTurn }
         set {
+            if newValue == nil, let ending = recordingTurn {
+                endedTurn = ending
+            } else if newValue != nil {
+                endedTurn = nil
+            }
             recordingTurn = newValue
             for observe in turnObservers.values { observe(newValue) }
         }

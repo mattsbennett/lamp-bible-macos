@@ -313,6 +313,36 @@ struct AgentChatModelTests {
         #expect(model.queued.isEmpty)
     }
 
+    /// A turn that ends can still be asked for once.
+    ///
+    /// SwiftUI delivers two state changes in one update cycle as their
+    /// net change, so a pane that opens as a turn ends is told the turn
+    /// and then nil, and hears neither — measured in a hosted-view probe,
+    /// not assumed. The run's last write lands exactly then, so the host
+    /// asks rather than waiting to be told.
+    @Test func aTurnThatHasJustEndedCanStillBeAccountedFor() throws {
+        let workspace = try workspace()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let model = NativeAgentChatModel(provider: .claude, workspace: workspace, mode: .writing)
+
+        #expect(model.takeTurnForAttribution() == nil, "nothing has run")
+
+        let turn = UUID()
+        model.setCurrentTurnForTesting(turn)
+        #expect(model.takeTurnForAttribution() == turn, "while it runs")
+        #expect(model.takeTurnForAttribution() == turn, "and it is still running")
+
+        model.setCurrentTurnForTesting(nil)
+        #expect(model.takeTurnForAttribution() == turn, "its last write is still its own")
+        #expect(model.takeTurnForAttribution() == nil, "taken once; what follows belongs to nobody")
+
+        // A new turn starting clears what the old one left.
+        let next = UUID()
+        model.setCurrentTurnForTesting(next)
+        model.setCurrentTurnForTesting(nil)
+        #expect(model.takeTurnForAttribution() == next)
+    }
+
     /// Every pane on a workspace is one chat, and every pane is told which
     /// turn is running — including one that opened while it already was.
     @Test func everyPaneSharesTheChatAndIsToldWhereItStands() throws {
