@@ -86,6 +86,7 @@
 		A10000000000000000000024 /* TextSizeMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000023 /* TextSizeMenu.swift */; };
 		6F7B2A0C0C569007F4D8E846 /* CommandPaletteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 636FA8A2119B7D43B22FDC74 /* CommandPaletteView.swift */; };
 		A10000000000000000000025 /* DevotionalAgentWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000024 /* DevotionalAgentWorkspaceView.swift */; };
+		A00000000000000000000D00 /* DevotionalAgentDraftReconciler.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000D00 /* DevotionalAgentDraftReconciler.swift */; };
 		A10000000000000000000026 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = G10000000000000000000005 /* SwiftTerm */; };
 		A10000000000000000000027 /* AgentRevisionSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000025 /* AgentRevisionSupport.swift */; };
 		A100000000000000000000F9 /* AgentProseTextSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000F9 /* AgentProseTextSupport.swift */; };
@@ -96,7 +97,7 @@
 		A10000000000000000000047 /* LampSyncSettingsCommit.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000041 /* LampSyncSettingsCommit.swift */; };
 		A100000000000000000000FC /* LampSyncLocalFiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000FD /* LampSyncLocalFiles.swift */; };
 		A100000000000000000000FE /* LampSyncMacPassLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000FF /* LampSyncMacPassLibrary.swift */; };
-		A10000000000000000000100 /* LampSyncBundleLedgers.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000101 /* LampSyncBundleLedgers.swift */; };
+		A00000000000000000000900 /* LampSyncBundleLedgers.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000101 /* LampSyncBundleLedgers.swift */; };
 		A10000000000000000000102 /* LampSyncBundleSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000103 /* LampSyncBundleSettings.swift */; };
 		A10000000000000000000106 /* LampSyncMoveOffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000107 /* LampSyncMoveOffer.swift */; };
 		A10000000000000000000108 /* LampSyncErrorText.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000109 /* LampSyncErrorText.swift */; };
@@ -218,6 +219,7 @@
 		B10000000000000000000023 /* TextSizeMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/TextSizeMenu.swift; sourceTree = SOURCE_ROOT; };
 		636FA8A2119B7D43B22FDC74 /* CommandPaletteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/CommandPaletteView.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000024 /* DevotionalAgentWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/DevotionalAgentWorkspaceView.swift; sourceTree = SOURCE_ROOT; };
+		B00000000000000000000D00 /* DevotionalAgentDraftReconciler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/DevotionalAgentDraftReconciler.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000025 /* AgentRevisionSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/AgentRevisionSupport.swift; sourceTree = SOURCE_ROOT; };
 		B100000000000000000000F9 /* AgentProseTextSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/AgentProseTextSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000043 /* PresentationDeckSyncSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/PresentationDeckSyncSupport.swift; sourceTree = SOURCE_ROOT; };
@@ -439,6 +441,7 @@
 				B10000000000000000000023 /* TextSizeMenu.swift */,
 				636FA8A2119B7D43B22FDC74 /* CommandPaletteView.swift */,
 				B10000000000000000000024 /* DevotionalAgentWorkspaceView.swift */,
+				B00000000000000000000D00 /* DevotionalAgentDraftReconciler.swift */,
 				B10000000000000000000037 /* NativeAgentChatView.swift */,
 				B10000000000000000000038 /* AgentChatSupport.swift */,
 				B100000000000000000000F7 /* ChatSurfaceSupport.swift */,
@@ -728,6 +731,7 @@
 				A10000000000000000000024 /* TextSizeMenu.swift in Sources */,
 				6F7B2A0C0C569007F4D8E846 /* CommandPaletteView.swift in Sources */,
 				A10000000000000000000025 /* DevotionalAgentWorkspaceView.swift in Sources */,
+				A00000000000000000000D00 /* DevotionalAgentDraftReconciler.swift in Sources */,
 				A1000000000000000000003B /* NativeAgentChatView.swift in Sources */,
 				A1000000000000000000003C /* AgentChatSupport.swift in Sources */,
 				A100000000000000000000F7 /* ChatSurfaceSupport.swift in Sources */,
@@ -766,7 +770,7 @@
 				A10000000000000000000047 /* LampSyncSettingsCommit.swift in Sources */,
 				A100000000000000000000FC /* LampSyncLocalFiles.swift in Sources */,
 				A100000000000000000000FE /* LampSyncMacPassLibrary.swift in Sources */,
-				A10000000000000000000100 /* LampSyncBundleLedgers.swift in Sources */,
+				A00000000000000000000900 /* LampSyncBundleLedgers.swift in Sources */,
 				A10000000000000000000102 /* LampSyncBundleSettings.swift in Sources */,
 				A10000000000000000000106 /* LampSyncMoveOffer.swift in Sources */,
 				A10000000000000000000108 /* LampSyncErrorText.swift in Sources */,

@@ -334,7 +334,10 @@ private struct DevotionalAgentSkill: Identifiable, Equatable {
     var id: String { name }
 }
 
-private enum DevotionalAgentWorkspaceStore {
+/// Internal rather than file-private: the draft reconciler reads and
+/// writes the workspace through this, and it lives in its own file so a
+/// test can drive it.
+enum DevotionalAgentWorkspaceStore {
     static let draftFilename = "draft.md"
     static let contextFilename = "DEVOTIONAL_CONTEXT.md"
     static let devotionalIdentifierFilename = "DEVOTIONAL_ID"
@@ -433,7 +436,7 @@ private enum DevotionalAgentWorkspaceStore {
         try data.write(to: markerURL, options: [.atomic])
     }
 
-    static func contextFiles(in workspace: URL) throws -> [DevotionalAgentContextFile] {
+    fileprivate static func contextFiles(in workspace: URL) throws -> [DevotionalAgentContextFile] {
         let keys: Set<URLResourceKey> = [.isDirectoryKey, .fileSizeKey]
         return try FileManager.default.contentsOfDirectory(
             at: contextDirectory(in: workspace),
@@ -473,7 +476,7 @@ private enum DevotionalAgentWorkspaceStore {
         return skipped
     }
 
-    static func removeContextFile(
+    fileprivate static func removeContextFile(
         _ file: DevotionalAgentContextFile,
         from workspace: URL,
         libraryRootURL: URL
@@ -486,7 +489,7 @@ private enum DevotionalAgentWorkspaceStore {
         try updateInstructions(in: workspace)
     }
 
-    static func skills(in workspace: URL) throws -> [DevotionalAgentSkill] {
+    fileprivate static func skills(in workspace: URL) throws -> [DevotionalAgentSkill] {
         let root = codexSkillsDirectory(in: workspace)
         guard FileManager.default.fileExists(atPath: root.path) else { return [] }
         return try FileManager.default.contentsOfDirectory(
@@ -508,7 +511,7 @@ private enum DevotionalAgentWorkspaceStore {
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
-    static func librarySkills(libraryRootURL: URL) throws -> [DevotionalAgentSkill] {
+    fileprivate static func librarySkills(libraryRootURL: URL) throws -> [DevotionalAgentSkill] {
         try WorkspaceSkillStore.catalogSkills(in: libraryRootURL).map { skill in
             DevotionalAgentSkill(
                 name: skill.name,
@@ -1408,31 +1411,9 @@ struct DevotionalAgentWorkspaceView: View {
             try DevotionalAgentWorkspaceStore.writeContext(contextDocument, to: workspace)
             writeEditorFocus(editorFocus)
 
-            let diskDraft = try DevotionalAgentWorkspaceStore.readDraft(from: workspace)
-            let persistedDraft = try DevotionalAgentRevisionStore.lastSyncedDraft(in: workspace)
-            if diskDraft == draftMarkdown {
-                try finishSynchronizing(draftMarkdown, in: workspace)
-            } else if persistedDraft == diskDraft {
-                // The editor changed while the agent pane was closed, so its
-                // current document is the newer side of the live workspace.
-                try DevotionalAgentWorkspaceStore.writeDraftContent(draftMarkdown, to: workspace)
-                try finishSynchronizing(draftMarkdown, in: workspace)
-            } else {
-                // Preserve an existing, unimported workspace draft. This also
-                // migrates drafts left behind by the former manual Pull workflow.
-                //
-                // Both sides may have moved while this pane was away: a run
-                // outlives its pane now, so the agent can write to the
-                // workspace while the writer carries on in the editor, with
-                // nothing mounted to reconcile the two as they go. That is
-                // the one case where the arriving draft must not simply be
-                // taken, and `persistedDraft` is the base that says so.
-                try takeOrKeep(
-                    diskDraft: diskDraft,
-                    in: workspace,
-                    writingMovedSince: persistedDraft.map { $0 != writingNow } ?? false
-                )
-            }
+            apply(try reconciler(for: workspace).prepare(
+                writing: draftMarkdown, provider: activeProvider?.shortName
+            ), in: workspace)
             refreshWorkspaceMetadata(in: workspace)
             Task { await importPresentationArtifactIfNeeded(in: workspace) }
         } catch {
@@ -1443,28 +1424,14 @@ struct DevotionalAgentWorkspaceView: View {
     private func refreshWorkspace() {
         guard let workspaceURL else { return }
         do {
-            let diskDraft = try DevotionalAgentWorkspaceStore.readDraft(from: workspaceURL)
-            // The marker as the **workspace** holds it, not as this pane
-            // last left it. The same writing can be open in two windows,
-            // and a draft one of them has already accounted for — the
-            // person typing into it — read here as a change nobody had
-            // seen. This pane recorded it as the agent's work, under
-            // whatever turn was running, so undoing that turn took away
-            // what the person had typed in the other window.
-            let marker = (try? DevotionalAgentRevisionStore.lastSyncedDraft(in: workspaceURL))
-                ?? lastSyncedDraft
-            if let marker, diskDraft != marker {
-                try takeOrKeep(
-                    diskDraft: diskDraft, in: workspaceURL, previous: marker
-                )
-            } else {
-                if let marker, marker != lastSyncedDraft {
-                    // Settled by the other window. Nothing to record, and
-                    // this pane carries on from where the workspace is.
-                    lastSyncedDraft = marker
-                }
-                workspaceDraft = diskDraft
-            }
+            apply(
+                try reconciler(for: workspaceURL).reconcile(
+                    writing: writingNow,
+                    provider: activeProvider?.shortName,
+                    turnID: chatTurn
+                ),
+                in: workspaceURL
+            )
             refreshWorkspaceMetadata(in: workspaceURL)
             Task { await importPresentationArtifactIfNeeded(in: workspaceURL) }
             collectTerminalTurns(in: workspaceURL)
@@ -1474,117 +1441,45 @@ struct DevotionalAgentWorkspaceView: View {
         }
     }
 
-    /// Takes a draft written in the workspace, or keeps the writer's text and
-    /// files the draft in history instead.
-    ///
-    /// Until now the arriving draft always won, which was right while only an
-    /// agent working in this workspace could have written it: the writer's own
-    /// editing came through this view and was reconciled before it got here.
-    /// An outside app can write while Lamp is closed, so the question "has the
-    /// writing moved since that draft was based on it?" now has to be asked,
-    /// and `LampWritingWrite.Note` is what answers it. No times are compared;
-    /// a clock says which write was later, which is not the question.
-    ///
-    /// Without a note the old rule applies, so a draft from this workspace's
-    /// own agent, or from a Lamp that predates the note, behaves as before.
-    private func takeOrKeep(
-        diskDraft: String,
-        in workspace: URL,
-        previous: String? = nil,
-        /// Set where the caller knows the writing has moved since the last
-        /// time this workspace and the editor agreed — which is the same
-        /// question a note answers, asked of a draft that left no note.
-        writingMovedSince: Bool = false
-    ) throws {
-        let applicationSupport = LampAgentDescriptorStore.defaultApplicationSupportURL()
-        let note = applicationSupport.flatMap {
-            LampWritingWrite.note(applicationSupportURL: $0, writingID: devotionalID)
-        }
-        let writing = writingNow
-        let resolution = LampWritingWrite.resolve(
-            note: note,
-            draftOnDisk: diskDraft,
-            // This view holds Lamp's own full copy, so it fingerprints that
-            // rather than asking the library — same rule, no round trip.
-            libraryRevision: LampWritingWrite.fingerprint(writing)
+    /// The deciding, which lives in `DevotionalAgentDraftReconciler` so a
+    /// test can run it. Everything here is what to do with its answer.
+    private func reconciler(for workspace: URL) -> DevotionalAgentDraftReconciler {
+        DevotionalAgentDraftReconciler(
+            workspace: workspace,
+            writingID: devotionalID,
+            applicationSupportURL: LampAgentDescriptorStore.defaultApplicationSupportURL()
         )
-        // Spent either way: it describes this draft, and this is the decision
-        // it was left for.
-        if let applicationSupport, note != nil {
-            LampWritingWrite.forgetNote(
-                applicationSupportURL: applicationSupport, writingID: devotionalID
-            )
+    }
+
+    private func apply(
+        _ outcome: DevotionalAgentDraftReconciler.Outcome, in workspace: URL
+    ) {
+        switch outcome {
+        case .unchanged:
+            break
+        case .take(let draft):
+            importDraft(draft)
+        case .keep(let note):
+            contextNote = note
         }
-
-        switch resolution {
-        case .takeDraftUnrecorded where writingMovedSince:
-            // No note, but the caller has the answer the note would have
-            // given: the writer's text and this draft both moved from the
-            // same base. Their words stay, and the draft goes to history —
-            // the same resolution, reached without one.
-            fallthrough
-
-        case .keepWritingAndRecordDraft:
-            // The writer changed this writing after the draft was written, so
-            // their words stay. The outside version is recorded as an agent
-            // change, which is where they can read it and take what they want
-            // from it, and the workspace is put back to what Lamp holds so the
-            // same draft is not resolved again on the next pass.
-            try recordAgentRevision(
-                before: writing,
-                after: diskDraft,
-                in: workspace
-            )
-            try DevotionalAgentWorkspaceStore.writeDraftContent(writing, to: workspace)
-            try finishSynchronizing(writing, in: workspace)
-            contextNote = """
-            A draft written outside the editor was not applied: you had edited \
-            this writing since. Your text is unchanged, and the draft is in the \
-            history below.
-            """
-
-        case .takeDraft, .takeDraftUnrecorded:
-            try recordAgentRevision(
-                before: previous ?? writing,
-                after: diskDraft,
-                in: workspace
-            )
-            try finishSynchronizing(diskDraft, in: workspace)
-            importDraft(diskDraft)
+        if let draft = try? DevotionalAgentWorkspaceStore.readDraft(from: workspace) {
+            workspaceDraft = draft
         }
+        lastSyncedDraft = reconciler(for: workspace).marker() ?? lastSyncedDraft
+        revisions = (try? DevotionalAgentRevisionStore.revisions(in: workspace)) ?? revisions
     }
 
     private func synchronizeEditorDraft(_ draft: String) {
         guard let workspaceURL else { return }
         do {
-            if draft == lastSyncedDraft {
-                workspaceDraft = draft
-                return
-            }
-
-            // If the editor and agent changed during the same polling interval,
-            // keep the user's live edit but retain the agent version in history.
-            let diskDraft = try DevotionalAgentWorkspaceStore.readDraft(from: workspaceURL)
-            if let lastSyncedDraft, diskDraft != lastSyncedDraft, diskDraft != draft {
-                try recordAgentRevision(
-                    before: lastSyncedDraft,
-                    after: diskDraft,
-                    in: workspaceURL
-                )
-            } else if lastSyncedDraft == nil, diskDraft != draft {
-                // Nothing has synced yet — the moment just after this pane
-                // opens. The branch above cannot run, so the disk draft used
-                // to be overwritten with no record of it. Rare while only this
-                // workspace's own agent could have written it; an outside app
-                // can write at any moment, including this one.
-                try recordAgentRevision(
-                    before: diskDraft,
-                    after: diskDraft,
-                    in: workspaceURL
-                )
-            }
-            try DevotionalAgentWorkspaceStore.writeDraftContent(draft, to: workspaceURL)
-            try finishSynchronizing(draft, in: workspaceURL)
+            try reconciler(for: workspaceURL).synchronize(
+                writing: draft,
+                provider: activeProvider?.shortName,
+                turnID: chatTurn
+            )
+            lastSyncedDraft = draft
+            workspaceDraft = draft
+            revisions = (try? DevotionalAgentRevisionStore.revisions(in: workspaceURL)) ?? revisions
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -1635,114 +1530,56 @@ struct DevotionalAgentWorkspaceView: View {
     /// answer decided which side of a conflict was kept.
     private var writingNow: String { lastSyncedDraft ?? draftMarkdown }
 
-    private func finishSynchronizing(_ draft: String, in workspace: URL) throws {
-        try DevotionalAgentRevisionStore.markSynced(draft, in: workspace)
-        lastSyncedDraft = draft
-        workspaceDraft = draft
-    }
-
-    private func recordAgentRevision(before: String, after: String, in workspace: URL) throws {
-        _ = try DevotionalAgentRevisionStore.record(
-            kind: .agentEdit,
-            providerName: activeProvider?.shortName,
-            // Marked with the turn that asked for it, which is what lets
-            // that turn be undone later. Agent edits minutes apart are
-            // merged into one record, so the times alone cannot say which
-            // turn a change belonged to once the history is tidied.
-            turnID: chatTurn,
-            before: before,
-            after: after,
-            in: workspace
-        )
-        revisions = try DevotionalAgentRevisionStore.revisions(in: workspace)
-    }
-
-    /// Puts the draft back as it was before a turn, and takes that turn
-    /// and everything after it out of the conversation.
-    ///
-    /// `turns` is all of them — the one the reader named and everything
-    /// that followed it, since all of that is leaving the conversation.
-    /// Asked about the named turn alone, this put the draft back to before
-    /// it and left the later turns' work in the writing, having just
-    /// removed the questions that accounted for it.
-    ///
-    /// The restore is itself recorded, so undoing a turn can be undone:
-    /// nothing here destroys a version, it only writes another.
-    ///
-    /// What the person typed while the reply was arriving is theirs and
-    /// stays. Only the agent's own edits, marked with this turn, are put
-    /// back.
-    ///
-    /// The draft alone. The revision history can describe other documents
-    /// and this workspace only ever writes the one, so a turn that changed
-    /// something else is not something that can happen yet — and if it
-    /// ever does, this says so rather than quietly restoring half of it.
+    /// Puts the draft back as it was before these turns, and says whether
+    /// it could. The deciding is the reconciler's; this is what to do with
+    /// its answer.
     @discardableResult
     private func undoTurn(_ turns: [UUID]) -> Bool {
-        guard let workspaceURL, !turns.isEmpty else { return false }
-        // Anything the agent wrote and the poll has not picked up yet is
-        // collected first, so it is in the history as its own change
-        // rather than being overwritten by what follows with no record of
-        // it having existed.
-        refreshWorkspace()
+        guard let workspaceURL else { return false }
         do {
-            // In the conversation's order, which is what decides the
-            // baseline: two Macs' clocks disagree, and the times cannot
-            // say which turn followed which.
-            let before = try DevotionalAgentRevisionStore.stateBefore(
-                turns: turns, in: workspaceURL
-            )
-            let primary = DevotionalAgentRevisionStore.primaryDocumentPath
-            let others = before.keys.filter { $0 != primary }.sorted()
-            guard others.isEmpty else {
-                errorMessage = "Those turns also changed \(others.joined(separator: ", ")), which this cannot put back yet, so nothing was changed."
+            switch try reconciler(for: workspaceURL).undo(
+                turns: turns, writing: writingNow, provider: activeProvider?.shortName
+            ) {
+            case .refused(let reason):
+                errorMessage = reason
                 return false
+            case .nothingToPutBack:
+                refreshAfterWriting(in: workspaceURL)
+                return true
+            case .restored(let markdown):
+                importDraft(markdown)
+                refreshAfterWriting(in: workspaceURL)
+                return true
             }
-            if let markdown = before[primary] {
-                guard restoreRevision(markdown) else { return false }
-            }
-            revisions = try DevotionalAgentRevisionStore.revisions(in: workspaceURL)
-            return true
         } catch {
             errorMessage = error.localizedDescription
             return false
         }
     }
 
-    /// Puts a version back, saying whether it did.
-    ///
-    /// What it replaces is recorded first, so a restore never destroys the
-    /// version that was current when it ran — including text typed since
-    /// the version being restored to.
     @discardableResult
     private func restoreRevision(_ markdown: String) -> Bool {
         guard let workspaceURL else { return false }
-        // Whatever the workspace has not shown this pane yet is taken up
-        // first, so the text about to be written over is in the history as
-        // a version of its own.
-        refreshWorkspace()
-        // And read from the workspace, not from this view: an outside app
-        // can write `draft.md` between two passes, and what is about to be
-        // overwritten is what is in the file — recording anything else
-        // would file a version nobody ever had and lose the one they did.
-        let replaced = manuscript(in: workspaceURL)
-        guard markdown != replaced else { return true }
         do {
-            _ = try DevotionalAgentRevisionStore.record(
-                kind: .restoration,
-                before: replaced,
-                after: markdown,
-                in: workspaceURL
+            let restored = try reconciler(for: workspaceURL).restore(
+                markdown, writing: writingNow, provider: activeProvider?.shortName
             )
-            try DevotionalAgentWorkspaceStore.writeDraftContent(markdown, to: workspaceURL)
-            try finishSynchronizing(markdown, in: workspaceURL)
-            revisions = try DevotionalAgentRevisionStore.revisions(in: workspaceURL)
-            importDraft(markdown)
+            importDraft(restored)
+            refreshAfterWriting(in: workspaceURL)
             return true
         } catch {
             errorMessage = error.localizedDescription
             return false
         }
+    }
+
+    /// What this pane holds about a workspace it has just written to.
+    private func refreshAfterWriting(in workspace: URL) {
+        lastSyncedDraft = reconciler(for: workspace).marker() ?? lastSyncedDraft
+        if let draft = try? DevotionalAgentWorkspaceStore.readDraft(from: workspace) {
+            workspaceDraft = draft
+        }
+        revisions = (try? DevotionalAgentRevisionStore.revisions(in: workspace)) ?? revisions
     }
 
     /// Runs several times a second, so everything here is assigned only on a real
