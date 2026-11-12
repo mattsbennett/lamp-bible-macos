@@ -617,6 +617,37 @@ struct AgentRevisionAttributionTests {
         #expect(kept.map(\.id) == [merged.id])
     }
 
+    /// The originals need not still be files of their own. This Mac may
+    /// have merged them already, so what covers them is a tagged merge —
+    /// and asking for the originals by id would find nothing and let the
+    /// legacy merge take both turns with it.
+    @Test func aSurvivingTaggedMergeCountsAsTheOriginalsItCovers() {
+        let firstTurn = UUID(), secondTurn = UUID()
+        let a = UUID(), b = UUID()
+        let merged = DevotionalAgentRevision(
+            createdAt: Date(timeIntervalSince1970: 10), kind: .agentEdit,
+            beforeMarkdown: "A", afterMarkdown: "C",
+            updatedAt: Date(timeIntervalSince1970: 12),
+            replacedRevisionIDs: [a, b], turnID: firstTurn
+        )
+        let later = DevotionalAgentRevision(
+            createdAt: Date(timeIntervalSince1970: 20), kind: .agentEdit,
+            beforeMarkdown: "C", afterMarkdown: "D", turnID: secondTurn
+        )
+        // What an older Lamp writes, having merged all three: it names the
+        // original changes, not the merge that now stands for two of them.
+        let legacy = DevotionalAgentRevision(
+            createdAt: merged.createdAt, kind: .agentEdit,
+            beforeMarkdown: "A", afterMarkdown: "D",
+            updatedAt: later.createdAt,
+            replacedRevisionIDs: [a, b, later.id]
+        )
+
+        let kept = DevotionalAgentRevisionCompactor.removingReplaced([merged, later, legacy])
+        #expect(Set(kept.map(\.id)) == [merged.id, later.id])
+        #expect(kept.compactMap(\.turnID).count == 2, "both turns can still be undone")
+    }
+
     /// Only where the originals are all still here. A merge whose changes
     /// are nowhere else is the only copy of them.
     @Test func anUntaggedMergeStandsWhenItsOriginalsAreGone() {
@@ -633,5 +664,89 @@ struct AgentRevisionAttributionTests {
 
         let kept = DevotionalAgentRevisionCompactor.removingReplaced([merged])
         #expect(kept.map(\.id) == [merged.id])
+    }
+}
+
+/// Undoing a turn takes everything after it, so what it puts back has to
+/// account for all of them.
+struct AgentTurnSuffixUndoTests {
+    @Test func theStateBeforeIsTheStateBeforeTheEarliestTurnGoing() throws {
+        let workspace = FileManager.default.temporaryDirectory
+            .appendingPathComponent("suffix-undo-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workspace) }
+
+        func at(_ seconds: Double) -> Date { Date(timeIntervalSince1970: seconds) }
+        let first = UUID(), second = UUID()
+        _ = try DevotionalAgentRevisionStore.record(
+            kind: .agentEdit, turnID: first, before: "A", after: "B",
+            in: workspace, createdAt: at(10)
+        )
+        _ = try DevotionalAgentRevisionStore.record(
+            kind: .agentEdit, turnID: second, documentPath: "notes.md",
+            before: "", after: "A note", in: workspace, createdAt: at(400)
+        )
+
+        // The named turn alone: the draft goes back, and the second turn's
+        // note stays although its question is about to be taken away.
+        let named = try DevotionalAgentRevisionStore.stateBefore(turn: first, in: workspace)
+        #expect(named["notes.md"] == nil)
+
+        let going = try DevotionalAgentRevisionStore.stateBefore(
+            turns: [first, second], in: workspace
+        )
+        #expect(going[DevotionalAgentRevisionStore.primaryDocumentPath] == "A")
+        #expect(going["notes.md"] == "", "the second turn's document is in the answer, so the undo refuses")
+    }
+}
+
+/// Two panes on one workspace both notice what the agent wrote.
+struct AgentRevisionTurnOwnershipTests {
+    @Test func aTaggedRecordReplacesTheUntaggedOneItRepeats() throws {
+        let workspace = FileManager.default.temporaryDirectory
+            .appendingPathComponent("turn-ownership-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workspace) }
+
+        func at(_ seconds: Double) -> Date { Date(timeIntervalSince1970: seconds) }
+        // The pane that opened during the run and had no turn to mark it with.
+        let untagged = try #require(try DevotionalAgentRevisionStore.record(
+            kind: .agentEdit, before: "A", after: "B", in: workspace, createdAt: at(10)
+        ))
+        let turn = UUID()
+        let tagged = try #require(try DevotionalAgentRevisionStore.record(
+            kind: .agentEdit, turnID: turn, before: "A", after: "B",
+            in: workspace, createdAt: at(11)
+        ))
+        #expect(tagged.turnID == turn)
+
+        let revisions = try DevotionalAgentRevisionStore.revisions(in: workspace)
+        #expect(revisions.count == 1, "one record of the change, not two")
+        #expect(revisions.first?.turnID == turn)
+        #expect(revisions.first?.coveredRevisionIDs.contains(untagged.id) == true)
+
+        // And the turn can be undone, which was the point.
+        let before = try DevotionalAgentRevisionStore.stateBefore(turn: turn, in: workspace)
+        #expect(before[DevotionalAgentRevisionStore.primaryDocumentPath] == "A")
+    }
+
+    @Test func anUntaggedRepeatDoesNotDisplaceATaggedRecord() throws {
+        let workspace = FileManager.default.temporaryDirectory
+            .appendingPathComponent("turn-ownership-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workspace) }
+
+        func at(_ seconds: Double) -> Date { Date(timeIntervalSince1970: seconds) }
+        let turn = UUID()
+        _ = try DevotionalAgentRevisionStore.record(
+            kind: .agentEdit, turnID: turn, before: "A", after: "B",
+            in: workspace, createdAt: at(10)
+        )
+        #expect(try DevotionalAgentRevisionStore.record(
+            kind: .agentEdit, before: "A", after: "B", in: workspace, createdAt: at(11)
+        ) == nil)
+        let revisions = try DevotionalAgentRevisionStore.revisions(in: workspace)
+        #expect(revisions.count == 1)
+        #expect(revisions.first?.turnID == turn)
     }
 }

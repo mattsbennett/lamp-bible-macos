@@ -1019,7 +1019,7 @@ private final class NativeAgentChatModel: ObservableObject {
         // the queue is otherwise drained only by a reply landing. Without
         // this, messages recovered at launch sat there until the next one.
         onQueueReady?()
-        show(AgentChatTranscriptStore.load(providerID: provider.rawValue, in: workspace))
+        adopt(AgentChatTranscriptStore.load(providerID: provider.rawValue, in: workspace))
     }
 
     /// Picks up a transcript changed by something other than this chat. Cheap
@@ -1030,7 +1030,20 @@ private final class NativeAgentChatModel: ObservableObject {
         guard modified != knownModificationDate else { return }
         knownModificationDate = modified
         let onDisk = AgentChatTranscriptStore.load(providerID: provider.rawValue, in: workspace)
-        if onDisk != knownTranscript { show(onDisk) }
+        if onDisk != knownTranscript { adopt(onDisk) }
+    }
+
+    /// Takes up a transcript from disk, and writes it back where showing it
+    /// changed it.
+    ///
+    /// A copy rewritten by a Lamp that has no name for the record of what
+    /// was undone brings those turns back with it. Shown without them is
+    /// half the answer: held only in memory, the undo would last until the
+    /// app next opened. So the file is put right at the same time.
+    private func adopt(_ onDisk: AgentChatTranscript) {
+        show(onDisk)
+        guard knownTranscript != onDisk else { return }
+        persistTranscript()
     }
 
     private func show(_ transcript: AgentChatTranscript) {
@@ -1734,7 +1747,23 @@ private final class NativeAgentChatModel: ObservableObject {
     /// already gone — undone in another pane, or trimmed by a copy that
     /// synced in — is not one to put anything back for.
     func canRevert(turn: UUID) -> Bool {
-        !isRunning && canFork(from: turn)
+        guard !isRunning else { return false }
+        // Read, rather than trust what is held. Sync can have installed
+        // another Mac's copy — or a conversation cleared there — since
+        // this pane last looked, and the turn being undone may not be in
+        // it any more. Found out afterwards, the draft would already have
+        // been put back for a turn the conversation no longer had.
+        let onDisk = AgentChatTranscriptStore.load(providerID: provider.rawValue, in: workspace)
+        if onDisk != knownTranscript {
+            show(onDisk)
+            knownModificationDate = transcriptModificationDate()
+        }
+        return canFork(from: turn)
+    }
+
+    /// The turns an undo of this one would take with it.
+    func turnsUndoneBy(_ turn: UUID) -> [UUID] {
+        knownTranscript?.turnsFrom(turn) ?? []
     }
 
     /// Whether this message begins a turn the conversation still holds, so
@@ -1812,14 +1841,19 @@ struct NativeAgentChatView: View {
     /// somewhere to put one. Nil in a pane that cannot open another chat,
     /// where the menu item is simply not offered.
     let forkFromTurn: ((UUID) -> Void)?
-    /// Undoes what a turn did, saying whether it could. Nil in a pane with
-    /// nothing to put back, where the menu item is simply not offered.
+    /// Undoes what these turns did, saying whether it could. Nil in a pane
+    /// with nothing to put back, where the menu item is simply not offered.
     ///
-    /// Answering matters: the host refuses a turn whose changes it cannot
-    /// put back whole, and a conversation trimmed after such a refusal
-    /// would have taken away the question while leaving its work in the
-    /// writing.
-    let revertTurn: ((UUID) -> Bool)?
+    /// **All** of them: the turn the reader named and everything after it,
+    /// since all of that is about to leave the conversation. Given only the
+    /// named one, the host put the draft back to before it and left the
+    /// later turns' work in the writing with nothing left to account for
+    /// it.
+    ///
+    /// Answering matters too: the host refuses what it cannot put back
+    /// whole, and a conversation trimmed after such a refusal would have
+    /// taken away the questions and kept their work.
+    let revertTurn: (([UUID]) -> Bool)?
     /// Told which turn is running, for a pane that marks its own records
     /// with it.
     let onTurnChanged: ((UUID?) -> Void)?
@@ -1838,6 +1872,8 @@ struct NativeAgentChatView: View {
     /// This pane's name among the panes sharing one chat, so that each is
     /// told which turn is running rather than only the last to appear.
     @State private var paneToken = UUID()
+    /// The turn the shared chat is on, as this pane last heard it.
+    @State private var observedTurn: UUID?
     @State private var submissionError: String?
     /// A message is being prepared, between Send and the run starting.
     @State private var isPreparing = false
@@ -1850,7 +1886,7 @@ struct NativeAgentChatView: View {
         preparePrompt: @escaping (String) async throws -> String = { $0 },
         onRunningChanged: @escaping (Bool) -> Void = { _ in },
         forkFromTurn: ((UUID) -> Void)? = nil,
-        revertTurn: ((UUID) -> Bool)? = nil,
+        revertTurn: (([UUID]) -> Bool)? = nil,
         onTurnChanged: ((UUID?) -> Void)? = nil
     ) {
         self.provider = provider
@@ -2090,9 +2126,16 @@ struct NativeAgentChatView: View {
         }
         .onAppear {
             model.onQueueReady = { drainQueue() }
-            if let onTurnChanged {
-                model.observeTurn(for: paneToken) { onTurnChanged($0) }
-            }
+            // Into state, not straight on to the host. A closure
+            // registered here keeps the view struct it was made with, and
+            // a plain `let` in that struct — the draft the writing held
+            // when this pane opened — never changes again. Through
+            // `@State` and `onChange`, the host is called by the view as
+            // it is now.
+            model.observeTurn(for: paneToken) { observedTurn = $0 }
+        }
+        .onChange(of: observedTurn) { _, turn in
+            onTurnChanged?(turn)
         }
         .onChange(of: model.isRunning, initial: true) { _, running in
             onRunningChanged(running)
@@ -2109,6 +2152,7 @@ struct NativeAgentChatView: View {
             // told about would mark everything written afterwards — by a run
             // that outlives this pane, or by the person — as that turn's
             // doing.
+            observedTurn = nil
             onTurnChanged?(nil)
             // Not stopped. The model is shared now, so a pane going away
             // may not be the only one holding it — and stopping a run
@@ -2143,17 +2187,19 @@ struct NativeAgentChatView: View {
                 // after the draft has been put back is a refusal that came
                 // too late to refuse anything.
                 guard model.canRevert(turn: turn) else { return }
+                let going = model.turnsUndoneBy(turn)
+                guard !going.isEmpty else { return }
                 // Then the draft, and only then the conversation. Putting
                 // the writing back is the half that can fail; trimmed
                 // first, a failure would leave the question gone and its
                 // work still in the draft, with nothing left to undo it
                 // from.
-                guard revertTurn?(turn) == true else { return }
+                guard revertTurn?(going) == true else { return }
                 _ = model.revert(turn: turn)
             }
             Button("Cancel", role: .cancel) { turnToUndo = nil }
         } message: { _ in
-            Text("The draft goes back to what it said before this turn, and this turn and everything after it leave the conversation. Anything you wrote yourself stays, and the restore is itself undoable.")
+            Text("The draft goes back to what it said before this turn, and this turn and everything after it leave the conversation. Anything you have written since is replaced — the restore is recorded in the writing’s history, so you can put it back.")
         }
         .confirmationDialog(
             "Start a new \(provider.shortName) chat?",

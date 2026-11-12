@@ -694,7 +694,25 @@ struct DevotionalEditorView: View {
                                 importDraft: { importedDraft in
                                     content = importedDraft
                                 },
-                                chatTurn: $agentChatTurn
+                                chatTurn: Binding(
+                                    get: { agentChatTurn },
+                                    set: { turn in
+                                        guard turn != agentChatTurn else { return }
+                                        // What the finishing turn wrote to
+                                        // the workspace's other documents,
+                                        // collected while it is still the
+                                        // turn in hand. These are polled on
+                                        // their own clock, and a run's last
+                                        // write lands just before it ends —
+                                        // so the change was regularly
+                                        // picked up under no turn at all,
+                                        // and an undo then put the draft
+                                        // back and left those files as the
+                                        // turn had made them.
+                                        refreshWorkspaceDocuments()
+                                        agentChatTurn = turn
+                                    }
+                                )
                             )
                             .id(identifier)
                         } else {

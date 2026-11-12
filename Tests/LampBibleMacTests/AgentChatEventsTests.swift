@@ -700,7 +700,10 @@ struct AgentChatUndoDurabilityTests {
         let merged = AgentChatTranscriptMerge.merge(local: trimmed, incoming: full)
         #expect(merged.turns.map(\.question) == ["Tighten the opening"])
         #expect(merged.messages.count == 2)
-        #expect(merged.removedTurns == [second])
+        // The turn, and the messages that were in it: a copy rewritten
+        // without events reads each of those as a turn of its own.
+        #expect(merged.removedTurns?.contains(second) == true)
+        #expect(merged.removedTurns?.count == 3)
         // The provider's session still holds the turn that was taken out.
         #expect(merged.sessionID == nil)
     }
@@ -713,7 +716,7 @@ struct AgentChatUndoDurabilityTests {
         // The other Mac's copy, which has never heard of the undo.
         let merged = AgentChatTranscriptMerge.merge(local: full, incoming: trimmed)
         #expect(merged.turns.map(\.question) == ["One"])
-        #expect(merged.removedTurns == [second])
+        #expect(merged.removedTurns?.contains(second) == true)
     }
 
     /// A turn asked on another Mac after the undo is new work, not undone
@@ -739,7 +742,7 @@ struct AgentChatUndoDurabilityTests {
         let once = try #require(full.trimmed(from: third))
         let twice = try #require(once.trimmed(from: second))
         #expect(twice.turns.map(\.question) == ["One"])
-        #expect(Set(twice.removedTurns ?? []) == [second, third])
+        #expect(Set(twice.removedTurns ?? []).isSuperset(of: [second, third]))
 
         let merged = AgentChatTranscriptMerge.merge(local: twice, incoming: full)
         #expect(merged.turns.map(\.question) == ["One"])
@@ -757,8 +760,25 @@ struct AgentChatUndoDurabilityTests {
         let trimmed = try #require(full.trimmed(from: second))
         try AgentChatTranscriptStore.save(trimmed, providerID: "claude", in: workspace)
         let loaded = AgentChatTranscriptStore.load(providerID: "claude", in: workspace)
-        #expect(loaded.removedTurns == [second])
+        #expect(loaded.removedTurns?.contains(second) == true)
         #expect(loaded.turns.map(\.question) == ["One"])
+    }
+
+    /// A Lamp from before events rewrites the file with the messages and
+    /// without what grouped them. Every message then reads as a turn of
+    /// its own — so a tombstone naming the question alone took the
+    /// question away and left the answer to it.
+    @Test func anUndoneAnswerDoesNotComeBackOnItsOwn() throws {
+        let id = UUID(), first = UUID(), second = UUID()
+        let full = conversation(id, [(first, 10, "One"), (second, 20, "Two")])
+        let trimmed = try #require(full.trimmed(from: second))
+
+        var stripped = full
+        stripped.events = nil
+
+        let merged = AgentChatTranscriptMerge.merge(local: trimmed, incoming: stripped)
+        #expect(merged.messages.map(\.text) == ["One", "Done."])
+        #expect(merged.turns.map(\.question) == ["One"])
     }
 
     /// A conversation that was cleared is a different conversation, and what

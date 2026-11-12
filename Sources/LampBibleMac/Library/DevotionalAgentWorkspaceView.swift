@@ -1430,7 +1430,7 @@ struct DevotionalAgentWorkspaceView: View {
                 try takeOrKeep(
                     diskDraft: diskDraft,
                     in: workspace,
-                    writingMovedSince: persistedDraft.map { $0 != draftMarkdown } ?? false
+                    writingMovedSince: persistedDraft.map { $0 != writingNow } ?? false
                 )
             }
             refreshWorkspaceMetadata(in: workspace)
@@ -1486,12 +1486,13 @@ struct DevotionalAgentWorkspaceView: View {
         let note = applicationSupport.flatMap {
             LampWritingWrite.note(applicationSupportURL: $0, writingID: devotionalID)
         }
+        let writing = writingNow
         let resolution = LampWritingWrite.resolve(
             note: note,
             draftOnDisk: diskDraft,
             // This view holds Lamp's own full copy, so it fingerprints that
             // rather than asking the library — same rule, no round trip.
-            libraryRevision: LampWritingWrite.fingerprint(draftMarkdown)
+            libraryRevision: LampWritingWrite.fingerprint(writing)
         )
         // Spent either way: it describes this draft, and this is the decision
         // it was left for.
@@ -1516,12 +1517,12 @@ struct DevotionalAgentWorkspaceView: View {
             // from it, and the workspace is put back to what Lamp holds so the
             // same draft is not resolved again on the next pass.
             try recordAgentRevision(
-                before: draftMarkdown,
+                before: writing,
                 after: diskDraft,
                 in: workspace
             )
-            try DevotionalAgentWorkspaceStore.writeDraftContent(draftMarkdown, to: workspace)
-            try finishSynchronizing(draftMarkdown, in: workspace)
+            try DevotionalAgentWorkspaceStore.writeDraftContent(writing, to: workspace)
+            try finishSynchronizing(writing, in: workspace)
             contextNote = """
             A draft written outside the editor was not applied: you had edited \
             this writing since. Your text is unchanged, and the draft is in the \
@@ -1530,7 +1531,7 @@ struct DevotionalAgentWorkspaceView: View {
 
         case .takeDraft, .takeDraftUnrecorded:
             try recordAgentRevision(
-                before: previous ?? draftMarkdown,
+                before: previous ?? writing,
                 after: diskDraft,
                 in: workspace
             )
@@ -1607,6 +1608,19 @@ struct DevotionalAgentWorkspaceView: View {
         }
     }
 
+    /// The writing as Lamp holds it, read live.
+    ///
+    /// Not `draftMarkdown`. The polling task and the chat's turn observer
+    /// are long-lived closures holding the view struct as it was when they
+    /// were made, and a plain `let` in that struct keeps whatever it was
+    /// given — for ever. `@State` reads stay live because they go through
+    /// SwiftUI's storage, and `lastSyncedDraft` follows the editor: every
+    /// change it makes is written to the workspace and marked synced in
+    /// the same pass. Read through the stale copy, "has the writing moved
+    /// since?" was answered about the writing as it was hours ago, and the
+    /// answer decided which side of a conflict was kept.
+    private var writingNow: String { lastSyncedDraft ?? draftMarkdown }
+
     private func finishSynchronizing(_ draft: String, in workspace: URL) throws {
         try DevotionalAgentRevisionStore.markSynced(draft, in: workspace)
         lastSyncedDraft = draft
@@ -1632,6 +1646,12 @@ struct DevotionalAgentWorkspaceView: View {
     /// Puts the draft back as it was before a turn, and takes that turn
     /// and everything after it out of the conversation.
     ///
+    /// `turns` is all of them — the one the reader named and everything
+    /// that followed it, since all of that is leaving the conversation.
+    /// Asked about the named turn alone, this put the draft back to before
+    /// it and left the later turns' work in the writing, having just
+    /// removed the questions that accounted for it.
+    ///
     /// The restore is itself recorded, so undoing a turn can be undone:
     /// nothing here destroys a version, it only writes another.
     ///
@@ -1644,8 +1664,8 @@ struct DevotionalAgentWorkspaceView: View {
     /// something else is not something that can happen yet — and if it
     /// ever does, this says so rather than quietly restoring half of it.
     @discardableResult
-    private func undoTurn(_ turn: UUID) -> Bool {
-        guard let workspaceURL else { return false }
+    private func undoTurn(_ turns: [UUID]) -> Bool {
+        guard let workspaceURL, !turns.isEmpty else { return false }
         // Anything the agent wrote and the poll has not picked up yet is
         // collected first, so it is in the history as its own change
         // rather than being overwritten by what follows with no record of
@@ -1653,12 +1673,12 @@ struct DevotionalAgentWorkspaceView: View {
         refreshWorkspace()
         do {
             let before = try DevotionalAgentRevisionStore.stateBefore(
-                turn: turn, in: workspaceURL
+                turns: Set(turns), in: workspaceURL
             )
             let primary = DevotionalAgentRevisionStore.primaryDocumentPath
             let others = before.keys.filter { $0 != primary }.sorted()
             guard others.isEmpty else {
-                errorMessage = "That turn also changed \(others.joined(separator: ", ")), which this cannot put back yet, so nothing was changed."
+                errorMessage = "Those turns also changed \(others.joined(separator: ", ")), which this cannot put back yet, so nothing was changed."
                 return false
             }
             if let markdown = before[primary] {
@@ -1680,11 +1700,15 @@ struct DevotionalAgentWorkspaceView: View {
     @discardableResult
     private func restoreRevision(_ markdown: String) -> Bool {
         guard let workspaceURL else { return false }
-        // The text this is about to write over, which is what is in the
-        // workspace rather than what this view last drew. They differ for
-        // the moment between the editor changing and the next pass, and the
-        // workspace is the copy being replaced.
-        let replaced = lastSyncedDraft ?? draftMarkdown
+        // Whatever the workspace has not shown this pane yet is taken up
+        // first, so the text about to be written over is in the history as
+        // a version of its own.
+        refreshWorkspace()
+        // And read from the workspace, not from this view: an outside app
+        // can write `draft.md` between two passes, and what is about to be
+        // overwritten is what is in the file — recording anything else
+        // would file a version nobody ever had and lose the one they did.
+        let replaced = manuscript(in: workspaceURL)
         guard markdown != replaced else { return true }
         do {
             _ = try DevotionalAgentRevisionStore.record(

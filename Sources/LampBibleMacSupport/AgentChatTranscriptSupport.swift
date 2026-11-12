@@ -98,7 +98,7 @@ public struct AgentChatTranscript: Codable, Equatable, Sendable {
     /// before events, which is not the same as a conversation in which
     /// nothing happened.
     public var events: [Event]?
-    /// The turns somebody undid, kept after the turns themselves are gone.
+    /// What somebody undid, kept after the turns themselves are gone.
     ///
     /// Two copies of a conversation are reconciled by **union**: every turn
     /// either side has is kept, because a turn one Mac lacks is a turn it
@@ -110,6 +110,13 @@ public struct AgentChatTranscript: Codable, Equatable, Sendable {
     /// So removal is written down rather than performed. Absent means a
     /// Lamp that does not know about undoing, which is silence and not "no
     /// turn was ever undone".
+    ///
+    /// It names a turn **and every message that was in it**. A copy
+    /// rewritten by a Lamp from before events keeps the messages and
+    /// loses what grouped them, and each of those messages then reads as a
+    /// turn of its own, under its own id. Naming the turn alone took the
+    /// question away and left the answer to it — as a turn, in the
+    /// conversation, and in the next recap.
     public var removedTurns: [UUID]?
 
     public init(
@@ -275,10 +282,20 @@ public struct AgentChatTranscript: Codable, Equatable, Sendable {
     /// provider's session is one line of talk in that provider's own store
     /// and cannot be rewound. The next message carries on from a recap of
     /// what is left.
+    /// The turns an undo of this one would take: it, and everything that
+    /// followed it, in order.
+    public func turnsFrom(_ turn: UUID) -> [UUID] {
+        let kept = turns
+        guard let cut = kept.firstIndex(where: { $0.id == turn }) else { return [] }
+        return kept[cut...].map(\.id)
+    }
+
     public func trimmed(from turn: UUID) -> AgentChatTranscript? {
         let kept = turns
         guard let cut = kept.firstIndex(where: { $0.id == turn }) else { return nil }
-        return removing(turns: kept[cut...].map(\.id))
+        return removing(turns: kept[cut...].flatMap { going in
+            [going.id] + going.events.filter { $0.kind == Event.said }.map(\.id)
+        })
     }
 
     /// This conversation without the turns named, and with their names kept
@@ -286,7 +303,8 @@ public struct AgentChatTranscript: Codable, Equatable, Sendable {
     ///
     /// A turn is removed wherever it is recorded: from the events, and from
     /// the messages, including a message that is a turn on its own because
-    /// no event covers it.
+    /// no event covers it — which is why what is named here is every id the
+    /// removed turns were recorded under, not only the turns'.
     ///
     /// The session goes with anything actually removed. A provider's
     /// session is one line of talk in that provider's own store: it still

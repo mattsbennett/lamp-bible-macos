@@ -196,13 +196,17 @@ public enum DevotionalAgentRevisionCompactor {
         // one that goes. Nothing is lost: the originals cover the same
         // changes, end to end.
         //
-        // Indexed once rather than searched per revision: this runs on
-        // every record and every read of the history, and a workspace can
-        // hold thousands.
-        var turnsByID: [UUID: UUID?] = [:]
-        for revision in revisions {
-            turnsByID.updateValue(revision.turnID, forKey: revision.id)
+        // What covers a change need not be the change's own file. This Mac
+        // may itself have merged the originals already, so `a` and `b` are
+        // gone and a tagged merge of them stands in their place; asking for
+        // the records by id would find nothing and let the legacy merge
+        // take both. Coverage is asked of whatever survives.
+        let coverage = revisions.map(\.coveredRevisionIDs)
+        var holders: [UUID: [Int]] = [:]
+        for (index, covered) in coverage.enumerated() {
+            for identifier in covered { holders[identifier, default: []].append(index) }
         }
+
         let demoted = Set(revisions.indices.filter { index in
             let revision = revisions[index]
             guard revision.turnID == nil,
@@ -210,21 +214,17 @@ public enum DevotionalAgentRevisionCompactor {
             else { return false }
             var knowsATurn = false
             for identifier in replaced where identifier != revision.id {
-                guard let turn = turnsByID[identifier] else { return false }
-                if turn != nil { knowsATurn = true }
+                guard let holder = holders[identifier]?.first(where: { $0 != index })
+                else { return false }
+                if revisions[holder].turnID != nil { knowsATurn = true }
             }
             return knowsATurn
         })
         guard demoted.isEmpty else {
+            // Every pass removes at least one record, so this ends.
             return removingReplaced(
                 revisions.indices.filter { !demoted.contains($0) }.map { revisions[$0] }
             )
-        }
-
-        let coverage = revisions.map(\.coveredRevisionIDs)
-        var holders: [UUID: [Int]] = [:]
-        for (index, covered) in coverage.enumerated() {
-            for identifier in covered { holders[identifier, default: []].append(index) }
         }
 
         return revisions.indices.compactMap { index in
@@ -235,6 +235,12 @@ public enum DevotionalAgentRevisionCompactor {
             let isReplaced = holders[probe, default: []].contains { other in
                 guard other != index, covered.isSubset(of: coverage[other]) else { return false }
                 if coverage[other].count != covered.count { return true }
+                // The same changes recorded twice. The record that knows
+                // which turn made them is the one to keep — that is the
+                // whole reason one was written over the other.
+                if (revisions[other].turnID != nil) != (revisions[index].turnID != nil) {
+                    return revisions[other].turnID != nil
+                }
                 return (revisions[other].id.uuidString, other)
                     < (revisions[index].id.uuidString, index)
             }
@@ -416,19 +422,42 @@ public enum DevotionalAgentRevisionStore {
     public static func agentEdits(
         in workspace: URL, forTurn turn: UUID
     ) throws -> [String: [DevotionalAgentRevision]] {
+        try agentEdits(in: workspace, forTurns: [turn])
+    }
+
+    /// What the agent did in any of these turns, by document.
+    ///
+    /// Several turns, because undoing one takes everything after it with
+    /// it: what followed it followed *from* it. Asking only about the turn
+    /// the reader named would put the draft back to before it and leave
+    /// the later turns' work in place, having just removed the questions
+    /// that account for it.
+    public static func agentEdits(
+        in workspace: URL, forTurns turns: Set<UUID>
+    ) throws -> [String: [DevotionalAgentRevision]] {
         let all = DevotionalAgentRevisionCompactor
             .removingReplaced(try storedRevisions(in: workspace).map(\.revision))
-            .filter { $0.kind == .agentEdit && !$0.isNoOp && $0.turnID == turn }
+            .filter {
+                $0.kind == .agentEdit && !$0.isNoOp
+                    && $0.turnID.map(turns.contains) == true
+            }
             .sorted { ($0.createdAt, $0.id.uuidString) < ($1.createdAt, $1.id.uuidString) }
         return Dictionary(grouping: all, by: \.resolvedDocumentPath)
     }
 
-    /// What each document said before a turn changed it: the `before` of
-    /// the **first** thing the agent did to it in that turn.
+    /// What each document said before these turns changed it: the `before`
+    /// of the **first** thing the agent did to it in any of them.
+    public static func stateBefore(
+        turns: Set<UUID>, in workspace: URL
+    ) throws -> [String: String] {
+        try agentEdits(in: workspace, forTurns: turns)
+            .compactMapValues { $0.first?.beforeMarkdown }
+    }
+
     public static func stateBefore(
         turn: UUID, in workspace: URL
     ) throws -> [String: String] {
-        try agentEdits(in: workspace, forTurn: turn).compactMapValues { $0.first?.beforeMarkdown }
+        try stateBefore(turns: [turn], in: workspace)
     }
 
     /// What `revisions` answers, from history that has already been read.
@@ -512,9 +541,24 @@ public enum DevotionalAgentRevisionStore {
         // with typing in between, wrote over that typing and recorded
         // nothing to find it in. Two restores in a row to the version
         // already showing are stopped by the guard above instead.
+        // A record that knows its turn is not a duplicate of one that does
+        // not. Two panes on a workspace both notice what the agent wrote,
+        // and whichever gets there first is the one that stands — so a pane
+        // that opened mid-run, with no turn to mark it with, could settle
+        // the only record of that change and leave the turn with nothing to
+        // undo. The tagged record is written instead, replacing the
+        // untagged one it is otherwise identical to, so the history still
+        // holds one record of the change and that one says whose it was.
         if let latest, latest.afterMarkdown == afterMarkdown,
            continuingLatest || (latest.kind == kind && kind != .restoration) {
-            return nil
+            guard !continuingLatest, kind == .agentEdit, turnID != nil,
+                  latest.turnID == nil, latest.beforeMarkdown == beforeMarkdown
+            else { return nil }
+            return try replace(
+                latest, with: turnID, before: beforeMarkdown, after: afterMarkdown,
+                kind: kind, providerName: providerName, documentPath: documentPath,
+                stored: stored, in: workspace, createdAt: createdAt
+            )
         }
 
         // The writer kept typing from a copy an agent change has since replaced.
@@ -542,6 +586,48 @@ public enum DevotionalAgentRevisionStore {
         let url = try write(revision, in: workspace)
         // Measured from the change itself, which is the newest thing in the
         // history; the run it extends is judged by the most recent tier.
+        try compact(
+            stored + [StoredRevision(url: url, revision: revision)],
+            in: workspace,
+            now: createdAt
+        )
+        return revision
+    }
+
+    /// Writes a record of a change already recorded without its turn, as
+    /// the replacement of that record rather than beside it.
+    ///
+    /// The same machinery a merge uses: naming what it replaces is what
+    /// lets the older record be dropped here and dropped again wherever
+    /// sync brings it back from.
+    private static func replace(
+        _ latest: DevotionalAgentRevision,
+        with turnID: UUID?,
+        before beforeMarkdown: String,
+        after afterMarkdown: String,
+        kind: DevotionalAgentRevisionKind,
+        providerName: String?,
+        documentPath: String,
+        stored: [StoredRevision],
+        in workspace: URL,
+        createdAt: Date
+    ) throws -> DevotionalAgentRevision {
+        let replaced = latest.coveredRevisionIDs
+            .union([latest.id])
+            .sorted { $0.uuidString < $1.uuidString }
+        let revision = DevotionalAgentRevision(
+            id: DevotionalAgentRevisionCompactor.mergedID(for: replaced),
+            createdAt: latest.createdAt,
+            kind: kind,
+            providerName: providerName ?? latest.providerName,
+            documentPath: documentPath,
+            beforeMarkdown: beforeMarkdown,
+            afterMarkdown: afterMarkdown,
+            updatedAt: latest.effectiveDate,
+            replacedRevisionIDs: replaced,
+            turnID: turnID
+        )
+        let url = try write(revision, in: workspace)
         try compact(
             stored + [StoredRevision(url: url, revision: revision)],
             in: workspace,
