@@ -845,6 +845,16 @@ private struct QueuedMessageRow: View {
 /// One per provider and workspace, which is one per window and provider, and
 /// only for this run of the app: the transcript on disk is what lasts.
 @MainActor
+/// One chat model per provider and workspace, for the life of the app.
+///
+/// A pane comes and goes — closed, swapped for Study, emptied while
+/// another section is shown, hidden behind a Terminal — and a conversation
+/// owned by the pane went with it, stopping the reply it was waiting on
+/// and saving it half written (user, 2026-11-05).
+///
+/// It is also what makes a chat's queue and its reservation mean
+/// something. The same writing can be open in two panes, and two models
+/// over the same two files could each believe they owned the queue.
 private enum KeptAgentChats {
     private static var models: [String: NativeAgentChatModel] = [:]
 
@@ -1719,7 +1729,6 @@ struct NativeAgentChatView: View {
     /// Whether the conversation outlives this view, so that taking the view
     /// away leaves a reply running and a new view shows it. See
     /// `KeptAgentChats`.
-    let outlivesView: Bool
     /// Starts a conversation of its own from a turn, where the host has
     /// somewhere to put one. Nil in a pane that cannot open another chat,
     /// where the menu item is simply not offered.
@@ -1745,7 +1754,6 @@ struct NativeAgentChatView: View {
         canSend: Bool = true,
         preparePrompt: @escaping (String) async throws -> String = { $0 },
         onRunningChanged: @escaping (Bool) -> Void = { _ in },
-        outlivesView: Bool = false,
         forkFromTurn: ((UUID) -> Void)? = nil
     ) {
         self.provider = provider
@@ -1753,12 +1761,19 @@ struct NativeAgentChatView: View {
         self.canSend = canSend
         self.preparePrompt = preparePrompt
         self.onRunningChanged = onRunningChanged
-        self.outlivesView = outlivesView
         self.forkFromTurn = forkFromTurn
         self.workspaceFolder = workspace
-        _model = StateObject(wrappedValue: outlivesView
-            ? KeptAgentChats.model(provider: provider, workspace: workspace, mode: mode)
-            : NativeAgentChatModel(provider: provider, workspace: workspace, mode: mode))
+        // **One model per provider and workspace, for every pane.** A
+        // writing pane used to build its own, and the same writing can be
+        // open twice — its own window, and that writing opened from the
+        // library. Two models owning the same two files meant one pane
+        // could send a message the other still showed as waiting, and an
+        // edit made in one could be deleted by the other's receipt without
+        // ever being sent. The queue and the reservation are the model's,
+        // so sharing the model is what makes them cover both panes.
+        _model = StateObject(wrappedValue: KeptAgentChats.model(
+            provider: provider, workspace: workspace, mode: mode
+        ))
     }
 
     /// Sends the next waiting message, if this pane is free to.
@@ -1980,7 +1995,11 @@ struct NativeAgentChatView: View {
             drainQueue()
         }
         .onDisappear {
-            if !outlivesView { model.cancel() }
+            // Not stopped. The model is shared now, so a pane going away
+            // may not be the only one holding it — and stopping a run
+            // because one view of it closed is what the reader's pane was
+            // changed away from, for the same reason: going stopped the
+            // reply it was waiting on and saved it half written.
             onRunningChanged(false)
         }
         .sheet(item: $authenticationProvider, onDismiss: {

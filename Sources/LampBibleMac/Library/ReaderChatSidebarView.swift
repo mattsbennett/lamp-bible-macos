@@ -334,9 +334,6 @@ struct ReaderChatSidebarView: View {
                         let notes = await notes(on: capture.noteReferences)
                         return capture.context(notes: notes).prompt(for: question)
                     },
-                    // The pane is closed, swapped for Study and emptied out of
-                    // sight; none of those should end the conversation in it.
-                    outlivesView: true,
                     forkFromTurn: forkFromTurn
                 )
                 .id("\(provider.rawValue)|\(workspace.path)")
