@@ -26,6 +26,7 @@ struct ReaderChatSidebarView: View {
     /// Puts this tab on another chat, or on a new one for nil. The window
     /// owns the move, since it is the tab's chat that changes.
     let resume: (UUID?) -> Void
+    @State private var forkError: String?
     let close: () -> Void
 
     @State private var isChoosingChat = false
@@ -49,6 +50,27 @@ struct ReaderChatSidebarView: View {
                 providerID = chosen
             }
         )
+    }
+
+    /// Takes the conversation up to a turn into a chat of its own and opens
+    /// it, leaving this one where it was.
+    ///
+    /// The tab moves to the fork, because the reader asked to follow the
+    /// tangent; the thread it came from is in the chat list, where every
+    /// other conversation is.
+    private func forkFromTurn(_ turn: UUID) {
+        do {
+            guard let forked = try ReaderChatWorkspaceStore.fork(
+                chat: chatID, at: turn, providerID: provider.rawValue,
+                libraryRootURL: libraryModel.library.rootURL
+            ) else {
+                forkError = "That turn is no longer part of this conversation."
+                return
+            }
+            resume(forked)
+        } catch {
+            forkError = "Could not start a chat from that turn: \(error.localizedDescription)"
+        }
     }
 
     private var workspace: URL {
@@ -313,7 +335,8 @@ struct ReaderChatSidebarView: View {
                     },
                     // The pane is closed, swapped for Study and emptied out of
                     // sight; none of those should end the conversation in it.
-                    outlivesView: true
+                    outlivesView: true,
+                    forkFromTurn: forkFromTurn
                 )
                 .id("\(provider.rawValue)|\(workspace.path)")
             } else if let preparationError {
@@ -330,6 +353,18 @@ struct ReaderChatSidebarView: View {
             }
         }
         .background(.background)
+        .alert(
+            "Could not start a chat from that turn",
+            isPresented: Binding(
+                get: { forkError != nil },
+                set: { if !$0 { forkError = nil } }
+            ),
+            presenting: forkError
+        ) { _ in
+            Button("OK", role: .cancel) { forkError = nil }
+        } message: { reason in
+            Text(reason)
+        }
         .onAppear(perform: prepareWorkspace)
         .onChange(of: provider) { _, _ in loadChoices() }
         .onChange(of: accessPolicy) { _, _ in

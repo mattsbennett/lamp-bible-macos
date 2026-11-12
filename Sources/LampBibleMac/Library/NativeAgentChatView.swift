@@ -1222,6 +1222,12 @@ private final class NativeAgentChatModel: ObservableObject {
         }
     }
 
+    /// Whether this message begins a turn the conversation still holds, so
+    /// a fork taken from it has something to keep.
+    func canFork(from turn: UUID) -> Bool {
+        events.contains { $0.turn == turn }
+    }
+
     private func transcriptMessages() -> [AgentChatTranscript.Message] {
         messages.compactMap { message in
             // Every kind carries the words; only the drawing differs.
@@ -1276,6 +1282,10 @@ struct NativeAgentChatView: View {
     /// away leaves a reply running and a new view shows it. See
     /// `KeptAgentChats`.
     let outlivesView: Bool
+    /// Starts a conversation of its own from a turn, where the host has
+    /// somewhere to put one. Nil in a pane that cannot open another chat,
+    /// where the menu item is simply not offered.
+    let forkFromTurn: ((UUID) -> Void)?
 
     @StateObject private var model: NativeAgentChatModel
     @State private var draft = ""
@@ -1295,7 +1305,8 @@ struct NativeAgentChatView: View {
         canSend: Bool = true,
         preparePrompt: @escaping (String) async throws -> String = { $0 },
         onRunningChanged: @escaping (Bool) -> Void = { _ in },
-        outlivesView: Bool = false
+        outlivesView: Bool = false,
+        forkFromTurn: ((UUID) -> Void)? = nil
     ) {
         self.provider = provider
         self.mode = mode
@@ -1303,6 +1314,7 @@ struct NativeAgentChatView: View {
         self.preparePrompt = preparePrompt
         self.onRunningChanged = onRunningChanged
         self.outlivesView = outlivesView
+        self.forkFromTurn = forkFromTurn
         _model = StateObject(wrappedValue: outlivesView
             ? KeptAgentChats.model(provider: provider, workspace: workspace, mode: mode)
             : NativeAgentChatModel(provider: provider, workspace: workspace, mode: mode))
@@ -1397,6 +1409,15 @@ struct NativeAgentChatView: View {
                     if let text = message.text {
                         Button("Copy Message", systemImage: "doc.on.doc") {
                             MessageClipboard.copy(text)
+                        }
+                    }
+                    // Offered on what the reader asked, because a turn is
+                    // named by its question: forking from an answer would
+                    // mean forking from the question above it, which is not
+                    // what the menu would appear to say.
+                    if let forkFromTurn, message.isSender, model.canFork(from: message.id) {
+                        Button("Fork From Here", systemImage: "arrow.branch") {
+                            forkFromTurn(message.id)
                         }
                     }
                 }
