@@ -173,6 +173,35 @@ public struct AgentChatTranscript: Codable, Equatable, Sendable {
         }
     }
 
+    /// This conversation up to and including one turn, as its own
+    /// conversation.
+    ///
+    /// Study is made of tangents: a word leads somewhere, and following it
+    /// should not cost the thread it was followed from. A fork keeps
+    /// everything up to the turn it was taken at and leaves the rest where
+    /// it was.
+    ///
+    /// It takes **no session**. A provider's session is a single line of
+    /// talk in that provider's own store; there is no splitting it, and
+    /// pointing two conversations at one session would have each overwrite
+    /// the other's end. So a fork carries on from a recap, which is the
+    /// same path a conversation already takes when its session is gone —
+    /// `AgentChatContinuation`.
+    public func forked(at turn: UUID) -> AgentChatTranscript? {
+        let kept = turns
+        guard let end = kept.firstIndex(where: { $0.id == turn }) else { return nil }
+        let events = kept[...end].flatMap(\.events)
+        guard !events.isEmpty else { return nil }
+        return AgentChatTranscript(
+            conversationID: UUID(),
+            startedAt: startedAt ?? events.first?.date,
+            sessionID: nil,
+            sessionInstallID: nil,
+            messages: Self.messages(from: events),
+            events: events
+        )
+    }
+
     /// The session ID this install may hand back to its provider, if any.
     ///
     /// A transcript written before ownership was recorded is taken to be local:

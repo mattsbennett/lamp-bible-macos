@@ -105,4 +105,105 @@ struct AgentChatEventsTests {
         )
         #expect(withSilence.events?.count == 1, "silence is not an empty list")
     }
+
+    /// A tangent followed without losing the thread it was followed from.
+    @Test func forkingKeepsEverythingUpToTheTurnAndNoSession() throws {
+        let first = UUID(), second = UUID(), third = UUID()
+        let original = AgentChatTranscript(
+            conversationID: UUID(),
+            startedAt: Date(timeIntervalSince1970: 5),
+            sessionID: "session-1",
+            sessionInstallID: "install-1",
+            events: [
+                event(first, 10, AgentChatTranscript.Event.said, role: .user, text: "Who wrote Hebrews?"),
+                event(first, 11, AgentChatTranscript.Event.tool, name: "search", text: "Hebrews"),
+                event(first, 12, AgentChatTranscript.Event.said, role: .assistant, text: "Nobody knows."),
+                event(second, 20, AgentChatTranscript.Event.said, role: .user, text: "What about Apollos?"),
+                event(second, 21, AgentChatTranscript.Event.said, role: .assistant, text: "Luther liked it."),
+                event(third, 30, AgentChatTranscript.Event.said, role: .user, text: "And Priscilla?"),
+            ]
+        )
+
+        let fork = try #require(original.forked(at: second))
+        #expect(fork.turns.map(\.question) == ["Who wrote Hebrews?", "What about Apollos?"])
+        #expect(fork.events?.count == 5, "the tool call comes with its turn")
+        #expect(fork.messages.map(\.text).last == "Luther liked it.")
+
+        // A provider's session is one line of talk in its own store; two
+        // conversations pointing at it would each overwrite the other's end.
+        #expect(fork.sessionID == nil)
+        #expect(fork.sessionInstallID == nil)
+        #expect(fork.conversationID != original.conversationID, "its own conversation")
+
+        // And the original is untouched — that is the whole point.
+        #expect(original.turns.count == 3)
+        #expect(original.sessionID == "session-1")
+
+        #expect(original.forked(at: UUID()) == nil, "a turn it does not have")
+    }
+}
+
+/// Forking a reader chat on disk.
+struct ReaderChatForkTests {
+    private func root() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("chat-fork-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    @Test func aForkIsItsOwnChatAndLeavesTheOriginalAlone() throws {
+        let library = try root()
+        defer { try? FileManager.default.removeItem(at: library) }
+        let original = UUID()
+        let workspace = ReaderChatWorkspaceStore.workspaceURL(
+            libraryRootURL: library, chatID: original
+        )
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+
+        let first = UUID(), second = UUID()
+        func said(_ turn: UUID, _ at: Double, _ role: AgentChatTranscript.Role, _ text: String)
+            -> AgentChatTranscript.Event
+        {
+            AgentChatTranscript.Event(
+                turn: turn, date: Date(timeIntervalSince1970: at),
+                kind: AgentChatTranscript.Event.said, role: role, text: text
+            )
+        }
+        let transcript = AgentChatTranscript(
+            conversationID: UUID(), sessionID: "session-1", sessionInstallID: "install-1",
+            events: [
+                said(first, 10, .user, "Who wrote Hebrews?"),
+                said(first, 11, .assistant, "Nobody knows."),
+                said(second, 20, .user, "And Priscilla?"),
+            ]
+        )
+        try AgentChatTranscriptStore.save(transcript, providerID: "claude", in: workspace)
+
+        let forkID = try #require(try ReaderChatWorkspaceStore.fork(
+            chat: original, at: first, providerID: "claude", libraryRootURL: library
+        ))
+        let forked = AgentChatTranscriptStore.load(
+            providerID: "claude",
+            in: ReaderChatWorkspaceStore.workspaceURL(libraryRootURL: library, chatID: forkID)
+        )
+        #expect(forked.turns.map(\.question) == ["Who wrote Hebrews?"])
+        #expect(forked.sessionID == nil, "a provider session cannot be in two conversations")
+
+        let untouched = AgentChatTranscriptStore.load(providerID: "claude", in: workspace)
+        #expect(untouched.turns.count == 2)
+        #expect(untouched.sessionID == "session-1")
+
+        // And it is a chat the reader can see and take up, not a loose file.
+        #expect(
+            ReaderChatWorkspaceStore.chats(libraryRootURL: library).map(\.id).contains(forkID)
+        )
+
+        #expect(
+            try ReaderChatWorkspaceStore.fork(
+                chat: original, at: UUID(), providerID: "claude", libraryRootURL: library
+            ) == nil,
+            "a turn the conversation does not have"
+        )
+    }
 }

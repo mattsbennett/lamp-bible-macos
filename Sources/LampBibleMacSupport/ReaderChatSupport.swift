@@ -325,6 +325,41 @@ public enum ReaderChatWorkspaceStore {
             .appendingPathComponent(chatID.uuidString, isDirectory: true)
     }
 
+    /// A chat holding one conversation up to a turn of it, as a chat of its
+    /// own.
+    ///
+    /// Study is made of tangents: a word leads somewhere, and following it
+    /// should not cost the thread it was followed from. The original is not
+    /// touched.
+    ///
+    /// Only the transcript of the provider whose turn this is comes across.
+    /// A chat may hold a conversation with more than one provider, and those
+    /// are separate conversations that happen to share a pane — carrying
+    /// them into a fork taken in one of them would be joining things the
+    /// reader never joined.
+    ///
+    /// Returns nil where there is no such turn, which is also what happens
+    /// when the transcript changed under the reader between seeing the turn
+    /// and asking for it.
+    @discardableResult
+    public static func fork(
+        chat id: UUID,
+        at turn: UUID,
+        providerID: String,
+        libraryRootURL: URL,
+        newID: UUID = UUID()
+    ) throws -> UUID? {
+        let source = workspaceURL(libraryRootURL: libraryRootURL, chatID: id)
+        let transcript = AgentChatTranscriptStore.load(providerID: providerID, in: source)
+        guard let forked = transcript.forked(at: turn) else { return nil }
+        let destination = workspaceURL(libraryRootURL: libraryRootURL, chatID: newID)
+        try FileManager.default.createDirectory(
+            at: destination, withIntermediateDirectories: true
+        )
+        try AgentChatTranscriptStore.save(forked, providerID: providerID, in: destination)
+        return newID
+    }
+
     /// The reader chats on disk, the most recently spoken in first.
     ///
     /// One directory per chat, named by its identifier; anything else in the
