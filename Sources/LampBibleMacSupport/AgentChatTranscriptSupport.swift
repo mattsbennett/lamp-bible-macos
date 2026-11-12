@@ -27,6 +27,56 @@ public struct AgentChatTranscript: Codable, Equatable, Sendable {
         }
     }
 
+    /// One thing that happened in the conversation.
+    ///
+    /// The transcript used to keep two roles of text and throw the rest away:
+    /// the parser read tool calls, activity and failures out of the
+    /// provider's stream, and `AgentChatRunSummary` folded them into one
+    /// string. So nothing afterwards could say what the agent had done,
+    /// a turn could not be undone, and a reply had to be drawn as one bubble
+    /// that grew — which is what scrolled the chat past its end.
+    ///
+    /// Flat rather than an enum with associated values, and **unknown kinds
+    /// are kept**: a newer Lamp will write kinds this one has no name for,
+    /// and an event it cannot draw is still an event that happened, still
+    /// part of its turn, and must survive being read and written here.
+    public struct Event: Codable, Equatable, Identifiable, Sendable {
+        public let id: UUID
+        /// The user message this turn began with, so a turn can be found
+        /// whole — to undo it, to fork from it, or to show what it did.
+        public let turn: UUID
+        public let date: Date
+        /// `said`, `tool`, `activity`, `failed`, or something a later Lamp
+        /// knows about.
+        public let kind: String
+        public let role: Role?
+        public let name: String?
+        public let text: String?
+
+        public init(
+            id: UUID = UUID(),
+            turn: UUID,
+            date: Date,
+            kind: String,
+            role: Role? = nil,
+            name: String? = nil,
+            text: String? = nil
+        ) {
+            self.id = id
+            self.turn = turn
+            self.date = date
+            self.kind = kind
+            self.role = role
+            self.name = name
+            self.text = text
+        }
+
+        public static let said = "said"
+        public static let tool = "tool"
+        public static let activity = "activity"
+        public static let failed = "failed"
+    }
+
     /// Replaced whenever the conversation is cleared, so a clear on one Mac can be
     /// told apart from an older copy of the same conversation on another. Missing
     /// on transcripts written before sync, which all count as one conversation.
@@ -38,26 +88,89 @@ public struct AgentChatTranscript: Codable, Equatable, Sendable {
     /// each tool's private store on the Mac that ran them, so an ID recorded
     /// anywhere else names a session that cannot be resumed here.
     public var sessionInstallID: String?
+    /// What a reader sees, and what a Lamp from before events reads. Kept
+    /// written beside `events` rather than derived on load: an older Mac
+    /// opens this file too, and one that rewrites it drops the events it
+    /// has no name for — at which point this is the whole conversation
+    /// again, which is exactly where we were, rather than nothing.
     public var messages: [Message]
+    /// Everything that happened, in order. Absent on a transcript written
+    /// before events, which is not the same as a conversation in which
+    /// nothing happened.
+    public var events: [Event]?
 
     public init(
         conversationID: UUID? = nil,
         startedAt: Date? = nil,
         sessionID: String? = nil,
         sessionInstallID: String? = nil,
-        messages: [Message] = []
+        messages: [Message] = [],
+        events: [Event]? = nil
     ) {
         self.conversationID = conversationID
         self.startedAt = startedAt
         self.sessionID = sessionID
         self.sessionInstallID = sessionInstallID
         self.messages = messages
+        self.events = events
     }
 
     /// The most recent thing that happened in this conversation, including it
     /// being cleared.
     public var lastActivity: Date {
         max(startedAt ?? .distantPast, messages.map(\.date).max() ?? .distantPast)
+    }
+
+    /// The conversation as turns: each user message with everything that
+    /// followed it, in order.
+    ///
+    /// A transcript from before events has none, so it reads as one turn per
+    /// message — which is what it was.
+    public var turns: [Turn] {
+        guard let events, !events.isEmpty else {
+            return messages.map { Turn(id: $0.id, date: $0.date, events: [
+                Event(
+                    id: $0.id, turn: $0.id, date: $0.date,
+                    kind: Event.said, role: $0.role, text: $0.text
+                ),
+            ]) }
+        }
+        var order: [UUID] = []
+        var grouped: [UUID: [Event]] = [:]
+        for event in events.sorted(by: Self.inOrder) {
+            if grouped[event.turn] == nil { order.append(event.turn) }
+            grouped[event.turn, default: []].append(event)
+        }
+        return order.compactMap { id in
+            guard let events = grouped[id], let first = events.first else { return nil }
+            return Turn(id: id, date: first.date, events: events)
+        }
+    }
+
+    public struct Turn: Equatable, Identifiable, Sendable {
+        public let id: UUID
+        public let date: Date
+        public let events: [Event]
+
+        /// What the person asked, where this turn records it.
+        public var question: String? {
+            events.first { $0.kind == Event.said && $0.role == .user }?.text
+        }
+    }
+
+    /// Two devices order the same events the same way.
+    static func inOrder(_ left: Event, _ right: Event) -> Bool {
+        (left.date, left.id.uuidString) < (right.date, right.id.uuidString)
+    }
+
+    /// What a reader sees, from the events — the projection written into
+    /// `messages` so an older Lamp still has the conversation.
+    public static func messages(from events: [Event]) -> [Message] {
+        events.sorted(by: inOrder).compactMap { event in
+            guard event.kind == Event.said, let role = event.role, let text = event.text
+            else { return nil }
+            return Message(id: event.id, role: role, text: text, date: event.date)
+        }
     }
 
     /// The session ID this install may hand back to its provider, if any.
@@ -184,8 +297,30 @@ public enum AgentChatTranscriptMerge {
             startedAt: starts.min(),
             sessionID: nil,
             sessionInstallID: nil,
-            messages: messages
+            messages: messages,
+            events: mergedEvents(local: local, incoming: incoming)
         )
+    }
+
+    /// The same union, for events.
+    ///
+    /// Absent on one side is silence, not emptiness: a Mac from before
+    /// events, or one that rewrote the file without them, says nothing
+    /// about what happened — so the side that has them keeps them rather
+    /// than having them cleared by a copy that never knew.
+    private static func mergedEvents(
+        local: AgentChatTranscript, incoming: AgentChatTranscript
+    ) -> [AgentChatTranscript.Event]? {
+        switch (local.events, incoming.events) {
+        case (nil, nil): return nil
+        case let (mine?, nil): return mine
+        case let (nil, theirs?): return theirs
+        case let (mine?, theirs?):
+            var seen = Set<UUID>()
+            return (mine + theirs)
+                .filter { seen.insert($0.id).inserted }
+                .sorted(by: AgentChatTranscript.inOrder)
+        }
     }
 }
 
