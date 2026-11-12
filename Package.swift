@@ -78,6 +78,12 @@ let package = Package(
             name: "LampBibleMacTests",
             dependencies: [
                 "LampBibleMacSupport",
+                // The app itself, so the chat model can be driven by a
+                // test. Its undo, its queue and the panes that share it
+                // were reachable only by reading: four review rounds
+                // found faults in that sequence, every one of them after
+                // it had shipped, because nothing could run it.
+                "LampBibleMac",
                 .product(name: "LampCore", package: "lamp-bible-core"),
             ]
         ),

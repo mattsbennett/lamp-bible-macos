@@ -249,7 +249,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
     }
 }
 
-private struct NativeAgentChatUser: ChatUser {
+struct NativeAgentChatUser: ChatUser {
     let id: String
     let userName: String
     let avatar: PlatformImage?
@@ -303,7 +303,7 @@ struct PersonMessageContent {
     let text: String
 }
 
-private struct NativeAgentChatMessage: ChatMessage {
+struct NativeAgentChatMessage: ChatMessage {
     let id: UUID
     let user: NativeAgentChatUser
     let messageKind: ChatMessageKind
@@ -855,7 +855,7 @@ private struct QueuedMessageRow: View {
 /// It is also what makes a chat's queue and its reservation mean
 /// something. The same writing can be open in two panes, and two models
 /// over the same two files could each believe they owned the queue.
-private enum KeptAgentChats {
+enum KeptAgentChats {
     private static var models: [String: NativeAgentChatModel] = [:]
 
     static func model(
@@ -872,7 +872,7 @@ private enum KeptAgentChats {
 }
 
 @MainActor
-private final class NativeAgentChatModel: ObservableObject {
+final class NativeAgentChatModel: ObservableObject {
     @Published var messages: [NativeAgentChatMessage] = []
     @Published private(set) var isRunning = false
     @Published private(set) var errorMessage: String?
