@@ -188,6 +188,14 @@ public struct SearchTabCollection: Codable, Equatable, Sendable {
         return tab.id
     }
 
+    /// Moves a tab to `index` among the tabs, as a dragged tab lands where it
+    /// is dropped. The open tab stays open: moving one is not choosing it.
+    public mutating func move(_ id: UUID, to index: Int) {
+        guard let from = tabs.firstIndex(where: { $0.id == id }) else { return }
+        let tab = tabs.remove(at: from)
+        tabs.insert(tab, at: min(max(index, 0), tabs.count))
+    }
+
     /// Closes a tab, selecting its neighbour the way a window of tabs does:
     /// the one to its right, or the one to its left when it was last. Closing
     /// the only tab empties it instead, since the pane always shows one.

@@ -313,6 +313,30 @@ struct ReaderSupportTests {
         #expect(tabs.tabs.count == 1)
     }
 
+    /// A dragged tab lands where it is dropped, and the open tab stays the
+    /// open one: moving a tab is not choosing it.
+    @Test func aDraggedTabLandsWhereDroppedAndTheOpenTabStaysOpen() {
+        func at(_ book: Int) -> ReaderLocation {
+            ReaderLocation(translationID: "WEB", bookNumber: book, chapterNumber: 1)
+        }
+        var tabs = ReaderTabCollection(initialLocation: at(1))
+        let first = tabs.tabs[0].id
+        let second = tabs.add(location: at(2))
+        let third = tabs.add(location: at(3))
+        tabs.move(first, to: 2)
+        #expect(tabs.tabs.map(\.id) == [second, third, first])
+        #expect(tabs.selectedID == third)
+        tabs.move(first, to: 0)
+        #expect(tabs.tabs.map(\.id) == [first, second, third])
+        // Past either end is the end, not a lost tab.
+        tabs.move(second, to: 99)
+        #expect(tabs.tabs.map(\.id) == [first, third, second])
+        tabs.move(second, to: -4)
+        #expect(tabs.tabs.map(\.id) == [second, first, third])
+        tabs.move(UUID(), to: 0)
+        #expect(tabs.tabs.count == 3)
+    }
+
     /// A tab is named for where it is until someone names it themselves, and
     /// then it keeps that name wherever it is read on to — which is the point
     /// of naming one.

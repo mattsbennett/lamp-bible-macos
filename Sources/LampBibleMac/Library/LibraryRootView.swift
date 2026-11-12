@@ -887,9 +887,9 @@ struct LibraryRootView: View {
                     close: closeReaderTab,
                     duplicate: duplicateReaderTab,
                     rename: renameReaderTab,
+                    move: { readerTabs.move($0, to: $1) },
                     openLocation: { openReaderTab(at: $0) }
                 )
-                Divider()
             }
             // Laid out beside the reader rather than with `.inspector`, whose
             // column is chrome for the whole window: it rounds its top corners
@@ -1318,6 +1318,8 @@ private struct StudyInspectorColumn<Content: View>: View {
     }
 }
 
+/// The reader's tabs: the shared bar (`LibraryTabBar`), with a new tab
+/// chosen from the reader's passage picker before it opens.
 private struct ReaderTabBar: View {
     let tabs: [ReaderTab]
     let selectedID: UUID
@@ -1326,152 +1328,26 @@ private struct ReaderTabBar: View {
     let close: (UUID) -> Void
     let duplicate: (UUID) -> Void
     let rename: (UUID, String?) -> Void
+    let move: (UUID, Int) -> Void
     let openLocation: (ReaderLocation) -> Void
 
-    @State private var hoveredTabID: UUID?
-    @State private var isHoveringNewTab = false
-    /// The tab being renamed, and what is being typed for it.
-    @State private var renamingTabID: UUID?
-    @State private var draftName = ""
-
-    /// Shared with the Search pane's bar, so the two ranks cannot drift
-    /// apart in height or dividers (`LibraryTabStrip`).
-    private static let height = LibraryTabStrip.height
-
     var body: some View {
-        ScrollView(.horizontal) {
-            // Contiguous full-height cells divided by hairlines, so the row reads
-            // as a rank of tabs rather than a row of floating buttons. The new-tab
-            // button rides at the end of the rank instead of across the window,
-            // which means it scrolls away with the tabs it belongs to.
-            HStack(spacing: 0) {
-                ForEach(tabs) { tab in
-                    tabCell(tab)
-                    separator
-                }
-                newTabButton
-                separator
-            }
-            .frame(height: Self.height)
-        }
-        .scrollIndicators(.hidden)
-        .frame(height: Self.height)
-        .background(.bar)
-        .alert(
-            "Rename Tab",
-            isPresented: Binding(
-                get: { renamingTabID != nil },
-                set: { if !$0 { renamingTabID = nil } }
-            )
+        LibraryTabBar(
+            items: tabs.map { LibraryTabStripItem(id: $0.id, title: tabTitle($0), isNamed: $0.name != nil) },
+            selectedID: selectedID,
+            select: select,
+            close: close,
+            duplicate: duplicate,
+            rename: rename,
+            move: move,
+            clearNameTitle: "Use the Chapter's Name",
+            newTabHelp: "New reader tab (⌘T)",
+            newTab: { showingNewTab = true },
+            newTabPopover: $showingNewTab
         ) {
-            TextField("Name", text: $draftName)
-            Button("Rename") {
-                if let id = renamingTabID { rename(id, draftName) }
-                renamingTabID = nil
-            }
-            Button("Cancel", role: .cancel) { renamingTabID = nil }
-        } message: {
-            Text("Leave it empty to name the tab after whatever it is showing.")
-        }
-    }
-
-    private var separator: some View { LibraryTabStripSeparator() }
-
-    private func tabCell(_ tab: ReaderTab) -> some View {
-        let isSelected = tab.id == selectedID
-        let isHovered = hoveredTabID == tab.id
-        // Siblings rather than a close button nested inside the tab button: a
-        // Button inside another Button's label is a fight over the click.
-        return HStack(spacing: 5) {
-            Button {
-                select(tab.id)
-            } label: {
-                Text(tabTitle(tab))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .frame(height: Self.height)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            if tabs.count > 1 {
-                Button("Close \(tabTitle(tab))", systemImage: "xmark") {
-                    close(tab.id)
-                }
-                .labelStyle(.iconOnly)
-                .buttonStyle(.plain)
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
-                // Revealed on approach, so idle tabs stay titles rather than a
-                // row of crosses.
-                .opacity(isSelected || isHovered ? 1 : 0)
-                .help("Close tab")
-            }
-        }
-        .font(.subheadline)
-        .foregroundStyle(isSelected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
-        .padding(.horizontal, 10)
-        .frame(minWidth: LibraryTabStrip.minimumCellWidth, maxWidth: LibraryTabStrip.maximumCellWidth)
-        .frame(height: Self.height)
-        // A shape style fills the safe area too unless told not to, and the
-        // bar sits right under the toolbar: the open tab's fill would rise
-        // up behind it.
-        .background(cellBackground(isSelected: isSelected, isHovered: isHovered), ignoresSafeAreaEdges: [])
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(Color.accentColor)
-                .frame(height: 2)
-                .opacity(isSelected ? 1 : 0)
-        }
-        .onHover { isHovering in
-            hoveredTabID = isHovering ? tab.id : (hoveredTabID == tab.id ? nil : hoveredTabID)
-        }
-        .help(tabTitle(tab))
-        .contextMenu {
-            Button("Rename Tab…") {
-                draftName = tab.name ?? ""
-                renamingTabID = tab.id
-            }
-            if tab.name != nil {
-                Button("Use the Chapter's Name") { rename(tab.id, nil) }
-            }
-            // Here rather than in the new-tab popover, where it was an odd
-            // thing to meet: that popover is for choosing a passage, and
-            // "duplicate" is about a tab you can see and point at.
-            Button("Duplicate Tab") { duplicate(tab.id) }
-            if tabs.count > 1 {
-                Divider()
-                Button("Close Tab") { close(tab.id) }
-            }
-        }
-    }
-
-    private func cellBackground(isSelected: Bool, isHovered: Bool) -> some ShapeStyle {
-        LibraryTabStrip.cellBackground(isSelected: isSelected, isHovered: isHovered)
-    }
-
-    private var newTabButton: some View {
-        Button {
-            showingNewTab = true
-        } label: {
-            Image(systemName: "plus")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 30, height: Self.height)
-                .background(
-                    isHoveringNewTab ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear),
-                    ignoresSafeAreaEdges: []
-                )
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { isHoveringNewTab = $0 }
-        .help("New reader tab (⌘T)")
-        // The reader's own passage picker, less the two things a tab cannot
-        // do: a tab opens a chapter, so words to search for and Strong's
-        // keys have nowhere to go here.
-        .popover(isPresented: $showingNewTab) {
+            // The reader's own passage picker, less the two things a tab
+            // cannot do: a tab opens a chapter, so words to search for and
+            // Strong's keys have nowhere to go here.
             PassagePickerPopover(
                 isPresented: $showingNewTab,
                 open: openLocation,

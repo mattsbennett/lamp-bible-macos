@@ -321,4 +321,19 @@ struct SearchTabTests {
         fresh.show(SearchTab(query: "grace"))
         #expect(fresh.tabs.count == 1)
     }
+
+    /// A dragged tab lands where it is dropped, and the open search stays
+    /// the open one.
+    @Test func aDraggedSearchTabLandsWhereDropped() {
+        var tabs = SearchTabCollection()
+        let first = tabs.selectedID
+        let second = tabs.open(SearchTab(query: "faith"))
+        let third = tabs.open(SearchTab(query: "hope"))
+        tabs.move(third, to: 0)
+        #expect(tabs.tabs.map(\.id) == [third, first, second])
+        #expect(tabs.selectedID == third)
+        tabs.move(first, to: 99)
+        #expect(tabs.tabs.map(\.id) == [third, second, first])
+        #expect(tabs.selectedID == third)
+    }
 }

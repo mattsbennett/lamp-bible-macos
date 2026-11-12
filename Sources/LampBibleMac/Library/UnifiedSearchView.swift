@@ -310,22 +310,26 @@ struct UnifiedSearchView: View {
         VStack(spacing: 0) {
         // Above the filters, because the filters belong to the tab: the rank
         // reads as what each page of filters is for.
-        SearchTabBar(
-            tabs: tabs.tabs,
+        LibraryTabBar(
+            items: tabs.tabs.map {
+                LibraryTabStripItem(id: $0.id, title: searchTabTitle($0), isNamed: $0.name != nil)
+            },
             selectedID: tabs.selectedID,
-            title: { searchTabTitle($0) },
             select: { tabs.select($0) },
             close: { id in
                 tabs.close(id)
-                // What that tab was showing goes with it, so the dictionary
-                // holds the open tabs and not every tab this window ever had.
+                // What that tab was showing goes with it, so the
+                // dictionary holds the open tabs and not every tab this
+                // window ever had.
                 tabViewState[id] = nil
             },
             duplicate: { tabs.duplicate($0) },
             rename: { tabs.rename($0, to: $1) },
+            move: { tabs.move($0, to: $1) },
+            clearNameTitle: "Use the Search's Words",
+            newTabHelp: "New search tab (⌘T)",
             newTab: { tabs.open() }
         )
-        Divider()
         refineFilters
         devotionalFilters
         Group {
@@ -1927,151 +1931,3 @@ extension UnifiedSearchView {
     }
 }
 
-/// The Search pane's rank of tabs.
-///
-/// Its chrome is `LibraryTabStrip`, shared with the reader's bar so the two
-/// cannot drift; its cells are its own, because what a search tab offers is
-/// not what a reader tab offers. A new tab opens here and then: there is no
-/// passage to choose first, which is what the reader's popover is for.
-private struct SearchTabBar: View {
-    let tabs: [SearchTab]
-    let selectedID: UUID
-    let title: (SearchTab) -> String
-    let select: (UUID) -> Void
-    let close: (UUID) -> Void
-    let duplicate: (UUID) -> Void
-    let rename: (UUID, String?) -> Void
-    let newTab: () -> Void
-
-    @State private var hoveredTabID: UUID?
-    @State private var isHoveringNewTab = false
-    @State private var renamingTabID: UUID?
-    @State private var draftName = ""
-
-    var body: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 0) {
-                ForEach(tabs) { tab in
-                    cell(tab)
-                    LibraryTabStripSeparator()
-                }
-                newTabButton
-                LibraryTabStripSeparator()
-            }
-        }
-        .scrollIndicators(.never)
-        .frame(height: LibraryTabStrip.height)
-    }
-
-    private func cell(_ tab: SearchTab) -> some View {
-        let isSelected = tab.id == selectedID
-        let isHovered = hoveredTabID == tab.id
-        // Siblings rather than a close button inside the tab's own button: a
-        // Button inside another Button's label is a fight over the click.
-        return HStack(spacing: 5) {
-            Button { select(tab.id) } label: {
-                Text(title(tab))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .frame(height: LibraryTabStrip.height)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            if tabs.count > 1 {
-                Button("Close \(title(tab))", systemImage: "xmark") { close(tab.id) }
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.plain)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    // Revealed on approach, so idle tabs stay titles rather
-                    // than a row of crosses.
-                    .opacity(isSelected || isHovered ? 1 : 0)
-                    .help("Close tab")
-            }
-        }
-        .font(.subheadline)
-        .foregroundStyle(isSelected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
-        .padding(.horizontal, 10)
-        .frame(minWidth: LibraryTabStrip.minimumCellWidth, maxWidth: LibraryTabStrip.maximumCellWidth)
-        .frame(height: LibraryTabStrip.height)
-        // A shape style fills the safe area too unless told not to, and the
-        // bar sits under the toolbar: the open tab's fill would rise behind it.
-        .background(
-            LibraryTabStrip.cellBackground(isSelected: isSelected, isHovered: isHovered),
-            ignoresSafeAreaEdges: []
-        )
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(Color.accentColor)
-                .frame(height: 2)
-                .opacity(isSelected ? 1 : 0)
-        }
-        .onHover { isHovering in
-            hoveredTabID = isHovering ? tab.id : (hoveredTabID == tab.id ? nil : hoveredTabID)
-        }
-        .help(title(tab))
-        .contextMenu {
-            Button("Rename Tab…") {
-                draftName = tab.name ?? ""
-                renamingTabID = tab.id
-            }
-            if tab.name != nil {
-                Button("Use the Search's Words") { rename(tab.id, nil) }
-            }
-            Button("Duplicate Tab") { duplicate(tab.id) }
-            if tabs.count > 1 {
-                Divider()
-                Button("Close Tab") { close(tab.id) }
-            }
-        }
-        .popover(isPresented: Binding(
-            get: { renamingTabID == tab.id },
-            set: { if !$0, renamingTabID == tab.id { renamingTabID = nil } }
-        )) {
-            renamePopover(tab)
-        }
-    }
-
-    private func renamePopover(_ tab: SearchTab) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Name this tab")
-                .font(.subheadline.weight(.semibold))
-            TextField("Name", text: $draftName)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 220)
-                .onSubmit {
-                    rename(tab.id, draftName)
-                    renamingTabID = nil
-                }
-            HStack {
-                Spacer()
-                Button("Cancel") { renamingTabID = nil }
-                Button("Rename") {
-                    rename(tab.id, draftName)
-                    renamingTabID = nil
-                }
-                .keyboardShortcut(.defaultAction)
-            }
-        }
-        .padding(14)
-    }
-
-    private var newTabButton: some View {
-        Button(action: newTab) {
-            Image(systemName: "plus")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 30, height: LibraryTabStrip.height)
-                .background(
-                    isHoveringNewTab ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear),
-                    ignoresSafeAreaEdges: []
-                )
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { isHoveringNewTab = $0 }
-        .help("New search tab")
-    }
-}

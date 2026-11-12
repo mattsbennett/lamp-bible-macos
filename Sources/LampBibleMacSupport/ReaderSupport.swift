@@ -1735,6 +1735,14 @@ public struct ReaderTabCollection: Codable, Equatable, Sendable {
         return copy.location
     }
 
+    /// Moves a tab to `index` among the tabs, as a dragged tab lands where it
+    /// is dropped. The open tab stays open: moving one is not choosing it.
+    public mutating func move(_ id: UUID, to index: Int) {
+        guard let from = tabs.firstIndex(where: { $0.id == id }) else { return }
+        let tab = tabs.remove(at: from)
+        tabs.insert(tab, at: min(max(index, 0), tabs.count))
+    }
+
     /// A reader always keeps one tab. Closing the selected tab chooses the tab to
     /// its right, or the previous tab when the closed tab was last.
     @discardableResult
