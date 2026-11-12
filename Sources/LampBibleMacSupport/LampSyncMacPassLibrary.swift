@@ -125,7 +125,7 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             // install on every pass.
             try await downloadNoteMedia()
             return try await digestOfOwnExport(
-                .notes, adapterKind: .notes,
+                .notes,
                 remoteModuleID: Self.remoteNotesModuleID, filename: "notes.lamp"
             )
         case .module(.highlights):
@@ -146,7 +146,7 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
         case .module(.devotionals):
             try await installWritings(from: try named(url, as: path), remotePath: path)
             return try await digestOfOwnExport(
-                .writing, adapterKind: .devotionals,
+                .writing,
                 remoteModuleID: Self.remoteWritingModuleID, filename: "devotionals.lamp"
             )
         case .module:
@@ -310,13 +310,11 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
     /// This Mac's own export of a collection it has just merged into.
     private func digestOfOwnExport(
         _ module: LampPersonalModule,
-        adapterKind: LampWebDAVPersonalArchiveKind,
         remoteModuleID: String,
         filename: String
     ) async throws -> String? {
         let exported = try await exportPersonal(
-            module, adapterKind: adapterKind,
-            remoteModuleID: remoteModuleID, filename: filename
+            module, remoteModuleID: remoteModuleID, filename: filename
         )
         return try? LampSyncContentRevision.digest(forFileAt: exported)
     }
@@ -405,12 +403,12 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             switch kind {
             case .module(.notes):
                 republish[path] = try await exportPersonal(
-                    .notes, adapterKind: .notes, remoteModuleID: Self.remoteNotesModuleID,
+                    .notes, remoteModuleID: Self.remoteNotesModuleID,
                     filename: "notes.lamp"
                 )
             case .module(.devotionals):
                 republish[path] = try await exportPersonal(
-                    .writing, adapterKind: .devotionals,
+                    .writing,
                     remoteModuleID: Self.remoteWritingModuleID, filename: "devotionals.lamp"
                 )
             case .module(.highlights):
@@ -449,7 +447,7 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             remoteModuleID: Self.remoteNotesModuleID,
             kind: .notes,
             at: try await exportPersonal(
-                .notes, adapterKind: .notes,
+                .notes,
                 remoteModuleID: Self.remoteNotesModuleID, filename: "notes.lamp"
             )
         ))
@@ -457,7 +455,7 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             remoteModuleID: Self.remoteWritingModuleID,
             kind: .devotionals,
             at: try await exportPersonal(
-                .writing, adapterKind: .devotionals,
+                .writing,
                 remoteModuleID: Self.remoteWritingModuleID, filename: "devotionals.lamp"
             )
         ))
@@ -480,40 +478,21 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
 
     /// One editable collection, as the file it is published as.
     ///
-    /// **Notes** are written under their travelling name in one pass, by
-    /// core, which is what lets the phone produce the same bytes from the
-    /// same notes.
-    ///
-    /// **Writings** still go out through the adapter, and not merely out of
-    /// caution: for writings that step does more than rename. It turns each
-    /// entry's stored blocks into the portable Markdown a second device
-    /// reads, gathers the media that Markdown refers to, and refuses the
-    /// file outright if a referenced picture is not on this Mac. Writing
-    /// the name in from the start would skip all of that. It moves when
-    /// that normalisation moves into `LampPersonalWritingFile`, not before.
+    /// Core writes it whole — the travelling name written in from the
+    /// start, and for writings the content and media made ready to travel
+    /// on the way out. Both used to be done afterwards, by decompressing
+    /// the exported file, rewriting it and compressing it again; that step
+    /// was this app's own, so no second writer could ever have matched its
+    /// bytes. Now the phone produces the same file from the same records.
     private func exportPersonal(
         _ module: LampPersonalModule,
-        adapterKind: LampWebDAVPersonalArchiveKind,
         remoteModuleID: String,
         filename: String
     ) async throws -> URL {
         try fileManager.createDirectory(at: workspace, withIntermediateDirectories: true)
         let destination = workspace.appendingPathComponent(filename)
-        if module == .notes {
-            try await library.personalArchive(module, moduleID: remoteModuleID)
-                .write(to: destination, options: .atomic)
-            return destination
-        }
-        let exported = workspace.appendingPathComponent("export-\(filename)")
-        try await library.exportPersonalModule(module, format: .lamp, to: exported)
-        let rewritten = try LampWebDAVPersonalArchiveAdapter.archive(
-            try Data(contentsOf: exported, options: .mappedIfSafe),
-            replacingModuleIDWith: remoteModuleID,
-            kind: adapterKind,
-            mediaRootURL: library.rootURL,
-            fileManager: fileManager
-        )
-        try rewritten.write(to: destination, options: .atomic)
+        try await library.personalArchive(module, moduleID: remoteModuleID)
+            .write(to: destination, options: .atomic)
         return destination
     }
 
