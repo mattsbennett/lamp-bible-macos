@@ -900,10 +900,13 @@ struct UnifiedSearchView: View {
                 .font(.subheadline.weight(.semibold))
             // The count in words and in the readable grey, not tracked into
             // the heading's capitals where "SCRIPTURE 19" read as one label.
-            Text(resultCountDescription(group, isCut: offersMore && isOnlyShelf(of: group)))
+            Text(resultCountDescription(
+                group, isCut: model.moduleSearchCutKinds.contains(group.kind) && isOnlyShelf(of: group)
+            ) + scriptureNote(group))
                 .font(.subheadline)
                 .foregroundStyle(Color.lampSecondaryText)
                 .monospacedDigit()
+                .lineLimit(1)
             Spacer(minLength: 8)
             if offersMore {
                 // The kind filter is the deeper page: it searches that kind
@@ -936,6 +939,30 @@ struct UnifiedSearchView: View {
         .overlay(alignment: .bottom) {
             Rectangle().fill(Color.lampCardStroke).frame(height: 1)
         }
+    }
+
+    /// After Scripture's count on the page of every kind, where its verses
+    /// came from one translation: " · none in BSB" when that is not the
+    /// reading translation, and " · also in 9 other translations".
+    private func scriptureNote(_ group: SearchResultGroup) -> String {
+        guard group.kind == .translation, let scripture = model.moduleSearchScripture,
+              group.results.first?.moduleID == scripture.translationID else { return "" }
+        var note = ""
+        if let reading = scripture.readingTranslationID, reading != scripture.translationID {
+            note += " · none in \(shortName(of: reading))"
+        }
+        switch scripture.alsoIn.count {
+        case 0: break
+        case 1: note += " · also in \(shortName(of: scripture.alsoIn[0]))"
+        case let count: note += " · also in \(count) other translations"
+        }
+        return note
+    }
+
+    /// A translation's abbreviation where it has one, else its name.
+    private func shortName(of id: String) -> String {
+        let module = model.modules.first { $0.id == id }
+        return module?.abbreviation ?? module?.name ?? id
     }
 
     /// "12 results", or "20+ results" for a kind cut short: more were found

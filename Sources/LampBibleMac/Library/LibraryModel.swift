@@ -143,6 +143,13 @@ final class LibraryModel: ObservableObject {
     /// them: Search offers "More in …" for these, which searches that kind
     /// alone. Not how many more; core doesn't count past its limit.
     @Published private(set) var moduleSearchKindsWithMore: Set<LampModuleKind> = []
+    /// The kinds cut short in what was shown — a "+" on their count. Not the
+    /// same as offering more: Scripture from one translation offers the other
+    /// translations, but that translation's own verses may all be there.
+    @Published private(set) var moduleSearchCutKinds: Set<LampModuleKind> = []
+    /// Where the search across every kind took Scripture from: the reading
+    /// translation, or the one with the most matches where it had none.
+    @Published private(set) var moduleSearchScripture: ModuleSearchScripture?
     @Published private(set) var isModuleSearching = false
     @Published private(set) var selectedVerseReference: Int?
     @Published private(set) var dictionaryLookupRequest: DictionaryLookupRequest?
@@ -616,6 +623,8 @@ final class LibraryModel: ObservableObject {
         moduleSearchTask = nil
         moduleSearchResults = []
         moduleSearchKindsWithMore = []
+        moduleSearchCutKinds = []
+        moduleSearchScripture = nil
         isModuleSearching = false
     }
 
@@ -651,6 +660,8 @@ final class LibraryModel: ObservableObject {
             || devotionalCriteria != LampDevotionalSearchCriteria() else {
             moduleSearchResults = []
             moduleSearchKindsWithMore = []
+        moduleSearchCutKinds = []
+        moduleSearchScripture = nil
             isModuleSearching = false
             return
         }
@@ -673,6 +684,8 @@ final class LibraryModel: ObservableObject {
                 // one kind, chosen, gets a page of 250 to itself.
                 let results: [LampModuleSearchResult]
                 let kindsWithMore: Set<LampModuleKind>
+                let cutKinds: Set<LampModuleKind>
+                var scripture: ModuleSearchScripture?
                 if let kind {
                     results = try await library.searchModules(
                         query: trimmedQuery,
@@ -685,7 +698,13 @@ final class LibraryModel: ObservableObject {
                         limit: 250
                     )
                     kindsWithMore = []
+                    cutKinds = []
                 } else {
+                    // Scripture from the reading translation: every
+                    // translation searched together put the same verse on
+                    // the page once per translation. "More in Scripture" has
+                    // them all.
+                    let reading = readingTranslationID
                     let groups = try await library.searchModulesByKind(
                         query: trimmedQuery,
                         moduleIDs: includedModuleIDs,
@@ -693,14 +712,25 @@ final class LibraryModel: ObservableObject {
                         strongsKey: strongsKey,
                         highlightColors: highlightColors,
                         devotionalCriteria: devotionalCriteria,
+                        preferredTranslationID: reading,
                         limit: 60
                     )
                     results = groups.flatMap(\.results)
-                    kindsWithMore = Set(groups.filter(\.hasMore).map(\.kind))
+                    kindsWithMore = Set(groups.filter { $0.hasMore || !$0.alsoInTranslationIDs.isEmpty }.map(\.kind))
+                    cutKinds = Set(groups.filter(\.hasMore).map(\.kind))
+                    scripture = groups.first { $0.kind == .translation }?.translationID.map { shown in
+                        ModuleSearchScripture(
+                            translationID: shown,
+                            readingTranslationID: reading,
+                            alsoIn: groups.first { $0.kind == .translation }?.alsoInTranslationIDs ?? []
+                        )
+                    }
                 }
                 guard !Task.isCancelled else { return }
                 moduleSearchResults = results
                 moduleSearchKindsWithMore = kindsWithMore
+                moduleSearchCutKinds = cutKinds
+                moduleSearchScripture = scripture
             } catch is CancellationError {
                 return
             } catch {
@@ -708,9 +738,17 @@ final class LibraryModel: ObservableObject {
                 errorMessage = error.localizedDescription
                 moduleSearchResults = []
                 moduleSearchKindsWithMore = []
+                moduleSearchCutKinds = []
+                moduleSearchScripture = nil
             }
             if !Task.isCancelled { isModuleSearching = false }
         }
+    }
+
+    /// The translation being read: the reader's open one, else the last
+    /// chosen. What Search's page of every kind takes Scripture from.
+    var readingTranslationID: String? {
+        activeReader?.selectedTranslationID ?? selectedTranslationID
     }
 
     func focusVerse(_ reference: Int?) {
@@ -1407,4 +1445,15 @@ final class LibraryModel: ObservableObject {
             hiddenIDs: hiddenModuleIDs, id: \.id
         )
     }
+}
+
+/// Where a search across every kind took Scripture from.
+struct ModuleSearchScripture: Equatable {
+    /// The translation the verses shown came from.
+    let translationID: String
+    /// The translation being read when the search ran. Differs from
+    /// `translationID` when the reading translation had no match.
+    let readingTranslationID: String?
+    /// The other translations that matched, for "also in …".
+    let alsoIn: [String]
 }

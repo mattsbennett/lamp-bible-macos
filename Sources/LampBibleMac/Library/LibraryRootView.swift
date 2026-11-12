@@ -7105,8 +7105,12 @@ extension LibraryRootView {
         // Nil is every module: nothing is hidden.
         let searchable: Set<String>?
         do { searchable = try await model.searchableModuleIDs() } catch { return [] }
+        // Scripture on the main page from the reading translation, as
+        // Search's page of every kind takes it; Scripture's own page has
+        // every translation.
         let groups = (try? await model.library.searchModulesByKind(
             query: words, kinds: kinds, moduleIDs: searchable,
+            preferredTranslationID: kind == nil ? model.readingTranslationID : nil,
             limit: kind == nil ? Self.paletteMainPage : Self.paletteKindPage
         )) ?? []
         // Sections in the order Search shelves them, which both apps follow.
@@ -7131,7 +7135,8 @@ extension LibraryRootView {
                         perform: { placement in go(to: .searchResult(result, placement: placement)) }
                     )
                 },
-                hasMore: group.hasMore
+                // Scripture from one translation offers the others.
+                hasMore: group.hasMore || !group.alsoInTranslationIDs.isEmpty
             )
         }
     }
