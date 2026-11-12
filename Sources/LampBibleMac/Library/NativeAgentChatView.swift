@@ -922,6 +922,9 @@ private final class NativeAgentChatModel: ObservableObject {
     /// The identity each turn's steps row is drawn under, kept so it is the
     /// same row across redraws.
     private var stepsRowIDs: [UUID: UUID] = [:]
+    /// Told when the queue has been read from disk, so a pane can send what
+    /// was waiting rather than leave it until the next reply.
+    var onQueueReady: (() -> Void)?
     private var knownModificationDate: Date?
     private var cancelRequested = false
     private var loadingMessageID: UUID?
@@ -965,6 +968,10 @@ private final class NativeAgentChatModel: ObservableObject {
             try? AgentChatQueueStore.save(waiting, providerID: provider.rawValue, in: workspace)
         }
         queued = waiting.messages
+        // What was restored may be waiting with nothing about to run, and
+        // the queue is otherwise drained only by a reply landing. Without
+        // this, messages recovered at launch sat there until the next one.
+        onQueueReady?()
         show(AgentChatTranscriptStore.load(providerID: provider.rawValue, in: workspace))
     }
 
@@ -1680,10 +1687,14 @@ private final class NativeAgentChatModel: ObservableObject {
             // Changed elsewhere while this reply ran. Merged as sync merges two
             // Macs' copies, so neither side's turns are lost.
             transcript = AgentChatTranscriptMerge.merge(local: transcript, incoming: onDisk)
-            show(transcript)
         }
         do {
             try AgentChatTranscriptStore.save(transcript, providerID: provider.rawValue, in: workspace)
+            // Shown only once it is saved. Adopted before the write, a
+            // failed save left this pane describing a conversation that is
+            // not on disk — and the receipt check reads what this pane
+            // believes.
+            show(transcript)
             knownTranscript = transcript
             knownModificationDate = transcriptModificationDate()
             return true
@@ -1958,6 +1969,7 @@ struct NativeAgentChatView: View {
                 model.reloadIfChangedOnDisk()
             }
         }
+        .onAppear { model.onQueueReady = { drainQueue() } }
         .onChange(of: model.isRunning, initial: true) { _, running in
             onRunningChanged(running)
             // The reply has landed, so the next message waiting goes. One at
