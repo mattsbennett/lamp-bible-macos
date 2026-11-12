@@ -841,6 +841,9 @@ struct DevotionalAgentWorkspaceView: View {
     /// Whether the chat pane is waiting on a reply. It stays mounted while it
     /// is, so changing mode doesn't stop the run.
     @State private var chatIsReplying = false
+    /// The chat turn running now, so what the agent changes is marked with
+    /// the question that asked for it.
+    @State private var chatTurn: UUID?
     @State private var contextFiles: [DevotionalAgentContextFile] = []
     @State private var skills: [DevotionalAgentSkill] = []
     @State private var librarySkills: [DevotionalAgentSkill] = []
@@ -1267,7 +1270,9 @@ struct DevotionalAgentWorkspaceView: View {
                     provider: selectedProvider,
                     workspace: workspaceURL,
                     preparePrompt: { [editorFocus] message in editorFocus.prompt(for: message) },
-                    onRunningChanged: { chatIsReplying = $0 }
+                    onRunningChanged: { chatIsReplying = $0 },
+                    revertTurn: { undoTurn($0) },
+                    onTurnChanged: { chatTurn = $0 }
                 )
                 .id("\(selectedProvider.rawValue)|\(workspaceURL.path)")
                 // Covers the terminal kept alive beneath it.
@@ -1573,11 +1578,51 @@ struct DevotionalAgentWorkspaceView: View {
         _ = try DevotionalAgentRevisionStore.record(
             kind: .agentEdit,
             providerName: activeProvider?.shortName,
+            // Marked with the turn that asked for it, which is what lets
+            // that turn be undone later. Agent edits minutes apart are
+            // merged into one record, so the times alone cannot say which
+            // turn a change belonged to once the history is tidied.
+            turnID: chatTurn,
             before: before,
             after: after,
             in: workspace
         )
         revisions = try DevotionalAgentRevisionStore.revisions(in: workspace)
+    }
+
+    /// Puts the draft back as it was before a turn, and takes that turn
+    /// and everything after it out of the conversation.
+    ///
+    /// The restore is itself recorded, so undoing a turn can be undone:
+    /// nothing here destroys a version, it only writes another.
+    ///
+    /// What the person typed while the reply was arriving is theirs and
+    /// stays. Only the agent's own edits, marked with this turn, are put
+    /// back.
+    ///
+    /// The draft alone. The revision history can describe other documents
+    /// and this workspace only ever writes the one, so a turn that changed
+    /// something else is not something that can happen yet — and if it
+    /// ever does, this says so rather than quietly restoring half of it.
+    private func undoTurn(_ turn: UUID) {
+        guard let workspaceURL else { return }
+        do {
+            let before = try DevotionalAgentRevisionStore.stateBefore(
+                turn: turn, in: workspaceURL
+            )
+            let primary = DevotionalAgentRevisionStore.primaryDocumentPath
+            let others = before.keys.filter { $0 != primary }.sorted()
+            guard others.isEmpty else {
+                errorMessage = "That turn also changed \(others.joined(separator: ", ")), which this cannot put back yet, so nothing was changed."
+                return
+            }
+            if let markdown = before[primary], markdown != draftMarkdown {
+                restoreRevision(markdown)
+            }
+            revisions = try DevotionalAgentRevisionStore.revisions(in: workspaceURL)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func restoreRevision(_ markdown: String) {

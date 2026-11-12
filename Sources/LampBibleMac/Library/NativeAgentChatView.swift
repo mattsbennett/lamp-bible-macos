@@ -935,6 +935,18 @@ private final class NativeAgentChatModel: ObservableObject {
     /// Told when the queue has been read from disk, so a pane can send what
     /// was waiting rather than leave it until the next reply.
     var onQueueReady: (() -> Void)?
+    /// Told which turn is being recorded, so a workspace can mark what the
+    /// agent changes with the turn that asked for it.
+    var onTurnChanged: ((UUID?) -> Void)?
+
+    /// The turn in progress, nil between turns.
+    private(set) var currentTurn: UUID? {
+        get { recordingTurn }
+        set {
+            recordingTurn = newValue
+            onTurnChanged?(newValue)
+        }
+    }
     private var knownModificationDate: Date?
     private var cancelRequested = false
     private var loadingMessageID: UUID?
@@ -1082,7 +1094,7 @@ private final class NativeAgentChatModel: ObservableObject {
             date: Date()
         )
         messages.append(userMessage)
-        recordingTurn = userMessage.id
+        currentTurn = userMessage.id
         record(
             AgentChatTranscript.Event.said, role: .user,
             text: prompt, at: userMessage.date
@@ -1147,7 +1159,7 @@ private final class NativeAgentChatModel: ObservableObject {
         // behind, it was written back under the new conversation's id and
         // the cleared questions returned on the next load.
         events = []
-        recordingTurn = nil
+        currentTurn = nil
         stepsRowIDs = [:]
         // The waiting messages were written to **this** conversation, and
         // it is being put away. Sending them into its replacement would be
@@ -1419,7 +1431,7 @@ private final class NativeAgentChatModel: ObservableObject {
         persistTranscript()
         // The turn is over. What happens before the next question is the
         // app's business, not the conversation's.
-        recordingTurn = nil
+        currentTurn = nil
         // Drawn again from what was just written, so the turn gains its
         // line of steps now rather than at the next load — which, for a
         // pane that keeps its model across closes, could be the next
@@ -1659,6 +1671,22 @@ private final class NativeAgentChatModel: ObservableObject {
         reservedQueued = nil
     }
 
+    /// Undoes a turn: it and everything after it leave the conversation,
+    /// and the provider session with them.
+    ///
+    /// The files are the caller's to put back — this is the conversation's
+    /// half. Returns false where the turn is no longer there, or a reply is
+    /// arriving, which is not a moment to rewrite what it is replying to.
+    func revert(turn: UUID) -> Bool {
+        guard !isRunning, let trimmed = knownTranscript?.trimmed(from: turn)
+            ?? AgentChatTranscriptStore
+                .load(providerID: provider.rawValue, in: workspace)
+                .trimmed(from: turn)
+        else { return false }
+        show(trimmed)
+        return persistTranscript()
+    }
+
     /// Whether this message begins a turn the conversation still holds, so
     /// a fork taken from it has something to keep.
     func canFork(from turn: UUID) -> Bool {
@@ -1733,6 +1761,12 @@ struct NativeAgentChatView: View {
     /// somewhere to put one. Nil in a pane that cannot open another chat,
     /// where the menu item is simply not offered.
     let forkFromTurn: ((UUID) -> Void)?
+    /// Undoes what a turn did. Nil in a pane with nothing to put back,
+    /// where the menu item is simply not offered.
+    let revertTurn: ((UUID) -> Void)?
+    /// Told which turn is running, for a pane that marks its own records
+    /// with it.
+    let onTurnChanged: ((UUID?) -> Void)?
     /// Where this chat works, which the header names.
     private let workspaceFolder: URL
 
@@ -1743,6 +1777,8 @@ struct NativeAgentChatView: View {
     @State private var authenticationProvider: AIProviderCLI?
     @State private var terminalRequest: AIProviderTerminalRequest?
     @State private var showingClearConfirmation = false
+    /// A turn the reader has asked to undo, held while they confirm.
+    @State private var turnToUndo: UUID?
     @State private var submissionError: String?
     /// A message is being prepared, between Send and the run starting.
     @State private var isPreparing = false
@@ -1754,7 +1790,9 @@ struct NativeAgentChatView: View {
         canSend: Bool = true,
         preparePrompt: @escaping (String) async throws -> String = { $0 },
         onRunningChanged: @escaping (Bool) -> Void = { _ in },
-        forkFromTurn: ((UUID) -> Void)? = nil
+        forkFromTurn: ((UUID) -> Void)? = nil,
+        revertTurn: ((UUID) -> Void)? = nil,
+        onTurnChanged: ((UUID?) -> Void)? = nil
     ) {
         self.provider = provider
         self.mode = mode
@@ -1762,6 +1800,8 @@ struct NativeAgentChatView: View {
         self.preparePrompt = preparePrompt
         self.onRunningChanged = onRunningChanged
         self.forkFromTurn = forkFromTurn
+        self.revertTurn = revertTurn
+        self.onTurnChanged = onTurnChanged
         self.workspaceFolder = workspace
         // **One model per provider and workspace, for every pane.** A
         // writing pane used to build its own, and the same writing can be
@@ -1943,6 +1983,11 @@ struct NativeAgentChatView: View {
                             forkFromTurn(message.id)
                         }
                     }
+                    if revertTurn != nil, message.isSender, model.canFork(from: message.id) {
+                        Button("Undo This Turn…", systemImage: "arrow.uturn.backward") {
+                            turnToUndo = message.id
+                        }
+                    }
                 }
                 .registerCustomCell { payload in
                     if let content = payload as? PersonMessageContent {
@@ -1984,7 +2029,10 @@ struct NativeAgentChatView: View {
                 model.reloadIfChangedOnDisk()
             }
         }
-        .onAppear { model.onQueueReady = { drainQueue() } }
+        .onAppear {
+            model.onQueueReady = { drainQueue() }
+            model.onTurnChanged = onTurnChanged
+        }
         .onChange(of: model.isRunning, initial: true) { _, running in
             onRunningChanged(running)
             // The reply has landed, so the next message waiting goes. One at
@@ -2011,6 +2059,28 @@ struct NativeAgentChatView: View {
             Task { await refreshConnectionState() }
         }) { request in
             AIProviderAuthenticationTerminal(request: request)
+        }
+        .confirmationDialog(
+            "Undo this turn?",
+            isPresented: Binding(
+                get: { turnToUndo != nil },
+                set: { if !$0 { turnToUndo = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: turnToUndo
+        ) { turn in
+            Button("Undo", role: .destructive) {
+                turnToUndo = nil
+                // The draft first. If putting it back fails, the
+                // conversation still describes what is on disk;
+                // trimmed first, a failure would leave a draft that
+                // nothing accounts for.
+                revertTurn?(turn)
+                _ = model.revert(turn: turn)
+            }
+            Button("Cancel", role: .cancel) { turnToUndo = nil }
+        } message: { _ in
+            Text("The draft goes back to what it said before this turn, and this turn and everything after it leave the conversation. Anything you wrote yourself stays, and the restore is itself undoable.")
         }
         .confirmationDialog(
             "Start a new \(provider.shortName) chat?",

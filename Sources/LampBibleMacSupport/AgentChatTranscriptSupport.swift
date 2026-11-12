@@ -179,6 +179,18 @@ public struct AgentChatTranscript: Codable, Equatable, Sendable {
             events.first { $0.kind == Event.said && $0.role == .user }?.text
         }
 
+        /// When this turn ran: its first event to its last.
+        ///
+        /// What the agent changed while it ran is found by this, rather
+        /// than by a mark in the revision history. A revision is a synced
+        /// record that other Lamps read and write; the time a turn
+        /// occupied is already in both and needs nothing added to either.
+        public var span: ClosedRange<Date> {
+            let dates = events.map(\.date)
+            let first = dates.min() ?? date
+            return first...(dates.max() ?? first)
+        }
+
         /// The tools this turn used, named once each and in the order they
         /// were first used.
         ///
@@ -236,6 +248,28 @@ public struct AgentChatTranscript: Codable, Equatable, Sendable {
             messages: Self.messages(from: events),
             events: events
         )
+    }
+
+    /// This conversation without a turn, and without anything after it.
+    ///
+    /// For undoing a turn: what followed it followed *from* it, so leaving
+    /// those behind would leave answers to a question that is no longer
+    /// there.
+    ///
+    /// Takes **no session**, for the same reason a fork does not: a
+    /// provider's session is one line of talk in that provider's own store
+    /// and cannot be rewound. The next message carries on from a recap of
+    /// what is left.
+    public func trimmed(from turn: UUID) -> AgentChatTranscript? {
+        let kept = turns
+        guard let cut = kept.firstIndex(where: { $0.id == turn }) else { return nil }
+        let events = kept[..<cut].flatMap(\.events)
+        var trimmed = self
+        trimmed.events = events
+        trimmed.messages = Self.messages(from: events)
+        trimmed.sessionID = nil
+        trimmed.sessionInstallID = nil
+        return trimmed
     }
 
     /// The session ID this install may hand back to its provider, if any.

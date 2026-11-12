@@ -555,3 +555,104 @@ struct AgentChatTurnProjectionTests {
         #expect(transcript.turns.map(\.question) == ["Asked", "Still mine"])
     }
 }
+
+/// Undoing a turn: what it changed, and what it leaves behind.
+struct AgentChatTurnRevertTests {
+    private func event(
+        _ turn: UUID, _ at: Double, _ kind: String,
+        role: AgentChatTranscript.Role? = nil, text: String? = nil
+    ) -> AgentChatTranscript.Event {
+        AgentChatTranscript.Event(
+            turn: turn, date: Date(timeIntervalSince1970: at),
+            kind: kind, role: role, text: text
+        )
+    }
+
+    /// What followed a turn followed *from* it, so undoing it takes those
+    /// with it — otherwise there are answers to a question that is gone.
+    @Test func undoingATurnTakesWhatFollowedIt() throws {
+        let first = UUID(), second = UUID(), third = UUID()
+        let transcript = AgentChatTranscript(
+            conversationID: UUID(), sessionID: "s1", sessionInstallID: "i1",
+            events: [
+                event(first, 10, AgentChatTranscript.Event.said, role: .user, text: "Tighten the opening"),
+                event(first, 11, AgentChatTranscript.Event.said, role: .assistant, text: "Done."),
+                event(second, 20, AgentChatTranscript.Event.said, role: .user, text: "Now the ending"),
+                event(second, 21, AgentChatTranscript.Event.said, role: .assistant, text: "Done."),
+                event(third, 30, AgentChatTranscript.Event.said, role: .user, text: "And a title"),
+            ]
+        )
+
+        let trimmed = try #require(transcript.trimmed(from: second))
+        #expect(trimmed.turns.map(\.question) == ["Tighten the opening"])
+        #expect(trimmed.messages.count == 2)
+        // A provider's session is one line of talk in its own store and
+        // cannot be rewound, so what is left carries on from a recap.
+        #expect(trimmed.sessionID == nil)
+        #expect(trimmed.conversationID == transcript.conversationID, "the same conversation, shorter")
+
+        #expect(transcript.trimmed(from: UUID()) == nil)
+        // Undoing the first turn leaves the conversation empty rather than
+        // refusing: there is nothing before it.
+        #expect(try #require(transcript.trimmed(from: first)).turns.isEmpty)
+    }
+
+    @Test func aTurnKnowsWhenItRan() {
+        let turn = UUID()
+        let transcript = AgentChatTranscript(events: [
+            event(turn, 10, AgentChatTranscript.Event.said, role: .user, text: "Ask"),
+            event(turn, 14, AgentChatTranscript.Event.said, role: .assistant, text: "Done."),
+        ])
+        let span = transcript.turns.first?.span
+        #expect(span?.lowerBound == Date(timeIntervalSince1970: 10))
+        #expect(span?.upperBound == Date(timeIntervalSince1970: 14))
+    }
+}
+
+/// What one turn changed in the workspace.
+struct AgentTurnEditsTests {
+    @Test func onlyTheAgentsOwnEditsInThatTurnCount() throws {
+        let workspace = FileManager.default.temporaryDirectory
+            .appendingPathComponent("turn-edits-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workspace) }
+
+        let turn = UUID(), earlier = UUID(), later = UUID()
+        func at(_ seconds: Double) -> Date { Date(timeIntervalSince1970: seconds) }
+        func record(
+            _ kind: DevotionalAgentRevisionKind, _ before: String, _ after: String,
+            at date: Date, turn: UUID? = nil, document: String = "draft.md"
+        ) throws {
+            _ = try DevotionalAgentRevisionStore.record(
+                kind: kind, turnID: turn, documentPath: document,
+                before: before, after: after, in: workspace, createdAt: date
+            )
+        }
+
+        try record(.agentEdit, "", "First draft", at: at(5), turn: earlier)
+        try record(.agentEdit, "First draft", "Tighter draft", at: at(11), turn: turn)
+        try record(.agentEdit, "Tighter draft", "Tighter still", at: at(14), turn: turn)
+        try record(.agentEdit, "", "A note", at: at(15), turn: turn, document: "notes.md")
+        // Typed by the person while the reply arrived: theirs, not the
+        // turn's, though it happened inside it.
+        try record(.userEdit, "Tighter still", "Tighter still, mine", at: at(16))
+        try record(.agentEdit, "Tighter still, mine", "Later work", at: at(25), turn: later)
+
+        let edits = try DevotionalAgentRevisionStore.agentEdits(in: workspace, forTurn: turn)
+        #expect(Set(edits.keys) == ["draft.md", "notes.md"])
+
+        let before = try DevotionalAgentRevisionStore.stateBefore(turn: turn, in: workspace)
+        #expect(
+            before["draft.md"] == "First draft",
+            "what it said before this turn touched it, not before the one before"
+        )
+        #expect(before["notes.md"] == "")
+
+        // The run before this turn is a separate record, though it is
+        // seconds away and would otherwise have been merged into it.
+        #expect(
+            try DevotionalAgentRevisionStore.stateBefore(turn: earlier, in: workspace)["draft.md"]
+                == ""
+        )
+    }
+}

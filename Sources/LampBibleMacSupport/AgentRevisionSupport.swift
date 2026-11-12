@@ -29,6 +29,17 @@ public struct DevotionalAgentRevision: Codable, Equatable, Identifiable, Sendabl
     /// back from any Mac that still has it. This list is what lets it be
     /// recognised as already accounted for and dropped again.
     public let replacedRevisionIDs: [UUID]?
+    /// The chat turn this change was made during, where it was the agent's
+    /// doing. Missing on anything the person typed, on records made before
+    /// turns were known, and on a merge of changes from more than one turn
+    /// — which cannot happen, since a run of changes is never merged
+    /// across turns.
+    ///
+    /// Marked rather than worked out from the times. Agent edits minutes
+    /// apart are merged into one record, so a merged run's `before` can
+    /// be from before the turn began: a window cannot say what a turn
+    /// changed once the history has been tidied.
+    public let turnID: UUID?
 
     public init(
         id: UUID = UUID(),
@@ -39,7 +50,8 @@ public struct DevotionalAgentRevision: Codable, Equatable, Identifiable, Sendabl
         beforeMarkdown: String,
         afterMarkdown: String,
         updatedAt: Date? = nil,
-        replacedRevisionIDs: [UUID]? = nil
+        replacedRevisionIDs: [UUID]? = nil,
+        turnID: UUID? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -50,6 +62,7 @@ public struct DevotionalAgentRevision: Codable, Equatable, Identifiable, Sendabl
         self.afterMarkdown = afterMarkdown
         self.updatedAt = updatedAt
         self.replacedRevisionIDs = replacedRevisionIDs
+        self.turnID = turnID
     }
 
     public var resolvedDocumentPath: String {
@@ -204,6 +217,10 @@ public enum DevotionalAgentRevisionCompactor {
         guard earlier.kind == later.kind,
               earlier.kind != .restoration,
               earlier.providerName == later.providerName,
+              // Never across turns. Merged, a run would hold the state
+              // before the *earlier* turn, and undoing the later one would
+              // put the draft back further than it was asked to.
+              earlier.turnID == later.turnID,
               later.beforeMarkdown == earlier.afterMarkdown
         else { return false }
         let gap = later.createdAt.timeIntervalSince(earlier.effectiveDate)
@@ -228,7 +245,9 @@ public enum DevotionalAgentRevisionCompactor {
             beforeMarkdown: earlier.beforeMarkdown,
             afterMarkdown: later.afterMarkdown,
             updatedAt: later.effectiveDate,
-            replacedRevisionIDs: replaced
+            replacedRevisionIDs: replaced,
+            // The same on both, or they would not have been merged.
+            turnID: earlier.turnID
         )
     }
 
@@ -345,6 +364,37 @@ public enum DevotionalAgentRevisionStore {
         )
     }
 
+    /// What the agent changed during one turn of a chat, by document,
+    /// oldest first.
+    ///
+    /// By the mark each change carries, not by when it happened. Agent
+    /// edits minutes apart are merged into one record, so a merged run's
+    /// `before` can be from before the turn began — a time window cannot
+    /// say what a turn changed once the history has been tidied. A test
+    /// found that, after I had designed it the other way on the grounds
+    /// that it needed nothing added to a synced format.
+    ///
+    /// Only the agent's own edits. Something the person typed while the
+    /// reply was arriving is theirs, and undoing the turn must not take it
+    /// away.
+    public static func agentEdits(
+        in workspace: URL, forTurn turn: UUID
+    ) throws -> [String: [DevotionalAgentRevision]] {
+        let all = DevotionalAgentRevisionCompactor
+            .removingReplaced(try storedRevisions(in: workspace).map(\.revision))
+            .filter { $0.kind == .agentEdit && !$0.isNoOp && $0.turnID == turn }
+            .sorted { ($0.createdAt, $0.id.uuidString) < ($1.createdAt, $1.id.uuidString) }
+        return Dictionary(grouping: all, by: \.resolvedDocumentPath)
+    }
+
+    /// What each document said before a turn changed it: the `before` of
+    /// the **first** thing the agent did to it in that turn.
+    public static func stateBefore(
+        turn: UUID, in workspace: URL
+    ) throws -> [String: String] {
+        try agentEdits(in: workspace, forTurn: turn).compactMapValues { $0.first?.beforeMarkdown }
+    }
+
     /// What `revisions` answers, from history that has already been read.
     private static func currentRevisions(
         _ revisions: [DevotionalAgentRevision],
@@ -392,6 +442,7 @@ public enum DevotionalAgentRevisionStore {
     public static func record(
         kind: DevotionalAgentRevisionKind,
         providerName: String? = nil,
+        turnID: UUID? = nil,
         documentPath: String = primaryDocumentPath,
         before beforeMarkdown: String,
         after afterMarkdown: String,
@@ -443,7 +494,8 @@ public enum DevotionalAgentRevisionStore {
             providerName: providerName,
             documentPath: documentPath,
             beforeMarkdown: base,
-            afterMarkdown: afterMarkdown
+            afterMarkdown: afterMarkdown,
+            turnID: turnID
         )
         let url = try write(revision, in: workspace)
         // Measured from the change itself, which is the newest thing in the
