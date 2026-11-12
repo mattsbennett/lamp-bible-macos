@@ -656,3 +656,121 @@ struct AgentTurnEditsTests {
         )
     }
 }
+
+/// Undoing a turn has to survive the save that follows it.
+///
+/// Two copies of a conversation are reconciled by union, and a trimmed copy
+/// is a subset of the untrimmed one — so the untrimmed side won and the
+/// undone turn came straight back: on this Mac from the file it had just
+/// been removed from, and on another Mac from sync.
+struct AgentChatUndoDurabilityTests {
+    private func event(
+        _ turn: UUID, _ at: Double, _ kind: String,
+        role: AgentChatTranscript.Role? = nil, text: String? = nil
+    ) -> AgentChatTranscript.Event {
+        AgentChatTranscript.Event(
+            turn: turn, date: Date(timeIntervalSince1970: at),
+            kind: kind, role: role, text: text
+        )
+    }
+
+    private func conversation(
+        _ conversationID: UUID, _ turns: [(UUID, Double, String)]
+    ) -> AgentChatTranscript {
+        let events = turns.flatMap { turn, at, question in
+            [
+                event(turn, at, AgentChatTranscript.Event.said, role: .user, text: question),
+                event(turn, at + 1, AgentChatTranscript.Event.said, role: .assistant, text: "Done."),
+            ]
+        }
+        return AgentChatTranscript(
+            conversationID: conversationID,
+            sessionID: "s1",
+            sessionInstallID: "this-mac",
+            messages: AgentChatTranscript.messages(from: events),
+            events: events
+        )
+    }
+
+    @Test func theFullCopyOnDiskDoesNotPutAnUndoneTurnBack() throws {
+        let id = UUID(), first = UUID(), second = UUID()
+        let full = conversation(id, [(first, 10, "Tighten the opening"), (second, 20, "Now the ending")])
+        let trimmed = try #require(full.trimmed(from: second))
+
+        let merged = AgentChatTranscriptMerge.merge(local: trimmed, incoming: full)
+        #expect(merged.turns.map(\.question) == ["Tighten the opening"])
+        #expect(merged.messages.count == 2)
+        #expect(merged.removedTurns == [second])
+        // The provider's session still holds the turn that was taken out.
+        #expect(merged.sessionID == nil)
+    }
+
+    @Test func itIsRememberedWhicheverSideTheRecordIsOn() throws {
+        let id = UUID(), first = UUID(), second = UUID()
+        let full = conversation(id, [(first, 10, "One"), (second, 20, "Two")])
+        let trimmed = try #require(full.trimmed(from: second))
+
+        // The other Mac's copy, which has never heard of the undo.
+        let merged = AgentChatTranscriptMerge.merge(local: full, incoming: trimmed)
+        #expect(merged.turns.map(\.question) == ["One"])
+        #expect(merged.removedTurns == [second])
+    }
+
+    /// A turn asked on another Mac after the undo is new work, not undone
+    /// work: it is kept, and the undone one still goes.
+    @Test func aTurnAskedElsewhereSurvivesTheUndo() throws {
+        let id = UUID(), first = UUID(), second = UUID(), elsewhere = UUID()
+        let full = conversation(id, [(first, 10, "One"), (second, 20, "Two")])
+        let trimmed = try #require(full.trimmed(from: second))
+        var theirs = full
+        let added = [
+            event(elsewhere, 30, AgentChatTranscript.Event.said, role: .user, text: "Three"),
+        ]
+        theirs.events = (theirs.events ?? []) + added
+        theirs.messages += AgentChatTranscript.messages(from: added)
+
+        let merged = AgentChatTranscriptMerge.merge(local: trimmed, incoming: theirs)
+        #expect(merged.turns.map(\.question) == ["One", "Three"])
+    }
+
+    @Test func undoingTwiceRemembersBoth() throws {
+        let id = UUID(), first = UUID(), second = UUID(), third = UUID()
+        let full = conversation(id, [(first, 10, "One"), (second, 20, "Two"), (third, 30, "Three")])
+        let once = try #require(full.trimmed(from: third))
+        let twice = try #require(once.trimmed(from: second))
+        #expect(twice.turns.map(\.question) == ["One"])
+        #expect(Set(twice.removedTurns ?? []) == [second, third])
+
+        let merged = AgentChatTranscriptMerge.merge(local: twice, incoming: full)
+        #expect(merged.turns.map(\.question) == ["One"])
+    }
+
+    /// Written down, so it is still known after a relaunch.
+    @Test func theRecordSurvivesBeingWrittenAndRead() throws {
+        let workspace = FileManager.default.temporaryDirectory
+            .appendingPathComponent("undo-record-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workspace) }
+
+        let id = UUID(), first = UUID(), second = UUID()
+        let full = conversation(id, [(first, 10, "One"), (second, 20, "Two")])
+        let trimmed = try #require(full.trimmed(from: second))
+        try AgentChatTranscriptStore.save(trimmed, providerID: "claude", in: workspace)
+        let loaded = AgentChatTranscriptStore.load(providerID: "claude", in: workspace)
+        #expect(loaded.removedTurns == [second])
+        #expect(loaded.turns.map(\.question) == ["One"])
+    }
+
+    /// A conversation that was cleared is a different conversation, and what
+    /// was undone in the one before says nothing about it.
+    @Test func clearingIsNotHeldToAnEarlierUndo() throws {
+        let first = UUID(), second = UUID()
+        let full = conversation(UUID(), [(first, 10, "One"), (second, 20, "Two")])
+        let trimmed = try #require(full.trimmed(from: second))
+        let fresh = conversation(UUID(), [(second, 40, "Asked again")])
+
+        let merged = AgentChatTranscriptMerge.merge(local: trimmed, incoming: fresh)
+        #expect(merged.conversationID == fresh.conversationID)
+        #expect(merged.turns.map(\.question) == ["Asked again"])
+    }
+}

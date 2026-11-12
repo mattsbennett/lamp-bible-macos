@@ -523,3 +523,115 @@ struct AgentRevisionStoreCompactionTests {
         #expect(try revisionFiles(in: workspace).count == 1)
     }
 }
+
+/// Putting a version back is a deliberate act, and what it replaces has to
+/// be written down whatever the history already says.
+struct AgentRevisionRestorationTests {
+    @Test func restoringTwiceKeepsWhatWasTypedInBetween() throws {
+        let workspace = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workspace) }
+
+        func at(_ seconds: Double) -> Date { Date(timeIntervalSince1970: seconds) }
+        try DevotionalAgentRevisionStore.record(
+            kind: .agentEdit, before: "Mine", after: "The agent's",
+            in: workspace, createdAt: at(10)
+        )
+        // Put back, then typed in, then put back again — the second restore
+        // used to be read as a repeat of the first and recorded nothing, so
+        // the writing in between was overwritten and nowhere to be found.
+        try DevotionalAgentRevisionStore.record(
+            kind: .restoration, before: "The agent's", after: "Mine",
+            in: workspace, createdAt: at(20)
+        )
+        let second = try DevotionalAgentRevisionStore.record(
+            kind: .restoration, before: "Mine, with a new paragraph", after: "Mine",
+            in: workspace, createdAt: at(30)
+        )
+
+        #expect(second != nil, "a restore from a state the history does not end at is a change")
+        let revisions = try DevotionalAgentRevisionStore.revisions(in: workspace)
+        #expect(
+            revisions.contains { $0.beforeMarkdown == "Mine, with a new paragraph" },
+            "the paragraph typed between the two restores is recoverable"
+        )
+    }
+
+    @Test func restoringToWhatIsAlreadyThereRecordsNothing() throws {
+        let workspace = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workspace) }
+
+        #expect(try DevotionalAgentRevisionStore.record(
+            kind: .restoration, before: "Mine", after: "Mine", in: workspace
+        ) == nil)
+    }
+}
+
+/// History tidied by a Lamp that does not know about turns.
+struct AgentRevisionAttributionTests {
+    @Test func anUntaggedMergeGivesWayToTheTaggedChangesItCovers() {
+        let turn = UUID()
+        let first = DevotionalAgentRevision(
+            createdAt: Date(timeIntervalSince1970: 10), kind: .agentEdit,
+            beforeMarkdown: "A", afterMarkdown: "B", turnID: turn
+        )
+        let second = DevotionalAgentRevision(
+            createdAt: Date(timeIntervalSince1970: 20), kind: .agentEdit,
+            beforeMarkdown: "B", afterMarkdown: "C", turnID: UUID()
+        )
+        // What an older Mac writes when it merges the two: the same span,
+        // and nothing left to say which turn either change belonged to.
+        let merged = DevotionalAgentRevision(
+            createdAt: first.createdAt, kind: .agentEdit,
+            beforeMarkdown: "A", afterMarkdown: "C",
+            updatedAt: second.createdAt,
+            replacedRevisionIDs: [first.id, second.id]
+        )
+
+        let kept = DevotionalAgentRevisionCompactor.removingReplaced([first, second, merged])
+        #expect(Set(kept.map(\.id)) == [first.id, second.id], "the coarser record is the one that goes")
+    }
+
+    @Test func aTaggedMergeStillReplacesWhatItCovers() {
+        let turn = UUID()
+        let first = DevotionalAgentRevision(
+            createdAt: Date(timeIntervalSince1970: 10), kind: .agentEdit,
+            beforeMarkdown: "A", afterMarkdown: "B", turnID: turn
+        )
+        let second = DevotionalAgentRevision(
+            createdAt: Date(timeIntervalSince1970: 20), kind: .agentEdit,
+            beforeMarkdown: "B", afterMarkdown: "C", turnID: turn
+        )
+        let merged = DevotionalAgentRevision(
+            createdAt: first.createdAt, kind: .agentEdit,
+            beforeMarkdown: "A", afterMarkdown: "C",
+            updatedAt: second.createdAt,
+            replacedRevisionIDs: [first.id, second.id],
+            turnID: turn
+        )
+
+        let kept = DevotionalAgentRevisionCompactor.removingReplaced([first, second, merged])
+        #expect(kept.map(\.id) == [merged.id])
+    }
+
+    /// Only where the originals are all still here. A merge whose changes
+    /// are nowhere else is the only copy of them.
+    @Test func anUntaggedMergeStandsWhenItsOriginalsAreGone() {
+        let first = DevotionalAgentRevision(
+            createdAt: Date(timeIntervalSince1970: 10), kind: .agentEdit,
+            beforeMarkdown: "A", afterMarkdown: "B", turnID: UUID()
+        )
+        let merged = DevotionalAgentRevision(
+            createdAt: first.createdAt, kind: .agentEdit,
+            beforeMarkdown: "A", afterMarkdown: "C",
+            updatedAt: Date(timeIntervalSince1970: 20),
+            replacedRevisionIDs: [first.id, UUID()]
+        )
+
+        let kept = DevotionalAgentRevisionCompactor.removingReplaced([merged])
+        #expect(kept.map(\.id) == [merged.id])
+    }
+}

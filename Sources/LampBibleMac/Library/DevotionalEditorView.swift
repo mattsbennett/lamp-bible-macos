@@ -83,6 +83,13 @@ private struct PendingWorkspaceRevision {
     let kind: DevotionalAgentRevisionKind
     let before: String
     let after: String
+    /// The chat turn that made this change, where the agent made it.
+    ///
+    /// The workspace's other documents are the agent's to write too, and
+    /// an undo of a turn refuses rather than restore half of it — so a
+    /// change left unmarked here does not read as "a change this turn did
+    /// not make". It reads as nothing at all, and the refusal never comes.
+    var turnID: UUID? = nil
 }
 
 private struct DevotionalRevisionHistoryRequest: Identifiable {
@@ -408,6 +415,14 @@ struct DevotionalEditorView: View {
     @AppStorage("agent.moduleAccess.scope") private var agentModuleAccessScope = AgentModuleAccessScope.enabledModules.rawValue
     @AppStorage("agent.moduleAccess.personal") private var agentPersonalContentEnabled = false
     @State private var showingAgentWorkspace = false
+    /// The chat turn running in the agent pane, where one is open.
+    ///
+    /// Held here rather than in that pane because the agent writes to the
+    /// workspace's other documents as well as the draft, and those are
+    /// this view's to record. Nil while no turn is running, and while the
+    /// pane is closed — a run outlives its pane, and a change nobody was
+    /// watching is a change nobody can say the turn made.
+    @State private var agentChatTurn: UUID?
     /// Whether AI features are shown (`AIFeatures`): off, the editor has no
     /// Agent button and no agent pane. The workspace on disk is kept.
     @AppStorage(AIFeatures.key) private var aiFeaturesEnabled = AIFeatures.defaultValue
@@ -678,7 +693,8 @@ struct DevotionalEditorView: View {
                                 editorFocus: editorFocus,
                                 importDraft: { importedDraft in
                                     content = importedDraft
-                                }
+                                },
+                                chatTurn: $agentChatTurn
                             )
                             .id(identifier)
                         } else {
@@ -2295,6 +2311,7 @@ struct DevotionalEditorView: View {
         for revision in pending {
             try await DevotionalAgentRevisionHistory.shared.record(
                 kind: revision.kind,
+                turnID: revision.turnID,
                 documentPath: documentPath,
                 before: revision.before,
                 after: revision.after,
@@ -2335,7 +2352,8 @@ struct DevotionalEditorView: View {
         return [PendingWorkspaceRevision(
             kind: .agentEdit,
             before: document.persistedText,
-            after: externalText
+            after: externalText,
+            turnID: agentChatTurn
         )]
     }
 
@@ -2355,14 +2373,18 @@ struct DevotionalEditorView: View {
             pending.append(PendingWorkspaceRevision(
                 kind: .agentEdit,
                 before: persisted,
-                after: base
+                after: base,
+                turnID: agentChatTurn
             ))
         }
         if submitted != base {
             pending.append(PendingWorkspaceRevision(
                 kind: changeKind,
                 before: base,
-                after: submitted
+                after: submitted,
+                // The writer's own change, even where it lands during a
+                // turn. Only what the agent wrote is the turn's to undo.
+                turnID: changeKind == .agentEdit ? agentChatTurn : nil
             ))
         }
         return pending
@@ -2444,9 +2466,10 @@ struct DevotionalEditorView: View {
                 // Nowhere left to report a failure once the tab closes, and the
                 // deletion is the agent's own: losing the record of it costs
                 // history, not work.
-                Task { [workspace = workspaceURL, text = document.text] in
+                Task { [workspace = workspaceURL, text = document.text, turn = agentChatTurn] in
                     try? await DevotionalAgentRevisionHistory.shared.record(
                         kind: .agentEdit,
+                        turnID: turn,
                         documentPath: documentID,
                         before: text,
                         after: "",
@@ -2467,7 +2490,8 @@ struct DevotionalEditorView: View {
                 [PendingWorkspaceRevision(
                     kind: .agentEdit,
                     before: localText,
-                    after: externalText
+                    after: externalText,
+                    turnID: agentChatTurn
                 )],
                 documentPath: documentID,
                 failureNote: "Revision history could not be updated"
@@ -2561,7 +2585,8 @@ struct DevotionalEditorView: View {
                         pending[path] = [PendingWorkspaceRevision(
                             kind: .agentEdit,
                             before: "",
-                            after: snapshot.contents
+                            after: snapshot.contents,
+                            turnID: agentChatTurn
                         )]
                     }
                     documents.append(DevotionalWorkspaceEditorDocument(

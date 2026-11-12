@@ -187,6 +187,40 @@ public enum DevotionalAgentRevisionCompactor {
     public static func removingReplaced(
         _ revisions: [DevotionalAgentRevision]
     ) -> [DevotionalAgentRevision] {
+        // A Lamp that does not know about turns merges across them, and the
+        // merge it writes says nothing about which turn its changes
+        // belonged to. Taken as the replacement it claims to be, it would
+        // drop originals that do say — losing, for good, the one thing that
+        // lets a turn be undone. So where every original is still here and
+        // at least one of them knows its turn, the coarser record is the
+        // one that goes. Nothing is lost: the originals cover the same
+        // changes, end to end.
+        //
+        // Indexed once rather than searched per revision: this runs on
+        // every record and every read of the history, and a workspace can
+        // hold thousands.
+        var turnsByID: [UUID: UUID?] = [:]
+        for revision in revisions {
+            turnsByID.updateValue(revision.turnID, forKey: revision.id)
+        }
+        let demoted = Set(revisions.indices.filter { index in
+            let revision = revisions[index]
+            guard revision.turnID == nil,
+                  let replaced = revision.replacedRevisionIDs, !replaced.isEmpty
+            else { return false }
+            var knowsATurn = false
+            for identifier in replaced where identifier != revision.id {
+                guard let turn = turnsByID[identifier] else { return false }
+                if turn != nil { knowsATurn = true }
+            }
+            return knowsATurn
+        })
+        guard demoted.isEmpty else {
+            return removingReplaced(
+                revisions.indices.filter { !demoted.contains($0) }.map { revisions[$0] }
+            )
+        }
+
         let coverage = revisions.map(\.coveredRevisionIDs)
         var holders: [UUID: [Int]] = [:]
         for (index, covered) in coverage.enumerated() {
@@ -301,6 +335,7 @@ public actor DevotionalAgentRevisionHistory {
     public func record(
         kind: DevotionalAgentRevisionKind,
         providerName: String? = nil,
+        turnID: UUID? = nil,
         documentPath: String = DevotionalAgentRevisionStore.primaryDocumentPath,
         before beforeMarkdown: String,
         after afterMarkdown: String,
@@ -310,6 +345,7 @@ public actor DevotionalAgentRevisionHistory {
         try DevotionalAgentRevisionStore.record(
             kind: kind,
             providerName: providerName,
+            turnID: turnID,
             documentPath: documentPath,
             before: beforeMarkdown,
             after: afterMarkdown,
@@ -470,8 +506,14 @@ public enum DevotionalAgentRevisionStore {
         // A caller continuing from its own copy discounts the kind as well: an
         // agent import or an explicit restore already wrote this transition under
         // its own.
+        // A restoration is never one of those. It is a deliberate act with
+        // the live document in hand, so its `before` is what is really
+        // there — and skipping it meant restoring the same version twice,
+        // with typing in between, wrote over that typing and recorded
+        // nothing to find it in. Two restores in a row to the version
+        // already showing are stopped by the guard above instead.
         if let latest, latest.afterMarkdown == afterMarkdown,
-           continuingLatest || latest.kind == kind {
+           continuingLatest || (latest.kind == kind && kind != .restoration) {
             return nil
         }
 

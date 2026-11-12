@@ -98,6 +98,19 @@ public struct AgentChatTranscript: Codable, Equatable, Sendable {
     /// before events, which is not the same as a conversation in which
     /// nothing happened.
     public var events: [Event]?
+    /// The turns somebody undid, kept after the turns themselves are gone.
+    ///
+    /// Two copies of a conversation are reconciled by **union**: every turn
+    /// either side has is kept, because a turn one Mac lacks is a turn it
+    /// has not seen yet. A turn that was undone is the one thing that rule
+    /// cannot say — removal looks exactly like not having it — so without
+    /// this the copy on disk, or on another Mac, simply put the undone turn
+    /// back on the next save.
+    ///
+    /// So removal is written down rather than performed. Absent means a
+    /// Lamp that does not know about undoing, which is silence and not "no
+    /// turn was ever undone".
+    public var removedTurns: [UUID]?
 
     public init(
         conversationID: UUID? = nil,
@@ -105,7 +118,8 @@ public struct AgentChatTranscript: Codable, Equatable, Sendable {
         sessionID: String? = nil,
         sessionInstallID: String? = nil,
         messages: [Message] = [],
-        events: [Event]? = nil
+        events: [Event]? = nil,
+        removedTurns: [UUID]? = nil
     ) {
         self.conversationID = conversationID
         self.startedAt = startedAt
@@ -113,6 +127,7 @@ public struct AgentChatTranscript: Codable, Equatable, Sendable {
         self.sessionInstallID = sessionInstallID
         self.messages = messages
         self.events = events
+        self.removedTurns = removedTurns
     }
 
     /// The most recent thing that happened in this conversation, including it
@@ -263,13 +278,36 @@ public struct AgentChatTranscript: Codable, Equatable, Sendable {
     public func trimmed(from turn: UUID) -> AgentChatTranscript? {
         let kept = turns
         guard let cut = kept.firstIndex(where: { $0.id == turn }) else { return nil }
-        let events = kept[..<cut].flatMap(\.events)
-        var trimmed = self
-        trimmed.events = events
-        trimmed.messages = Self.messages(from: events)
-        trimmed.sessionID = nil
-        trimmed.sessionInstallID = nil
-        return trimmed
+        return removing(turns: kept[cut...].map(\.id))
+    }
+
+    /// This conversation without the turns named, and with their names kept
+    /// so that no copy of it puts them back.
+    ///
+    /// A turn is removed wherever it is recorded: from the events, and from
+    /// the messages, including a message that is a turn on its own because
+    /// no event covers it.
+    ///
+    /// The session goes with anything actually removed. A provider's
+    /// session is one line of talk in that provider's own store: it still
+    /// holds the turn that was taken out, and resuming it would carry on
+    /// from work this conversation no longer has.
+    public func removing(turns removed: [UUID]) -> AgentChatTranscript {
+        var union = Set(removedTurns ?? [])
+        union.formUnion(removed)
+        guard !union.isEmpty else { return self }
+        let all = turns
+        let kept = all.filter { !union.contains($0.id) }
+        let events = kept.flatMap(\.events)
+        var result = self
+        result.events = events
+        result.messages = Self.messages(from: events)
+        result.removedTurns = union.sorted { $0.uuidString < $1.uuidString }
+        if kept.count != all.count {
+            result.sessionID = nil
+            result.sessionInstallID = nil
+        }
+        return result
     }
 
     /// The session ID this install may hand back to its provider, if any.
@@ -504,17 +542,24 @@ public enum AgentChatTranscriptMerge {
         // agent did — in one direction only, so which Mac synced first
         // decided what survived.
         let events = mergedEvents(local: local, incoming: incoming)
+        // Undone turns last. The union above keeps every turn either side
+        // has, which is right for a turn one Mac has not seen and exactly
+        // wrong for one somebody took out: a trimmed copy's messages are a
+        // subset of the untrimmed one's, so the untrimmed side won and an
+        // undo was reversed by the save that followed it — on this Mac
+        // immediately, and on the other as soon as it synced.
+        let removed = (local.removedTurns ?? []) + (incoming.removedTurns ?? [])
         let localIDs = Set(local.messages.map(\.id))
         let incomingIDs = Set(incoming.messages.map(\.id))
         if incomingIDs.isSubset(of: localIDs) {
             var kept = local
             kept.events = events
-            return kept
+            return kept.removing(turns: removed)
         }
         if localIDs.isSubset(of: incomingIDs) {
             var kept = incoming
             kept.events = events
-            return kept
+            return kept.removing(turns: removed)
         }
 
         var seen = Set<UUID>()
@@ -529,7 +574,7 @@ public enum AgentChatTranscriptMerge {
             sessionInstallID: nil,
             messages: messages,
             events: events
-        )
+        ).removing(turns: removed)
     }
 
     /// The same union, for events.

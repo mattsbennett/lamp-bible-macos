@@ -919,6 +919,12 @@ private final class NativeAgentChatModel: ObservableObject {
     /// compiler says so in as many words; I filtered the build to errors
     /// and never read it.
     @Published private(set) var events: [AgentChatTranscript.Event] = []
+    /// The turns undone here, kept because removal is the one thing the
+    /// union that reconciles two copies of a transcript cannot express.
+    /// Held on the model as well as in the file so that a copy arriving
+    /// from another Mac — which may have been written by a Lamp that drops
+    /// what it has no name for — does not put them back.
+    private var removedTurns: [UUID] = []
     /// Messages written while a reply was still arriving, in the order they
     /// will be sent.
     @Published private(set) var queued: [AgentChatQueue.Message] = []
@@ -937,14 +943,33 @@ private final class NativeAgentChatModel: ObservableObject {
     var onQueueReady: (() -> Void)?
     /// Told which turn is being recorded, so a workspace can mark what the
     /// agent changes with the turn that asked for it.
-    var onTurnChanged: ((UUID?) -> Void)?
+    ///
+    /// One per pane, not one in all. The model is shared between every pane
+    /// on a workspace, and each of those panes records what the agent
+    /// changes; a single closure meant the last pane to appear was the only
+    /// one told, so another pane's recording — the same files, from the
+    /// same run — was filed under no turn at all, and under the duplicate
+    /// rule that untagged record is the one that stands.
+    private var turnObservers: [AnyHashable: (UUID?) -> Void] = [:]
+
+    /// Registers a pane's observer and tells it where the conversation
+    /// stands, rather than only about the next change. A pane opened during
+    /// a run would otherwise believe nothing was running until it ended.
+    func observeTurn(for token: AnyHashable, _ observe: @escaping (UUID?) -> Void) {
+        turnObservers[token] = observe
+        observe(recordingTurn)
+    }
+
+    func stopObservingTurn(for token: AnyHashable) {
+        turnObservers.removeValue(forKey: token)
+    }
 
     /// The turn in progress, nil between turns.
     private(set) var currentTurn: UUID? {
         get { recordingTurn }
         set {
             recordingTurn = newValue
-            onTurnChanged?(newValue)
+            for observe in turnObservers.values { observe(newValue) }
         }
     }
     private var knownModificationDate: Date?
@@ -1009,6 +1034,15 @@ private final class NativeAgentChatModel: ObservableObject {
     }
 
     private func show(_ transcript: AgentChatTranscript) {
+        // What this chat knows to have been undone is applied to whatever
+        // arrives, so a copy written without it — by sync, or by a Lamp
+        // that has no name for the record — does not bring the turns back.
+        // Only within the same conversation: a cleared one is a new
+        // conversation, and what was undone in its predecessor says
+        // nothing about it.
+        let undone = transcript.conversationID == conversationID ? removedTurns : []
+        let transcript = transcript.removing(turns: undone)
+        removedTurns = transcript.removedTurns ?? []
         knownTranscript = transcript
         events = transcript.events ?? []
         conversationID = transcript.conversationID
@@ -1159,6 +1193,9 @@ private final class NativeAgentChatModel: ObservableObject {
         // behind, it was written back under the new conversation's id and
         // the cleared questions returned on the next load.
         events = []
+        // With the conversation they named. A list of undone turns outlives
+        // the turns, not the conversation.
+        removedTurns = []
         currentTurn = nil
         stepsRowIDs = [:]
         // The waiting messages were written to **this** conversation, and
@@ -1678,13 +1715,26 @@ private final class NativeAgentChatModel: ObservableObject {
     /// half. Returns false where the turn is no longer there, or a reply is
     /// arriving, which is not a moment to rewrite what it is replying to.
     func revert(turn: UUID) -> Bool {
-        guard !isRunning, let trimmed = knownTranscript?.trimmed(from: turn)
-            ?? AgentChatTranscriptStore
-                .load(providerID: provider.rawValue, in: workspace)
-                .trimmed(from: turn)
+        guard canRevert(turn: turn),
+              let trimmed = knownTranscript?.trimmed(from: turn)
+                ?? AgentChatTranscriptStore
+                    .load(providerID: provider.rawValue, in: workspace)
+                    .trimmed(from: turn)
         else { return false }
         show(trimmed)
         return persistTranscript()
+    }
+
+    /// Whether undoing this turn is something that can be done now.
+    ///
+    /// Asked **before** anything is written, because the first half of an
+    /// undo is the host putting the writing back: a check made after that
+    /// is a check made after the only destructive step. A reply arriving is
+    /// not a moment to rewrite what it is replying to, and a turn that has
+    /// already gone — undone in another pane, or trimmed by a copy that
+    /// synced in — is not one to put anything back for.
+    func canRevert(turn: UUID) -> Bool {
+        !isRunning && canFork(from: turn)
     }
 
     /// Whether this message begins a turn the conversation still holds, so
@@ -1718,7 +1768,8 @@ private final class NativeAgentChatModel: ObservableObject {
             // events are empty *because the conversation was cleared*, and
             // reaching for the old ones wrote the cleared questions back
             // under a new conversation's id.
-            events: events
+            events: events,
+            removedTurns: removedTurns.isEmpty ? nil : removedTurns
         )
         let onDisk = AgentChatTranscriptStore.load(providerID: provider.rawValue, in: workspace)
         if onDisk != knownTranscript {
@@ -1761,9 +1812,14 @@ struct NativeAgentChatView: View {
     /// somewhere to put one. Nil in a pane that cannot open another chat,
     /// where the menu item is simply not offered.
     let forkFromTurn: ((UUID) -> Void)?
-    /// Undoes what a turn did. Nil in a pane with nothing to put back,
-    /// where the menu item is simply not offered.
-    let revertTurn: ((UUID) -> Void)?
+    /// Undoes what a turn did, saying whether it could. Nil in a pane with
+    /// nothing to put back, where the menu item is simply not offered.
+    ///
+    /// Answering matters: the host refuses a turn whose changes it cannot
+    /// put back whole, and a conversation trimmed after such a refusal
+    /// would have taken away the question while leaving its work in the
+    /// writing.
+    let revertTurn: ((UUID) -> Bool)?
     /// Told which turn is running, for a pane that marks its own records
     /// with it.
     let onTurnChanged: ((UUID?) -> Void)?
@@ -1779,6 +1835,9 @@ struct NativeAgentChatView: View {
     @State private var showingClearConfirmation = false
     /// A turn the reader has asked to undo, held while they confirm.
     @State private var turnToUndo: UUID?
+    /// This pane's name among the panes sharing one chat, so that each is
+    /// told which turn is running rather than only the last to appear.
+    @State private var paneToken = UUID()
     @State private var submissionError: String?
     /// A message is being prepared, between Send and the run starting.
     @State private var isPreparing = false
@@ -1791,7 +1850,7 @@ struct NativeAgentChatView: View {
         preparePrompt: @escaping (String) async throws -> String = { $0 },
         onRunningChanged: @escaping (Bool) -> Void = { _ in },
         forkFromTurn: ((UUID) -> Void)? = nil,
-        revertTurn: ((UUID) -> Void)? = nil,
+        revertTurn: ((UUID) -> Bool)? = nil,
         onTurnChanged: ((UUID?) -> Void)? = nil
     ) {
         self.provider = provider
@@ -2031,7 +2090,9 @@ struct NativeAgentChatView: View {
         }
         .onAppear {
             model.onQueueReady = { drainQueue() }
-            model.onTurnChanged = onTurnChanged
+            if let onTurnChanged {
+                model.observeTurn(for: paneToken) { onTurnChanged($0) }
+            }
         }
         .onChange(of: model.isRunning, initial: true) { _, running in
             onRunningChanged(running)
@@ -2043,6 +2104,12 @@ struct NativeAgentChatView: View {
             drainQueue()
         }
         .onDisappear {
+            model.stopObservingTurn(for: paneToken)
+            // And told so. A host that goes on holding the turn it was last
+            // told about would mark everything written afterwards — by a run
+            // that outlives this pane, or by the person — as that turn's
+            // doing.
+            onTurnChanged?(nil)
             // Not stopped. The model is shared now, so a pane going away
             // may not be the only one holding it — and stopping a run
             // because one view of it closed is what the reader's pane was
@@ -2071,11 +2138,17 @@ struct NativeAgentChatView: View {
         ) { turn in
             Button("Undo", role: .destructive) {
                 turnToUndo = nil
-                // The draft first. If putting it back fails, the
-                // conversation still describes what is on disk;
-                // trimmed first, a failure would leave a draft that
-                // nothing accounts for.
-                revertTurn?(turn)
+                // Asked before anything is written: a reply arriving, or a
+                // turn that has since gone, is a refusal, and a refusal
+                // after the draft has been put back is a refusal that came
+                // too late to refuse anything.
+                guard model.canRevert(turn: turn) else { return }
+                // Then the draft, and only then the conversation. Putting
+                // the writing back is the half that can fail; trimmed
+                // first, a failure would leave the question gone and its
+                // work still in the draft, with nothing left to undo it
+                // from.
+                guard revertTurn?(turn) == true else { return }
                 _ = model.revert(turn: turn)
             }
             Button("Cancel", role: .cancel) { turnToUndo = nil }
