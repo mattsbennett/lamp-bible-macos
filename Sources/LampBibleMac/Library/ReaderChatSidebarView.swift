@@ -513,6 +513,7 @@ private struct ReaderChatChooser: View {
 
     @State private var query = ""
     @State private var matches: [ReaderChatWorkspaceStore.Match] = []
+    @State private var searching: Task<Void, Never>?
 
     /// A chat is found by what was said in it, not only by how it opened.
     /// The list reads by its opening line, which answers "where was that
@@ -587,12 +588,27 @@ private struct ReaderChatChooser: View {
         .frame(width: 320)
     }
 
+    /// Searched off the main actor, a moment after the typing stops.
+    ///
+    /// Every chat's transcripts are decoded for a search, which is over a
+    /// second for a couple of hundred chats; run on each keystroke, on the
+    /// main actor, that is typing that stops while it works.
     private func runSearch() {
+        searching?.cancel()
         guard let libraryRootURL, isSearching else {
             matches = []
             return
         }
-        matches = ReaderChatWorkspaceStore.search(query, libraryRootURL: libraryRootURL)
+        let wanted = query
+        searching = Task {
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled else { return }
+            let found = await Task.detached(priority: .userInitiated) {
+                ReaderChatWorkspaceStore.search(wanted, libraryRootURL: libraryRootURL)
+            }.value
+            guard !Task.isCancelled, wanted == query else { return }
+            matches = found
+        }
     }
 
     @ViewBuilder private var searchResults: some View {

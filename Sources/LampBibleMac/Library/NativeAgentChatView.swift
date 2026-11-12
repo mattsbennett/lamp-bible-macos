@@ -848,12 +848,22 @@ private final class NativeAgentChatModel: ObservableObject {
     /// Everything that has happened in this conversation, which is what the
     /// transcript keeps. The messages below are what is drawn; these are the
     /// record a turn can be undone or forked from.
-    @State private var events: [AgentChatTranscript.Event] = []
+    /// Plain storage on the model. These were `@State`, which does nothing
+    /// in a class — SwiftUI installs no storage for it, so every recording
+    /// call returned at the guard and the whole record stayed empty. The
+    /// compiler says so in as many words; I filtered the build to errors
+    /// and never read it.
+    @Published private(set) var events: [AgentChatTranscript.Event] = []
     /// Messages written while a reply was still arriving, in the order they
     /// will be sent.
-    @Published var queued: [AgentChatQueue.Message] = []
+    @Published private(set) var queued: [AgentChatQueue.Message] = []
     /// The turn being recorded: the id of the user message that began it.
-    @State private var recordingTurn: UUID?
+    private var recordingTurn: UUID?
+    /// The queued message being sent right now, held so that a second pane
+    /// cannot take the one after it while this is still being prepared.
+    /// Not persisted: an unfinished reservation is simply a message still
+    /// waiting the next time the app opens, which is what it is.
+    private var reservedQueued: UUID?
     private var knownModificationDate: Date?
     private var cancelRequested = false
     private var loadingMessageID: UUID?
@@ -1006,6 +1016,11 @@ private final class NativeAgentChatModel: ObservableObject {
         conversationStartedAt = Date()
         sessionID = nil
         messages = []
+        // The record goes with the conversation it was a record of. Left
+        // behind, it was written back under the new conversation's id and
+        // the cleared questions returned on the next load.
+        events = []
+        recordingTurn = nil
         errorMessage = nil
         continuityNotice = nil
         persistTranscript()
@@ -1271,6 +1286,28 @@ private final class NativeAgentChatModel: ObservableObject {
         // The turn is over. What happens before the next question is the
         // app's business, not the conversation's.
         recordingTurn = nil
+        // Drawn again from what was just written, so the turn gains its
+        // line of steps now rather than at the next load — which, for a
+        // pane that keeps its model across closes, could be the next
+        // launch.
+        redrawFromRecord()
+    }
+
+    /// Rebuilds the rows from the events and messages now held.
+    ///
+    /// Only between turns: a redraw mid-run would take away the loader or
+    /// the reply being streamed into it, both of which live in `messages`
+    /// and in neither record.
+    private func redrawFromRecord() {
+        guard !isRunning, loadingMessageID == nil else { return }
+        messages = rows(of: AgentChatTranscript(
+            conversationID: conversationID,
+            startedAt: conversationStartedAt,
+            sessionID: sessionID,
+            sessionInstallID: sessionID == nil ? nil : installID,
+            messages: transcriptMessages(),
+            events: events
+        ))
     }
 
     private func appendAgentMarkdown(_ markdown: String) {
@@ -1295,9 +1332,6 @@ private final class NativeAgentChatModel: ObservableObject {
     /// A transcript from before events has no steps to show and reads as it
     /// always did.
     private func rows(of transcript: AgentChatTranscript) -> [NativeAgentChatMessage] {
-        guard let events = transcript.events, !events.isEmpty else {
-            return transcript.messages.map(makeChatMessage)
-        }
         return transcript.turns.flatMap { turn -> [NativeAgentChatMessage] in
             var rows: [NativeAgentChatMessage] = []
             for event in turn.events {
@@ -1311,7 +1345,11 @@ private final class NativeAgentChatModel: ObservableObject {
                 // rather than under the answer they produced.
                 if role == .user, !turn.toolsUsed.isEmpty {
                     rows.append(NativeAgentChatMessage(
-                        id: turn.id,
+                        // Its own identity. The question's event is stored
+                        // under the turn's id, so giving the steps row the
+                        // same one put two rows with one id into the list
+                        // SwiftyChat draws and scrolls by.
+                        id: Self.stepsRowID(for: turn.id),
                         user: agentUser,
                         messageKind: .custom(TurnStepsContent(steps: turn.toolsUsed)),
                         isSender: false,
@@ -1321,6 +1359,15 @@ private final class NativeAgentChatModel: ObservableObject {
             }
             return rows
         }
+    }
+
+    /// A turn's steps row, derived from the turn so it is the same across
+    /// redraws rather than new each time.
+    static func stepsRowID(for turn: UUID) -> UUID {
+        var bytes = turn.uuid
+        // One bit, flipped: derived from the turn, and never equal to it.
+        bytes.15 ^= 0x01
+        return UUID(uuid: bytes)
     }
 
     private func makeChatMessage(_ message: AgentChatTranscript.Message) -> NativeAgentChatMessage {
@@ -1408,10 +1455,35 @@ private final class NativeAgentChatModel: ObservableObject {
     func updateQueued(_ id: UUID, text: String) { changeQueue { $0.update(id, text: text) } }
     func sendQueuedSooner(_ id: UUID) { changeQueue { $0.sendSooner(id) } }
 
-    func takeNextQueued() -> String? {
-        var next: String?
-        changeQueue { next = $0.takeNext() }
+    /// The next message waiting, **reserved rather than removed**.
+    ///
+    /// It stays on disk until it is in the transcript. Taken out first, a
+    /// quit during the moment between — preparing the prompt reads the
+    /// reader's place and can wait — lost it from the queue and from the
+    /// conversation both, which is losing the person's words.
+    ///
+    /// The reservation is the model's, not a view's, and the model outlives
+    /// the pane. Two views each with their own `isPreparing` both drained:
+    /// close the pane mid-preparation and reopen it, and the second view
+    /// took the next message while the first was still working, so one of
+    /// them was refused by the running guard after its queue entry had
+    /// already gone.
+    func reserveNextQueued() -> AgentChatQueue.Message? {
+        guard reservedQueued == nil, let next = queued.first else { return nil }
+        reservedQueued = next.id
         return next
+    }
+
+    /// The reserved message reached the conversation, so it stops waiting.
+    func completeQueued(_ id: UUID) {
+        reservedQueued = nil
+        changeQueue { $0.remove(id) }
+    }
+
+    /// It did not. It goes back to waiting, in its place, to be tried again.
+    func releaseQueued(_ id: UUID) {
+        guard reservedQueued == id else { return }
+        reservedQueued = nil
     }
 
     /// Whether this message begins a turn the conversation still holds, so
@@ -1440,7 +1512,11 @@ private final class NativeAgentChatModel: ObservableObject {
             sessionID: sessionID,
             sessionInstallID: sessionID == nil ? nil : installID,
             messages: transcriptMessages(),
-            events: events.isEmpty ? knownTranscript?.events : events
+            // No falling back to what was on disk: after New Chat the
+            // events are empty *because the conversation was cleared*, and
+            // reaching for the old ones wrote the cleared questions back
+            // under a new conversation's id.
+            events: events
         )
         let onDisk = AgentChatTranscriptStore.load(providerID: provider.rawValue, in: workspace)
         if onDisk != knownTranscript {
@@ -1518,8 +1594,11 @@ struct NativeAgentChatView: View {
     /// Sends a message now, which is also how a message that was waiting is
     /// sent when the reply before it lands.
     @discardableResult
-    private func startSending(_ prompt: String) -> Bool {
-        guard !isPreparing else { return false }
+    private func startSending(_ prompt: String, queued: UUID? = nil) -> Bool {
+        guard !isPreparing else {
+            if let queued { model.releaseQueued(queued) }
+            return false
+        }
         isPreparing = true
         // Started now, and on the main actor until it first waits, so the
         // reader's place is read at Send and not after a navigation.
@@ -1530,11 +1609,20 @@ struct NativeAgentChatView: View {
                 submissionError = nil
                 isPreparing = false
                 await model.send(prompt, contextualPrompt: contextualPrompt)
+                // In the conversation now, so it stops waiting.
+                if let queued { model.completeQueued(queued) }
                 scrollToBottom = true
             } catch {
                 submissionError = error.localizedDescription
-                // The message goes back where it was written.
-                if draft.isEmpty { draft = prompt }
+                // A queued message goes back to waiting, in its place,
+                // rather than into a draft field the reader may be typing
+                // in — which is where it used to vanish, since it was only
+                // put back when the field happened to be empty.
+                if let queued {
+                    model.releaseQueued(queued)
+                } else if draft.isEmpty {
+                    draft = prompt
+                }
             }
         }
         return true
@@ -1684,7 +1772,9 @@ struct NativeAgentChatView: View {
             // place as it is *now* — a queued question about this chapter
             // was written about this chapter.
             guard !running, !isPreparing else { return }
-            if let next = model.takeNextQueued() { startSending(next) }
+            if let next = model.reserveNextQueued() {
+                startSending(next.text, queued: next.id)
+            }
         }
         .onDisappear {
             if !outlivesView { model.cancel() }

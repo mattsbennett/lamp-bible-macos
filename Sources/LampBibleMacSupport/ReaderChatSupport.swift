@@ -357,6 +357,14 @@ public enum ReaderChatWorkspaceStore {
             at: destination, withIntermediateDirectories: true
         )
         try AgentChatTranscriptStore.save(forked, providerID: providerID, in: destination)
+        // The chat's own choices go with it — which provider answers above
+        // all. Without them the fork takes the app's current default, and a
+        // conversation forked from a Claude thread could open against
+        // OpenCode showing nothing, because the conversation it holds is
+        // Claude's and nobody was asking Claude.
+        try AgentChatChoicesStore.save(
+            AgentChatChoicesStore.load(in: source), in: destination
+        )
         return newID
     }
 
@@ -442,34 +450,51 @@ public enum ReaderChatWorkspaceStore {
     /// Matching ignores case and accents, so *Gethsemane* finds
     /// *Gethsémané*. Every chat's transcripts are read, which is bounded by
     /// the retention the reader chose rather than by the life of the app.
-    public static func search(
+    /// `nonisolated` and reading only the file system, so a caller runs it
+    /// off the main actor. Every chat's transcripts are decoded, which took
+    /// well over a second for two hundred chats when it was run on each
+    /// keystroke — typing stopped while it worked.
+    public nonisolated static func search(
         _ query: String, libraryRootURL: URL, limit: Int = 50
     ) -> [Match] {
         let wanted = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !wanted.isEmpty else { return [] }
+        let folder = directory(libraryRootURL: libraryRootURL)
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
         var matches: [Match] = []
-        for chat in chats(libraryRootURL: libraryRootURL) {
-            let workspace = workspaceURL(libraryRootURL: libraryRootURL, chatID: chat.id)
+        for name in names {
+            guard let id = UUID(uuidString: name) else { continue }
+            let workspace = workspaceURL(libraryRootURL: libraryRootURL, chatID: id)
+            // Each chat's transcripts are decoded **once**, for the match
+            // and its date both. Listing the chats first and then searching
+            // them decoded every file twice.
             guard let found = firstMention(of: wanted, in: workspace) else { continue }
             matches.append(Match(
-                id: chat.id, lastSpoken: chat.lastSpoken,
+                id: id, lastSpoken: found.lastSpoken,
                 snippet: found.line, saidByReader: found.saidByReader
             ))
             if matches.count >= limit { break }
         }
-        return matches
+        return matches.sorted {
+            ($0.lastSpoken ?? .distantPast, $0.id.uuidString)
+                > ($1.lastSpoken ?? .distantPast, $1.id.uuidString)
+        }
     }
 
     /// The first line in a chat holding these words, and who said it.
-    private static func firstMention(
+    private nonisolated static func firstMention(
         of wanted: String, in workspace: URL
-    ) -> (line: String, saidByReader: Bool)? {
+    ) -> (line: String, saidByReader: Bool, lastSpoken: Date?)? {
         let folder = AgentChatTranscriptStore.directory(in: workspace)
         let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+        var found: (line: String, saidByReader: Bool)?
+        var lastSpoken: Date?
         for name in names.filter(AgentChatTranscriptStore.isTranscriptFilename) {
             guard let data = try? Data(contentsOf: folder.appendingPathComponent(name)),
                   let transcript = try? AgentChatTranscriptStore.decode(data)
             else { continue }
+            lastSpoken = [lastSpoken, transcript.lastActivity].compactMap { $0 }.max()
+            if found != nil { continue }
             for message in transcript.messages {
                 // Found by the line it is in rather than the whole message:
                 // a reply runs to paragraphs, and showing all of them to say
@@ -478,11 +503,14 @@ public enum ReaderChatWorkspaceStore {
                     guard line.range(
                         of: wanted, options: [.caseInsensitive, .diacriticInsensitive]
                     ) != nil else { continue }
-                    return (label(String(line)), message.role == .user)
+                    found = (label(String(line)), message.role == .user)
+                    break
                 }
+                if found != nil { break }
             }
         }
-        return nil
+        guard let found else { return nil }
+        return (found.line, found.saidByReader, lastSpoken)
     }
 
     /// Something said, as a list shows it: one line, trimmed, and cut at a

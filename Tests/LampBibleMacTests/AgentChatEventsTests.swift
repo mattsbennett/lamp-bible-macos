@@ -248,17 +248,12 @@ struct ReaderChatForkTests {
 /// nowhere to put it the reader either interrupts the run or holds it until
 /// the reply lands, and the second is how a question gets lost.
 struct AgentChatQueueTests {
-    @Test func aMessageWaitsItsTurnAndIsTakenWhenItGoes() {
+    @Test func whitespaceIsNotAMessage() {
         var queue = AgentChatQueue()
         queue.add("Check Romans 8:1")
         queue.add("   ")
         queue.add("And the Greek for 'condemnation'")
-        #expect(queue.messages.count == 2, "whitespace is not a message")
-
-        #expect(queue.takeNext() == "Check Romans 8:1")
-        #expect(queue.messages.count == 1, "taken, not read: otherwise it is sent twice")
-        #expect(queue.takeNext() == "And the Greek for 'condemnation'")
-        #expect(queue.takeNext() == nil)
+        #expect(queue.messages.map(\.text) == ["Check Romans 8:1", "And the Greek for 'condemnation'"])
     }
 
     @Test func aWaitingMessageCanBeRewordedOrTakenBack() throws {
@@ -304,7 +299,7 @@ struct AgentChatQueueTests {
 
         // Worked through, it leaves no file — so a queue that has been
         // emptied does not read as one that was never written.
-        _ = queue.takeNext()
+        queue.remove(try #require(queue.messages.first).id)
         try AgentChatQueueStore.save(queue, providerID: "claude", in: workspace)
         #expect(!FileManager.default.fileExists(
             atPath: AgentChatQueueStore.url(providerID: "claude", in: workspace).path
@@ -385,5 +380,115 @@ struct ReaderChatSearchTests {
         defer { try? FileManager.default.removeItem(at: library) }
         try chat(UUID(), in: library, [(.user, "Anything", 10)])
         #expect(ReaderChatWorkspaceStore.search("   ", libraryRootURL: library).isEmpty)
+    }
+}
+
+/// What a Codex review of the chat work found, held so it stays found.
+struct AgentChatRecordFixTests {
+    private func said(
+        _ id: UUID, _ at: Double, _ role: AgentChatTranscript.Role, _ text: String
+    ) -> AgentChatTranscript.Message {
+        AgentChatTranscript.Message(
+            id: id, role: role, text: text, date: Date(timeIntervalSince1970: at)
+        )
+    }
+
+    /// **A message outside the events is still a message.** Drawing the
+    /// conversation from the events alone dropped every message the events
+    /// did not cover — one from before events, from a Mac that rewrote the
+    /// file without them, or from a merge that kept both sides' messages
+    /// and one side's events. The next send then wrote the thinned list
+    /// back, which is how reading a record destroys it.
+    @Test func aMessageWithNoEventOfItsOwnIsStillInTheConversation() {
+        let recorded = UUID(), loose = UUID()
+        let transcript = AgentChatTranscript(
+            messages: [
+                said(loose, 5, .user, "From an older Mac"),
+                said(recorded, 10, .user, "Who wrote Hebrews?"),
+            ],
+            events: [
+                AgentChatTranscript.Event(
+                    id: recorded, turn: recorded, date: Date(timeIntervalSince1970: 10),
+                    kind: AgentChatTranscript.Event.said, role: .user, text: "Who wrote Hebrews?"
+                ),
+            ]
+        )
+        #expect(
+            transcript.turns.map(\.question) == ["From an older Mac", "Who wrote Hebrews?"],
+            "in time order, and neither lost"
+        )
+    }
+
+    /// Events are reconciled in **every** same-conversation branch. A copy
+    /// an older app rewrote has the same messages and no events; returning
+    /// it whole threw the other side's record away — in one direction only,
+    /// so which Mac synced first decided what survived.
+    @Test func aCopyWithoutEventsDoesNotEraseTheRecord() {
+        let conversation = UUID(), message = UUID()
+        let rich = AgentChatTranscript(
+            conversationID: conversation,
+            messages: [said(message, 10, .user, "Ask")],
+            events: [
+                AgentChatTranscript.Event(
+                    id: message, turn: message, date: Date(timeIntervalSince1970: 10),
+                    kind: AgentChatTranscript.Event.said, role: .user, text: "Ask"
+                ),
+                AgentChatTranscript.Event(
+                    turn: message, date: Date(timeIntervalSince1970: 11),
+                    kind: AgentChatTranscript.Event.tool, name: "read_passage"
+                ),
+            ]
+        )
+        let thinned = AgentChatTranscript(
+            conversationID: conversation,
+            messages: [said(message, 10, .user, "Ask")]
+        )
+
+        #expect(
+            AgentChatTranscriptMerge.merge(local: rich, incoming: thinned).events?.count == 2
+        )
+        #expect(
+            AgentChatTranscriptMerge.merge(local: thinned, incoming: rich).events?.count == 2,
+            "and the same whichever side is read first"
+        )
+    }
+
+    /// A fork takes the chat's choices with it. Without them it opens
+    /// against whatever the app currently defaults to — and a conversation
+    /// forked from a Claude thread shown against OpenCode is an empty pane,
+    /// because the conversation it holds is Claude's.
+    @Test func aForkKeepsTheProviderItWasHeldBy() throws {
+        let library = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fork-choices-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: library) }
+
+        let original = UUID()
+        let workspace = ReaderChatWorkspaceStore.workspaceURL(
+            libraryRootURL: library, chatID: original
+        )
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        let turn = UUID()
+        try AgentChatTranscriptStore.save(
+            AgentChatTranscript(
+                conversationID: UUID(),
+                events: [AgentChatTranscript.Event(
+                    id: turn, turn: turn, date: Date(timeIntervalSince1970: 10),
+                    kind: AgentChatTranscript.Event.said, role: .user, text: "Ask"
+                )]
+            ),
+            providerID: "claude", in: workspace
+        )
+        var choices = AgentChatChoices()
+        choices.set("claude", for: AgentChatChoices.providerKey)
+        try AgentChatChoicesStore.save(choices, in: workspace)
+
+        let forkID = try #require(try ReaderChatWorkspaceStore.fork(
+            chat: original, at: turn, providerID: "claude", libraryRootURL: library
+        ))
+        let forked = AgentChatChoicesStore.load(
+            in: ReaderChatWorkspaceStore.workspaceURL(libraryRootURL: library, chatID: forkID)
+        )
+        #expect(forked.value(for: AgentChatChoices.providerKey) == "claude")
     }
 }

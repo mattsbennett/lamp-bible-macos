@@ -127,17 +127,27 @@ public struct AgentChatTranscript: Codable, Equatable, Sendable {
     /// A transcript from before events has none, so it reads as one turn per
     /// message — which is what it was.
     public var turns: [Turn] {
-        guard let events, !events.isEmpty else {
-            return messages.map { Turn(id: $0.id, date: $0.date, events: [
-                Event(
-                    id: $0.id, turn: $0.id, date: $0.date,
-                    kind: Event.said, role: $0.role, text: $0.text
-                ),
-            ]) }
+        // **Every message is in a turn, with or without events.** Events
+        // cover what this app recorded; `messages` is the floor, and a
+        // message outside the events is not a message that did not happen.
+        // It is one from before events, or from a Mac that rewrote the file
+        // without them, or from a merge that kept both sides' messages and
+        // only one side's events. Drawing from the events alone dropped
+        // those from the pane — and the next send wrote the thinned list
+        // back, which is how reading a record destroys it.
+        let recorded = Set((events ?? []).map(\.id))
+        let loose = messages.filter { !recorded.contains($0.id) }.map { message in
+            Event(
+                id: message.id, turn: message.id, date: message.date,
+                kind: Event.said, role: message.role, text: message.text
+            )
         }
+        let all = (events ?? []) + loose
+        guard !all.isEmpty else { return [] }
+
         var order: [UUID] = []
         var grouped: [UUID: [Event]] = [:]
-        for event in events.sorted(by: Self.inOrder) {
+        for event in all.sorted(by: Self.inOrder) {
             if grouped[event.turn] == nil { order.append(event.turn) }
             grouped[event.turn, default: []].append(event)
         }
@@ -362,14 +372,6 @@ public struct AgentChatQueue: Codable, Equatable, Sendable {
         messages.swapAt(index, index - 1)
     }
 
-    /// The next message, taken out.
-    ///
-    /// Taken rather than read: one handed over to be sent is no longer
-    /// waiting, and leaving it in through the run it started is how a
-    /// message gets sent twice.
-    public mutating func takeNext() -> String? {
-        messages.isEmpty ? nil : messages.removeFirst().text
-    }
 }
 
 public enum AgentChatQueueStore {
@@ -435,10 +437,25 @@ public enum AgentChatTranscriptMerge {
             return incomingKey > localKey ? incoming : local
         }
 
+        // Events are reconciled in **every** branch, including the two
+        // where one side's messages contain the other's. A copy rewritten
+        // by an older app has the same messages and no events, and
+        // returning it whole threw away the other side's record of what the
+        // agent did — in one direction only, so which Mac synced first
+        // decided what survived.
+        let events = mergedEvents(local: local, incoming: incoming)
         let localIDs = Set(local.messages.map(\.id))
         let incomingIDs = Set(incoming.messages.map(\.id))
-        if incomingIDs.isSubset(of: localIDs) { return local }
-        if localIDs.isSubset(of: incomingIDs) { return incoming }
+        if incomingIDs.isSubset(of: localIDs) {
+            var kept = local
+            kept.events = events
+            return kept
+        }
+        if localIDs.isSubset(of: incomingIDs) {
+            var kept = incoming
+            kept.events = events
+            return kept
+        }
 
         var seen = Set<UUID>()
         let messages = (local.messages + incoming.messages)
@@ -451,7 +468,7 @@ public enum AgentChatTranscriptMerge {
             sessionID: nil,
             sessionInstallID: nil,
             messages: messages,
-            events: mergedEvents(local: local, incoming: incoming)
+            events: events
         )
     }
 
