@@ -1478,6 +1478,8 @@ struct NativeAgentChatView: View {
     /// somewhere to put one. Nil in a pane that cannot open another chat,
     /// where the menu item is simply not offered.
     let forkFromTurn: ((UUID) -> Void)?
+    /// Where this chat works, which the header names.
+    private let workspaceFolder: URL
 
     @StateObject private var model: NativeAgentChatModel
     @State private var draft = ""
@@ -1507,6 +1509,7 @@ struct NativeAgentChatView: View {
         self.onRunningChanged = onRunningChanged
         self.outlivesView = outlivesView
         self.forkFromTurn = forkFromTurn
+        self.workspaceFolder = workspace
         _model = StateObject(wrappedValue: outlivesView
             ? KeptAgentChats.model(provider: provider, workspace: workspace, mode: mode)
             : NativeAgentChatModel(provider: provider, workspace: workspace, mode: mode))
@@ -1714,6 +1717,12 @@ struct NativeAgentChatView: View {
         return false
     }
 
+    /// The folder this chat works in, by the name a person would know it
+    /// by rather than its path.
+    private var workspaceName: String {
+        workspaceFolder.lastPathComponent
+    }
+
     private var chatHeader: some View {
         HStack(spacing: 8) {
             // The reader's pane names its provider in its own menu just
@@ -1722,6 +1731,19 @@ struct NativeAgentChatView: View {
                 Label(provider.shortName, systemImage: provider.systemImage)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
+                // What this agent may do, and where. The reader's pane says
+                // so in its own context card; a writing workspace said
+                // nothing at all, and this is the one that can **write** —
+                // the person should know whose folder it is working in
+                // before they send, not after.
+                Label(workspaceName, systemImage: mode.isReadOnly ? "lock" : "square.and.pencil")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(mode.isReadOnly
+                        ? "Reads \(workspaceName). It cannot change anything."
+                        : "Reads and edits the files in \(workspaceName).")
             }
             Label(connectionState.label, systemImage: connectionState.systemImage)
                 .font(.caption)
