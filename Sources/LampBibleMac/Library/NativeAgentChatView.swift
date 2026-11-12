@@ -100,6 +100,17 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
         if process?.isRunning == true { process?.terminate() }
     }
 
+    /// Readies the runner for a run, clearing the last one's stop.
+    ///
+    /// Done by the caller **before** the work is scheduled. Cleared inside
+    /// the worker instead, a Stop pressed between scheduling and the worker
+    /// starting was wiped by the run it was meant to stop.
+    func prepareForRun() {
+        lock.lock()
+        cancelled = false
+        lock.unlock()
+    }
+
     /// Whether this runner has been stopped, read at each point a run can
     /// still be abandoned cheaply.
     private var isCancelled: Bool {
@@ -115,10 +126,6 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
         onLine: (@Sendable (String) -> Void)? = nil
     ) -> AgentCLIProcessResult {
         do {
-            lock.lock()
-            // A new run clears the last one's stop.
-            cancelled = false
-            lock.unlock()
             let executableURL = try resolveExecutable(named: executableName)
             guard !isCancelled else { return .stoppedBeforeStarting }
             let process = Process()
@@ -150,6 +157,12 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
 
             guard !isCancelled else { return .stoppedBeforeStarting }
             try process.run()
+            // And once more, now there is something to terminate. Stop
+            // between the guard above and this line found an assigned but
+            // unstarted process and killed nothing, so the provider ran on
+            // — doing, for a writing agent, work on the person's draft
+            // after they had said stop.
+            if isCancelled { process.terminate() }
             // Read the pipe as it fills rather than at the end. Reading to the
             // end of the file first is what left a chat with nothing to show
             // but its spinner: every event had already happened by the time
@@ -1009,15 +1022,30 @@ private final class NativeAgentChatModel: ObservableObject {
     ) async -> Bool {
         let prompt = rawPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty, !isRunning else { return false }
-        if let expected, expected != conversationID { return false }
-        // Turns from Terminal or another Mac may have arrived since this chat
-        // last looked; the message carries on from them.
+        // Turns from Terminal, another pane or another Mac may have arrived
+        // while this prompt was being prepared, so the conversation is read
+        // from disk **before** it is judged against the one the caller
+        // meant. Judged against the copy in memory, a clear that had
+        // already happened on disk was invisible and the message landed in
+        // the conversation that replaced it.
         reloadIfChangedOnDisk()
+        guard expected == conversationID else { return false }
+        // Already in the conversation, so it has been sent — by this pane
+        // before a crash, or by another pane sharing this workspace, which
+        // a writing window can have open at the same time. Its queue entry
+        // is stale rather than waiting.
+        if let messageID, knownTranscript?.messages.contains(where: { $0.id == messageID }) == true {
+            completeQueued(messageID)
+            return false
+        }
         errorMessage = nil
         needsProviderSetup = false
         stoppedNotice = nil
         isRunning = true
         cancelRequested = false
+        // Before the work is scheduled: cleared inside the worker, a Stop
+        // pressed in between was wiped by the run it was meant to stop.
+        runner.prepareForRun()
         // Resuming a session this Mac holds means the recap is behind us: the
         // provider has the whole conversation again. The notice stays up through
         // the reply to the recap itself, which is where it explains something.
@@ -1051,12 +1079,12 @@ private final class NativeAgentChatModel: ObservableObject {
             isSender: false,
             date: Date()
         ))
-        persistTranscript()
-        // Written down, so it is no longer waiting. Done here rather than
-        // when the run returns: by now the question is in the transcript
-        // under the queued message's own id, which is what says it was
-        // taken, and a quit during the run must not find it waiting again.
-        if let messageID { completeQueued(messageID) }
+        // Only once the question is **safely** written down does it stop
+        // waiting. The save reports failure rather than throwing, so
+        // completing regardless could take a message off the queue that a
+        // full disk had kept out of the transcript — gone from both.
+        let written = persistTranscript()
+        if let messageID, written { completeQueued(messageID) }
 
         streamTask?.cancel()
         streamTask = showReplyAsItArrives()
@@ -1103,6 +1131,13 @@ private final class NativeAgentChatModel: ObservableObject {
         // the cleared questions returned on the next load.
         events = []
         recordingTurn = nil
+        stepsRowIDs = [:]
+        // The waiting messages were written to **this** conversation, and
+        // it is being put away. Sending them into its replacement would be
+        // answering a question nobody asked here; keeping them while the
+        // transcript that recorded their having been sent is cleared is how
+        // one of them gets sent a second time.
+        if !queued.isEmpty { changeQueue { $0 = AgentChatQueue() } }
         errorMessage = nil
         continuityNotice = nil
         persistTranscript()
@@ -1543,6 +1578,9 @@ private final class NativeAgentChatModel: ObservableObject {
 
     /// The queue's own rules live in `AgentChatQueue`; this keeps it on
     /// screen and on disk.
+    /// Whether anything is waiting that nothing is sending yet.
+    var hasWaitingMessage: Bool { reservedQueued == nil && !queued.isEmpty }
+
     private func changeQueue(_ change: (inout AgentChatQueue) -> Void) {
         var queue = AgentChatQueue(messages: queued)
         change(&queue)
@@ -1623,7 +1661,8 @@ private final class NativeAgentChatModel: ObservableObject {
         }
     }
 
-    private func persistTranscript() {
+    @discardableResult
+    private func persistTranscript() -> Bool {
         var transcript = AgentChatTranscript(
             conversationID: conversationID,
             startedAt: conversationStartedAt,
@@ -1647,8 +1686,10 @@ private final class NativeAgentChatModel: ObservableObject {
             try AgentChatTranscriptStore.save(transcript, providerID: provider.rawValue, in: workspace)
             knownTranscript = transcript
             knownModificationDate = transcriptModificationDate()
+            return true
         } catch {
             errorMessage = "Could not save the chat transcript: \(error.localizedDescription)"
+            return false
         }
     }
 }
@@ -1709,6 +1750,13 @@ struct NativeAgentChatView: View {
             : NativeAgentChatModel(provider: provider, workspace: workspace, mode: mode))
     }
 
+    /// Sends the next waiting message, if this pane is free to.
+    private func drainQueue() {
+        guard !isPreparing, !model.isRunning, model.hasWaitingMessage else { return }
+        guard let next = model.reserveNextQueued() else { return }
+        startSending(next.text, queued: next.id)
+    }
+
     /// Sends a message now, which is also how a message that was waiting is
     /// sent when the reply before it lands.
     @discardableResult
@@ -1738,7 +1786,23 @@ struct NativeAgentChatView: View {
                 // reopened and something else is running, or New Chat
                 // happened while this was being prepared — it goes back to
                 // waiting rather than being dropped as sent.
-                if !taken, let queued { model.releaseQueued(queued) }
+                if !taken {
+                    if let queued {
+                        // Back to waiting — and tried again now, since
+                        // nothing else will: the queue is drained by a run
+                        // finishing, and no run started.
+                        model.releaseQueued(queued)
+                        isPreparing = false
+                        drainQueue()
+                    } else {
+                        // A message typed straight in, refused because the
+                        // conversation changed while it was being prepared.
+                        // The composer cleared it when it was accepted, so
+                        // without this it is simply gone.
+                        submissionError = "That message was not sent: the conversation changed while it was being prepared."
+                        if draft.isEmpty { draft = prompt }
+                    }
+                }
                 scrollToBottom = true
             } catch {
                 submissionError = error.localizedDescription
@@ -1900,10 +1964,8 @@ struct NativeAgentChatView: View {
             // a time, because each has to be prepared with the reader's
             // place as it is *now* — a queued question about this chapter
             // was written about this chapter.
-            guard !running, !isPreparing else { return }
-            if let next = model.reserveNextQueued() {
-                startSending(next.text, queued: next.id)
-            }
+            guard !running else { return }
+            drainQueue()
         }
         .onDisappear {
             if !outlivesView { model.cancel() }
@@ -2109,6 +2171,7 @@ private final class AIProviderBrowserAuthenticationModel: ObservableObject {
         guard !didStart else { return }
         didStart = true
         isRunning = true
+        runner.prepareForRun()
         let result = await runner.run(
             executableName: provider.executable,
             arguments: provider.authenticationArguments,
