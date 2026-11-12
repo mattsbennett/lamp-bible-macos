@@ -713,6 +713,12 @@ private final class NativeAgentChatModel: ObservableObject {
     /// and a difference from this is how their changes are noticed rather than
     /// overwritten.
     private var knownTranscript: AgentChatTranscript?
+    /// Everything that has happened in this conversation, which is what the
+    /// transcript keeps. The messages below are what is drawn; these are the
+    /// record a turn can be undone or forked from.
+    @State private var events: [AgentChatTranscript.Event] = []
+    /// The turn being recorded: the id of the user message that began it.
+    @State private var recordingTurn: UUID?
     private var knownModificationDate: Date?
     private var cancelRequested = false
     private var loadingMessageID: UUID?
@@ -760,6 +766,7 @@ private final class NativeAgentChatModel: ObservableObject {
 
     private func show(_ transcript: AgentChatTranscript) {
         knownTranscript = transcript
+        events = transcript.events ?? []
         conversationID = transcript.conversationID
         conversationStartedAt = transcript.startedAt
         // A session held by another Mac — or set aside when sync merged in turns
@@ -808,6 +815,11 @@ private final class NativeAgentChatModel: ObservableObject {
             date: Date()
         )
         messages.append(userMessage)
+        recordingTurn = userMessage.id
+        record(
+            AgentChatTranscript.Event.said, role: .user,
+            text: prompt, at: userMessage.date
+        )
         let loadingID = UUID()
         loadingMessageID = loadingID
         messages.append(NativeAgentChatMessage(
@@ -986,6 +998,10 @@ private final class NativeAgentChatModel: ObservableObject {
         for event in events {
             switch event {
             case .activity(let value):
+                // Only where it changed: a run reports the same thing many
+                // times a second, and a record of that is noise, not a
+                // record.
+                if activity != value { record(value) }
                 activity = activity?.succeeded(by: value) ?? value
             case .textFragment(let text):
                 streamedReply += text
@@ -1096,6 +1112,7 @@ private final class NativeAgentChatModel: ObservableObject {
                 ? "That reply was stopped. \(provider.shortName) still has the conversation, so your next message carries on from it."
                 : "That reply was stopped partway through."
         case .failed(let failure):
+            record(AgentChatTranscript.Event.failed, text: failure)
             let setupVerdict = AgentChatSetupRequirement.verdict(
                 output: result.output,
                 failure: failure,
@@ -1115,16 +1132,25 @@ private final class NativeAgentChatModel: ObservableObject {
             appendAgentMarkdown(notice)
         }
         persistTranscript()
+        // The turn is over. What happens before the next question is the
+        // app's business, not the conversation's.
+        recordingTurn = nil
     }
 
     private func appendAgentMarkdown(_ markdown: String) {
+        let id = UUID()
+        let date = Date()
         messages.append(NativeAgentChatMessage(
-            id: UUID(),
+            id: id,
             user: agentUser,
             messageKind: .custom(AgentMessageContent(markdown: markdown)),
             isSender: false,
-            date: Date()
+            date: date
         ))
+        // Under the same id the drawn message has, so what is written down
+        // and what is on screen are the same thing rather than two readings
+        // of it.
+        recordSaid(id: id, role: .assistant, text: markdown, at: date)
     }
 
     private func makeChatMessage(_ message: AgentChatTranscript.Message) -> NativeAgentChatMessage {
@@ -1139,6 +1165,61 @@ private final class NativeAgentChatModel: ObservableObject {
             isSender: isSender,
             date: message.date
         )
+    }
+
+    /// Writes down one thing that happened, against the turn in progress.
+    ///
+    /// Outside a turn there is nothing to hang it on, so nothing is kept —
+    /// which is right: what happens between turns is the app's, not the
+    /// conversation's.
+    private func record(
+        _ kind: String,
+        role: AgentChatTranscript.Role? = nil,
+        name: String? = nil,
+        text: String? = nil,
+        at date: Date = Date()
+    ) {
+        guard let recordingTurn else { return }
+        events.append(AgentChatTranscript.Event(
+            id: kind == AgentChatTranscript.Event.said && role == .user ? recordingTurn : UUID(),
+            turn: recordingTurn, date: date, kind: kind, role: role, name: name, text: text
+        ))
+    }
+
+    /// Something said, under the id the drawn message carries.
+    private func recordSaid(
+        id: UUID, role: AgentChatTranscript.Role, text: String, at date: Date
+    ) {
+        guard let recordingTurn else { return }
+        events.append(AgentChatTranscript.Event(
+            id: id, turn: recordingTurn, date: date,
+            kind: AgentChatTranscript.Event.said, role: role, text: text
+        ))
+    }
+
+    /// One step of a run, written down as the kind of thing it was.
+    ///
+    /// A tool call is kept by name, because what the agent *did* is the part
+    /// a reader wants afterwards. Thinking and writing are kept as activity:
+    /// they say the run was alive, which is worth having when a turn is read
+    /// back and worth nothing in the middle of it.
+    private func record(_ step: AgentChatActivity) {
+        switch step {
+        case .toolStarted(let name), .tool(let name, _):
+            var summary: String?
+            if case .tool(_, let value) = step { summary = value }
+            record(
+                AgentChatTranscript.Event.tool,
+                name: AgentChatToolDescription.label(for: name),
+                text: summary
+            )
+        case .thinking:
+            record(AgentChatTranscript.Event.activity, text: "Thinking")
+        case .writing:
+            record(AgentChatTranscript.Event.activity, text: "Writing")
+        case .toolFinished:
+            break
+        }
     }
 
     private func transcriptMessages() -> [AgentChatTranscript.Message] {
@@ -1160,7 +1241,8 @@ private final class NativeAgentChatModel: ObservableObject {
             startedAt: conversationStartedAt,
             sessionID: sessionID,
             sessionInstallID: sessionID == nil ? nil : installID,
-            messages: transcriptMessages()
+            messages: transcriptMessages(),
+            events: events.isEmpty ? knownTranscript?.events : events
         )
         let onDisk = AgentChatTranscriptStore.load(providerID: provider.rawValue, in: workspace)
         if onDisk != knownTranscript {
