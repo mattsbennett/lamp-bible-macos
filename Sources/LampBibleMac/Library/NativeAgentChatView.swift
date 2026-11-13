@@ -980,13 +980,24 @@ final class NativeAgentChatModel: ObservableObject {
     /// The identity each turn's steps row is drawn under, kept so it is the
     /// same row across redraws.
     private var stepsRowIDs: [UUID: UUID] = [:]
-    /// Told when the queue has been read from disk, so a pane can send what
-    /// was waiting rather than leave it until the next reply.
-    var onQueueReady: (() -> Void)?
-    /// The pane that set `onQueueReady`, so a pane going away clears only its
-    /// own: the closure holds that pane, and through it the reader of the
-    /// tab it was in, for as long as the chat is kept.
-    var queueReadyOwner: AnyHashable?
+    /// Told when the queue has been read from disk, one per pane.
+    ///
+    /// An owner token fixed the worst of this — a pane going away used to
+    /// clear a *different* pane's closure, and the closure held that pane
+    /// and through it the reader of the tab it was in. What a single
+    /// owner cannot do is hand the job back: with two panes open, the
+    /// second to appear owned it, and when that one went the first was
+    /// left with nothing listening, though it was still on screen. Keyed
+    /// per pane, like the turn observers, there is nothing to hand back.
+    private var queueObservers: [AnyHashable: () -> Void] = [:]
+
+    func observeQueueReady(for token: AnyHashable, _ observe: @escaping () -> Void) {
+        queueObservers[token] = observe
+    }
+
+    func stopObservingQueueReady(for token: AnyHashable) {
+        queueObservers.removeValue(forKey: token)
+    }
     /// Told which turn is being recorded, so a workspace can mark what the
     /// agent changes with the turn that asked for it.
     ///
@@ -1125,7 +1136,7 @@ final class NativeAgentChatModel: ObservableObject {
         // What was restored may be waiting with nothing about to run, and
         // the queue is otherwise drained only by a reply landing. Without
         // this, messages recovered at launch sat there until the next one.
-        onQueueReady?()
+        for observe in queueObservers.values { observe() }
         adopt(AgentChatTranscriptStore.load(providerID: provider.rawValue, in: workspace))
     }
 
@@ -2308,8 +2319,7 @@ struct NativeAgentChatView: View {
             }
         }
         .onAppear {
-            model.onQueueReady = { drainQueue() }
-            model.queueReadyOwner = paneToken
+            model.observeQueueReady(for: paneToken) { drainQueue() }
             // Into state, not straight on to the host. A closure
             // registered here keeps the view struct it was made with, and
             // a plain `let` in that struct — the draft the writing held
@@ -2332,10 +2342,7 @@ struct NativeAgentChatView: View {
         }
         .onDisappear {
             model.stopObservingTurn(for: paneToken)
-            if model.queueReadyOwner == AnyHashable(paneToken) {
-                model.onQueueReady = nil
-                model.queueReadyOwner = nil
-            }
+            model.stopObservingQueueReady(for: paneToken)
             // And told so. A host that goes on holding the turn it was last
             // told about would mark everything written afterwards — by a run
             // that outlives this pane, or by the person — as that turn's

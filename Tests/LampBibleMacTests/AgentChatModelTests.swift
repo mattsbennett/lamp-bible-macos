@@ -369,6 +369,35 @@ struct AgentChatModelTests {
         #expect(KeptAgentChats.existing(provider: .claude, workspace: second) === kept)
     }
 
+    /// Every pane is told the queue has been read, and one going away
+    /// takes only its own listening with it.
+    ///
+    /// A single callback with an owner token stopped a pane clearing
+    /// another pane's, but could not hand the job back: with two open,
+    /// the second to appear owned it, and when that one went the first
+    /// was left listening to nothing while still on screen.
+    @Test func everyPaneHearsThatTheQueueWasRead() throws {
+        let workspace = try workspace()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        try AgentChatTranscriptStore.save(
+            conversation(UUID(), [(UUID(), 10, "One")]), providerID: providerID, in: workspace
+        )
+        var queue = AgentChatQueue()
+        queue.add("Waiting")
+        try AgentChatQueueStore.save(queue, providerID: providerID, in: workspace)
+
+        let model = NativeAgentChatModel(provider: .claude, workspace: workspace, mode: .writing)
+        var heard: [String] = []
+        model.observeQueueReady(for: "first") { heard.append("first") }
+        model.observeQueueReady(for: "second") { heard.append("second") }
+
+        // The second pane closes; the first is still showing the chat.
+        model.stopObservingQueueReady(for: "second")
+        model.load()
+
+        #expect(heard == ["first"], "the pane still on screen is told")
+    }
+
     /// A turn that ends can still be asked for once.
     ///
     /// SwiftUI delivers two state changes in one update cycle as their
