@@ -20,6 +20,17 @@ public struct LampAgentMCPConfiguration: Equatable, Sendable {
     /// that position until this was passed, told by its instructions to call
     /// a tool that could only refuse.
     public let skillsURL: URL?
+    /// The reader chat this server answers in, when it answers in one.
+    ///
+    /// What lets `start_writing` bring the conversation along: the agent
+    /// asking is the one in that chat, and it has no way to name the chat
+    /// itself, nor should it be trusted to.
+    public let readerChatID: UUID?
+    /// Which provider the reader chat's helper answers for. A chat can hold a
+    /// conversation with each provider, and a writing started from one must
+    /// take the conversation that asked for it, not whichever the chat has
+    /// moved on to by the time Lamp makes the writing.
+    public let readerChatProviderID: String?
 
     public init(
         helperExecutableURL: URL,
@@ -27,7 +38,9 @@ public struct LampAgentMCPConfiguration: Equatable, Sendable {
         bundledModulesArchiveURL: URL? = nil,
         policyURL: URL,
         workspaceURL: URL? = nil,
-        skillsURL: URL? = nil
+        skillsURL: URL? = nil,
+        readerChatID: UUID? = nil,
+        readerChatProviderID: String? = nil
     ) {
         self.helperExecutableURL = helperExecutableURL
         self.libraryRootURL = libraryRootURL
@@ -35,6 +48,24 @@ public struct LampAgentMCPConfiguration: Equatable, Sendable {
         self.policyURL = policyURL
         self.workspaceURL = workspaceURL
         self.skillsURL = skillsURL
+        self.readerChatID = readerChatID
+        self.readerChatProviderID = readerChatProviderID
+    }
+
+    /// This configuration as one provider's helper is started with it: the
+    /// same, telling a reader chat's helper whose conversation it serves.
+    public func answering(provider providerID: String) -> LampAgentMCPConfiguration {
+        guard readerChatID != nil else { return self }
+        return LampAgentMCPConfiguration(
+            helperExecutableURL: helperExecutableURL,
+            libraryRootURL: libraryRootURL,
+            bundledModulesArchiveURL: bundledModulesArchiveURL,
+            policyURL: policyURL,
+            workspaceURL: workspaceURL,
+            skillsURL: skillsURL,
+            readerChatID: readerChatID,
+            readerChatProviderID: providerID
+        )
     }
 
     public var arguments: [String] {
@@ -49,6 +80,12 @@ public struct LampAgentMCPConfiguration: Equatable, Sendable {
         if let skillsURL {
             result += ["--skills", skillsURL.path]
         }
+        if let readerChatID {
+            result += ["--reader-chat", readerChatID.uuidString]
+            if let readerChatProviderID {
+                result += ["--reader-chat-provider", readerChatProviderID]
+            }
+        }
         return result
     }
 
@@ -56,17 +93,19 @@ public struct LampAgentMCPConfiguration: Equatable, Sendable {
         let fileManager = FileManager.default
         let codexDirectory = workspace.appendingPathComponent(".codex", isDirectory: true)
         try fileManager.createDirectory(at: codexDirectory, withIntermediateDirectories: true)
-        try codexTOML.write(
+        // Each file is read by one provider only, so each names that one.
+        try answering(provider: AgentChatWireProvider.codex.rawValue).codexTOML.write(
             to: codexDirectory.appendingPathComponent("config.toml"),
             atomically: true,
             encoding: .utf8
         )
-        try claudeJSON.write(
+        try answering(provider: AgentChatWireProvider.claude.rawValue).claudeJSON.write(
             to: workspace.appendingPathComponent(".mcp.json"),
             atomically: true,
             encoding: .utf8
         )
-        try (readOnly ? readOnlyOpenCodeJSON : openCodeJSON).write(
+        let openCode = answering(provider: AgentChatWireProvider.openCode.rawValue)
+        try (readOnly ? openCode.readOnlyOpenCodeJSON : openCode.openCodeJSON).write(
             to: workspace.appendingPathComponent("opencode.json"),
             atomically: true,
             encoding: .utf8

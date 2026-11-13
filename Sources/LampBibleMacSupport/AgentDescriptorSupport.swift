@@ -36,6 +36,11 @@ public struct LampAgentDescriptor: Codable, Equatable, Sendable {
     /// description, so this grants adding something new and nothing else —
     /// never changing or removing what is already in the library.
     public var allowsExternalReadingPlans: Bool
+    /// Whether an agent may start a new writing: one in a reader chat, which
+    /// carries its conversation into it, or one in another app. Its own
+    /// switch, off until turned on. It grants adding a writing that was not
+    /// there, and nothing else — never changing one that was.
+    public var allowsWritingStarts: Bool
 
     public init(
         version: Int = currentVersion,
@@ -44,7 +49,8 @@ public struct LampAgentDescriptor: Codable, Equatable, Sendable {
         bundledModulesArchivePath: String? = nil,
         allowsExternalApps: Bool = false,
         allowsExternalWriting: Bool = false,
-        allowsExternalReadingPlans: Bool = false
+        allowsExternalReadingPlans: Bool = false,
+        allowsWritingStarts: Bool = false
     ) {
         self.version = version
         self.libraryRootPath = libraryRootPath
@@ -53,6 +59,7 @@ public struct LampAgentDescriptor: Codable, Equatable, Sendable {
         self.allowsExternalApps = allowsExternalApps
         self.allowsExternalWriting = allowsExternalWriting
         self.allowsExternalReadingPlans = allowsExternalReadingPlans
+        self.allowsWritingStarts = allowsWritingStarts
     }
 
     public init(from decoder: Decoder) throws {
@@ -73,6 +80,9 @@ public struct LampAgentDescriptor: Codable, Equatable, Sendable {
         ) ?? false
         allowsExternalReadingPlans = try container.decodeIfPresent(
             Bool.self, forKey: .allowsExternalReadingPlans
+        ) ?? false
+        allowsWritingStarts = try container.decodeIfPresent(
+            Bool.self, forKey: .allowsWritingStarts
         ) ?? false
     }
 

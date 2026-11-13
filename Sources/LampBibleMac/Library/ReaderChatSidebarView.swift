@@ -8,6 +8,7 @@ import SwiftUI
 struct ReaderChatSidebarView: View {
     @EnvironmentObject private var libraryModel: LibraryModel
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
     @AppStorage("reader.chat.provider") private var providerID = AIProviderCLI.codex.rawValue
     @AppStorage("agent.moduleAccess.enabled") private var moduleAccessEnabled = true
     @AppStorage("agent.moduleAccess.scope")
@@ -27,6 +28,13 @@ struct ReaderChatSidebarView: View {
     /// owns the move, since it is the tab's chat that changes.
     let resume: (UUID?) -> Void
     @State private var forkError: String?
+    /// A writing about to be started from this chat, while the reader
+    /// confirms it.
+    @State private var writingToStart: WritingFromChat?
+    @State private var writingError: String?
+    /// The writings started from this chat, read from beside its transcript.
+    @State private var startedWritings: [ReaderChatWritingCopy.Started] = []
+    @State private var isReplying = false
     let close: () -> Void
     /// The reader of the tab this chat belongs to. A question is prepared
     /// with that tab's place when it is sent, which for a queued one is
@@ -77,6 +85,67 @@ struct ReaderChatSidebarView: View {
         } catch {
             forkError = "Could not start a chat from that turn: \(error.localizedDescription)"
         }
+    }
+
+    /// Offers to start a writing from the conversation, up to `turn` or the
+    /// whole of it.
+    ///
+    /// What the sheet shows is read here, as it opens, and handed in: see
+    /// the chat chooser's popover for why it is not read from this view's
+    /// state inside the sheet.
+    private func offerWriting(upTo turn: UUID?) {
+        let transcript = AgentChatTranscriptStore.load(providerID: provider.rawValue, in: workspace)
+        let turns = transcript.turns.filter { $0.question != nil }
+        writingToStart = WritingFromChat(
+            turn: turn,
+            title: (turn.flatMap { id in turns.first { $0.id == id }?.question } ?? turns.first?.question)
+                .map { ReaderChatWorkspaceStore.label($0) } ?? "",
+            hasConversation: !turns.isEmpty
+        )
+    }
+
+    /// Starts the writing, copies the conversation into it and opens it with
+    /// its chat showing.
+    private func startWriting(_ request: WritingFromChat, title: String) {
+        writingToStart = nil
+        // Whether a reply has begun since the sheet opened is asked by
+        // `startWriting` itself, just before it copies, which is the only
+        // place the answer cannot go stale.
+        Task {
+            do {
+                let saved = try await libraryModel.startWriting(
+                    title: title,
+                    fromReaderChat: request.hasConversation ? chatID : nil,
+                    upTo: request.turn,
+                    providerID: provider.rawValue
+                )
+                if !request.hasConversation {
+                    // Nothing to copy, but still this chat's writing.
+                    try? ReaderChatWritingCopy.recordStarted(
+                        .init(writingID: saved.id, title: saved.title),
+                        chat: chatID, libraryRootURL: libraryModel.library.rootURL
+                    )
+                }
+                loadStartedWritings()
+                open(writingID: saved.id)
+            } catch {
+                writingError = error.localizedDescription
+            }
+        }
+    }
+
+    private func open(writingID: String) {
+        openWindow(
+            id: "devotional-editor",
+            value: DevotionalEditorRequest(devotionalID: writingID, opensAgentPane: true)
+        )
+    }
+
+    private func loadStartedWritings() {
+        let started = ReaderChatWritingCopy.started(
+            chat: chatID, libraryRootURL: libraryModel.library.rootURL
+        )
+        if started != startedWritings { startedWritings = started }
     }
 
     private var workspace: URL {
@@ -258,6 +327,13 @@ struct ReaderChatSidebarView: View {
                     Text("Reader Chat")
                         .font(.headline)
                     Spacer()
+                    Button("Start a Writing", systemImage: "square.and.pencil") {
+                        offerWriting(upTo: nil)
+                    }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(ChatControlButtonStyle())
+                    .disabled(isReplying)
+                    .help("Start a writing from this conversation")
                     Button("Chats", systemImage: "clock.arrow.circlepath") {
                         isChoosingChat = true
                     }
@@ -324,13 +400,18 @@ struct ReaderChatSidebarView: View {
                 .padding(.leading, -6)
 
                 contextCard
+                startedWritingsLine
             }
             .padding(.horizontal, 14)
             .padding(.top, 12)
             .padding(.bottom, 12)
             Divider()
 
-            if let configuration {
+            // Only a configuration made for **this** chat. The pane is kept
+            // when its tab moves to another chat, and a chat mounted with the
+            // last one's configuration would hand its helper the wrong chat
+            // — a writing asked for in it would take that other conversation.
+            if let configuration, configuration.readerChatID == chatID {
                 NativeAgentChatView(
                     provider: provider,
                     workspace: workspace,
@@ -346,7 +427,11 @@ struct ReaderChatSidebarView: View {
                         let notes = await notes(on: capture.noteReferences)
                         return capture.context(notes: notes).prompt(for: question)
                     },
-                    forkFromTurn: forkFromTurn
+                    onRunningChanged: { running in
+                        if isReplying != running { isReplying = running }
+                    },
+                    forkFromTurn: forkFromTurn,
+                    startWritingFromTurn: { offerWriting(upTo: $0) }
                 )
                 .id("\(provider.rawValue)|\(workspace.path)")
             } else if let preparationError {
@@ -375,7 +460,39 @@ struct ReaderChatSidebarView: View {
         } message: { reason in
             Text(reason)
         }
-        .onAppear(perform: prepareWorkspace)
+        .alert(
+            "Could not start the writing",
+            isPresented: Binding(
+                get: { writingError != nil },
+                set: { if !$0 { writingError = nil } }
+            ),
+            presenting: writingError
+        ) { _ in
+            Button("OK", role: .cancel) { writingError = nil }
+        } message: { reason in
+            Text(reason)
+        }
+        .sheet(item: $writingToStart) { request in
+            StartWritingFromChatSheet(request: request) { title in
+                startWriting(request, title: title)
+            } cancel: {
+                writingToStart = nil
+            }
+        }
+        .onAppear {
+            prepareWorkspace()
+            loadStartedWritings()
+        }
+        // A writing an agent asked for in this chat is started when its
+        // reply finishes, by the library, which hears that from the chat
+        // whether or not this pane is open; and tried again here, for one
+        // left waiting.
+        .task { await libraryModel.takeInRequestedWritings() }
+        .onChange(of: libraryModel.startedWritingsRevision) { _, _ in loadStartedWritings() }
+        .onChange(of: chatID) { _, _ in
+            prepareWorkspace()
+            loadStartedWritings()
+        }
         .onChange(of: provider) { _, _ in loadChoices() }
         .onChange(of: accessPolicy) { _, _ in
             do {
@@ -458,6 +575,34 @@ struct ReaderChatSidebarView: View {
         }
     }
 
+    /// The writings started from this chat that are still in the library,
+    /// each a way to it. The chat says where its conversation went, and only
+    /// that: the writing's chat is its own from the moment it was copied.
+    @ViewBuilder
+    private var startedWritingsLine: some View {
+        let present = startedWritings.filter { started in
+            libraryModel.devotionals.contains { $0.id == started.writingID }
+        }
+        if !present.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(present) { started in
+                    HStack(spacing: 6) {
+                        Image(systemName: "square.and.pencil")
+                            .foregroundStyle(.secondary)
+                        Text("Started \u{201C}\(started.title)\u{201D}")
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .help("A writing started from this chat. It has its own copy of the conversation.")
+                        Spacer(minLength: 4)
+                        Button("Open") { open(writingID: started.writingID) }
+                            .buttonStyle(.link)
+                    }
+                }
+            }
+            .font(.caption)
+        }
+    }
+
     private var policyURL: URL { workspace.appendingPathComponent(".lamp/module-policy.json") }
 
     private func writeAccessPolicy() throws {
@@ -501,6 +646,72 @@ struct ReaderChatSidebarView: View {
         } catch {
             preparationError = error.localizedDescription
         }
+    }
+}
+
+/// A writing to be started from a reader chat: up to which turn, what to
+/// call it, and whether there is any conversation to bring.
+private struct WritingFromChat: Identifiable {
+    let id = UUID()
+    /// Nil for the whole conversation.
+    let turn: UUID?
+    let title: String
+    let hasConversation: Bool
+}
+
+/// Asks before starting a writing from a chat, and says what doing so means:
+/// a copy, made once, after which the two conversations are separate.
+private struct StartWritingFromChatSheet: View {
+    let request: WritingFromChat
+    let start: (String) -> Void
+    let cancel: () -> Void
+    @State private var title: String
+
+    init(request: WritingFromChat, start: @escaping (String) -> Void, cancel: @escaping () -> Void) {
+        self.request = request
+        self.start = start
+        self.cancel = cancel
+        _title = State(initialValue: request.title)
+    }
+
+    private var trimmedTitle: String {
+        title.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(request.turn == nil ? "Start a Writing from This Chat" : "Start a Writing from Here")
+                .font(.headline)
+            TextField("Title", text: $title)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { if !trimmedTitle.isEmpty { start(trimmedTitle) } }
+            Text(explanation)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel, action: cancel)
+                    .keyboardShortcut(.cancelAction)
+                Button("Start Writing") { start(trimmedTitle) }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(trimmedTitle.isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 380)
+    }
+
+    private var explanation: String {
+        guard request.hasConversation else {
+            return "Nothing has been said in this chat yet, so the writing starts with an empty chat of its own."
+        }
+        let what = request.turn == nil
+            ? "this conversation is"
+            : "this conversation, up to the question you chose, is"
+        return "A new writing is made and \(what) copied into its chat, where you can carry it on. "
+            + "It is copied once: nothing said afterwards in either chat reaches the other, "
+            + "and this chat stays as it is."
     }
 }
 

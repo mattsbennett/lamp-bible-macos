@@ -168,6 +168,10 @@ final class LibraryModel: ObservableObject {
     /// What the last take-in of plans asked for in other apps did, for the
     /// plans views to show. Nil when there is nothing to say.
     @Published var addedPlanMessage: String?
+    /// What the last take-in of writings asked for in other apps did, for
+    /// the Writing section to show. Nil when there is nothing to say. A
+    /// writing started from a reader chat is shown in that chat instead.
+    @Published var startedWritingMessage: String?
     @Published var errorMessage: String?
     @Published var studyImportMessage: String?
 
@@ -274,6 +278,14 @@ final class LibraryModel: ObservableObject {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.aiPreferencesChanged() }
         }
+        readerTurnObserver = NotificationCenter.default.addObserver(
+            forName: .lampReaderChatTurnFinished, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                Task { await self.takeInRequestedWritings() }
+            }
+        }
     }
 
     deinit {
@@ -281,6 +293,7 @@ final class LibraryModel: ObservableObject {
         moduleSearchTask?.cancel()
         aiSettleTask?.cancel()
         if let aiFeaturesObserver { NotificationCenter.default.removeObserver(aiFeaturesObserver) }
+        if let readerTurnObserver { NotificationCenter.default.removeObserver(readerTurnObserver) }
     }
 
     /// Reads the library for the first time. No reader is open yet to read
@@ -290,6 +303,7 @@ final class LibraryModel: ObservableObject {
         Task {
             await refreshLibrary(reloadingReader: false)
             await takeInRequestedReadingPlans()
+            await takeInRequestedWritings()
         }
     }
 
@@ -321,6 +335,18 @@ final class LibraryModel: ObservableObject {
     /// The switch as last worked out; nil until it first is.
     private var lastAIFeaturesEnabled: Bool?
     private var aiFeaturesObserver: NSObjectProtocol?
+    private var readerTurnObserver: NSObjectProtocol?
+    /// When this run of Lamp began, which says whether a reply that asked
+    /// for a writing can still finish: one from an earlier run cannot.
+    private let launchedAt = Date()
+    /// A take-in of writings is under way, and whether another was asked for
+    /// meanwhile. Take-ins are run one at a time: two at once could each see
+    /// the same request waiting, and both start it.
+    private var isTakingInWritings = false
+    private var takeInWritingsAgain = false
+    /// Bumped whenever a writing is started from a reader chat, for a chat
+    /// pane to read its list again.
+    @Published private(set) var startedWritingsRevision = 0
     private var aiSettleTask: Task<Void, Never>?
 
     /// Preferences change often (a reader's place, a text size), so the
@@ -353,7 +379,8 @@ final class LibraryModel: ObservableObject {
             bundledModulesArchiveURL: Bundle.main.url(forResource: "bundled_modules.db", withExtension: "zlib"),
             allowsExternalApps: defaults.bool(forKey: AgentModuleAccessPreferences.allowsExternalAppsKey),
             allowsExternalWriting: defaults.bool(forKey: AgentModuleAccessPreferences.allowsExternalWritingKey),
-            allowsExternalReadingPlans: defaults.bool(forKey: AgentModuleAccessPreferences.allowsExternalReadingPlansKey)
+            allowsExternalReadingPlans: defaults.bool(forKey: AgentModuleAccessPreferences.allowsExternalReadingPlansKey),
+            allowsWritingStarts: defaults.bool(forKey: AgentModuleAccessPreferences.allowsWritingStartsKey)
         )
     }
 
@@ -1067,6 +1094,196 @@ final class LibraryModel: ObservableObject {
         if !added.isEmpty { await refreshLibrary() }
         if let message = LampReadingPlanAdditions.summary(added: added, refused: refused) {
             addedPlanMessage = message
+        }
+    }
+
+    /// Starts a writing, carrying a reader chat's conversation into it where
+    /// one is named.
+    ///
+    /// The conversation is copied first and the writing saved after, so a
+    /// copy that fails leaves no writing behind that is missing what it was
+    /// started for. Only a save that did not happen takes the copy away
+    /// again: once the writing is in the library, the copy is its
+    /// conversation, whatever goes wrong after.
+    ///
+    /// `providerID` is whose conversation in the chat comes across; nil
+    /// means the one the chat is on now.
+    @discardableResult
+    func startWriting(
+        id: String = UUID().uuidString,
+        title: String,
+        category: String? = nil,
+        draft: String? = nil,
+        fromReaderChat chatID: UUID? = nil,
+        upTo turn: UUID? = nil,
+        providerID: String? = nil
+    ) async throws -> LampDevotional {
+        let workspace = LampWritingWorkspace.url(libraryRootURL: library.rootURL, writingID: id)
+        let hadWorkspace = FileManager.default.fileExists(atPath: workspace.path)
+        func takeBackCopy() {
+            if chatID != nil, !hadWorkspace { try? FileManager.default.removeItem(at: workspace) }
+        }
+        if let chatID {
+            // Checked here, with nothing between it and the copy that could
+            // let a reply begin: a message being prepared when the reader
+            // confirmed can start sending at any suspension, and copied then
+            // the conversation would end at its unanswered question.
+            guard !KeptAgentChats.isRunning(in: ReaderChatWorkspaceStore.workspaceURL(
+                libraryRootURL: library.rootURL, chatID: chatID
+            )) else {
+                throw ReaderChatWritingCopy.CopyError.replyArriving
+            }
+            do {
+                try ReaderChatWritingCopy.copy(
+                    chat: chatID, upTo: turn,
+                    providerID: providerID ?? currentProvider(ofReaderChat: chatID),
+                    libraryRootURL: library.rootURL, writingID: id
+                )
+            } catch {
+                takeBackCopy()
+                throw error
+            }
+        }
+        let now = Date()
+        let saved: LampDevotional
+        do {
+            saved = try await library.savePersonalDevotional(LampDevotional(
+                id: id,
+                moduleID: "personal-devotionals",
+                moduleName: "My Writing",
+                title: title.trimmingCharacters(in: .whitespacesAndNewlines),
+                category: LampWritingCategory.kindToStore(
+                    shown: category ?? LampWritingCategory.suggestions.first, held: nil
+                ),
+                content: draft ?? "",
+                created: now,
+                lastModified: now,
+                isEditable: true
+            ))
+        } catch {
+            takeBackCopy()
+            throw error
+        }
+        // Saved. A list that will not read again is not a writing that was
+        // not made, so it is added to what is shown rather than undone.
+        if let listed = try? await library.devotionals() {
+            devotionals = listed
+        } else if !devotionals.contains(where: { $0.id == saved.id }) {
+            devotionals.append(saved)
+        }
+        await refreshManuscriptNotes(for: saved)
+        if let chatID {
+            // What the chat shows of it. A failure costs the chat its line
+            // pointing to the writing, not the writing.
+            try? ReaderChatWritingCopy.recordStarted(
+                .init(writingID: saved.id, title: saved.title, startedAt: now),
+                chat: chatID, libraryRootURL: library.rootURL
+            )
+            startedWritingsRevision += 1
+        }
+        return saved
+    }
+
+    /// The provider a reader chat is on now, as its pane would open it.
+    private func currentProvider(ofReaderChat chatID: UUID) -> String {
+        AgentChatChoicesStore.load(
+            in: ReaderChatWorkspaceStore.workspaceURL(libraryRootURL: library.rootURL, chatID: chatID)
+        ).value(
+            for: AgentChatChoices.providerKey,
+            orAppDefault: defaults.string(forKey: "reader.chat.provider")
+        ) ?? AIProviderCLI.codex.rawValue
+    }
+
+    /// Starts the writings agents have asked for.
+    ///
+    /// `start_writing` runs in the MCP helper, which must not write into the
+    /// library Lamp has open, so it writes down what was asked for and this
+    /// starts it. Called when the library is first read, when Today, the
+    /// Writing section or a reader chat appears, and whenever a reader chat's
+    /// reply finishes — that last because the request came from inside the
+    /// reply, and the conversation it carries should hold the whole of it.
+    ///
+    /// A request from a reader chat waits until the reply that made it is on
+    /// disk; see `ReaderChatWritingCopy.isReady`. One take-in runs at a time,
+    /// and one asked for while another runs is run after it.
+    func takeInRequestedWritings(
+        applicationSupportURL: URL? = LampAgentDescriptorStore.defaultApplicationSupportURL()
+    ) async {
+        guard !isTakingInWritings else {
+            takeInWritingsAgain = true
+            return
+        }
+        isTakingInWritings = true
+        defer { isTakingInWritings = false }
+        repeat {
+            takeInWritingsAgain = false
+            await takeInRequestedWritingsOnce(applicationSupportURL: applicationSupportURL)
+        } while takeInWritingsAgain
+    }
+
+    private func takeInRequestedWritingsOnce(applicationSupportURL: URL?) async {
+        guard settleAIFeatures(), let applicationSupportURL else { return }
+        let waiting = LampWritingStarts.pending(inApplicationSupport: applicationSupportURL)
+        guard !waiting.isEmpty else { return }
+        var started: [String] = []
+        for request in waiting {
+            var providerID: String?
+            var upTo: UUID?
+            var copiesConversation = request.readerChatID != nil
+            if let chatID = request.readerChatID {
+                let provider = request.readerChatProviderID ?? currentProvider(ofReaderChat: chatID)
+                guard ReaderChatWritingCopy.isReady(
+                    askedAt: request.askedAt,
+                    chat: chatID,
+                    providerID: provider,
+                    libraryRootURL: library.rootURL,
+                    isRunning: KeptAgentChats.isRunning(in: ReaderChatWorkspaceStore.workspaceURL(
+                        libraryRootURL: library.rootURL, chatID: chatID
+                    )),
+                    launchedAt: launchedAt
+                ) else { continue }
+                providerID = provider
+                let asking = ReaderChatWritingCopy.requestingTurn(
+                    askedAt: request.askedAt, chat: chatID,
+                    providerID: provider, libraryRootURL: library.rootURL
+                )
+                // Cleared since it asked: what the chat holds now is not the
+                // conversation the request was made in, so none is copied.
+                copiesConversation = !asking.replaced
+                upTo = asking.turn
+            }
+            // Made already, by a take-in that stopped before forgetting it.
+            guard !devotionals.contains(where: { $0.id == request.id }) else {
+                LampWritingStarts.forget(id: request.id, inApplicationSupport: applicationSupportURL)
+                continue
+            }
+            do {
+                let saved = try await startWriting(
+                    id: request.id,
+                    title: request.title,
+                    category: request.category,
+                    draft: request.draft,
+                    fromReaderChat: copiesConversation ? request.readerChatID : nil,
+                    upTo: upTo,
+                    providerID: providerID
+                )
+                if !copiesConversation, let chatID = request.readerChatID {
+                    try? ReaderChatWritingCopy.recordStarted(
+                        .init(writingID: saved.id, title: saved.title),
+                        chat: chatID, libraryRootURL: library.rootURL
+                    )
+                    startedWritingsRevision += 1
+                }
+                LampWritingStarts.forget(id: request.id, inApplicationSupport: applicationSupportURL)
+                if request.readerChatID == nil { started.append(saved.title) }
+            } catch {
+                errorMessage = "Could not start the writing \u{201C}\(request.title)\u{201D}: \(error.localizedDescription)"
+            }
+        }
+        if started.count == 1 {
+            startedWritingMessage = "Started the writing \u{201C}\(started[0])\u{201D}, asked for in another app."
+        } else if started.count > 1 {
+            startedWritingMessage = "Started \(started.count) writings asked for in another app."
         }
     }
 

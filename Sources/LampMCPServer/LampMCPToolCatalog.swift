@@ -445,6 +445,46 @@ public enum LampMCPToolCatalog {
                 openWorldHint: false
             )
         ),
+        Tool(
+            name: "start_writing",
+            description: """
+            Start a new writing in the user's library, only when they have \
+            asked for one. Needs "Allow agents to start a writing" in Lamp's \
+            Settings, under AI & Agents, which is off until the reader turns \
+            it on. Asked from a Lamp reader chat, the conversation so far is \
+            copied into the new writing's chat once, when your reply has \
+            finished, and carries on there; nothing said afterwards in either \
+            chat reaches the other. Give `draft` only if the user wants the \
+            writing begun with text, such as an outline of what was \
+            discussed; otherwise it starts empty. Lamp makes the writing, so \
+            it is not in the library at the moment this returns, and the \
+            reply says so. Starting twice makes two writings.
+            """,
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "title": string("The writing's title."),
+                    "category": string(
+                        "Optional kind of writing, such as devotional, study, "
+                            + "reflection, exhortation or prayer."
+                    ),
+                    "draft": string(
+                        "Optional Markdown to begin the writing with. Leave it "
+                            + "out to start an empty writing."
+                    ),
+                ]),
+                "additionalProperties": .bool(false),
+                "required": .array([.string("title")]),
+            ]),
+            annotations: .init(
+                readOnlyHint: false,
+                // A writing that was not there before: nothing of the user's
+                // is replaced or removed.
+                destructiveHint: false,
+                idempotentHint: false,
+                openWorldHint: false
+            )
+        ),
     ]
 
     /// What both reading-plan tools take: the same things Lamp's own New

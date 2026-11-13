@@ -61,7 +61,9 @@ struct LampMCPCommand {
                 policy: policy,
                 policyURL: policyURL,
                 workspaceURL: options.workspaceURL,
-                skillsURL: options.skillsURL
+                skillsURL: options.skillsURL,
+                readerChatID: options.readerChatID,
+                readerChatProviderID: options.readerChatProviderID
             )
         } catch {
             FileHandle.standardError.write(Data("lamp-mcp: \(error.localizedDescription)\n".utf8))
@@ -166,6 +168,11 @@ private struct Options {
     /// The folder whose installed skills `read_skill` serves, for a session
     /// with no workspace of its own: a reader chat.
     let skillsURL: URL?
+    /// The reader chat this helper answers in, so `start_writing` can bring
+    /// its conversation along.
+    let readerChatID: UUID?
+    /// Whose conversation in that chat this helper serves.
+    let readerChatProviderID: String?
     /// Whether to fill in what wasn't given from the descriptor Lamp writes.
     /// Set by `--external`, and by being started with no arguments at all:
     /// that is what an outside app's config looks like, since a config cannot
@@ -186,6 +193,8 @@ private struct Options {
         var renderWidth = 1_600.0
         var workspaceURL: URL?
         var skillsURL: URL?
+        var readerChatID: UUID?
+        var readerChatProviderID: String?
         var usesDescriptor = arguments.isEmpty
         var index = 0
         while index < arguments.count {
@@ -235,6 +244,17 @@ private struct Options {
                 index += 1
                 guard arguments.indices.contains(index) else { throw OptionError.missingValue(argument) }
                 skillsURL = URL(fileURLWithPath: arguments[index], isDirectory: true)
+            case "--reader-chat":
+                index += 1
+                guard arguments.indices.contains(index) else { throw OptionError.missingValue(argument) }
+                guard let id = UUID(uuidString: arguments[index]) else {
+                    throw OptionError.invalidValue(argument, "Use the reader chat's identifier.")
+                }
+                readerChatID = id
+            case "--reader-chat-provider":
+                index += 1
+                guard arguments.indices.contains(index) else { throw OptionError.missingValue(argument) }
+                readerChatProviderID = arguments[index]
             case "--slides":
                 index += 1
                 guard arguments.indices.contains(index) else { throw OptionError.missingValue(argument) }
@@ -278,6 +298,8 @@ private struct Options {
         self.renderWidth = renderWidth
         self.workspaceURL = workspaceURL
         self.skillsURL = skillsURL
+        self.readerChatID = readerChatID
+        self.readerChatProviderID = readerChatProviderID
         self.usesDescriptor = usesDescriptor
     }
 }
@@ -293,7 +315,7 @@ private enum OptionError: Error, LocalizedError {
     var errorDescription: String? {
         let usage = """
         Usage: lamp-mcp [--external]
-               lamp-mcp --library-root PATH [--bundled-modules-archive PATH] [--policy PATH] [--workspace DIR] [--skills DIR] [--health-check]
+               lamp-mcp --library-root PATH [--bundled-modules-archive PATH] [--policy PATH] [--workspace DIR] [--skills DIR] [--reader-chat ID [--reader-chat-provider NAME]] [--health-check]
                lamp-mcp --render-deck PATH [--output DIR] [--overview FILE] [--slides 1,3,5] [--width 1600] [--library-root PATH] [--manuscript PATH]
                lamp-mcp --build-deck PATH --manuscript PATH
         """

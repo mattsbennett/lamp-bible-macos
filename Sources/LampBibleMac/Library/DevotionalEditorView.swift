@@ -11,9 +11,19 @@ import UniformTypeIdentifiers
 /// Identifies which devotional an editor window is for. A `nil` id opens a blank one.
 struct DevotionalEditorRequest: Codable, Hashable {
     var devotionalID: String?
+    /// Opens the writing with its agent pane showing: for a writing started
+    /// from a reader chat, whose conversation is in that pane.
+    var opensAgentPane = false
 
-    init(devotionalID: String? = nil) {
+    init(devotionalID: String? = nil, opensAgentPane: Bool = false) {
         self.devotionalID = devotionalID
+        self.opensAgentPane = opensAgentPane
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        devotionalID = try container.decodeIfPresent(String.self, forKey: .devotionalID)
+        opensAgentPane = try container.decodeIfPresent(Bool.self, forKey: .opensAgentPane) ?? false
     }
 }
 
@@ -2785,6 +2795,7 @@ struct DevotionalEditorView: View {
             hasLoaded = true
             return
         }
+        if request.opensAgentPane, aiFeaturesEnabled { showingAgentWorkspace = true }
         identifier = devotional.id
         createdDate = devotional.created
         title = devotional.title

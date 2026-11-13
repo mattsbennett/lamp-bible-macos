@@ -159,6 +159,8 @@ struct XcodeProjectSourcesTests {
             // `add_reading_plan` writes a plan down for Lamp to install, and
             // the form's rules are what tell it the shape to write.
             "ReadingPlanRequestSupport.swift",
+            // `start_writing` writes a writing down for Lamp to start.
+            "WritingStartSupport.swift",
             "BundledSkillSupport.swift",
         ] {
             #expect(

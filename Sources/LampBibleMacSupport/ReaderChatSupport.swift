@@ -120,6 +120,9 @@ public struct ReaderChatContext: Equatable, Sendable {
     You are the Bible study chat in Lamp Bible's reader. Discuss scripture conversationally.
     This is a read-only conversation: do not create or edit files, modules, notes, devotionals,
     settings, or other content, and do not launch other agents or use external services.
+    The one exception is a writing the user asks for: when they want to take the conversation into
+    a writing of their own, `start_writing` starts one in their library and copies this
+    conversation into it once. Call it only when they ask, once, and tell them what it replied.
     Use only the read-only `lamp` module tools for research. Start by listing available modules.
     Read passages before quoting them; use the current translation unless the user requests another.
     Read scripture before interpretive sources. Consult commentaries and books when the question
@@ -524,7 +527,7 @@ public enum ReaderChatWorkspaceStore {
 
     /// Something said, as a list shows it: one line, trimmed, and cut at a
     /// word where it is too long to read at a glance.
-    static func label(_ text: String, limit: Int = 80) -> String {
+    public static func label(_ text: String, limit: Int = 80) -> String {
         let line = text
             .split(whereSeparator: \.isNewline)
             .joined(separator: " ")
@@ -632,7 +635,10 @@ public enum ReaderChatWorkspaceStore {
             libraryRootURL: libraryRootURL,
             bundledModulesArchiveURL: bundledModulesArchiveURL,
             policyURL: policyURL,
-            skillsURL: workspace
+            skillsURL: workspace,
+            // The chat's identifier is its folder's name, as
+            // `workspaceURL(libraryRootURL:chatID:)` makes it.
+            readerChatID: UUID(uuidString: workspace.lastPathComponent)
         )
     }
 

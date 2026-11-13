@@ -95,7 +95,10 @@ struct TodayView: View {
         .sheet(isPresented: $isMakingPlan) { NewReadingPlanSheet() }
         // A plan asked for in another app is installed by Lamp, not by the
         // helper that was asked; here is where someone will look for it.
-        .task { await model.takeInRequestedReadingPlans() }
+        .task {
+            await model.takeInRequestedReadingPlans()
+            await model.takeInRequestedWritings()
+        }
         .task(id: request) { await loadDays() }
     }
 

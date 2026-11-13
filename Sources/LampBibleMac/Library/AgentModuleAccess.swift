@@ -90,6 +90,11 @@ enum AgentModuleAccessPreferences {
     /// lays out, not changing or removing anything already in the library.
     static let allowsExternalReadingPlansKey = "agent.externalApps.readingPlans"
 
+    /// The key behind the switch that lets an agent start a writing: one in a
+    /// reader chat, or one in another app. Its own, and off until turned on,
+    /// because it is the one way a reader chat can add to the library.
+    static let allowsWritingStartsKey = "agent.writingStarts"
+
     /// Writes the policy, and the descriptor that tells a helper started by
     /// another app where to find it.
     ///
@@ -105,6 +110,7 @@ enum AgentModuleAccessPreferences {
         allowsExternalApps: Bool,
         allowsExternalWriting: Bool,
         allowsExternalReadingPlans: Bool,
+        allowsWritingStarts: Bool,
         applicationSupportURL: URL? = LampAgentDescriptorStore.defaultApplicationSupportURL()
     ) throws -> URL {
         let policyURL = try writePolicy(policy, libraryRootURL: libraryRootURL)
@@ -122,7 +128,8 @@ enum AgentModuleAccessPreferences {
                 bundledModulesArchivePath: bundledModulesArchiveURL?.path,
                 allowsExternalApps: allowsExternalApps,
                 allowsExternalWriting: allowsExternalWriting,
-                allowsExternalReadingPlans: allowsExternalReadingPlans
+                allowsExternalReadingPlans: allowsExternalReadingPlans,
+                allowsWritingStarts: allowsWritingStarts
             ),
             inApplicationSupport: applicationSupportURL
         )
@@ -145,6 +152,7 @@ enum AgentModuleAccessPreferences {
             allowsExternalApps: false,
             allowsExternalWriting: false,
             allowsExternalReadingPlans: false,
+            allowsWritingStarts: false,
             applicationSupportURL: support
         )
     }

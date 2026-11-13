@@ -438,7 +438,7 @@ public enum AgentChatLaunchArguments {
             if case .reader(let configuration) = mode {
                 // Explicit overrides also work before a generated workspace is trusted.
                 arguments += ["-c", "approval_policy=\"never\""]
-                arguments += configuration.codexCommandLineOverrides
+                arguments += configuration.answering(provider: provider.rawValue).codexCommandLineOverrides
             }
             if let sessionID { arguments += ["resume", sessionID] }
             arguments += ["--", prompt]
@@ -452,7 +452,8 @@ public enum AgentChatLaunchArguments {
             if case .reader(let configuration) = mode {
                 arguments += [
                     "--tools", "", "--allowedTools", "mcp__lamp__*",
-                    "--strict-mcp-config", "--mcp-config", configuration.claudeJSON,
+                    "--strict-mcp-config", "--mcp-config",
+                    configuration.answering(provider: provider.rawValue).claudeJSON,
                     "--disable-slash-commands",
                 ]
             } else if let permissionHookSettings {

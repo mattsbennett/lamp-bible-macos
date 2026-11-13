@@ -25,6 +25,11 @@ public actor LampMCPToolHandler {
     /// Where `read_skill` finds the session's skills when it has no
     /// workspace: a reader chat's own folder.
     private let skillsURL: URL?
+    /// The reader chat this session answers in, whose conversation a writing
+    /// started from it takes along. Nil for any other session.
+    private let readerChatID: UUID?
+    /// Whose conversation in that chat this session is.
+    private let readerChatProviderID: String?
     private let encoder: JSONEncoder
     /// The policy as last read, kept because some tools have to ask about it
     /// rather than let the library enforce it.
@@ -61,6 +66,14 @@ public actor LampMCPToolHandler {
             .allowsExternalReadingPlans ?? false
     }
 
+    /// Whether an agent may start a writing, read at each call for the same
+    /// reason as the other switches.
+    private var allowsWritingStarts: Bool {
+        guard let applicationSupportURL else { return false }
+        return (try? LampAgentDescriptorStore.read(inApplicationSupport: applicationSupportURL))?
+            .allowsWritingStarts ?? false
+    }
+
     public init(
         library: LampAgentLibrary,
         libraryRootURL: URL? = nil,
@@ -68,7 +81,9 @@ public actor LampMCPToolHandler {
         policy: LampAgentAccessPolicy = LampAgentAccessPolicy(),
         policyURL: URL? = nil,
         workspaceURL: URL? = nil,
-        skillsURL: URL? = nil
+        skillsURL: URL? = nil,
+        readerChatID: UUID? = nil,
+        readerChatProviderID: String? = nil
     ) {
         self.library = library
         self.libraryRootURL = libraryRootURL
@@ -77,6 +92,8 @@ public actor LampMCPToolHandler {
         self.policyURL = policyURL
         self.workspaceURL = workspaceURL
         self.skillsURL = skillsURL
+        self.readerChatID = readerChatID
+        self.readerChatProviderID = readerChatProviderID
         encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         encoder.dateEncodingStrategy = .iso8601
@@ -165,6 +182,9 @@ public actor LampMCPToolHandler {
 
         case "add_reading_plan":
             return try await addReadingPlan(arguments)
+
+        case "start_writing":
+            return try startWriting(arguments)
 
         case "list_books":
             return try result(try await library.listBooks())
@@ -468,6 +488,50 @@ public actor LampMCPToolHandler {
         ))
     }
 
+    private func startWriting(_ arguments: [String: Value]) throws -> CallTool.Result {
+        guard allowsWritingStarts else { throw LampMCPToolError.writingStartsNotAllowed }
+        guard let applicationSupportURL else { throw LampMCPToolError.nowhereToLeaveAPlan }
+        let title = try requiredString("title", in: arguments)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        func optional(_ name: String) -> String? {
+            guard let value = arguments[name]?.stringValue,
+                  !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { return nil }
+            return value
+        }
+        let start = LampWritingStarts.Start(
+            id: UUID().uuidString,
+            title: title,
+            category: optional("category")?.trimmingCharacters(in: .whitespacesAndNewlines),
+            draft: optional("draft"),
+            readerChatID: readerChatID,
+            readerChatProviderID: readerChatID == nil ? nil : readerChatProviderID
+        )
+        try LampWritingStarts.write(start, inApplicationSupport: applicationSupportURL)
+        let carried = readerChatID != nil
+        return try result(WritingStart(
+            writingID: start.id,
+            title: title,
+            queued: true,
+            carriesConversation: carried,
+            message: carried
+                ? """
+                Written down for Lamp to start. When this reply has finished, \
+                Lamp makes the writing and copies this conversation into its \
+                chat, once; the reader can open it from this chat. It is not \
+                in the library yet, so it will not appear in list_writings \
+                until then.
+                """
+                : """
+                Written down for Lamp to start, which it does the next time it \
+                reads its library — at once if Lamp is running and its Writing \
+                section is opened, otherwise when it is next opened. It is not \
+                in the library yet, so it will not appear in list_writings \
+                until then.
+                """
+        ))
+    }
+
     /// What a session's skills say, served as a tool because the surfaces that
     /// need them most cannot open a file.
     ///
@@ -722,6 +786,17 @@ struct ReadingPlanAddition: Codable, Sendable {
     var message: String
 }
 
+/// What `start_writing` did, as the agent is told it. As with a plan, there
+/// is no field saying the writing exists: Lamp makes it, later.
+struct WritingStart: Codable, Sendable {
+    var writingID: String
+    var title: String
+    var queued: Bool
+    /// Whether the conversation this was asked in goes into the writing.
+    var carriesConversation: Bool
+    var message: String
+}
+
 /// A writing's draft and the context Lamp wrote beside it.
 struct WritingDraft: Codable, Sendable {
     var writingID: String
@@ -773,6 +848,7 @@ public enum LampMCPToolError: Error, LocalizedError, Equatable, Sendable {
     case noWritingWorkspace(String)
     case writingNotAllowed
     case readingPlansNotAllowed
+    case writingStartsNotAllowed
     case nowhereToLeaveAPlan
 
     public var errorDescription: String? {
@@ -823,10 +899,17 @@ public enum LampMCPToolError: Error, LocalizedError, Equatable, Sendable {
             turns it on. draft_reading_plan works either way, so the plan can \
             still be laid out and shown.
             """
+        case .writingStartsNotAllowed:
+            """
+            Lamp is not letting agents start writings. Turn on "Allow agents \
+            to start a writing" in Lamp's Settings, under AI & Agents. It is \
+            off until the reader turns it on. Nothing was started, so tell \
+            the user that rather than that a writing exists.
+            """
         case .nowhereToLeaveAPlan:
             """
             This Mac has no Application Support directory, which is where Lamp \
-            and this helper agree to leave a plan, so there is nowhere to put \
+            and this helper agree to leave a request, so there is nowhere to put \
             one.
             """
         case .noWritingWorkspace(let id):

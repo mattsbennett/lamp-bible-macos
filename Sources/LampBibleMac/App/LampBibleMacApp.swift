@@ -281,6 +281,8 @@ private struct ReaderSettingsView: View {
     private var agentAllowsExternalWriting = false
     @AppStorage(AgentModuleAccessPreferences.allowsExternalReadingPlansKey)
     private var agentAllowsExternalReadingPlans = false
+    @AppStorage(AgentModuleAccessPreferences.allowsWritingStartsKey)
+    private var agentAllowsWritingStarts = false
     @AppStorage("agent.moduleAccess.personal") private var agentPersonalContentEnabled = false
     @AppStorage(ReaderChatWorkspaceStore.retentionKey)
     private var readerChatRetention = ReaderChatWorkspaceStore.Retention.standard.rawValue
@@ -699,7 +701,8 @@ private struct ReaderSettingsView: View {
                                 """
                                 Module results are sent to the AI provider you \
                                 launch. Lamp's tools only read your library, \
-                                apart from the two switches under Use Lamp in \
+                                apart from starting a writing, under Reader \
+                                Chats, and the two switches under Use Lamp in \
                                 Other Apps.
                                 """
                             )
@@ -733,6 +736,20 @@ private struct ReaderSettingsView: View {
                             was said in is not kept, and the rest are let go \
                             of when Lamp next opens, once they are older than \
                             this.
+                            """
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                        Toggle("Allow agents to start a writing", isOn: $agentAllowsWritingStarts)
+                        Text(
+                            """
+                            When you ask, the agent in a reader chat can start \
+                            a new writing and copy the conversation into its \
+                            chat, once. So can an app you allow to read your \
+                            library. Either way it only adds a writing: it \
+                            cannot change or remove one. You can always start \
+                            a writing from a chat yourself, from its menu.
                             """
                         )
                         .font(.caption)
@@ -803,6 +820,7 @@ private struct ReaderSettingsView: View {
                     .onChange(of: agentAllowsExternalApps) { _, _ in publishAgentAccess() }
                     .onChange(of: agentAllowsExternalWriting) { _, _ in publishAgentAccess() }
                     .onChange(of: agentAllowsExternalReadingPlans) { _, _ in publishAgentAccess() }
+                    .onChange(of: agentAllowsWritingStarts) { _, _ in publishAgentAccess() }
                     .task { publishAgentAccess() }
                     }
 
@@ -1386,7 +1404,8 @@ private struct ReaderSettingsView: View {
             bundledModulesArchiveURL: bundledModulesArchiveURL,
             allowsExternalApps: aiFeaturesEnabled && agentAllowsExternalApps,
             allowsExternalWriting: aiFeaturesEnabled && agentAllowsExternalWriting,
-            allowsExternalReadingPlans: aiFeaturesEnabled && agentAllowsExternalReadingPlans
+            allowsExternalReadingPlans: aiFeaturesEnabled && agentAllowsExternalReadingPlans,
+            allowsWritingStarts: aiFeaturesEnabled && agentAllowsWritingStarts
         )
     }
 

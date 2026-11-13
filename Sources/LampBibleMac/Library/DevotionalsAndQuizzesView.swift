@@ -309,6 +309,14 @@ struct DevotionalsView: View {
         .onChange(of: categoryFilter) { _, _ in selectFirstIfNeeded() }
         .onChange(of: moduleFilter) { _, _ in selectFirstIfNeeded() }
         .task { await monitorLinkedPresentationDecks() }
+        // Writings an agent in another app asked for turn up here, which is
+        // where the reader will look for them.
+        .task { await model.takeInRequestedWritings() }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            StartedWritingNotice()
+                .padding(.horizontal, 12)
+                .padding(.top, model.startedWritingMessage == nil ? 0 : 8)
+        }
     }
 
     private var writingListWidth: CGFloat {
@@ -1806,4 +1814,28 @@ enum QuizCardSurface {
     static var page: Color { Color(nsColor: .windowBackgroundColor) }
     static var card: Color { .lampCardFill }
     static var answer: Color { Color.primary.opacity(0.05) }
+}
+
+/// What another app asked Lamp to start, said where the writing turns up: as
+/// with a plan, the asking happened elsewhere, and this is the only place the
+/// reader learns their library has a writing in it they did not start here.
+private struct StartedWritingNotice: View {
+    @EnvironmentObject private var model: LibraryModel
+
+    var body: some View {
+        if let message = model.startedWritingMessage {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Label(message, systemImage: "square.and.pencil")
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                Button("Dismiss", systemImage: "xmark") { model.startedWritingMessage = nil }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.borderless)
+            }
+            .font(.callout)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+        }
+    }
 }

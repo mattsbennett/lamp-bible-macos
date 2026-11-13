@@ -19,12 +19,12 @@ struct LampMCPServerTests {
         #expect(LampMCPToolCatalog.tools.count == 18)
         #expect(LampMCPToolCatalog.deckTools.count == 3)
         #expect(LampMCPToolCatalog.writingTools.count == 2)
-        #expect(LampMCPToolCatalog.writeTools.count == 2)
-        #expect(all.count == 26)
+        #expect(LampMCPToolCatalog.writeTools.count == 3)
+        #expect(all.count == 27)
         #expect(Set(all.map(\.name)).count == all.count)
 
         let writing = Set(LampMCPToolCatalog.writeTools.map(\.name))
-        #expect(writing == ["write_writing_draft", "add_reading_plan"])
+        #expect(writing == ["write_writing_draft", "add_reading_plan", "start_writing"])
         for tool in all {
             if writing.contains(tool.name) {
                 #expect(
@@ -366,7 +366,8 @@ struct LampMCPClientCompatibilityTests {
     /// path until the descriptor's location became injectable.
     private func writingFixture(
         allowsWriting: Bool,
-        allowsReadingPlans: Bool = false
+        allowsReadingPlans: Bool = false,
+        allowsWritingStarts: Bool = false
     ) async throws -> WritingFixture {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("lamp-write-mcp-\(UUID().uuidString)", isDirectory: true)
@@ -400,7 +401,8 @@ struct LampMCPClientCompatibilityTests {
                 policyPath: libraryRoot.appendingPathComponent("p.json").path,
                 allowsExternalApps: true,
                 allowsExternalWriting: allowsWriting,
-                allowsExternalReadingPlans: allowsReadingPlans
+                allowsExternalReadingPlans: allowsReadingPlans,
+                allowsWritingStarts: allowsWritingStarts
             ),
             inApplicationSupport: support
         )
@@ -416,12 +418,13 @@ struct LampMCPClientCompatibilityTests {
         )
     }
 
-    private func handler(_ fixture: WritingFixture) -> LampMCPToolHandler {
+    private func handler(_ fixture: WritingFixture, readerChatID: UUID? = nil) -> LampMCPToolHandler {
         LampMCPToolHandler(
             library: fixture.agent,
             libraryRootURL: fixture.root.appendingPathComponent("Library", isDirectory: true),
             applicationSupportURL: fixture.support,
-            policy: LampAgentAccessPolicy(includesPersonalContent: true)
+            policy: LampAgentAccessPolicy(includesPersonalContent: true),
+            readerChatID: readerChatID
         )
     }
 
@@ -739,6 +742,108 @@ extension LampMCPClientCompatibilityTests {
                 "name": .string("Nothing"),
                 "tracks": .array([.object(["passages": .array([])])]),
             ])
+        }
+    }
+}
+
+extension LampMCPClientCompatibilityTests {
+    /// The tool is offered whatever the switch says, and names the switch, so
+    /// an agent can tell the reader what to turn on.
+    @Test func thewritingStartToolNamesItsSettingAndAddsOnly() throws {
+        let tool = try #require(
+            LampMCPToolCatalog.tools(workspace: false).first { $0.name == "start_writing" }
+        )
+        let description = try #require(tool.description)
+        #expect(description.contains("Allow agents to start a writing"))
+        #expect(description.contains("Settings"))
+        #expect(tool.annotations.readOnlyHint == false)
+        #expect(tool.annotations.destructiveHint == false, "a writing that was not there before")
+    }
+
+    /// Refused out loud, so the agent does not tell the reader a writing
+    /// exists that was never asked for.
+    @Test func startingAWritingIsRefusedWhileTheSettingIsOff() async throws {
+        let fixture = try await writingFixture(
+            allowsWriting: true, allowsReadingPlans: true, allowsWritingStarts: false
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        await #expect(throws: LampMCPToolError.writingStartsNotAllowed) {
+            try await handler(fixture, readerChatID: UUID()).call(
+                name: "start_writing", arguments: ["title": .string("Hebrews")]
+            )
+        }
+        #expect(LampWritingStarts.pending(inApplicationSupport: fixture.support).isEmpty)
+        let message = LampMCPToolError.writingStartsNotAllowed.localizedDescription
+        #expect(message.contains("Allow agents to start a writing"))
+        #expect(message.contains("Nothing was started"))
+    }
+
+    /// From a reader chat, the request names the chat, which the helper was
+    /// told when it started — never something the agent supplies.
+    @Test func awritingAskedForInAReaderChatCarriesThatChat() async throws {
+        let fixture = try await writingFixture(allowsWriting: false, allowsWritingStarts: true)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let chat = UUID()
+
+        let response = try await handler(fixture, readerChatID: chat).call(
+            name: "start_writing",
+            arguments: [
+                "title": .string("  Who Wrote Hebrews  "),
+                "category": .string("study"),
+                "draft": .string("# Who Wrote Hebrews\n\n- Paul?\n"),
+            ]
+        )
+
+        #expect(response.isError == false)
+        let answer = try #require(response.structuredContent?.objectValue)
+        #expect(answer["queued"]?.boolValue == true)
+        #expect(answer["carriesConversation"]?.boolValue == true)
+        let said = try #require(answer["message"]?.stringValue)
+        #expect(said.contains("not in the library yet"))
+
+        let waiting = LampWritingStarts.pending(inApplicationSupport: fixture.support)
+        #expect(waiting.count == 1)
+        let start = try #require(waiting.first)
+        #expect(start.id == answer["writingID"]?.stringValue)
+        #expect(start.title == "Who Wrote Hebrews")
+        #expect(start.category == "study")
+        #expect(start.draft == "# Who Wrote Hebrews\n\n- Paul?\n")
+        #expect(start.readerChatID == chat)
+        #expect(
+            try await fixture.library.devotionals().map(\.id) == ["living-hope"],
+            "nothing was made here"
+        )
+    }
+
+    /// From another app there is no conversation here to bring.
+    @Test func awritingAskedForElsewhereCarriesNoConversation() async throws {
+        let fixture = try await writingFixture(allowsWriting: false, allowsWritingStarts: true)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let response = try await handler(fixture).call(
+            name: "start_writing", arguments: ["title": .string("Hebrews"), "draft": .string("  ")]
+        )
+        let answer = try #require(response.structuredContent?.objectValue)
+        #expect(answer["carriesConversation"]?.boolValue == false)
+        let start = try #require(LampWritingStarts.pending(inApplicationSupport: fixture.support).first)
+        #expect(start.readerChatID == nil)
+        #expect(start.draft == nil, "a blank draft is no draft")
+        #expect(start.category == nil)
+
+        await #expect(throws: LampMCPToolError.missingArgument("title")) {
+            try await handler(fixture).call(name: "start_writing", arguments: ["title": .string(" ")])
+        }
+    }
+
+    /// Letting apps add plans or change writings does not let an agent start
+    /// one. Each switch answers for itself.
+    @Test func theOtherSwitchesDoNotGrantStartingWritings() async throws {
+        let fixture = try await writingFixture(allowsWriting: true, allowsReadingPlans: true)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        await #expect(throws: LampMCPToolError.writingStartsNotAllowed) {
+            try await handler(fixture).call(name: "start_writing", arguments: ["title": .string("X")])
         }
     }
 }

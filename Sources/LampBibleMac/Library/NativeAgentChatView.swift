@@ -297,6 +297,12 @@ struct TurnStepsContent {
     let steps: [String]
 }
 
+/// Where a conversation copied from a reader chat ends and the writing's own
+/// chat begins. See `ReaderChatWritingCopy.copiedEventKind`.
+struct CopiedConversationContent {
+    let copiedAt: Date
+}
+
 /// What the person typed. Lamp draws it rather than SwiftyChat, whose text cell
 /// can't be selected.
 struct PersonMessageContent {
@@ -717,6 +723,31 @@ private struct TurnStepsRow: View {
     }
 }
 
+/// The line under a conversation copied in from a reader chat, saying that it
+/// was a copy and that the two chats go their own ways from here.
+private struct CopiedConversationRow: View {
+    let copiedAt: Date
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Rectangle().fill(.quaternary).frame(height: 1)
+            Label {
+                Text("Copied from a reader chat on \(copiedAt.formatted(date: .abbreviated, time: .omitted))")
+            } icon: {
+                Image(systemName: "bubble.left.and.bubble.right")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize()
+            Rectangle().fill(.quaternary).frame(height: 1)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .help("This conversation was copied once. Nothing said here goes back to the reader chat, and nothing said there comes here.")
+        .accessibilityElement(children: .combine)
+    }
+}
+
 /// What is waiting to be sent, above the composer.
 ///
 /// Shown rather than merely held: a message the reader cannot see is one
@@ -893,6 +924,11 @@ enum KeptAgentChats {
     /// exactly when a pane reopens on a run that outlived it.
     static func existing(provider: AIProviderCLI, workspace: URL) -> NativeAgentChatModel? {
         models["\(provider.rawValue)|\(workspace.standardizedFileURL.path)"]
+    }
+
+    /// Whether a reply is arriving in any provider's chat on this workspace.
+    static func isRunning(in workspace: URL) -> Bool {
+        AIProviderCLI.allCases.contains { existing(provider: $0, workspace: workspace)?.isRunning == true }
     }
 
     static func model(
@@ -1629,6 +1665,13 @@ final class NativeAgentChatModel: ObservableObject {
         // pane that keeps its model across closes, could be the next
         // launch.
         redrawFromRecord()
+        // Said by the chat rather than its pane, because a reply outlives
+        // its pane: closed while the agent was answering, the pane is not
+        // there to hear the turn end, and a writing the reply asked for
+        // would wait for the next launch.
+        if case .reader = mode {
+            NotificationCenter.default.post(name: .lampReaderChatTurnFinished, object: workspace)
+        }
     }
 
     /// Rebuilds the rows from the events and messages now held.
@@ -1677,6 +1720,16 @@ final class NativeAgentChatModel: ObservableObject {
         return transcript.turns.flatMap { turn -> [NativeAgentChatMessage] in
             var rows: [NativeAgentChatMessage] = []
             for event in turn.events {
+                if event.kind == ReaderChatWritingCopy.copiedEventKind {
+                    rows.append(NativeAgentChatMessage(
+                        id: event.id,
+                        user: agentUser,
+                        messageKind: .custom(CopiedConversationContent(copiedAt: event.date)),
+                        isSender: false,
+                        date: event.date
+                    ))
+                    continue
+                }
                 guard event.kind == AgentChatTranscript.Event.said,
                       let role = event.role, let text = event.text
                 else { continue }
@@ -2035,6 +2088,9 @@ struct NativeAgentChatView: View {
     /// somewhere to put one. Nil in a pane that cannot open another chat,
     /// where the menu item is simply not offered.
     let forkFromTurn: ((UUID) -> Void)?
+    /// Starts a writing from the conversation up to a turn, where the host
+    /// can make one. Nil elsewhere, where the item is not offered.
+    let startWritingFromTurn: ((UUID) -> Void)?
     /// Undoes what these turns did, saying whether it could. Nil in a pane
     /// with nothing to put back, where the menu item is simply not offered.
     ///
@@ -2080,6 +2136,7 @@ struct NativeAgentChatView: View {
         preparePrompt: @escaping (String) async throws -> String = { $0 },
         onRunningChanged: @escaping (Bool) -> Void = { _ in },
         forkFromTurn: ((UUID) -> Void)? = nil,
+        startWritingFromTurn: ((UUID) -> Void)? = nil,
         revertTurn: (([UUID]) -> Bool)? = nil,
         onTurnChanged: ((UUID?) -> Void)? = nil
     ) {
@@ -2089,6 +2146,7 @@ struct NativeAgentChatView: View {
         self.preparePrompt = preparePrompt
         self.onRunningChanged = onRunningChanged
         self.forkFromTurn = forkFromTurn
+        self.startWritingFromTurn = startWritingFromTurn
         self.revertTurn = revertTurn
         self.onTurnChanged = onTurnChanged
         self.workspaceFolder = workspace
@@ -2272,6 +2330,14 @@ struct NativeAgentChatView: View {
                             forkFromTurn(message.id)
                         }
                     }
+                    // Not while a reply is arriving: copied now, the
+                    // conversation would end without it.
+                    if let startWritingFromTurn, message.isSender, !model.isRunning,
+                       model.canFork(from: message.id) {
+                        Button("Start a Writing from Here…", systemImage: "square.and.pencil") {
+                            startWritingFromTurn(message.id)
+                        }
+                    }
                     if revertTurn != nil, message.isSender, model.canFork(from: message.id) {
                         Button("Undo This Turn…", systemImage: "arrow.uturn.backward") {
                             turnToUndo = message.id
@@ -2287,6 +2353,8 @@ struct NativeAgentChatView: View {
                         StreamingAgentReplyBubble(content: content)
                     } else if let content = payload as? TurnStepsContent {
                         TurnStepsRow(steps: content.steps)
+                    } else if let content = payload as? CopiedConversationContent {
+                        CopiedConversationRow(copiedAt: content.copiedAt)
                     }
                 }
                 .environment(\.chatStyle, chatStyle)
@@ -2656,4 +2724,9 @@ struct AIProviderBrowserAuthenticationView: View {
 
 private func readableCLIError(in output: String) -> String? {
     AgentChatRunDisposition.readableCLIError(in: output)
+}
+
+extension Notification.Name {
+    /// A reader chat's reply has finished. The object is the chat's workspace.
+    static let lampReaderChatTurnFinished = Notification.Name("lampReaderChatTurnFinished")
 }
