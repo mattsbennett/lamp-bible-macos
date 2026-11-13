@@ -1610,15 +1610,29 @@ struct LampDictionaryStylingTests {
         #expect(textView.textLayoutManager != nil)
     }
 
-    /// The word under the pointer is found near it, not by reading a whole
-    /// chapter from its start on every move.
+    /// The word under the pointer is found in its paragraph, not by reading
+    /// a whole chapter from its start on every move, and is the word the
+    /// whole text would give: in Chinese and Japanese, too, and for a token
+    /// longer than any window.
     @Test @MainActor func aWordIsFoundNearTheEndOfAChapterLongText() {
-        let filler = String(repeating: "and the word of the Lord ", count: 20_000)
+        let filler = String(repeating: "and the word of the Lord.\n", count: 20_000)
         let text = filler + "Melchizedek priest"
         let offset = (text as NSString).range(of: "Melchizedek").location + 3
         #expect(ReaderTextLinkHitTester.word(atUTF16Offset: offset, in: text) == "Melchizedek")
         #expect(ReaderTextLinkHitTester.word(atUTF16Offset: 2, in: "a word") == "word")
         #expect(ReaderTextLinkHitTester.word(atUTF16Offset: 1, in: "a word") == nil)
         #expect(ReaderTextLinkHitTester.word(atUTF16Offset: 2, in: "\u{05D0}\u{05B5}\u{05DC}\u{05B4}\u{05D9} x") == "\u{05D0}\u{05B5}\u{05DC}\u{05B4}\u{05D9}")
+
+        // Where a window around the offset split words differently.
+        let cjk = String(repeating: "有一些经文我们需要在这里解释，然后查找正确的词。これは日本語の文章です。 ", count: 12)
+        for offset in [315, 316] {
+            var whole: String?
+            (cjk as NSString).enumerateSubstrings(in: NSRange(location: 0, length: (cjk as NSString).length), options: .byWords) { word, range, _, stop in
+                if NSLocationInRange(offset, range) { whole = word; stop.pointee = true }
+            }
+            #expect(ReaderTextLinkHitTester.word(atUTF16Offset: offset, in: cjk) == whole)
+        }
+        let token = String(repeating: "x", count: 300)
+        #expect(ReaderTextLinkHitTester.word(atUTF16Offset: 10, in: token + " end") == token)
     }
 }

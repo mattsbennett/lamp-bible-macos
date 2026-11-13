@@ -196,18 +196,16 @@ public enum ReaderTextLinkHitTester {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    /// The word at `offset`, looked for within 256 UTF-16 units either side.
-    /// The text can be a whole chapter of commentary, and this runs on every
-    /// pointer move: searching from the start cost a millisecond and more a
-    /// move near a chapter's end. Only a word longer than the window is cut.
-    static let wordSearchRadius = 256
-
+    /// The word at `offset`, looked for in its own paragraph. The text can
+    /// be a whole chapter of commentary, and this runs on every pointer move:
+    /// searching from the start cost a millisecond and more a move near a
+    /// chapter's end. Words never run across a paragraph break, so the
+    /// paragraph gives the words the whole text would, Chinese and Japanese
+    /// included, which a fixed window around the offset did not.
     static func word(atUTF16Offset offset: Int, in text: String) -> String? {
         let string = text as NSString
         guard string.length > 0, offset >= 0, offset < string.length else { return nil }
-        let lower = max(offset - wordSearchRadius, 0)
-        let upper = min(offset + wordSearchRadius, string.length)
-        let window = string.rangeOfComposedCharacterSequences(for: NSRange(location: lower, length: upper - lower))
+        let window = string.paragraphRange(for: NSRange(location: offset, length: 0))
         var clickedWord: String?
         string.enumerateSubstrings(in: window, options: [.byWords, .substringNotRequired]) { _, range, _, stop in
             guard NSLocationInRange(offset, range) else { return }
