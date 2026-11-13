@@ -1918,12 +1918,7 @@ private struct NewReaderTabPage: View {
             VStack(alignment: .leading, spacing: 18) {
                 Text("New Tab")
                     .font(.title2.weight(.semibold))
-                PassagePickerPopover(isPresented: .constant(true), open: open)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .strokeBorder(Color(nsColor: .separatorColor))
-                    }
+                PassagePickerPopover(isPresented: .constant(true), open: open, isInline: true)
                 if !recent.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Recently Read")
@@ -1946,7 +1941,7 @@ private struct NewReaderTabPage: View {
                     }
                 }
             }
-            .frame(width: PassagePickerPopover.width)
+            .frame(width: PassagePickerPopover.inlineWidth)
             .padding(.vertical, 48)
             .frame(maxWidth: .infinity)
         }
@@ -3875,6 +3870,9 @@ private struct PassagePickerPopover: View {
     var openSearch: ((String) -> Void)?
     /// And a Strong's key to the analysis, which is where that goes.
     var openAnalysis: ((String) -> Void)?
+    /// Laid out in a page (`NewReaderTabPage`) rather than in a popover:
+    /// on the page's own ground, with no fill or margin of its own.
+    var isInline = false
     @State private var translationID = ""
     @State private var books: [LampTranslationBook] = []
     @State private var bookNumber = 0
@@ -3974,15 +3972,15 @@ private struct PassagePickerPopover: View {
         // squeezed the padding away on one side, so the field's focus ring
         // sat against the popover's edge while the other side kept its
         // margin.
-        .padding(20)
-        .frame(width: Self.width)
+        .padding(isInline ? 0 : Self.padding)
+        .frame(width: isInline ? Self.inlineWidth : Self.width)
         .fixedSize(horizontal: false, vertical: true)
         // Opaque, and one step off the page in both appearances. The
         // popover's glass let the passage behind it through as a smear of
         // grey words under the books and chapters, which is noise exactly
         // where the eye is choosing; and on the white page its edge all but
         // disappeared.
-        .background(Color.lampPopoverFill)
+        .background(isInline ? Color.clear : Color.lampPopoverFill)
         .presentationBackground(Color.lampPopoverFill)
         .onAppear {
             resetSelection()
@@ -4047,8 +4045,11 @@ private struct PassagePickerPopover: View {
     /// them rather than guessed.
     private static let booksColumnWidth: Double = 176
     private static let chaptersColumnWidth: Double = 246
-    /// The picker's width, for a page that lays things out beside it.
+    private static let padding: Double = 20
+    /// The picker's width in a popover.
     static let width: Double = booksColumnWidth + chaptersColumnWidth + 65
+    /// And in a page, without the popover's margin.
+    static let inlineWidth: Double = width - 2 * padding
     /// Tall enough for a dozen books at once, and the 50 chapters of Genesis
     /// with no more than a short scroll.
     private static let columnsHeight: Double = 352
