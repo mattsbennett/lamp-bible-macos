@@ -1632,13 +1632,6 @@ struct LampDictionaryStylingTests {
             }
             #expect(ReaderTextLinkHitTester.word(atUTF16Offset: offset, in: cjk) == whole)
         }
-        // And within one paragraph, which dictionary breaking also depends on.
-        let mixed = "English\u{2029}中文日本語的有一些經文解释\u{2029}English"
-        var wholeMixed: String?
-        (mixed as NSString).enumerateSubstrings(in: NSRange(location: 0, length: (mixed as NSString).length), options: .byWords) { word, range, _, stop in
-            if NSLocationInRange(17, range) { wholeMixed = word; stop.pointee = true }
-        }
-        #expect(ReaderTextLinkHitTester.word(atUTF16Offset: 17, in: mixed) == wholeMixed)
         let token = String(repeating: "x", count: 300)
         #expect(ReaderTextLinkHitTester.word(atUTF16Offset: 10, in: token + " end") == token)
     }

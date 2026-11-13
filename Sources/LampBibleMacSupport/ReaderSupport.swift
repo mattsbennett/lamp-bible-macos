@@ -199,18 +199,17 @@ public enum ReaderTextLinkHitTester {
     /// The word at `offset`, looked for in its own paragraph. The text can
     /// be a whole chapter of commentary, and this runs on every pointer move:
     /// searching from the start cost a millisecond and more a move near a
-    /// chapter's end. Words in alphabetic scripts break by rule and never
-    /// across a paragraph, so the paragraph gives the words the whole text
-    /// would. Chinese, Japanese and the Southeast Asian scripts break by
-    /// dictionary, which depends on where the search starts, so a paragraph
-    /// holding any of them is searched from the start as before.
+    /// chapter's end, and twelve in Chinese. Words never run across a
+    /// paragraph break, so in text of one script the paragraph gives the
+    /// words the whole text would. Where scripts mix, the whole-text search
+    /// carried the dictionary's state from one into the next and split words
+    /// either way (`Ἐν` after Japanese, `聞き` after Chinese); the paragraph
+    /// is read on its own, the same wherever it falls. A fixed window around
+    /// the offset split Chinese mid-sentence.
     static func word(atUTF16Offset offset: Int, in text: String) -> String? {
         let string = text as NSString
         guard string.length > 0, offset >= 0, offset < string.length else { return nil }
-        let paragraph = string.paragraphRange(for: NSRange(location: offset, length: 0))
-        let window = breaksByDictionary(string.substring(with: paragraph))
-            ? NSRange(location: 0, length: string.length)
-            : paragraph
+        let window = string.paragraphRange(for: NSRange(location: offset, length: 0))
         var clickedWord: String?
         string.enumerateSubstrings(in: window, options: [.byWords, .substringNotRequired]) { _, range, _, stop in
             guard NSLocationInRange(offset, range) else { return }
@@ -218,21 +217,6 @@ public enum ReaderTextLinkHitTester {
             stop.pointee = true
         }
         return clickedWord.flatMap(nonemptyTrimmed(_:))
-    }
-
-    /// Whether `text` holds a script whose words are found by dictionary:
-    /// Han, kana, Thai, Lao, Khmer, Myanmar.
-    private static func breaksByDictionary(_ text: String) -> Bool {
-        text.unicodeScalars.contains { scalar in
-            switch scalar.value {
-            case 0x0E00...0x0EFF, 0x1000...0x109F, 0x1780...0x17FF, 0x19E0...0x19FF,
-                 0x3040...0x30FF, 0x31F0...0x31FF, 0x3400...0x4DBF, 0x4E00...0x9FFF,
-                 0xF900...0xFAFF, 0xFF66...0xFF9F, 0x20000...0x323AF:
-                true
-            default:
-                false
-            }
-        }
     }
 }
 
