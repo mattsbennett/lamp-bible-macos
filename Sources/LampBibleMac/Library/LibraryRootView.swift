@@ -684,32 +684,31 @@ struct LibraryRootView: View {
         if model.activeReader == nil || controlActiveState == .key {
             model.activeReader = workspace
         }
+        if pending == nil, readerTabs.selectedTab?.isBlank == true {
+            // A new tab left empty reopens empty.
+            workspace.startBlank(model: model)
+            return
+        }
         workspace.start(model: model, at: pending ?? readerTabs.selectedTab?.location)
         if let verse = (pending ?? readerTabs.selectedTab?.location)?.verseReference {
             workspace.focusVerse(verse)
         }
     }
 
-    /// A new tab at once, on the chapter being read, with the passage picker
-    /// open for it to go somewhere else: Safari's and Finder's new tab,
-    /// which opens before anything is chosen. A popover hanging from the
-    /// tab bar's new-tab button sat at the window's edge, where macOS pushed
-    /// its arrow into its corner.
+    /// A new tab at once, empty, as Safari's and Finder's open before
+    /// anything is chosen: its page is the passage chooser
+    /// (`NewReaderTabPage`) until a passage is chosen in it. A copy of the
+    /// chapter being read, with the picker over it, read as a duplicated
+    /// tab; and a popover hanging from the new-tab button sat at the
+    /// window's edge, where macOS pushed its arrow into its corner.
     private func presentNewReaderTabChooser() {
+        readerTabs.updateSelected(location: workspace.currentLocation)
+        workspace.scrollMemory.save(tab: readerTabs.selectedID)
+        studyPane.scrollMemory.save(tab: readerTabs.selectedID)
+        recordTabSidebar()
+        let added = readerTabs.addBlank()
+        showReaderTab(added, at: nil)
         selection = .section(.reader)
-        guard let place = workspace.currentLocation ?? readerTabs.selectedTab?.location else {
-            workspace.isChoosingPassage = true
-            return
-        }
-        openReaderTab(at: ReaderLocation(
-            translationID: place.translationID,
-            bookNumber: place.bookNumber,
-            chapterNumber: place.chapterNumber
-        ))
-        // Once the new tab's toolbar is drawn: asked for in the same update,
-        // the picker would hang from the toolbar the switch is replacing.
-        let opened = workspace
-        DispatchQueue.main.async { opened.isChoosingPassage = true }
     }
 
     /// Copies the tab that was asked for, which is not always the open one.
@@ -770,7 +769,12 @@ struct LibraryRootView: View {
         if model.activeReader == nil || model.activeReader === leaving || controlActiveState == .key {
             model.activeReader = shown
         }
-        if isNew {
+        if isNew, readerTabs.tabs.first(where: { $0.id == id })?.isBlank == true {
+            // Nothing to put back: a new tab has not been read or scrolled.
+            shown.scrollMemory.track(tab: id)
+            studyPane.scrollMemory.track(tab: id)
+            shown.startBlank(model: model)
+        } else if isNew {
             shown.scrollMemory.prepare(tab: id)
             studyPane.scrollMemory.prepare(tab: id)
             shown.start(model: model, at: location)
@@ -1114,6 +1118,7 @@ struct LibraryRootView: View {
     }
 
     private var readerLocationTitle: String {
+        if workspace.isBlank { return "New Tab" }
         let translation = model.selectedTranslation?.abbreviation ?? "Translation"
         if let reading = planReadingMode?.activeReading {
             return "\(translation) \u{00B7} \(reading.displayDescription)"
@@ -1497,6 +1502,15 @@ struct LibraryRootView: View {
                         currentID: readerPool.currentID
                     ) { id in
                         guard let kept = readerPool.workspace(for: id) else { return AnyView(EmptyView()) }
+                        if kept.isBlank {
+                            return AnyView(
+                                NewReaderTabPage(
+                                    workspace: kept,
+                                    recent: readerPool.recentChapters.places
+                                )
+                                .environmentObject(kept)
+                            )
+                        }
                         return AnyView(
                             TranslationReaderView(
                                 model: model,
@@ -1891,6 +1905,73 @@ private struct StudyInspectorColumn<Content: View>: View {
     }
 }
 
+/// A new tab's page, until a passage is chosen in it: the passage chooser
+/// laid out in the page, its field ready for a reference, and the chapters
+/// read lately one click away.
+private struct NewReaderTabPage: View {
+    @EnvironmentObject private var model: LibraryModel
+    @ObservedObject var workspace: ReaderWorkspace
+    let recent: [ReaderLocation]
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("New Tab")
+                    .font(.title2.weight(.semibold))
+                PassagePickerPopover(isPresented: .constant(true), open: open)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(Color(nsColor: .separatorColor))
+                    }
+                if !recent.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Recently Read")
+                            .lampSectionHeading()
+                        LazyVGrid(
+                            columns: [GridItem(.adaptive(minimum: 150), spacing: 8, alignment: .leading)],
+                            alignment: .leading,
+                            spacing: 8
+                        ) {
+                            ForEach(recent.prefix(8), id: \.self) { place in
+                                Button { open(place) } label: {
+                                    Text(label(place))
+                                        .lineLimit(1)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.large)
+                            }
+                        }
+                    }
+                }
+            }
+            .frame(width: PassagePickerPopover.width)
+            .padding(.vertical, 48)
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    private func label(_ place: ReaderLocation) -> String {
+        let book = LampBibleReferenceFormatter.bookName(place.bookNumber)
+        let translation = model.translations.first { $0.id == place.translationID }
+        let name = translation?.abbreviation ?? translation?.name ?? place.translationID
+        return "\(book) \(place.chapterNumber) · \(name)"
+    }
+
+    private func open(_ place: ReaderLocation) {
+        if let verse = place.verseReference {
+            workspace.openReference(verse, translationID: place.translationID)
+        } else {
+            workspace.selectPassage(
+                translationID: place.translationID,
+                bookNumber: place.bookNumber,
+                chapterNumber: place.chapterNumber
+            )
+        }
+    }
+}
+
 /// The reader's tabs: the shared bar (`LibraryTabBar`).
 private struct ReaderTabBar: View {
     let tabs: [ReaderTab]
@@ -1920,7 +2001,7 @@ private struct ReaderTabBar: View {
 
     private func tabTitle(_ tab: ReaderTab) -> String {
         if let name = tab.name { return name }
-        guard let location = tab.location else { return "Reader" }
+        guard let location = tab.location else { return tab.isBlank ? "New Tab" : "Reader" }
         return "\(LampBibleReferenceFormatter.bookName(location.bookNumber)) \(location.chapterNumber)"
     }
 }
@@ -3894,7 +3975,7 @@ private struct PassagePickerPopover: View {
         // sat against the popover's edge while the other side kept its
         // margin.
         .padding(20)
-        .frame(width: Self.booksColumnWidth + Self.chaptersColumnWidth + 65)
+        .frame(width: Self.width)
         .fixedSize(horizontal: false, vertical: true)
         // Opaque, and one step off the page in both appearances. The
         // popover's glass let the passage behind it through as a smear of
@@ -3966,6 +4047,8 @@ private struct PassagePickerPopover: View {
     /// them rather than guessed.
     private static let booksColumnWidth: Double = 176
     private static let chaptersColumnWidth: Double = 246
+    /// The picker's width, for a page that lays things out beside it.
+    static let width: Double = booksColumnWidth + chaptersColumnWidth + 65
     /// Tall enough for a dozen books at once, and the 50 chapters of Genesis
     /// with no more than a short scroll.
     private static let columnsHeight: Double = 352
@@ -4514,10 +4597,15 @@ private struct PassagePickerPopover: View {
     }
 
     private func resetSelection() {
-        translationID = workspace.selectedTranslationID ?? model.translations.first?.id ?? ""
-        books = translationID == workspace.selectedTranslationID ? workspace.books : []
-        bookNumber = workspace.selectedBookNumber ?? books.first?.id ?? 0
-        chapterNumber = workspace.selectedChapterNumber
+        // A new tab has no place of its own, and starts where the library
+        // last was: the translation being read and its book, not the first
+        // of everything.
+        let fromLibrary = workspace.isBlank
+        let readTranslationID = fromLibrary ? model.selectedTranslationID : workspace.selectedTranslationID
+        translationID = readTranslationID ?? model.translations.first?.id ?? ""
+        books = !fromLibrary && translationID == workspace.selectedTranslationID ? workspace.books : []
+        bookNumber = (fromLibrary ? model.selectedBookNumber : workspace.selectedBookNumber) ?? books.first?.id ?? 0
+        chapterNumber = fromLibrary ? model.selectedChapterNumber : workspace.selectedChapterNumber
         clampChapterNumber()
         errorMessage = nil
     }

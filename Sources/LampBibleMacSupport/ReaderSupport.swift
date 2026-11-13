@@ -1564,22 +1564,29 @@ public struct ReaderTab: Codable, Identifiable, Equatable, Sendable {
     /// not copy this — a copy is a new tab, and the conversation stays with
     /// the tab it was had in.
     public var chatID: UUID?
+    /// A new tab nothing has been chosen in yet: it shows the passage
+    /// chooser, not a chapter, until a passage is chosen in it. Kept apart
+    /// from having no place, which a tab still opening also has, and which a
+    /// tab restored without one is dropped for.
+    public var isBlank: Bool
 
     public init(
         id: UUID = UUID(),
         location: ReaderLocation? = nil,
         name: String? = nil,
         sidebar: ReaderTabSidebar = ReaderTabSidebar(),
-        chatID: UUID? = nil
+        chatID: UUID? = nil,
+        isBlank: Bool = false
     ) {
         self.id = id
         self.location = location
         self.name = name
         self.sidebar = sidebar
         self.chatID = chatID
+        self.isBlank = isBlank
     }
 
-    private enum CodingKeys: String, CodingKey { case id, location, name, sidebar, chatID }
+    private enum CodingKeys: String, CodingKey { case id, location, name, sidebar, chatID, isBlank }
 
     /// Tabs saved before they kept a column decode with it closed. A column
     /// that cannot be read is closed too, rather than failing the tab, which
@@ -1596,6 +1603,7 @@ public struct ReaderTab: Codable, Identifiable, Equatable, Sendable {
         // A chat that cannot be read is no chat: the tab opens its pane on a
         // new conversation, and the old one is still in the list to go back to.
         chatID = (try? values.decodeIfPresent(UUID.self, forKey: .chatID)) ?? nil
+        isBlank = (try? values.decodeIfPresent(Bool.self, forKey: .isBlank)) ?? false
     }
 
     /// A name worth keeping, or nil. Blank is not a name, and a tab given one
@@ -1638,7 +1646,8 @@ public struct ReaderTabCollection: Codable, Equatable, Sendable {
         fallbackLocation: ReaderLocation?
     ) {
         tabs.removeAll { tab in
-            guard let location = tab.location else { return true }
+            // A new tab has no place and is kept: it reopens as it was left.
+            guard let location = tab.location else { return !tab.isBlank }
             return !translationIDs.contains(location.translationID)
                 || location.bookNumber < 1 || location.chapterNumber < 1
         }
@@ -1662,6 +1671,8 @@ public struct ReaderTabCollection: Codable, Equatable, Sendable {
         guard let location, let index = tabs.firstIndex(where: { $0.id == selectedID })
         else { return }
         tabs[index].location = location
+        // A passage chosen in a new tab makes it an ordinary one.
+        tabs[index].isBlank = false
     }
 
     /// Puts the open tab on a chat, or on none.
@@ -1701,6 +1712,16 @@ public struct ReaderTabCollection: Codable, Equatable, Sendable {
         return tab.id
     }
 
+    /// Opens a new tab with nothing in it yet, at the end, and selects it:
+    /// it shows the passage chooser until a passage is chosen in it.
+    @discardableResult
+    public mutating func addBlank() -> UUID {
+        let tab = ReaderTab(isBlank: true)
+        tabs.append(tab)
+        selectedID = tab.id
+        return tab.id
+    }
+
     @discardableResult
     public mutating func select(_ id: UUID) -> ReaderLocation? {
         guard let tab = tabs.first(where: { $0.id == id }) else {
@@ -1728,7 +1749,8 @@ public struct ReaderTabCollection: Codable, Equatable, Sendable {
         // Without the chat: a copy is a new tab, and the conversation stays
         // with the tab it was had in.
         let copy = ReaderTab(
-            location: tabs[index].location, name: tabs[index].name, sidebar: tabs[index].sidebar
+            location: tabs[index].location, name: tabs[index].name, sidebar: tabs[index].sidebar,
+            isBlank: tabs[index].isBlank
         )
         tabs.insert(copy, at: index + 1)
         selectedID = copy.id

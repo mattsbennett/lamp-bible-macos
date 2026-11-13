@@ -71,6 +71,10 @@ final class ReaderWorkspace: ObservableObject {
     private var readAloudChanges: AnyCancellable?
     /// Whether the passage picker hangs from the toolbar for this tab.
     @Published var isChoosingPassage = false
+    /// A new tab nothing has been chosen in yet (`ReaderTab.isBlank`): it
+    /// shows the passage chooser, reads nothing, and tells the library
+    /// nothing, until a passage is chosen in it.
+    @Published private(set) var isBlank = false
     /// Whether this is its window's tab on screen, set by `ReaderTabPool`.
     /// Read live, not published: a reader kept out of sight is never handed
     /// a new view, and what the window shares belongs to the one on screen.
@@ -98,6 +102,18 @@ final class ReaderWorkspace: ObservableObject {
     /// `@StateObject` is made before the view has an environment, and a
     /// chapter read before the library knows its note and highlight modules
     /// would come without them.
+    /// Starts a new tab's reader with nothing in it: no chapter read, and
+    /// not the library's place taken up as a window with nowhere of its own
+    /// would. Choosing a passage (`open`) reads it as any reader would.
+    func startBlank(model: LibraryModel) {
+        guard self.model == nil else { return }
+        self.model = model
+        isBlank = true
+        // The splash waits for the first chapter, and a window that opens on
+        // a new tab reads none: there is nothing to wait for.
+        model.markInitialContentLoaded()
+    }
+
     func start(model: LibraryModel, at location: ReaderLocation?) {
         guard self.model == nil else { return }
         self.model = model
@@ -122,7 +138,8 @@ final class ReaderWorkspace: ObservableObject {
     /// something ignores this, which is the whole point of the window owning
     /// its place.
     func adoptIfUnplaced() {
-        guard let model, selectedTranslationID == nil,
+        // A new tab is empty on purpose, not for want of a place.
+        guard let model, !isBlank, selectedTranslationID == nil,
               let translationID = model.selectedTranslationID else { return }
         // The book may be unknown, on a first launch: the translation's first
         // is opened then.
@@ -330,7 +347,8 @@ final class ReaderWorkspace: ObservableObject {
     /// not move the library: its chapter and selection are what the study
     /// pane shows and what a highlight is written against.
     private func mirror() {
-        guard let model, model.activeReader === self else { return }
+        // A new tab has no place to give: the library keeps the last one.
+        guard let model, model.activeReader === self, !isBlank else { return }
         model.adoptActiveReader(
             translationID: selectedTranslationID,
             book: selectedBookNumber,
@@ -351,6 +369,7 @@ final class ReaderWorkspace: ObservableObject {
     /// has changed — a highlight made, a note written, a module installed.
     func reload() {
         recentChapters.removeAll()
+        guard !isBlank else { return }
         loadBooksAndChapter()
     }
 
@@ -358,10 +377,14 @@ final class ReaderWorkspace: ObservableObject {
     /// tells the library where it is: for a kept tab shown again, which may
     /// have missed a change while out of sight. Only a change is published.
     func refreshQuietly() {
+        // A new tab has nothing to read again.
+        guard !isBlank else { return }
         loadBooksAndChapter()
     }
 
     private func loadBooksAndChapter() {
+        // Anything read is a passage chosen: a new tab becomes an ordinary one.
+        if isBlank { isBlank = false }
         guard let model, let translationID = selectedTranslationID else {
             contents = .empty
             mirror()
@@ -473,6 +496,19 @@ final class ReaderRecentChapters {
     }
 
     func removeAll() { entries.removeAll() }
+
+    /// The chapters read lately, the latest first, for a new tab to offer.
+    var places: [ReaderLocation] {
+        entries.reversed().compactMap { entry in
+            entry.contents.chapter.map { chapter in
+                ReaderLocation(
+                    translationID: entry.translationID,
+                    bookNumber: chapter.book.id,
+                    chapterNumber: chapter.number
+                )
+            }
+        }
+    }
 }
 
 /// Where each of a window's tabs was scrolled.

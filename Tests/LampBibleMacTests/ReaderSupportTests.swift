@@ -669,6 +669,48 @@ struct ReaderSupportTests {
         #expect(tab?.chatID == nil)
     }
 
+    /// A new tab is empty until a passage is chosen in it, and stays so
+    /// through a relaunch: the place it lacks is not a place lost.
+    @Test func aNewTabIsBlankUntilAPassageIsChosen() throws {
+        let john = ReaderLocation(translationID: "WEB", bookNumber: 43, chapterNumber: 3)
+        var tabs = ReaderTabCollection(initialLocation: john)
+        let blank = tabs.addBlank()
+        #expect(tabs.selectedID == blank)
+        #expect(tabs.selectedTab?.isBlank == true)
+        #expect(tabs.selectedTab?.location == nil)
+
+        // Saved and read back, and through the check that drops tabs whose
+        // translation has gone, it is still there and still blank.
+        let data = try JSONEncoder().encode(tabs)
+        var restored = try JSONDecoder().decode(ReaderTabCollection.self, from: data)
+        restored.restoreAvailableLocations(translationIDs: ["WEB"], fallbackLocation: john)
+        #expect(restored.tabs.count == 2)
+        #expect(restored.selectedTab?.isBlank == true)
+
+        // A copy of it is a new tab too.
+        restored.duplicate(blank)
+        #expect(restored.selectedTab?.isBlank == true)
+
+        // Nothing is not a passage; a passage makes it an ordinary tab.
+        tabs.updateSelected(location: nil)
+        #expect(tabs.selectedTab?.isBlank == true)
+        let romans = ReaderLocation(translationID: "WEB", bookNumber: 45, chapterNumber: 8)
+        tabs.updateSelected(location: romans)
+        #expect(tabs.selectedTab?.isBlank == false)
+        #expect(tabs.selectedTab?.location == romans)
+    }
+
+    /// A tab with no place that is not a new tab — one saved while still
+    /// opening — is still dropped on restore, as it was.
+    @Test func aTabWithNoPlaceThatIsNotNewIsStillDropped() {
+        let john = ReaderLocation(translationID: "WEB", bookNumber: 43, chapterNumber: 3)
+        var tabs = ReaderTabCollection(initialLocation: john)
+        tabs.add(location: nil)
+        tabs.restoreAvailableLocations(translationIDs: ["WEB"], fallbackLocation: john)
+        #expect(tabs.tabs.count == 1)
+        #expect(tabs.selectedTab?.location == john)
+    }
+
     @Test func aTabDoesNotLoseItsChapterToAReaderWithNoPlace() {
         let john = ReaderLocation(translationID: "WEB", bookNumber: 43, chapterNumber: 3)
         var tabs = ReaderTabCollection(initialLocation: john)
