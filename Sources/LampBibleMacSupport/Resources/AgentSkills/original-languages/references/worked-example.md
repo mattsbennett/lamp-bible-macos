@@ -28,14 +28,14 @@ construal to argue from context rather than a dependency supplied by the module.
 
 | translation | occurrences | renderings |
 |---|---|---|
-| ASVs | 136 | flesh (136) |
-| WEBs | 147 | flesh (145), human (1), life (1) |
-| KJVs | 153 | flesh (147), carnal (2), carnally (1), fleshly (1) |
+| KJVs | 153 | flesh (147), carnal (2), of (2), carnally (1), fleshly (1) |
 | BSBs | 127 | flesh (84), body (17), bodies (3), people (3), physical (2) |
 | TAGNT | 147 | σάρκα (37), σαρκὸς (30), σαρκὶ (21), σαρκί (18), σὰρξ (18) |
 
-In this recorded dataset the Berean has 43 tagged occurrences not grouped under
-"flesh", while the ASV's 136 are grouped under it. That establishes a distribution
+`ASVs`, `WEBs` and `YLT` are not in it: `list_modules` gives them
+`tagsStrongs: false`, and asking for them anyway returns nothing. The KJV's "of" is a tag aligned with more than the word, a reminder that a
+rendering here is an alignment. In this recorded dataset the Berean has 43 tagged
+occurrences not grouped under "flesh", while 147 of the KJV's 153 are. That establishes a distribution
 difference, not why "man" was chosen at Romans 8:3. The totals are not matched
 denominators: editions and tagging can differ. Inspect comparable contexts before
 suggesting a translation policy, and mark that suggestion as an inference.
@@ -44,14 +44,19 @@ suggesting a translation policy, and mark that suggestion as an inference.
 
 `lookup_dictionary_keys` on G4561:
 
-- Dodson Greek Lexicon: *flesh, body*
+- TBESG (Abbott-Smith, 1922), sense 3(b): "in ethical sense, esp. in Pauline Epp.,
+  of the flesh as the seat and vehicle of sinful desires", citing Rom.7:25 and
+  Rom.8:4-9. It also notes the word is "in LXX chiefly for בָּשָׂר".
+- Dodson Greek Lexicon: *flesh, body, human nature, materiality; kindred*
 - Strong's Greek Dictionary: *carnal(-ly, + -ly minded), flesh(-ly)*
 
-These short glosses do not by themselves establish the contextual rendering
-"sinful man". Read the full lexical entry and the sentence before classifying that
-rendering. Strong's rendering list is not independent lexical proof. If the
-available entry does not support the needed step, report that limit rather than
-declaring both alternatives inside the range from the gloss alone.
+The full entry gives a sense near the one "sinful man" paraphrases, attested in
+the verses just after. It does not place 8:3 itself, and it does not say whether
+"man" keeps what "flesh" carries there; that is the contextual argument still to
+make. Dodson's glosses could not show even the sense. Strong's rendering list is
+not independent lexical proof. If the available entry does not support the needed
+step, report that limit rather than declaring both alternatives inside the range
+from a gloss.
 
 ## What the report says
 

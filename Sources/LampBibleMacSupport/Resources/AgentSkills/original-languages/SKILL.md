@@ -35,9 +35,15 @@ interpretation; translators' rendering counts are neither.
    single-word text match, to identify the tag for the word under discussion.
 3. For a word the answer turns on, take parsing from that occurrence and quote a
    named lexicon for the range: `lookup_dictionary_keys`, for example
-   `{"keys": ["G4561"], "module_ids": ["dodson_greek"]}`. Prefer `bdb` for Hebrew,
-   `dodson_greek` for Greek. `strongs_hebrew` and `strongs_greek` are also bundled,
-   but their glosses index renderings and must not stand in for a semantic argument.
+   `{"keys": ["G4561"], "module_ids": ["tbesg"]}`. Prefer `bdb` for Hebrew and
+   `tbesg` for Greek: both give numbered senses with the passages behind each.
+   Ask `bdb` with the Strong's key. Its entries keep BDB's own numbers, so each
+   comes back with `mappedFrom` naming the key you asked, and one key often leads
+   to more than one entry, such as two words spelled alike: choose by the passage
+   and say which. `tbesg` is mostly Abbott-Smith (1922), and BDB is from 1906;
+   give the date when a claim leans on the entry. `dodson_greek` gives short
+   glosses only. `strongs_hebrew` and `strongs_greek` are also bundled, but their
+   glosses index renderings and must not stand in for a semantic argument.
 4. For a rendering-dependent claim, compare the relevant installed English
    translations. Bundled candidates are `KJVs`, `BSBs`, `ASVs`, `WEBs`, `YLT`.
    Name the ones actually compared. Do not request every translation regardless of
@@ -45,6 +51,10 @@ interpretation; translators' rendering counts are neither.
    call; remove that module and retry the compatible selection.
 5. If usage or rendering distribution matters, call `analyze_strongs` with `key`
    and explicit relevant `translation_ids`; narrow `range` when the claim is local.
+   Ask only for translations `list_modules` marks `tagsStrongs: true`; of the
+   bundled English that is `KJVs` and `BSBs`. A translation without tags is left
+   out of the result without comment, so report the rows that came back, not the
+   ones requested.
    Attribute every count to its translation and tagging. Unequal totals can reflect
    tagging or textual differences, not translator intent. A distribution can prompt
    a hypothesis about policy; it does not establish why this verse was rendered so.

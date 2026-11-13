@@ -73,7 +73,8 @@ nearby verses and compatible translations, not an entire library by default.
   20, subject to the reader's cap), not proof of absence or complete inventories.
   Use alternate wording and narrower module/book ranges when relevant.
 - `lookup_dictionary_keys` retrieves exact keys; prefer `bdb` for Hebrew and
-  `dodson_greek` for Greek semantic range. Strong's glosses and `analyze_strongs`
+  `tbesg` for Greek semantic range. Ask `bdb` with the Strong's key: each entry
+  names it in `mappedFrom`, and one key can lead to several. Strong's glosses and `analyze_strongs`
   rendering counts describe tagging/rendering, not the sense in this sentence.
 
 Verify every citation in an audit. For an uncited load-bearing claim, read the

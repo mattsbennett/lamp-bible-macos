@@ -87,7 +87,11 @@ public enum LampMCPToolCatalog {
         ),
         tool(
             "lookup_dictionary_keys",
-            "Look up exact Strong's or lexicon keys such as G3056 or H7225.",
+            """
+            Look up exact Strong's or lexicon keys such as G3056 or H7225. A Strong's \
+            Hebrew key also returns the BDB entries it maps to, each naming the key in \
+            mappedFrom.
+            """,
             properties: [
                 "keys": arrayOfStrings("One or more exact dictionary keys."),
                 "module_ids": arrayOfStrings("Optional dictionary module IDs."),

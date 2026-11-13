@@ -11,12 +11,12 @@ here what it does everywhere?**
 
 ```
 G4561 σάρξ
-  ASVs  136 occurrences:  flesh (136)
+  KJVs  153 occurrences:  flesh (147), carnal (2), of (2), carnally (1), fleshly (1)
   BSBs  127:              flesh (84), body (17), bodies (3), people (3), physical (2)
 ```
 
-A translation tagged with the same rendering 136 times is more uniform in this
-dataset than one tagged with several renderings. That describes the data, not the
+A translation tagged with one rendering at 147 of 153 occurrences is more uniform
+in this dataset than one tagged with several renderings. That describes the data, not the
 translator's intent, the fairness of a particular rendering, or a policy already
 proved. Check comparable occurrences before proposing a policy as an explanation.
 

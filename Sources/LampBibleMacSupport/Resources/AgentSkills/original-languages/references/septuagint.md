@@ -15,6 +15,20 @@ different underlying text. Describe the difference and mark that limit.
 `read_study_material` gives his translator footnotes. These can explain his English;
 attribute that explanation rather than making it the original's assertion.
 
+## The Hebrew behind a Greek word
+
+`tbesg` entries often say which Hebrew words the Septuagint renders with the Greek
+word: σάρξ is "in LXX chiefly for בָּשָׂר". `lookup_dictionary_keys` returns these
+as a sense's `septuagintHebrew`, each with a Strong's number where exactly one
+Hebrew word fits. Follow that number into `bdb`, or into `analyze_strongs` with
+`TAHOT`. A word without a number cannot be followed to an entry.
+
+This is Abbott-Smith's summary of Septuagint usage (1922), not a count of the
+bundled `LXX`, which stays untagged. Attribute it to him, and read an actual pair of
+passages before resting a claim on the correspondence. `tbesg` keys above G5624 are
+STEPBible's extended numbers for Septuagint and Apocrypha words; no bundled text
+is tagged with them, so they are reached only by key.
+
 ## Check references before comparing
 
 `read_passage` performs no versification conversion. Use separate calls and verify
