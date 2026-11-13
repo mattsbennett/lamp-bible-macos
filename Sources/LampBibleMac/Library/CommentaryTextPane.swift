@@ -52,7 +52,11 @@ struct CommentaryDocument: @unchecked Sendable {
             hasher.combine(unit.footnotes)
             hasher.combine(unit.startReference)
             hasher.combine(unit.endReference)
-            for link in unit.scriptureLinks { hasher.combine(link.id) }
+            for link in unit.scriptureLinks {
+                hasher.combine(link.text)
+                hasher.combine(link.startReference)
+                hasher.combine(link.endReference)
+            }
         }
         return hasher.finalize()
     }
@@ -681,6 +685,9 @@ struct CommentaryTextPane: NSViewRepresentable {
                 textView.textStorage?.setAttributedString(document.text)
                 updateTail()
                 textView.contentLength = document.text.length
+                // Set again, to be held to the commentary: replacing the text
+                // left the caret after the room under the last passage.
+                textView.setSelectedRanges(textView.selectedRanges, affinity: textView.selectionAffinity, stillSelecting: false)
             }
             textView.updateToolTipUnderPointer()
             if sameChapter {

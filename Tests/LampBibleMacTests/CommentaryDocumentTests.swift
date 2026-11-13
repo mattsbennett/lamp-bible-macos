@@ -164,8 +164,10 @@ struct CommentaryDocumentTests {
         let storage = try #require((scrollView.documentView as? NSTextView)?.textStorage)
         #expect(storage.attribute(.lampCommentaryTail, at: storage.length - 1, effectiveRange: nil) != nil)
         #expect(scrollView.contentInsets.bottom == 0)
-        // Select All copies the commentary, not the empty paragraph after it.
+        // Select All copies the commentary, not the empty paragraph after it,
+        // and a caret starts inside the commentary, not after that paragraph.
         let textView = try #require(scrollView.documentView as? CommentaryTextView)
+        #expect(NSMaxRange(textView.selectedRange()) <= document.text.length)
         textView.selectAll(nil)
         #expect(textView.selectedRange() == NSRange(location: 0, length: document.text.length))
         // A heading's level is drawn, so it is part of what the cache keys on.
