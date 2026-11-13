@@ -1048,13 +1048,9 @@ extension LibrarySyncController {
         // A book's pictures, for the books in the library and any the
         // manifest already names — the gate that keeps a picture belonging to
         // something else from going up as a book's.
-        var bookIDs = Set(
+        let bookIDs = Set(
             modules.filter { $0.module.kind == .book }.map(\.module.id)
-        )
-        for member in manifest.members where member.kind == .bookMedia {
-            let components = member.path.split(separator: "/").map(String.init)
-            if components.count >= 3 { bookIDs.insert(components[1]) }
-        }
+        ).union(LampBookMediaFiles.bookModuleIDs(inRemotePaths: manifest.members.map(\.path)))
         let pictures = LampSyncLocalFiles.bookMedia(
             forBookModuleIDs: bookIDs, inLibraryAt: library.rootURL, fileManager: fileManager
         )

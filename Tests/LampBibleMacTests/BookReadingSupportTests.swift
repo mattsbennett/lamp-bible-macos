@@ -147,36 +147,6 @@ struct BookReadingSupportTests {
         ])
     }
 
-    @Test func mediaResolverFindsSupportedLayoutsAndRejectsTraversal() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let mediaDirectory = root.appendingPathComponent("Media/Modules/a-book", isDirectory: true)
-        try FileManager.default.createDirectory(at: mediaDirectory, withIntermediateDirectories: true)
-        let image = mediaDirectory.appendingPathComponent("images/cover.jpg")
-        try FileManager.default.createDirectory(
-            at: image.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        try Data([1]).write(to: image)
-        defer { try? FileManager.default.removeItem(at: root) }
-
-        #expect(BookReaderMediaResolver.url(
-            for: "images/cover.jpg",
-            moduleID: "a-book",
-            libraryRootURL: root
-        ) == image)
-        #expect(BookReaderMediaResolver.url(
-            for: "../secrets.txt",
-            moduleID: "a-book",
-            libraryRootURL: root
-        ) == nil)
-        #expect(BookReaderMediaResolver.url(
-            for: "https://example.com/image.jpg",
-            moduleID: "a-book",
-            libraryRootURL: root
-        ) == URL(string: "https://example.com/image.jpg"))
-    }
-
     @Test func navigationStopsAtDocumentEdges() {
         let ids = ["one", "two", "three"]
         #expect(BookReaderNavigation.previousID(in: ids, currentID: "one") == nil)

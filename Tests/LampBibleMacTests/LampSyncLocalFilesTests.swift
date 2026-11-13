@@ -243,7 +243,7 @@ struct LampSyncLocalFilesTests {
         let library = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: library) }
         // `Media/Modules` wins over `Media/Books` for the same relative path,
-        // as it does in BookReaderMediaResolver.
+        // as it does for the reader (`LampBookMediaFiles`).
         try write("preferred", at: "Media/Modules/atonement/plates/one.jpg", in: library)
         try write("shadowed", at: "Media/Books/atonement/plates/one.jpg", in: library)
         try write("only here", at: "Media/Books/atonement/two.jpg", in: library)

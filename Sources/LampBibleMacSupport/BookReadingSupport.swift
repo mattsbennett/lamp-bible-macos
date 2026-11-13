@@ -48,33 +48,8 @@ public enum BookReaderJSON {
 // cited rather than as an unordered set, and `LampBookTextResolver` holds the
 // scalar-offset contract that the phone's reader needs too.
 
-public enum BookReaderMediaResolver {
-    public static func url(
-        for filename: String,
-        moduleID: String,
-        libraryRootURL: URL,
-        fileExists: (String) -> Bool = FileManager.default.fileExists(atPath:)
-    ) -> URL? {
-        if let remote = URL(string: filename),
-           let scheme = remote.scheme?.lowercased(),
-           scheme == "https" || scheme == "http" {
-            return remote
-        }
-
-        guard let relative = LampPortableBookJSON.safeRelativeMediaPath(filename) else {
-            return nil
-        }
-        let roots = [
-            libraryRootURL.appendingPathComponent("Media/Modules/\(moduleID)", isDirectory: true),
-            libraryRootURL.appendingPathComponent("Media/Books/\(moduleID)", isDirectory: true),
-            libraryRootURL.appendingPathComponent("Media/\(moduleID)", isDirectory: true),
-            libraryRootURL.appendingPathComponent("Modules/\(moduleID)/media", isDirectory: true),
-        ]
-        return roots
-            .map { $0.appendingPathComponent(relative) }
-            .first { fileExists($0.path) }
-    }
-}
+// Where a book's pictures are found is core's: `LampBookMediaFiles`, with
+// this library's folders from `LampBookMediaFiles.libraryFolders`.
 
 // Where each book was left and what is bookmarked in it are core's now, as
 // `LampBookReadingPosition`, `LampBookReadingPositionBuffer` and

@@ -1874,10 +1874,9 @@ private struct BookMediaBlockView: View {
     let presentImage: (NSImage, String) -> Void
 
     private var url: URL? {
-        BookReaderMediaResolver.url(
+        LampBookMediaFiles.url(
             for: media.filename,
-            moduleID: moduleID,
-            libraryRootURL: libraryRootURL
+            in: LampBookMediaFiles.libraryFolders(libraryRootURL: libraryRootURL, moduleID: moduleID)
         )
     }
 
@@ -2299,10 +2298,9 @@ private struct BookInformationView: View {
     @ViewBuilder
     private var coverView: some View {
         if let cover,
-           let url = BookReaderMediaResolver.url(
+           let url = LampBookMediaFiles.url(
             for: cover.filename,
-            moduleID: book.id,
-            libraryRootURL: libraryRootURL
+            in: LampBookMediaFiles.libraryFolders(libraryRootURL: libraryRootURL, moduleID: book.id)
            ) {
             BookImageView(url: url, alt: cover.alt, caption: "") { _, _ in }
                 .frame(width: 180, height: 250)

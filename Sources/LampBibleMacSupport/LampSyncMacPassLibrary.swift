@@ -229,9 +229,9 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
     /// their metadata — so these files are the library's only copy, and a
     /// library without them shows the book with its pictures missing.
     ///
-    /// Installed under `Media/Books/<module>/`, which is the root
-    /// `BookReaderMediaResolver` checks second and the only one a sync
-    /// writes, so what arrives is what the reader finds.
+    /// Installed where core's `LampBookMediaFiles` says this library's
+    /// reader finds it: `Media/Books/<module>/`, the only folder a sync
+    /// writes.
     /// A notes module's picture, under `Media/Notes/<module>/`, which is
     /// where `LampLibrary.noteMediaURL` looks for it. Keyed by the module
     /// rather than a verse: the module declares its pictures once and its
@@ -279,20 +279,11 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
     }
 
     private func installBookMedia(from url: URL, remotePath: String) throws {
-        let components = remotePath.split(separator: "/").map(String.init)
-        guard components.count >= 3 else { throw PassError.unsupported(remotePath) }
-        let moduleID = components[1]
-        let relative = components.dropFirst(2).joined(separator: "/")
-        let destination = LampSyncLocalFiles
-            .bookMediaInstallRoot(for: moduleID, inLibraryAt: library.rootURL)
-            .appendingPathComponent(relative)
-        try fileManager.createDirectory(
-            at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
-        )
-        if fileManager.fileExists(atPath: destination.path) {
-            try fileManager.removeItem(at: destination)
-        }
-        try fileManager.copyItem(at: url, to: destination)
+        let root = library.rootURL
+        guard let destination = LampBookMediaFiles.installURL(forRemotePath: remotePath, folders: {
+            LampBookMediaFiles.libraryFolders(libraryRootURL: root, moduleID: $0)
+        }) else { throw PassError.unsupported(remotePath) }
+        try place(url, at: destination)
     }
 
     private func installFile(from url: URL, to directory: URL, named path: String) throws {

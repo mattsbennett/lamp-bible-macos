@@ -180,7 +180,7 @@ struct LampSyncMacPassLibraryTests {
         let installed = root.appendingPathComponent("Media/Books/atonement/plates/one.jpg")
         #expect(try Data(contentsOf: installed) == Data("a plate".utf8))
         #expect(
-            LampSyncLocalFiles.bookMediaRoots(for: "atonement", inLibraryAt: root)[1]
+            LampBookMediaFiles.libraryFolders(libraryRootURL: root, moduleID: "atonement").install
                 == root.appendingPathComponent("Media/Books/atonement", isDirectory: true),
             "the install root is the reader's second root"
         )
