@@ -1,8 +1,8 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The measures a rank of tabs is drawn with, shared by the reader's tabs and
-/// the Search pane's.
+/// The measures a rank of tabs is drawn with, shared by the reader's tabs,
+/// the Search pane's, and the documents open for a writing.
 ///
 /// The bar follows the tabs macOS draws for Finder and Safari, since those
 /// are the tabs people who never open a code editor already know: the tabs
@@ -337,7 +337,8 @@ private final class CurrentTabs {
 /// The bar behind the tabs: a shade down from the content in light, a shade
 /// darker in dark, so the raised tab — drawn in the content's own colour —
 /// reads as lifted out of it. A hairline under it meets the content.
-private struct LibraryTabBarTrack: View {
+/// The bar the tabs sit in.
+struct LibraryTabBarTrack: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -355,7 +356,12 @@ private struct LibraryTabBarTrack: View {
 }
 
 /// The open tab raised, a hovered one tinted, the rest left as the bar.
-private struct LibraryTabShape: View {
+///
+/// Internal rather than file-private: a writing's document tabs are drawn
+/// with these three as well, so the two ranks cannot drift apart. What
+/// differs there is what a tab *is* — a file, with a saved state and a
+/// conflict of its own — not how it is drawn.
+struct LibraryTabShape: View {
     let isSelected: Bool
     let isHovered: Bool
     @Environment(\.colorScheme) private var colorScheme
@@ -374,7 +380,7 @@ private struct LibraryTabShape: View {
 }
 
 /// A tab's close button: a small cross on a circle that shows on approach.
-private struct LibraryTabCloseButton: View {
+struct LibraryTabCloseButton: View {
     let title: String
     let action: () -> Void
     @State private var isHovered = false

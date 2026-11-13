@@ -831,7 +831,6 @@ struct DevotionalEditorView: View {
     }
 
     /// The Reader's tab height, so the two ranks line up.
-    private static let tabHeight: CGFloat = 30
 
     /// The documents open for this writing, drawn as the Reader draws its own
     /// tabs: contiguous full-height cells divided by hairlines, so the row
@@ -844,48 +843,55 @@ struct DevotionalEditorView: View {
     private var documentTabBar: some View {
         HStack(spacing: 0) {
             documentTabRank
-            Spacer(minLength: 0)
             tabSeparator
             workspaceControls
         }
-        .frame(height: Self.tabHeight)
-        .background(.bar)
+        .frame(height: LibraryTabStrip.height)
+        .background { LibraryTabBarTrack() }
     }
 
     private var documentTabRank: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 0) {
-                documentTab(
-                    id: nil,
-                    title: "Main Prose",
-                    systemImage: "doc.text",
-                    isDirty: isDirty,
-                    hasConflict: false
+        HStack(spacing: 0) {
+            GeometryReader { proxy in
+                let available = proxy.size.width - LibraryTabStrip.inset
+                let width = LibraryTabStrip.cellWidth(
+                    available: available, count: workspaceDocuments.count + 1
                 )
-                tabSeparator
-                ForEach(workspaceDocuments) { document in
-                    documentTab(
-                        id: document.id,
-                        title: title(of: document),
-                        systemImage: document.isHandOpened ? "doc" : "doc.plaintext",
-                        isDirty: document.isDirty,
-                        hasConflict: document.hasExternalConflict,
-                        canClose: document.isHandOpened
-                    )
-                    tabSeparator
+                ScrollView(.horizontal) {
+                    HStack(spacing: 0) {
+                        documentTab(
+                            id: nil,
+                            title: "Main Prose",
+                            isDirty: isDirty,
+                            hasConflict: false,
+                            width: width
+                        )
+                        ForEach(workspaceDocuments) { document in
+                            documentTab(
+                                id: document.id,
+                                title: title(of: document),
+                                isDirty: document.isDirty,
+                                hasConflict: document.hasExternalConflict,
+                                canClose: document.isHandOpened,
+                                width: width
+                            )
+                        }
+                    }
+                    .padding(.leading, LibraryTabStrip.inset)
+                    .frame(height: LibraryTabStrip.height)
                 }
-
-                tabBarButton(
-                    "New Markdown File",
-                    systemImage: "plus",
-                    help: "Create a companion Markdown file"
-                ) { showingNewWorkspaceDocument = true }
-                tabSeparator
+                .scrollIndicators(.never)
             }
-            .frame(height: Self.tabHeight)
+            // The button that adds to the rank stays at its trailing edge
+            // rather than scrolling away with the tabs, as the reader's does.
+            tabBarButton(
+                "New Markdown File",
+                systemImage: "plus",
+                help: "Create a companion Markdown file"
+            ) { showingNewWorkspaceDocument = true }
+            .frame(width: LibraryTabStrip.newTabButtonWidth)
         }
-        .scrollIndicators(.hidden)
-        .frame(height: Self.tabHeight)
+        .frame(height: LibraryTabStrip.height)
     }
 
     /// What belongs to the workspace rather than to the rank, kept where it
@@ -930,7 +936,7 @@ struct DevotionalEditorView: View {
             Image(systemName: systemImage)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
-                .frame(width: 30, height: Self.tabHeight)
+                .frame(width: 30, height: LibraryTabStrip.height)
                 .background(
                     hoveredTabBarButton == title
                         ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear),
@@ -948,78 +954,83 @@ struct DevotionalEditorView: View {
         .help(help)
     }
 
+    /// One document as the rank draws it, with the measures, the raised
+    /// shape and the close button the reader's and Search's tabs use.
+    ///
+    /// What is this rank's own is what a tab here *is*: a file, so it can be
+    /// unsaved or in conflict with what is on disk, and the writing's own
+    /// prose is always first and cannot be closed. The accent underline the
+    /// old cells wore is gone — the open tab is raised instead, which is how
+    /// macOS has drawn window tabs since Finder and Safari took this shape.
     private func documentTab(
         id: String?,
         title: String,
-        systemImage: String,
         isDirty: Bool,
         hasConflict: Bool,
-        canClose: Bool = false
+        canClose: Bool = false,
+        width: CGFloat
     ) -> some View {
         let isSelected = selectedWorkspaceDocumentID == id
         let isHovered = hoveredDocumentTab == HoveredDocumentTab(id: id)
-        // Siblings rather than a close button nested inside the tab button, as
-        // in the Reader: a Button inside another Button's label is a fight
-        // over the click.
-        return HStack(spacing: 5) {
+        let showsClose = canClose && (isSelected || isHovered)
+        // Siblings rather than a close button nested inside the tab button: a
+        // Button inside another Button's label is a fight over the click.
+        return HStack(spacing: 4) {
+            // On the leading edge, as the reader's tabs have it, and holding
+            // its width whether or not it is shown so the title does not
+            // shift as the pointer passes.
+            Group {
+                if showsClose, let id {
+                    LibraryTabCloseButton(title: title) { closeWorkspaceDocument(id) }
+                        .disabled(isDirty)
+                        .help(isDirty ? "Save this file before closing it" : "Close this file")
+                } else {
+                    Color.clear
+                }
+            }
+            .frame(width: 16, height: 16)
+
             Button {
                 selectWorkspaceDocument(id)
             } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: systemImage)
+                HStack(spacing: 5) {
                     Text(title)
                         .lineLimit(1)
-                        .truncationMode(.tail)
-                    Spacer(minLength: 0)
+                        .truncationMode(.middle)
+                        .layoutPriority(1)
+                    // Beside the title, not at the cell's trailing edge: a
+                    // tab here can be as wide as the bar divided by two, and
+                    // a mark that far from its own title reads as belonging
+                    // to the tab after it.
+                    //
+                    // A file's state, which a reader tab has no equivalent of
+                    // and which is why this rank is not simply `LibraryTabBar`.
                     if hasConflict {
                         Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.caption2)
                             .foregroundStyle(.orange)
                             .accessibilityLabel("File conflict")
                     } else if isDirty {
                         Circle()
                             .fill(.secondary)
-                            .frame(width: 6, height: 6)
+                            .frame(width: 5, height: 5)
                             .accessibilityLabel("Unsaved changes")
                     }
+                    Spacer(minLength: 0)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .frame(height: Self.tabHeight)
+                .frame(height: LibraryTabStrip.height)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-
-            if canClose, let id {
-                Button("Close \(title)", systemImage: "xmark") {
-                    closeWorkspaceDocument(id)
-                }
-                .labelStyle(.iconOnly)
-                .buttonStyle(.plain)
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
-                // Revealed on approach, so idle tabs stay titles rather than a
-                // row of crosses.
-                .opacity(isSelected || isHovered ? 1 : 0)
-                .disabled(isDirty)
-                .help(isDirty ? "Save this file before closing it" : "Close this file")
-            }
         }
         .font(.subheadline)
         .foregroundStyle(isSelected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
-        .padding(.horizontal, 10)
-        .frame(minWidth: 104, maxWidth: 190)
-        .frame(height: Self.tabHeight)
-        // A shape style fills the safe area too unless told not to, and the
-        // bar sits under the toolbar: the open tab's fill would rise behind it.
-        .background(
-            documentTabBackground(isSelected: isSelected, isHovered: isHovered),
-            ignoresSafeAreaEdges: []
-        )
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(Color.accentColor)
-                .frame(height: 2)
-                .opacity(isSelected ? 1 : 0)
-        }
+        .padding(.horizontal, 6)
+        .frame(width: width)
+        .frame(height: LibraryTabStrip.height - LibraryTabStrip.inset * 2)
+        .background(LibraryTabShape(isSelected: isSelected, isHovered: isHovered))
+        .padding(.trailing, LibraryTabStrip.inset)
         .onHover { isHovering in
             let tab = HoveredDocumentTab(id: id)
             hoveredDocumentTab = isHovering
@@ -1036,14 +1047,6 @@ struct DevotionalEditorView: View {
                     .help(isDirty ? "Save this file before closing it" : "")
             }
         }
-    }
-
-    private func documentTabBackground(isSelected: Bool, isHovered: Bool) -> some ShapeStyle {
-        if isSelected {
-            // The content colour, so the open tab reads as the page below it.
-            return AnyShapeStyle(.background)
-        }
-        return isHovered ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear)
     }
 
     /// Takes a hand-opened file back off the tab bar. Its contents are left
