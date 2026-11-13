@@ -1048,9 +1048,14 @@ extension LibrarySyncController {
         // A book's pictures, for the books in the library and any the
         // manifest already names — the gate that keeps a picture belonging to
         // something else from going up as a book's.
+        // Every module this Mac knows of another kind, not just those with a
+        // file to publish: one whose file has gone is still read from its
+        // database, and still keeps pictures under its ID.
+        let otherModules = try await library.installedModules()
+            .filter { $0.kind != .book }.map(\.id)
         let bookIDs = LampBookMediaFiles.publishedBookModuleIDs(
             books: Set(modules.filter { $0.module.kind == .book }.map(\.module.id)),
-            otherModules: Set(modules.filter { $0.module.kind != .book }.map(\.module.id)),
+            otherModules: Set(otherModules),
             remotePaths: manifest.members.map(\.path)
         )
         let pictures = LampSyncLocalFiles.bookMedia(
