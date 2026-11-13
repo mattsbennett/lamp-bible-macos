@@ -67,6 +67,7 @@
 		A10000000000000000000018 /* LampMenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000017 /* LampMenuBarView.swift */; };
 		A10000000000000000000019 /* DevotionalAudioRecorderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000018 /* DevotionalAudioRecorderView.swift */; };
 		A1000000000000000000001A /* ReaderScrollLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000019 /* ReaderScrollLink.swift */; };
+		A1000000000000000000C701 /* CommentaryTextPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000C701 /* CommentaryTextPane.swift */; };
 		A1000000000000000000001B /* ScrollLinkSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001A /* ScrollLinkSupport.swift */; };
 		A1000000000000000000001C /* MarkdownTextEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001B /* MarkdownTextEditor.swift */; };
 		A1000000000000000000001D /* MarkdownEditing.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001C /* MarkdownEditing.swift */; };
@@ -200,6 +201,7 @@
 		B10000000000000000000017 /* LampMenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/App/LampMenuBarView.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000018 /* DevotionalAudioRecorderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/DevotionalAudioRecorderView.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000019 /* ReaderScrollLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/ReaderScrollLink.swift; sourceTree = SOURCE_ROOT; };
+		B1000000000000000000C701 /* CommentaryTextPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/CommentaryTextPane.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000001A /* ScrollLinkSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/ScrollLinkSupport.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000001B /* MarkdownTextEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/MarkdownTextEditor.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000001C /* MarkdownEditing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/MarkdownEditing.swift; sourceTree = SOURCE_ROOT; };
@@ -425,6 +427,7 @@
 				B10000000000000000000014 /* SyncSupport.swift */,
 				B1000000000000000000001A /* ScrollLinkSupport.swift */,
 				B10000000000000000000019 /* ReaderScrollLink.swift */,
+				B1000000000000000000C701 /* CommentaryTextPane.swift */,
 				B1000000000000000000001C /* MarkdownEditing.swift */,
 				B1000000000000000000001B /* MarkdownTextEditor.swift */,
 				B10000000000000000000112 /* WritingFindSupport.swift */,
@@ -715,6 +718,7 @@
 				A10000000000000000000015 /* SyncSupport.swift in Sources */,
 				A1000000000000000000001B /* ScrollLinkSupport.swift in Sources */,
 				A1000000000000000000001A /* ReaderScrollLink.swift in Sources */,
+				A1000000000000000000C701 /* CommentaryTextPane.swift in Sources */,
 				A1000000000000000000001D /* MarkdownEditing.swift in Sources */,
 				A1000000000000000000001C /* MarkdownTextEditor.swift in Sources */,
 				A10000000000000000000112 /* WritingFindSupport.swift in Sources */,

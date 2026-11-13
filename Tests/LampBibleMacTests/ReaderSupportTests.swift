@@ -1520,4 +1520,83 @@ struct LampDictionaryStylingTests {
         LampDictionaryStyling.holdLeftToRight(&english)
         #expect(String(english.characters) == "verb: cover over, כָּפַר")
     }
+
+    /// The reader's link cursor and context menu look under the pointer in
+    /// any text view in the window, the study pane's TextKit 2 commentary
+    /// among them. Asking such a view for `layoutManager` switches it to
+    /// TextKit 1 for good, so the character is found through TextKit 2. A
+    /// point inside the view but on no glyph answers nothing, or the
+    /// overlay's walk stops at this view instead of the one under it.
+    @Test @MainActor func aTextKit2ViewIsHitTestedWithoutLeavingTextKit2() throws {
+        let textView = NSTextView(usingTextLayoutManager: true)
+        textView.frame = NSRect(x: 0, y: 0, width: 300, height: 400)
+        textView.textContainerInset = NSSize(width: 16, height: 16)
+        let url = try #require(URL(string: "lampbible://read?reference=45008003"))
+        // Long enough to wrap, with the link well past the first line.
+        let text = NSMutableAttributedString(
+            string: "Paul now contrasts the situation he has just described, and the sending of the Son is in Rom 8:3 at the end.\nShort.",
+            attributes: [.font: NSFont.systemFont(ofSize: 15)]
+        )
+        let linkRange = (text.string as NSString).range(of: "Rom 8:3")
+        text.addAttribute(.link, value: url, range: linkRange)
+        textView.textStorage?.setAttributedString(text)
+        let layoutManager = try #require(textView.textLayoutManager)
+        layoutManager.ensureLayout(for: layoutManager.documentRange)
+
+        func segment(_ range: NSRange) throws -> CGRect {
+            let start = try #require(layoutManager.location(layoutManager.documentRange.location, offsetBy: range.location))
+            let end = try #require(layoutManager.location(start, offsetBy: range.length))
+            var frame = CGRect.zero
+            layoutManager.enumerateTextSegments(in: try #require(NSTextRange(location: start, end: end)), type: .standard, options: []) { _, segment, _, _ in
+                frame = segment
+                return false
+            }
+            return frame
+        }
+        let origin = textView.textContainerOrigin
+        let link = try segment(linkRange)
+        #expect(link.minY > 20, "the link should be on a later line")
+
+        let hit = ReaderTextLinkHitTester.hit(at: NSPoint(x: link.midX + origin.x, y: link.midY + origin.y), in: textView)
+        #expect(hit?.link == url)
+        #expect(hit?.word == "Rom 8:3")
+
+        // Past the end of a short line, and below the last line: no glyph.
+        let short = try segment((text.string as NSString).range(of: "Short."))
+        #expect(ReaderTextLinkHitTester.hit(at: NSPoint(x: short.maxX + origin.x + 40, y: short.midY + origin.y), in: textView) == nil)
+        #expect(ReaderTextLinkHitTester.hit(at: NSPoint(x: short.midX + origin.x, y: short.maxY + origin.y + 60), in: textView) == nil)
+        #expect(textView.textLayoutManager != nil)
+    }
+
+    /// Commentary quotes pointed Hebrew in English lines. Its combining marks
+    /// and right-to-left run put a character's edges out of order, so a glyph
+    /// is found by its own segments: pointing at the Hebrew finds the word.
+    @Test @MainActor func pointedHebrewInATextKit2ViewIsFound() throws {
+        let textView = NSTextView(usingTextLayoutManager: true)
+        textView.frame = NSRect(x: 0, y: 0, width: 400, height: 200)
+        let text = NSAttributedString(
+            string: "See \u{05D0}\u{05B5}\u{05DC}\u{05B4}\u{05D9} (Ps 22:1).",
+            attributes: [.font: NSFont.systemFont(ofSize: 15)]
+        )
+        textView.textStorage?.setAttributedString(text)
+        let layoutManager = try #require(textView.textLayoutManager)
+        layoutManager.ensureLayout(for: layoutManager.documentRange)
+        let hebrew = (text.string as NSString).range(of: "\u{05D0}\u{05B5}\u{05DC}\u{05B4}\u{05D9}")
+        let start = try #require(layoutManager.location(layoutManager.documentRange.location, offsetBy: hebrew.location))
+        let end = try #require(layoutManager.location(start, offsetBy: hebrew.length))
+        var segments: [CGRect] = []
+        layoutManager.enumerateTextSegments(in: try #require(NSTextRange(location: start, end: end)), type: .standard, options: []) { _, segment, _, _ in
+            segments.append(segment)
+            return true
+        }
+        let word = try #require(segments.first)
+        let origin = textView.textContainerOrigin
+        // Across the word, not only at its middle.
+        for fraction in [0.2, 0.5, 0.8] {
+            let point = NSPoint(x: word.minX + word.width * fraction + origin.x, y: word.midY + origin.y)
+            let hit = ReaderTextLinkHitTester.hit(at: point, in: textView)
+            #expect(hit?.word == "\u{05D0}\u{05B5}\u{05DC}\u{05B4}\u{05D9}", "at \(fraction)")
+        }
+        #expect(textView.textLayoutManager != nil)
+    }
 }

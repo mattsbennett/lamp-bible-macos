@@ -2768,8 +2768,16 @@ private struct CommentaryInspectorView: View {
     @AppStorage("commentary.typeface") private var typeface = ProseTypeface.commentaryDefault
     @AppStorage("commentary.previewContextAmount") private var previewContextAmount = ScripturePreviewContextAmount.oneVerse
     @State private var units: [LampCommentaryUnit] = []
+    /// The chapter `units` are for, named when they were read: the reader's
+    /// own moves on a moment before its units do.
+    @State private var unitsTitle = ""
     @State private var isLoading = false
     @State private var errorMessage: String?
+    @EnvironmentObject private var scrollLink: ReaderScrollLink
+    /// The chapter as drawn, built away from the main thread.
+    @State private var document: CommentaryDocument?
+    @State private var previewLink: LampScriptureLink?
+    @State private var previewAnchor = CGRect.zero
 
     /// One commentary at a time. Interleaving several turns a chapter into a wall of
     /// competing voices, and with the panel grouped by verse there is no running
@@ -2842,6 +2850,7 @@ private struct CommentaryInspectorView: View {
                 return
             }
             units = recent
+            unitsTitle = contextDescription
             errorMessage = nil
             isLoading = false
             shownRequest = request
@@ -2858,6 +2867,7 @@ private struct CommentaryInspectorView: View {
             guard shownRequest != request else { return }
             isLoading = true
             errorMessage = nil
+            let title = contextDescription
             do {
                 let read = try await model.library.commentary(
                     bookNumber: book,
@@ -2865,6 +2875,7 @@ private struct CommentaryInspectorView: View {
                     moduleIDs: [moduleID]
                 )
                 units = read
+                unitsTitle = title
                 studyPane.recents.keep(read, for: request)
             } catch {
                 errorMessage = error.localizedDescription
@@ -2872,6 +2883,31 @@ private struct CommentaryInspectorView: View {
             }
             isLoading = false
         }
+        .task(id: documentKey) {
+            let key = documentKey
+            guard !units.isEmpty else { return }
+            if let kept = CommentaryDocumentCache.document(for: key) {
+                document = kept
+                return
+            }
+            let units = units
+            let built = await Task.detached(priority: .userInitiated) {
+                CommentaryDocument.build(title: key.title, units: units, style: key.style)
+            }.value
+            // Kept even when the chapter moved on meanwhile, so coming back
+            // to it finds it built; shown only if it is still the one up.
+            CommentaryDocumentCache.keep(built)
+            if built.key == documentKey { document = built }
+        }
+    }
+
+    /// What the drawn chapter is made from: its units, as shown, and the type.
+    private var documentKey: CommentaryDocument.Key {
+        CommentaryDocument.Key(
+            title: unitsTitle,
+            unitIDs: units.map(\.id),
+            style: CommentaryTextStyle(fontSize: fontSize, lineSpacing: lineSpacing, typeface: typeface)
+        )
     }
 
     private func commentaryName(_ commentary: LampInstalledModule) -> String {
@@ -2912,51 +2948,30 @@ private struct CommentaryInspectorView: View {
                     description: Text(contextDescription)
                 )
                 .studyPaneState()
-            } else {
-                let groups = commentaryGroups
-                VerseAnchoredScrollView(
-                    anchors: groups.map(\.anchor),
-                    focusedReference: reader.selectedVerseReference
-                ) {
-                    Text(contextDescription)
-                        .font(.title3.weight(.bold))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                    // On the pane itself rather than in a box: a commentary is
-                    // a column of prose, and the box's pale ground lowered its
-                    // contrast without separating anything the passage
-                    // headings don't already separate.
-                    ForEach(groups) { group in
-                        VStack(alignment: .leading, spacing: 14) {
-                            CommentaryPassageHeading(title: group.title)
-                            let pieces = CommentaryPiece.pieces(of: group.units)
-                            ForEach(Array(pieces.enumerated()), id: \.element.id) { index, piece in
-                                switch piece {
-                                case .outline(_, let titles):
-                                    CommentaryOutlinePath(
-                                        titles: titles,
-                                        fontSize: LampTextScale.commentaryText.clamped(fontSize)
-                                    )
-                                case .unit(let unit):
-                                    CommentaryUnitView(
-                                        unit: unit,
-                                        fontSize: LampTextScale.commentaryText.clamped(fontSize),
-                                        lineSpacing: LampTextScale.commentaryLineSpacing.clamped(lineSpacing),
-                                        typeface: typeface
-                                    )
-                                    // A rule between two pieces of comment, but
-                                    // not before an outline path, which leads
-                                    // into the comment after it.
-                                    if index < pieces.count - 1 {
-                                        Divider().padding(.vertical, 2)
-                                    }
-                                }
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.bottom, 10)
-                        .id(group.id)
+            } else if let shown = CommentaryDocumentCache.document(for: documentKey) ?? document {
+                // Until a new chapter is built, which is a moment, the last one
+                // stays up rather than the pane going blank and its place lost.
+                CommentaryTextPane(
+                    document: shown,
+                    focusedReference: reader.selectedVerseReference,
+                    scrollLink: scrollLink,
+                    pane: studyPane,
+                    openLink: { url, rect in
+                        guard let link = LampScriptureLink(previewURL: url) else { return }
+                        previewAnchor = rect
+                        previewLink = link
                     }
+                )
+                .popover(
+                    item: $previewLink,
+                    attachmentAnchor: previewAnchor == .zero ? .rect(.bounds) : .rect(.rect(previewAnchor))
+                ) { link in
+                    ScriptureReferencePopover(
+                        link: link,
+                        typeface: typeface,
+                        lineSpacing: LampTextScale.commentaryLineSpacing.clamped(lineSpacing),
+                        contextAmount: previewContextAmount
+                    )
                 }
             }
         }
@@ -2965,255 +2980,6 @@ private struct CommentaryInspectorView: View {
     private var contextDescription: String {
         guard let chapter = reader.chapter else { return "Current passage" }
         return "\(chapter.book.name) \(chapter.number)"
-    }
-
-    /// Grouped by the passage a unit comments on rather than by module, so that a
-    /// verse the reader is sitting on is one place in this panel even when three
-    /// commentaries have something to say about it.
-    private var commentaryGroups: [CommentaryGroup] {
-        Dictionary(grouping: units, by: \.startReference)
-            .compactMap { startReference, units -> CommentaryGroup? in
-                let endReference = units.compactMap(\.endReference).max()
-                return CommentaryGroup(
-                    id: startReference,
-                    endReference: endReference,
-                    title: LampBibleReferenceFormatter.describeRange(
-                        from: startReference,
-                        to: endReference ?? startReference
-                    ),
-                    units: units.sorted {
-                        ($0.moduleName, $0.orderIndex) < ($1.moduleName, $1.orderIndex)
-                    }
-                )
-            }
-            .sorted { $0.id < $1.id }
-    }
-}
-
-private struct CommentaryGroup: Identifiable {
-    let id: Int
-    let endReference: Int?
-    let title: String
-    let units: [LampCommentaryUnit]
-
-    var anchor: VerseAnchor {
-        VerseAnchor(reference: id, endReference: endReference)
-    }
-}
-
-/// The passage a group of comment is on, as the pane's running heads: the
-/// reference in small capitals over a hairline, so the eye finds where each
-/// verse's comment starts when scrolling a chapter's worth.
-private struct CommentaryPassageHeading: View {
-    let title: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label(title, systemImage: "text.book.closed")
-                .labelStyle(.titleAndIcon)
-                .lampSectionHeading()
-            Divider()
-        }
-        .padding(.top, 6)
-    }
-}
-
-/// A group's comment as it is drawn: each run of headings with nothing under
-/// them folded into one outline path, then the units that have something to
-/// say.
-private enum CommentaryPiece: Identifiable {
-    case outline(id: String, titles: [String])
-    case unit(LampCommentaryUnit)
-
-    var id: String {
-        switch self {
-        case .outline(let id, _): "outline:\(id)"
-        case .unit(let unit): "unit:\(unit.id)"
-        }
-    }
-
-    static func pieces(of units: [LampCommentaryUnit]) -> [CommentaryPiece] {
-        var pieces: [CommentaryPiece] = []
-        var titles: [String] = []
-        var firstID: String?
-        func flush() {
-            if let firstID, !titles.isEmpty {
-                pieces.append(.outline(id: firstID, titles: titles))
-            }
-            titles = []
-            firstID = nil
-        }
-        for unit in units {
-            if !unit.hasBody, let title = unit.title {
-                if firstID == nil { firstID = "\(unit.id)" }
-                titles.append(title)
-            } else {
-                flush()
-                pieces.append(.unit(unit))
-            }
-        }
-        flush()
-        return pieces
-    }
-}
-
-/// Where the comment sits in the commentary's outline: its headings that have
-/// nothing under them, as one path ("Opening discussion › Text, Exposition,
-/// and Notes"), rather than a stack of what looked like empty sections.
-private struct CommentaryOutlinePath: View {
-    let titles: [String]
-    let fontSize: Double
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 7) {
-            Image(systemName: "list.bullet.indent")
-                .font(.system(size: max(fontSize - 3, 10), weight: .semibold))
-                .foregroundStyle(Color.lampSecondaryText)
-            titles.dropFirst().reduce(Text(titles.first ?? "")) { path, title in
-                path
-                    + Text("  ›  ").foregroundStyle(.tertiary)
-                    + Text(title)
-            }
-            .font(.system(size: max(fontSize - 2, 11), weight: .medium))
-            .foregroundStyle(Color.lampSecondaryText)
-            .lineLimit(1)
-            .truncationMode(.middle)
-        }
-        // One quiet line, so the path places the comment without competing
-        // with the article title under it.
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .help(titles.joined(separator: " › "))
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Outline: " + titles.joined(separator: ", "))
-    }
-}
-
-private extension LampCommentaryUnit {
-    /// Whether the unit has any prose, rather than only a title: an outline
-    /// heading ("Text, Exposition, and Notes") over the units that follow.
-    var hasBody: Bool {
-        [introduction, translation, commentary, footnotes].contains { $0?.isEmpty == false }
-    }
-
-    /// Notes that are the whole of what the unit says, which some
-    /// commentaries keep their main comment in. Set as the comment, not as
-    /// small grey footnotes, or the pane's main text is its faintest.
-    var footnotesAreTheComment: Bool {
-        [introduction, translation, commentary].allSatisfy { $0?.isEmpty != false }
-    }
-}
-
-private struct CommentaryUnitView: View {
-    let unit: LampCommentaryUnit
-    let fontSize: Double
-    let lineSpacing: Double
-    let typeface: ProseTypeface
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if let title = unit.title {
-                if unit.hasBody {
-                    Text(title)
-                        .font(.system(
-                            size: fontSize + (unit.level <= 1 ? 3 : 1),
-                            weight: unit.level <= 1 ? .bold : .semibold,
-                            design: typeface.design
-                        ))
-                        .foregroundStyle(.primary)
-                } else {
-                    // A heading with nothing under it is the commentary's
-                    // outline, not a section: shown as the outline's level,
-                    // small and quiet, so two of them in a row read as where
-                    // the comment sits rather than as two empty sections.
-                    Text(title)
-                        .font(.system(size: max(fontSize - 2, 11), weight: .medium))
-                        .foregroundStyle(Color.lampSecondaryText)
-                }
-            }
-            if let introduction = unit.introduction {
-                ScriptureLinkedText(text: introduction.leftToRightParagraphs, links: unit.scriptureLinks)
-                    .font(.system(size: fontSize, design: typeface.design))
-                    .foregroundStyle(Color.lampProse)
-            }
-            if let translation = unit.translation {
-                ScriptureLinkedText(text: translation.leftToRightParagraphs, links: unit.scriptureLinks)
-                    .font(.system(size: fontSize, design: typeface.design).italic())
-                    .foregroundStyle(Color.lampSecondaryText)
-            }
-            if let commentary = unit.commentary {
-                ScriptureLinkedText(text: commentary.leftToRightParagraphs, links: unit.scriptureLinks)
-                    .font(.system(size: fontSize, design: typeface.design))
-                    .foregroundStyle(Color.lampProse)
-            }
-            if let footnotes = unit.footnotes {
-                if unit.footnotesAreTheComment {
-                    ScriptureLinkedText(text: footnotes.leftToRightParagraphs, links: unit.scriptureLinks)
-                        .font(.system(size: fontSize, design: typeface.design))
-                        .foregroundStyle(Color.lampProse)
-                } else {
-                    ScriptureLinkedText(text: footnotes.leftToRightParagraphs, links: unit.scriptureLinks)
-                        .font(.system(size: max(fontSize - 1.5, 10), design: typeface.design))
-                        .foregroundStyle(Color.lampSecondaryText)
-                }
-            }
-            if !unmatchedScriptureLinks.isEmpty {
-                ScriptureLinkedText(
-                    text: "",
-                    links: [],
-                    appendedLinks: unmatchedScriptureLinks
-                )
-                .font(.system(size: fontSize, design: typeface.design))
-            }
-        }
-        // Prose about a verse is denser than the verse itself, so the panel opens
-        // its lines further than SwiftUI's default and lets the reader go further.
-        .lineSpacing(lineSpacing)
-    }
-
-    /// Annotation offsets are local to the source JSON objects and the core model
-    /// exposes their derived labels. Almost every annotation therefore maps back
-    /// to its phrase exactly; this keeps malformed legacy annotations available as
-    /// inline trailing links without bringing back a separate references panel.
-    private var unmatchedScriptureLinks: [LampScriptureLink] {
-        let textValues = [
-            unit.introduction,
-            unit.translation,
-            unit.commentary,
-            unit.footnotes,
-        ].compactMap { $0 }
-        return unit.scriptureLinks.filter { link in
-            let label = link.inlineLabel
-            return !textValues.contains {
-                $0.range(of: label, options: [.caseInsensitive]) != nil
-            }
-        }
-    }
-}
-
-private extension String {
-    /// Commentary is English that quotes Hebrew. A paragraph opening on a Hebrew
-    /// word takes a right-to-left base direction and draws "(2 Sam. 22:1)" as
-    /// "(Sam. 22:1 2)", so such a paragraph starts with a left-to-right mark.
-    var leftToRightParagraphs: String {
-        guard unicodeScalars.contains(where: \.isRightToLeftLetter) else { return self }
-        return split(separator: "\n", omittingEmptySubsequences: false)
-            .map { paragraph in
-                let opensRightToLeft = paragraph.unicodeScalars
-                    .first { $0.properties.isAlphabetic }?
-                    .isRightToLeftLetter == true
-                return opensRightToLeft ? "\u{200E}" + paragraph : String(paragraph)
-            }
-            .joined(separator: "\n")
-    }
-}
-
-private extension Unicode.Scalar {
-    /// Hebrew, Syriac and Arabic, with their presentation forms.
-    var isRightToLeftLetter: Bool {
-        switch value {
-        case 0x0590...0x08FF, 0xFB1D...0xFDFF, 0xFE70...0xFEFF: true
-        default: false
-        }
     }
 }
 
@@ -3260,17 +3026,8 @@ private struct ScriptureLinkedText: View {
                 } ?? .zero
                 switch url.host {
                 case "read":
-                    guard let value = components.queryItems?
-                        .first(where: { $0.name == "reference" })?.value,
-                          let reference = Int(value) else { return .systemAction }
-                    let endReference = components.queryItems?
-                        .first(where: { $0.name == "end" })?
-                        .value
-                        .flatMap(Int.init)
-                    preview = .scripture(LampScriptureLink(
-                        startReference: reference,
-                        endReference: endReference
-                    ))
+                    guard let link = LampScriptureLink(previewURL: url) else { return .systemAction }
+                    preview = .scripture(link)
                     return .handled
                 case "dictionary":
                     guard let key = components.queryItems?
@@ -3425,7 +3182,7 @@ private enum LinkedTextPreview: Identifiable {
     }
 }
 
-private extension LampScriptureLink {
+extension LampScriptureLink {
     var inlineLabel: String {
         if let label = text?.trimmingCharacters(in: .whitespacesAndNewlines),
            !label.isEmpty {
@@ -3447,6 +3204,18 @@ private extension LampScriptureLink {
             )
         }
         return components.url
+    }
+
+    /// The reference an `inlineURL` stands for.
+    init?(previewURL url: URL) {
+        guard url.scheme == "lampbible", url.host == "read",
+              let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
+              let reference = items.first(where: { $0.name == "reference" })?.value.flatMap(Int.init)
+        else { return nil }
+        self.init(
+            startReference: reference,
+            endReference: items.first(where: { $0.name == "end" })?.value.flatMap(Int.init)
+        )
     }
 }
 

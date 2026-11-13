@@ -21,14 +21,21 @@ public enum ReaderTextLinkHitTester {
     }
 
     public static func hit(at point: NSPoint, in textView: NSTextView) -> ReaderTextHit? {
-        guard let textStorage = textView.textStorage,
-              textStorage.length > 0,
-              let layoutManager = textView.layoutManager,
-              let textContainer = textView.textContainer else { return nil }
+        guard let textStorage = textView.textStorage, textStorage.length > 0 else { return nil }
         let containerPoint = NSPoint(
             x: point.x - textView.textContainerOrigin.x,
             y: point.y - textView.textContainerOrigin.y
         )
+        // A TextKit 2 view, such as the study pane's commentary: asking it for
+        // `layoutManager` would switch it to TextKit 1 for good, so its own
+        // layout manager finds the character.
+        if let textLayoutManager = textView.textLayoutManager {
+            guard let index = characterIndex(at: containerPoint, in: textLayoutManager, string: textStorage.string as NSString),
+                  index < textStorage.length else { return nil }
+            return hit(atCharacterIndex: index, attributedString: textStorage)
+        }
+        guard let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer else { return nil }
         return hit(
             at: containerPoint,
             attributedString: textStorage,
@@ -94,6 +101,45 @@ public enum ReaderTextLinkHitTester {
 
         let characterIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
         guard characterIndex < attributedString.length else { return nil }
+        return hit(atCharacterIndex: characterIndex, attributedString: attributedString)
+    }
+
+    /// The character under `point` in a TextKit 2 layout, in the container's
+    /// space, or nil when the point is not on a glyph: past a line's end, or
+    /// between paragraphs.
+    private static func characterIndex(at point: NSPoint, in layoutManager: NSTextLayoutManager, string: NSString) -> Int? {
+        guard let fragment = layoutManager.textLayoutFragment(for: point) else { return nil }
+        let frame = fragment.layoutFragmentFrame
+        let local = CGPoint(x: point.x - frame.minX, y: point.y - frame.minY)
+        guard let line = fragment.textLineFragments.first(where: {
+            $0.typographicBounds.insetBy(dx: -2, dy: -2).contains(local)
+        }) else { return nil }
+        let bounds = line.typographicBounds
+        let inLine = CGPoint(x: local.x - bounds.minX, y: local.y - bounds.minY)
+        let index = line.characterIndex(for: inLine)
+        guard index >= line.characterRange.location, index < NSMaxRange(line.characterRange) else { return nil }
+        let paragraphStart = layoutManager.offset(
+            from: layoutManager.documentRange.location,
+            to: fragment.rangeInElement.location
+        )
+        let documentIndex = paragraphStart + index
+        guard documentIndex < string.length else { return nil }
+        // On the glyph itself, as the TextKit 1 path checks its glyph's rect:
+        // the whole composed character's own segments, which right-to-left
+        // text and combining marks make more than two neighbouring edges.
+        let composed = string.rangeOfComposedCharacterSequence(at: documentIndex)
+        guard let start = layoutManager.location(layoutManager.documentRange.location, offsetBy: composed.location),
+              let end = layoutManager.location(start, offsetBy: composed.length),
+              let range = NSTextRange(location: start, end: end) else { return nil }
+        var isOnGlyph = false
+        layoutManager.enumerateTextSegments(in: range, type: .standard, options: []) { _, segment, _, _ in
+            isOnGlyph = segment.insetBy(dx: -2, dy: -2).contains(point)
+            return !isOnGlyph
+        }
+        return isOnGlyph ? documentIndex : nil
+    }
+
+    private static func hit(atCharacterIndex characterIndex: Int, attributedString: NSAttributedString) -> ReaderTextHit? {
         var effectiveLinkRange = NSRange(location: NSNotFound, length: 0)
         let value = attributedString.attribute(
             .link,
