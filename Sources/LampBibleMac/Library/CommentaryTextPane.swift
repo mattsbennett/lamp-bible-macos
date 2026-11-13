@@ -639,6 +639,7 @@ struct CommentaryTextPane: NSViewRepresentable {
             self.textView = textView
 
             scrollView.userScrollDidBegin = { [weak self] in self?.userScrollDidBegin() }
+            scrollView.userScrollContinues = { [weak self] in self?.userScrollContinues() }
             let clip = scrollView.contentView
             clip.postsBoundsChangedNotifications = true
             clip.postsFrameChangedNotifications = true
@@ -729,7 +730,9 @@ struct CommentaryTextPane: NSViewRepresentable {
         }
 
         private func followReader(to reference: Int) {
-            guard isOnScreen, let document,
+            // Not while a person is scrolling the pane: it is the one leading,
+            // and following the reader then pulled it back mid-gesture.
+            guard isOnScreen, !isUserScrolling, let document,
                   let anchor = VerseAnchorResolver.anchor(for: reference, in: document.anchors) else { return }
             scroll(to: anchor)
             scrollLink?.toolDidAdopt(anchor.reference)
@@ -836,8 +839,26 @@ struct CommentaryTextPane: NSViewRepresentable {
 
         private func userScrollDidBegin() {
             pinnedAnchor = nil
+            lastUserScroll = CFAbsoluteTimeGetCurrent()
             guard isOnScreen else { return }
             scrollLink?.toolUserScrollDidBegin()
+        }
+
+        /// Each later event of a gesture, its momentum included.
+        private func userScrollContinues() {
+            pinnedAnchor = nil
+            lastUserScroll = CFAbsoluteTimeGetCurrent()
+            guard isOnScreen else { return }
+            scrollLink?.toolUserScrollContinues()
+        }
+
+        /// When a person last moved the pane, by wheel, trackpad or scroller.
+        private var lastUserScroll: CFAbsoluteTime = 0
+
+        /// Whether a person is scrolling the pane now: dragging, flicking, its
+        /// momentum still running, or a wheel turned within the last moment.
+        private var isUserScrolling: Bool {
+            isLiveScrolling || CFAbsoluteTimeGetCurrent() - lastUserScroll < 0.3
         }
 
         /// Puts a pinned passage back where it was put, after TextKit has
@@ -1154,11 +1175,16 @@ final class CommentaryScroller: NSScroller {
 
 final class CommentaryScrollView: NSScrollView {
     var userScrollDidBegin: (() -> Void)?
+    var userScrollContinues: (() -> Void)?
 
     override func scrollWheel(with event: NSEvent) {
-        // A gesture's first event, or any click of a wheel, which has no phase.
+        // A gesture's first event, or any click of a wheel, which has no
+        // phase, begins; every other event of a gesture, momentum included,
+        // continues it.
         if event.phase == .began || (event.phase.isEmpty && event.momentumPhase.isEmpty) {
             userScrollDidBegin?()
+        } else if event.phase == .changed || event.momentumPhase == .began || event.momentumPhase == .changed {
+            userScrollContinues?()
         }
         super.scrollWheel(with: event)
     }

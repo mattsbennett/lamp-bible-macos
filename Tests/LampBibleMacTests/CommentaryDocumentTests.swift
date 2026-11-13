@@ -183,4 +183,48 @@ struct CommentaryDocumentTests {
         #expect(scrollView.verticalScroller?.scrollerStyle == NSScroller.preferredScrollerStyle)
         coordinator.detach()
     }
+
+    /// Scrolling the commentary leads the reader, so while a person scrolls
+    /// it the reader's report of where it now is must not pull the pane back
+    /// to a passage's start. Once the scroll is over, the reader leads again.
+    @Test @MainActor func aPaneBeingScrolledIsNotPulledBackByTheReader() throws {
+        let long = String(repeating: "Paul now contrasts the situation he has just described. ", count: 300)
+        let document = CommentaryDocument.build(title: "Romans 8", units: [
+            unit("a", start: 45_008_001, order: 1, commentary: long),
+            unit("b", start: 45_008_010, order: 2, commentary: long),
+        ], style: style)
+        let defaults = try #require(UserDefaults(suiteName: "CommentaryPaneTests-\(UUID().uuidString)"))
+        let scrollLink = ReaderScrollLink(defaults: defaults)
+        scrollLink.isLinked = true
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 410, height: 640), styleMask: [.titled], backing: .buffered, defer: false)
+        let coordinator = CommentaryTextPane.Coordinator()
+        let scrollView = CommentaryScrollView(frame: try #require(window.contentView).bounds)
+        window.contentView?.addSubview(scrollView)
+        coordinator.attach(to: scrollView)
+        coordinator.scrollLink = scrollLink
+        coordinator.show(document)
+        scrollView.tile()
+        window.contentView?.layoutSubtreeIfNeeded()
+
+        // A person scrolls the pane down into the first passage: the wheel
+        // event marks it as theirs (a test has no event loop to animate it),
+        // and the view moves as the scroll would move it.
+        let wheel = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -1, wheel2: 0, wheel3: 0))
+        scrollView.scrollWheel(with: try #require(NSEvent(cgEvent: wheel)))
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: 1_000))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        let scrolled = scrollView.contentView.bounds.minY
+        #expect(scrolled > 100)
+
+        // The reader, moved by the pane, reports the passage's first verse.
+        scrollLink.readerAnchors.send(45_008_001)
+        #expect(scrollView.contentView.bounds.minY == scrolled)
+
+        // Once the scroll is over, the reader leads again.
+        NotificationCenter.default.post(name: NSScrollView.didEndLiveScrollNotification, object: scrollView)
+        Thread.sleep(forTimeInterval: 0.35)
+        scrollLink.readerAnchors.send(45_008_010)
+        #expect(scrollView.contentView.bounds.minY > scrolled)
+        coordinator.detach()
+    }
 }

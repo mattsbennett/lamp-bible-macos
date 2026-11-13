@@ -83,6 +83,16 @@ final class ReaderScrollLink: ObservableObject {
         userScrollDidBegin(from: .tool)
     }
 
+    /// A person is still scrolling the tool: keep its lead. The tool reports
+    /// only when the passage at its top changes, which in a long commentary
+    /// passage takes longer than the arbiter's settle interval, and the
+    /// reader's own report of the move it was given would then take the link
+    /// back in the middle of the gesture.
+    func toolUserScrollContinues() {
+        guard isLinked, !isSuspended else { return }
+        _ = arbiter.claim(.tool)
+    }
+
     /// Hand control back after a chapter change or a jump, so the first scroll in
     /// either pane is honoured rather than losing to whoever moved last.
     func reset() {
