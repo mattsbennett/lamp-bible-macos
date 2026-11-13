@@ -35,12 +35,16 @@ struct CommentaryDocument: @unchecked Sendable {
         let style: CommentaryTextStyle
     }
 
-    /// The units' words and references, hashed: the same units with other
-    /// words, as a reinstalled commentary has, are another document.
+    /// Everything about the units that is drawn, hashed: their order, heading
+    /// levels, words and references. The same units with other words, as a
+    /// reinstalled commentary has, are another document.
     static func contentFingerprint(of units: [LampCommentaryUnit]) -> Int {
         var hasher = Hasher()
         for unit in units {
             hasher.combine(unit.id)
+            hasher.combine(unit.moduleName)
+            hasher.combine(unit.orderIndex)
+            hasher.combine(unit.level)
             hasher.combine(unit.title)
             hasher.combine(unit.introduction)
             hasher.combine(unit.translation)
@@ -673,8 +677,10 @@ struct CommentaryTextPane: NSViewRepresentable {
             } ?? false
             self.document = document
             moveItself {
+                textView.contentLength = nil
                 textView.textStorage?.setAttributedString(document.text)
                 updateTail()
+                textView.contentLength = document.text.length
             }
             textView.updateToolTipUnderPointer()
             if sameChapter {
@@ -1023,6 +1029,24 @@ struct CommentaryTextPane: NSViewRepresentable {
 /// Tells the pane when a person clicks or types in it, which takes the
 /// pane back from following the reader just as scrolling does.
 final class CommentaryTextView: NSTextView {
+    /// How much of the text is the commentary, before the empty paragraph
+    /// that leaves room under the last passage. A selection stops there, so
+    /// copying never takes that paragraph, a pane high, with it.
+    var contentLength: Int?
+
+    override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
+        guard let contentLength else {
+            super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
+            return
+        }
+        let clamped = ranges.map { value -> NSValue in
+            let range = value.rangeValue
+            let start = min(range.location, contentLength)
+            return NSValue(range: NSRange(location: start, length: min(NSMaxRange(range), contentLength) - start))
+        }
+        super.setSelectedRanges(clamped, affinity: affinity, stillSelecting: stillSelecting)
+    }
+
     /// Whether what the person did can scroll the pane.
     var didInteract: ((_ scrolls: Bool) -> Void)?
     /// After each of TextKit's layout passes over what is on screen, which

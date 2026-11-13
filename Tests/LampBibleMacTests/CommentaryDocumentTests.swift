@@ -164,6 +164,16 @@ struct CommentaryDocumentTests {
         let storage = try #require((scrollView.documentView as? NSTextView)?.textStorage)
         #expect(storage.attribute(.lampCommentaryTail, at: storage.length - 1, effectiveRange: nil) != nil)
         #expect(scrollView.contentInsets.bottom == 0)
+        // Select All copies the commentary, not the empty paragraph after it.
+        let textView = try #require(scrollView.documentView as? CommentaryTextView)
+        textView.selectAll(nil)
+        #expect(textView.selectedRange() == NSRange(location: 0, length: document.text.length))
+        // A heading's level is drawn, so it is part of what the cache keys on.
+        let level1 = LampCommentaryUnit(unitID: "a", moduleID: "NIC", moduleName: "NIC", bookNumber: 45, chapterNumber: 8,
+                                        startReference: 45_008_001, endReference: nil, unitType: "block", level: 1, title: "T", orderIndex: 1)
+        let level2 = LampCommentaryUnit(unitID: "a", moduleID: "NIC", moduleName: "NIC", bookNumber: 45, chapterNumber: 8,
+                                        startReference: 45_008_001, endReference: nil, unitType: "block", level: 2, title: "T", orderIndex: 1)
+        #expect(CommentaryDocument.contentFingerprint(of: [level1]) != CommentaryDocument.contentFingerprint(of: [level2]))
         // The pane's own scroller keeps the system's style, so an overlay
         // scroller takes no width from the text.
         #expect(scrollView.verticalScroller is CommentaryScroller)
