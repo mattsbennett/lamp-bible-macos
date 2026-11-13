@@ -194,6 +194,8 @@ extension NSAttributedString.Key {
     /// The SF Symbol drawn before a paragraph's first line, in its indent:
     /// a `CommentaryIcon`.
     static let lampCommentaryIcon = NSAttributedString.Key("lampCommentaryIcon")
+    /// The empty paragraph that leaves room under the last passage.
+    static let lampCommentaryTail = NSAttributedString.Key("lampCommentaryTail")
 }
 
 /// A symbol set before a paragraph, as a SwiftUI `Label` sets its icon.
@@ -647,9 +649,9 @@ struct CommentaryTextPane: NSViewRepresentable {
                 $0.key.title == document.key.title && $0.key.unitIDs == document.key.unitIDs
             } ?? false
             self.document = document
-            updateTail()
             moveItself {
                 textView.textStorage?.setAttributedString(document.text)
+                updateTail()
             }
             textView.updateToolTipUnderPointer()
             if sameChapter {
@@ -740,7 +742,6 @@ struct CommentaryTextPane: NSViewRepresentable {
             let lineTop = lineTop(of: fragment, at: location)
             let y = lineTop + textView.textContainerOrigin.y + topLineInset
             let maxY = max(textView.frame.height - scrollView.contentView.bounds.height, 0)
-                + scrollView.contentInsets.bottom
             moveItself {
                 scrollView.contentView.scroll(to: NSPoint(x: 0, y: min(max(y, 0), maxY)))
                 scrollView.reflectScrolledClipView(scrollView.contentView)
@@ -822,13 +823,36 @@ struct CommentaryTextPane: NSViewRepresentable {
         }
 
         /// Room under the last passage for it to reach the top, as the reader
-        /// leaves under its last verse.
+        /// leaves under its last verse: a last, empty paragraph as tall as the
+        /// pane. Not a bottom content inset, over which AppKit lays a scroll
+        /// edge view that takes every click, so links and selection never
+        /// reached the text.
         private func updateTail() {
-            guard let scrollView else { return }
-            let tail = ReaderScrollTail.height(for: scrollView.contentView.bounds.height)
-            guard scrollView.contentInsets.bottom != tail else { return }
-            scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: tail, right: 0)
-            scrollView.scrollerInsets = NSEdgeInsets(top: 0, left: 0, bottom: -tail, right: 0)
+            guard let scrollView, let storage = textView?.textStorage else { return }
+            let tail = max(ReaderScrollTail.height(for: scrollView.contentView.bounds.height), 1)
+            var range = NSRange(location: NSNotFound, length: 0)
+            let hasTail = storage.length > 0
+                && storage.attribute(.lampCommentaryTail, at: storage.length - 1, effectiveRange: &range) != nil
+            if hasTail,
+               (storage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle)?.minimumLineHeight == tail {
+                return
+            }
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.minimumLineHeight = tail
+            paragraph.maximumLineHeight = tail
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 1),
+                .paragraphStyle: paragraph,
+                .lampCommentaryTail: true,
+            ]
+            if hasTail {
+                storage.setAttributes(attributes, range: range)
+            } else {
+                // The break belongs to the paragraph it ends, and keeps its look.
+                let previous = storage.length > 0 ? storage.attributes(at: storage.length - 1, effectiveRange: nil) : [:]
+                storage.append(NSAttributedString(string: "\n", attributes: previous))
+                storage.append(NSAttributedString(string: " ", attributes: attributes))
+            }
         }
 
         // MARK: Layout ahead

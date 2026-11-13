@@ -123,4 +123,31 @@ struct CommentaryDocumentTests {
         #expect(textView.toolTip(at: try point(over: "prominent")) == nil)
         #expect(textView.textLayoutManager != nil)
     }
+
+    /// A click anywhere over the text reaches the text view, so links open
+    /// their previews and text can be selected. A bottom content inset on the
+    /// scroll view, once the room under the last passage, laid a view over
+    /// it all that took every click.
+    @Test @MainActor func clicksOverTheTextReachTheTextView() throws {
+        let document = CommentaryDocument.build(title: "Romans 8", units: [
+            unit("a", start: 45_008_001, order: 1, commentary: String(repeating: "No condemnation in Christ Jesus. ", count: 200)),
+        ], style: style)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 410, height: 640), styleMask: [.titled], backing: .buffered, defer: false)
+        let coordinator = CommentaryTextPane.Coordinator()
+        let scrollView = CommentaryScrollView(frame: try #require(window.contentView).bounds)
+        window.contentView?.addSubview(scrollView)
+        coordinator.attach(to: scrollView)
+        coordinator.show(document)
+        scrollView.tile()
+        window.contentView?.layoutSubtreeIfNeeded()
+        for y in [40.0, 320, 600] {
+            let hit = window.contentView?.hitTest(NSPoint(x: 200, y: y))
+            #expect(hit is CommentaryTextView, "at \(y): \(hit.map { String(describing: type(of: $0)) } ?? "nil")")
+        }
+        // The room under the last passage is still there, as text.
+        let storage = try #require((scrollView.documentView as? NSTextView)?.textStorage)
+        #expect(storage.attribute(.lampCommentaryTail, at: storage.length - 1, effectiveRange: nil) != nil)
+        #expect(scrollView.contentInsets.bottom == 0)
+        coordinator.detach()
+    }
 }
