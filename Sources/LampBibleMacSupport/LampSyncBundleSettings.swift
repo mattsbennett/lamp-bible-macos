@@ -144,6 +144,31 @@ public struct LampSyncBundleSettings {
                     scratch.set(value, forKey: key)
                 }
             } else {
+                // No base, so "who changed it" has no meaning yet: these two
+                // have never agreed on anything. The library's copy stands,
+                // which is deliberate and is the same rule core's ledger
+                // takes for the shared keys — a value held here may be
+                // nothing more than this Mac's default, and one of them has
+                // to give way or a joining Mac could never take up the
+                // settings of the library it is joining.
+                //
+                // Keeping what this Mac holds instead is a worse trade than
+                // it looks. "Chosen here" cannot be told from "written here
+                // by machinery": `recover` writes settings back into this
+                // domain after a pass. A key that arrived that way would
+                // then stand against the library's for ever, and two Macs
+                // would silently never agree on it — where taking the
+                // library's copy costs at most one setting, recovered by
+                // setting it again, which publishes it.
+                //
+                // The phone had a real fault of this shape and fixed it in
+                // its 7cf224d, by comparing against the values a fresh
+                // install holds. It needed to: it took the newer settings
+                // *row whole*, so a fresh install, whose row is stamped at
+                // install, reset every other device. Nothing here compares
+                // rows or times, and the base this branch lacks lives in the
+                // same defaults as the settings it would protect — so losing
+                // it without losing them takes a reset aimed at one key.
                 try LampPortableSettingsCodec.apply(
                     macSettings, to: scratch, excluding: excluded
                 )
