@@ -3,6 +3,7 @@ import Foundation
 import LampCore
 import LampModuleKit
 import Testing
+@testable import LampBibleMac
 @testable import LampBibleMacSupport
 
 struct ReaderSupportTests {
@@ -573,6 +574,82 @@ struct ReaderSupportTests {
         #expect(restored == tabs)
         #expect(restored.tabs.count == 1)
         #expect(restored.selectedTab?.location == john)
+    }
+
+    @Test func tabsSavedByAnEarlierLampAreTakenUpOnce() throws {
+        let oldSuite = "reader-tabs-old-\(UUID().uuidString)"
+        let newSuite = "reader-tabs-new-\(UUID().uuidString)"
+        let old = try #require(UserDefaults(suiteName: oldSuite))
+        let new = try #require(UserDefaults(suiteName: newSuite))
+        defer {
+            old.removePersistentDomain(forName: oldSuite)
+            new.removePersistentDomain(forName: newSuite)
+        }
+        let john = ReaderLocation(translationID: "WEB", bookNumber: 43, chapterNumber: 3)
+        let tabs = ReaderTabCollection(initialLocation: john)
+        let session = UUID()
+        ReaderTabSessionStore.save(tabs, session: session, defaults: old)
+
+        ReaderTabSessionStore.adoptEarlierSessions(from: old, into: new)
+        let restored = ReaderTabSessionStore.load(
+            session: session, resumingLastSession: true, defaults: new,
+            translationIDs: ["WEB"], fallbackLocation: john
+        )
+        #expect(restored == tabs)
+        #expect(ReaderTabSessionStore.sessions(defaults: new) == [session])
+
+        // Once the new store has tabs of its own, the old ones stay where they are.
+        let genesis = ReaderLocation(translationID: "WEB", bookNumber: 1, chapterNumber: 1)
+        let later = UUID()
+        ReaderTabSessionStore.save(ReaderTabCollection(initialLocation: genesis), session: later, defaults: old)
+        ReaderTabSessionStore.adoptEarlierSessions(from: old, into: new)
+        #expect(ReaderTabSessionStore.sessions(defaults: new) == [session])
+    }
+
+    @MainActor @Test func aPlaceKeptByAnEarlierLampIsTakenUpOnce() throws {
+        let oldSuite = "reader-location-old-\(UUID().uuidString)"
+        let newSuite = "reader-location-new-\(UUID().uuidString)"
+        let old = try #require(UserDefaults(suiteName: oldSuite))
+        let new = try #require(UserDefaults(suiteName: newSuite))
+        defer {
+            old.removePersistentDomain(forName: oldSuite)
+            new.removePersistentDomain(forName: newSuite)
+        }
+        old.set("WEB", forKey: "reader.translationID")
+        old.set(43, forKey: "reader.bookNumber")
+        old.set(3, forKey: "reader.chapterNumber")
+
+        LibraryModel.adoptEarlierLocation(from: old, into: new)
+        #expect(new.string(forKey: "reader.translationID") == "WEB")
+        #expect(new.integer(forKey: "reader.bookNumber") == 43)
+        #expect(new.integer(forKey: "reader.chapterNumber") == 3)
+
+        // A place the new store already holds is not overwritten.
+        new.set(1, forKey: "reader.chapterNumber")
+        old.set(5, forKey: "reader.chapterNumber")
+        LibraryModel.adoptEarlierLocation(from: old, into: new)
+        #expect(new.integer(forKey: "reader.chapterNumber") == 1)
+    }
+
+    /// What the window shares — a word looked up, the reader's scrolling —
+    /// belongs to the tab on screen, and its reader and pane are told so
+    /// live, since a tab out of sight is never handed a new view.
+    @MainActor @Test func onlyTheTabShownCountsAsOnScreen() throws {
+        let pool = ReaderTabPool()
+        let first = pool.currentID
+        let firstReader = pool.current
+        let firstPane = try #require(pool.studyPane(for: first))
+        let second = UUID()
+        let (secondReader, isNew) = pool.show(second)
+        let secondPane = try #require(pool.studyPane(for: second))
+        #expect(isNew)
+        #expect(!firstReader.isOnScreen && !firstPane.isOnScreen)
+        #expect(secondReader.isOnScreen && secondPane.isOnScreen)
+
+        let (shownAgain, isNewAgain) = pool.show(first)
+        #expect(!isNewAgain && shownAgain === firstReader)
+        #expect(firstReader.isOnScreen && firstPane.isOnScreen)
+        #expect(!secondReader.isOnScreen && !secondPane.isOnScreen)
     }
 
     @Test func aTabDoesNotLoseItsChapterToAReaderWithNoPlace() {

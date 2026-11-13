@@ -28,6 +28,12 @@ struct ReaderChatSidebarView: View {
     let resume: (UUID?) -> Void
     @State private var forkError: String?
     let close: () -> Void
+    /// The reader of the tab this chat belongs to. A question is prepared
+    /// with that tab's place when it is sent, which for a queued one is
+    /// after it was asked: read from the window's current reader, a question
+    /// queued in one tab and sent after a switch carried the other tab's
+    /// chapter.
+    @ObservedObject var reader: ReaderWorkspace
 
     @State private var isChoosingChat = false
 
@@ -131,14 +137,15 @@ struct ReaderChatSidebarView: View {
     }
 
     private func capture() -> Capture? {
-        guard let book = libraryModel.selectedBook,
-              let translation = libraryModel.selectedTranslation else { return nil }
-        let chapter = libraryModel.selectedChapterNumber
+        guard let book = reader.selectedBook,
+              let translation = libraryModel.translations.first(where: { $0.id == reader.selectedTranslationID })
+        else { return nil }
+        let chapter = reader.selectedChapterNumber
         let inChapter = { (reference: Int) in
             reference / 1_000 == book.id * 1_000 + chapter
         }
         let sharesPersonalStudy = ReaderChatContext.sharesPersonalStudy(under: accessPolicy)
-        let selection = libraryModel.readerTextSelection.current.map { passage in
+        let selection = reader.textSelection.current.map { passage in
             ReaderChatContext.Selection(
                 text: passage.text,
                 reference: passage.reference,
@@ -151,7 +158,7 @@ struct ReaderChatSidebarView: View {
             reference: "\(book.name) \(chapter)",
             translationID: translation.id,
             translationName: translation.name,
-            selectedVerse: libraryModel.selectedVerseReference.flatMap { reference in
+            selectedVerse: reader.selectedVerseReference.flatMap { reference in
                 inChapter(reference)
                     ? LampBibleReferenceFormatter.describeRange(from: reference, to: reference)
                     : nil
@@ -159,7 +166,7 @@ struct ReaderChatSidebarView: View {
             selection: selection,
             sharesPersonalStudy: sharesPersonalStudy,
             highlights: sharesPersonalStudy
-                ? personalHighlights(where: inChapter)
+                ? personalHighlights(in: translation.id, where: inChapter)
                 : [],
             noteReferences: sharesPersonalStudy
                 ? libraryModel.noteReferences.filter(inChapter).sorted()
@@ -167,14 +174,19 @@ struct ReaderChatSidebarView: View {
         )
     }
 
-    /// The reader's own highlights in the chapter, with the words each marks.
-    private func personalHighlights(where inChapter: @escaping (Int) -> Bool) -> [ReaderChatContext.Highlight] {
+    /// The reader's own highlights in the chapter, with the words each marks:
+    /// this tab's chapter and translation, which by the time a queued
+    /// question is sent need not be the library's.
+    private func personalHighlights(
+        in translationID: String,
+        where inChapter: @escaping (Int) -> Bool
+    ) -> [ReaderChatContext.Highlight] {
         let verses = Dictionary(
-            (libraryModel.chapter?.verses ?? []).map { ($0.id, $0.text) },
+            (reader.contents.chapter?.verses ?? []).map { ($0.id, $0.text) },
             uniquingKeysWith: { first, _ in first }
         )
         return libraryModel.highlightsByReference.keys.filter(inChapter).sorted().flatMap { reference in
-            libraryModel.personalHighlights(for: reference).map { highlight in
+            libraryModel.personalHighlights(for: reference, in: translationID).map { highlight in
                 ReaderChatContext.Highlight(
                     reference: LampBibleReferenceFormatter.describeRange(from: reference, to: reference),
                     color: highlight.color.map(Self.colorName),
@@ -396,7 +408,7 @@ struct ReaderChatSidebarView: View {
                 }
                 .font(.subheadline)
                 ReaderChatAttachmentsLine(
-                    selection: libraryModel.readerTextSelection,
+                    selection: reader.textSelection,
                     selectedVerse: capture.selectedVerse,
                     personalStudy: capture.sharesPersonalStudy
                         ? .shared(
@@ -791,7 +803,7 @@ enum OpenReaderWindows {
     ///   is picking up where the app left off — true when no other window held
     ///   one, which is what a launch looks like, and a lone window being
     ///   opened again. Only then are the last window's tabs a fallback.
-    static func claim(defaults: UserDefaults = .standard) -> (session: UUID, resuming: Bool) {
+    static func claim(defaults: UserDefaults = ReaderTabSessionStore.store) -> (session: UUID, resuming: Bool) {
         let resuming = held.isEmpty
         let id = ReaderTabSessionStore.claimingSession(
             from: ReaderTabSessionStore.sessions(defaults: defaults), heldBy: held

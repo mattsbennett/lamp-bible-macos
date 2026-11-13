@@ -983,6 +983,10 @@ final class NativeAgentChatModel: ObservableObject {
     /// Told when the queue has been read from disk, so a pane can send what
     /// was waiting rather than leave it until the next reply.
     var onQueueReady: (() -> Void)?
+    /// The pane that set `onQueueReady`, so a pane going away clears only its
+    /// own: the closure holds that pane, and through it the reader of the
+    /// tab it was in, for as long as the chat is kept.
+    var queueReadyOwner: AnyHashable?
     /// Told which turn is being recorded, so a workspace can mark what the
     /// agent changes with the turn that asked for it.
     ///
@@ -2305,6 +2309,7 @@ struct NativeAgentChatView: View {
         }
         .onAppear {
             model.onQueueReady = { drainQueue() }
+            model.queueReadyOwner = paneToken
             // Into state, not straight on to the host. A closure
             // registered here keeps the view struct it was made with, and
             // a plain `let` in that struct — the draft the writing held
@@ -2327,6 +2332,10 @@ struct NativeAgentChatView: View {
         }
         .onDisappear {
             model.stopObservingTurn(for: paneToken)
+            if model.queueReadyOwner == AnyHashable(paneToken) {
+                model.onQueueReady = nil
+                model.queueReadyOwner = nil
+            }
             // And told so. A host that goes on holding the turn it was last
             // told about would mark everything written afterwards — by a run
             // that outlives this pane, or by the person — as that turn's

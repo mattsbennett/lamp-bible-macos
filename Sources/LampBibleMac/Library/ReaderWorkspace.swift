@@ -3,6 +3,7 @@ import LampBibleMacSupport
 #endif
 import AppKit
 import Foundation
+import Combine
 import SwiftUI
 import LampCore
 
@@ -48,10 +49,38 @@ final class ReaderWorkspace: ObservableObject {
     /// chosen again, mostly — shows it at once rather than "Loading
     /// Chapter…" and a read. It is still read again underneath, quietly:
     /// highlights and notes edited since live in the library, not here.
-    private var recentChapters = ReaderRecentChapters()
+    private let recentChapters: ReaderRecentChapters
+
+    /// `recentChapters` is shared by the window's tabs (`ReaderTabPool`), so
+    /// a tab opened again after it was let go still finds its chapter read.
+    init(recentChapters: ReaderRecentChapters? = nil) {
+        self.recentChapters = recentChapters ?? ReaderRecentChapters()
+        readAloudChanges = readAloud.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+    }
     /// Where each tab was scrolled, so choosing it again goes back to where
     /// it was left rather than scrolling to its selected verse.
     let scrollMemory = ReaderScrollMemory()
+    /// The text selected in this tab's reader, for its chat to quote.
+    let textSelection = ReaderTextSelectionStore()
+    /// This tab's reading aloud. Here rather than in the reader view so the
+    /// window's toolbar, which is the window's and not the tab's, can work
+    /// it; its changes are passed on as this workspace's.
+    let readAloud = ReadAloudController()
+    private var readAloudChanges: AnyCancellable?
+    /// Whether the passage picker hangs from the toolbar for this tab.
+    @Published var isChoosingPassage = false
+    /// Whether this is its window's tab on screen, set by `ReaderTabPool`.
+    /// Read live, not published: a reader kept out of sight is never handed
+    /// a new view, and what the window shares belongs to the one on screen.
+    var isOnScreen = true
+    /// A plan reading's chapters as the reader read them, which the
+    /// toolbar reads aloud and moves through.
+    @Published var planReadingChapters: [LampChapter] = []
+    @Published var loadedPlanReadingRequest: PlanReadingChapterRequest?
+    @Published var isLoadingPlanReading = false
+    @Published var planReadingError: String?
     /// This window's own back and forward. Two windows each keep their own
     /// trail: going back in one has nothing to do with where the other has
     /// been.
@@ -296,8 +325,13 @@ final class ReaderWorkspace: ObservableObject {
     /// the library for the current verse, and there is no answer in the data
     /// once several readers disagree. The answer is the reader last used, so
     /// each move reports itself.
+    /// Tells the library where this reader is, if it is the one the library
+    /// follows. A tab out of sight, or a window behind, finishing a read must
+    /// not move the library: its chapter and selection are what the study
+    /// pane shows and what a highlight is written against.
     private func mirror() {
-        model?.adoptActiveReader(
+        guard let model, model.activeReader === self else { return }
+        model.adoptActiveReader(
             translationID: selectedTranslationID,
             book: selectedBookNumber,
             chapter: selectedChapterNumber,
@@ -307,10 +341,23 @@ final class ReaderWorkspace: ObservableObject {
         )
     }
 
+    /// Makes this the reader the library follows, and tells it where it is.
+    func becomeActive(in model: LibraryModel) {
+        model.activeReader = self
+        mirror()
+    }
+
     /// Reads this workspace's chapter again, for when the library beneath it
     /// has changed — a highlight made, a note written, a module installed.
     func reload() {
         recentChapters.removeAll()
+        loadBooksAndChapter()
+    }
+
+    /// Reads this workspace's chapter again without the loading state, and
+    /// tells the library where it is: for a kept tab shown again, which may
+    /// have missed a change while out of sight. Only a change is published.
+    func refreshQuietly() {
         loadBooksAndChapter()
     }
 
@@ -325,10 +372,10 @@ final class ReaderWorkspace: ObservableObject {
            let recent = recentChapters.chapter(translationID: translationID, book: book, chapter: selectedChapterNumber) {
             // Shown at once, and read again below without the loading state:
             // the text cannot have changed, but what is marked on it may have.
-            books = recent.books
-            contents = recent.contents
-            isLoadingChapter = false
-        } else {
+            if books != recent.books { books = recent.books }
+            if contents != recent.contents { contents = recent.contents }
+            if isLoadingChapter { isLoadingChapter = false }
+        } else if !isLoadingChapter {
             isLoadingChapter = true
         }
         // Where this window is, before what it is reading arrives: a move
@@ -337,7 +384,7 @@ final class ReaderWorkspace: ObservableObject {
         chapterTask = Task {
             defer {
                 if !Task.isCancelled {
-                    isLoadingChapter = false
+                    if isLoadingChapter { isLoadingChapter = false }
                     model.markInitialContentLoaded()
                 }
             }
@@ -346,12 +393,13 @@ final class ReaderWorkspace: ObservableObject {
                 guard !Task.isCancelled, selectedTranslationID == translationID else { return }
                 if books != loadedBooks { books = loadedBooks }
                 let book = loadedBooks.first { $0.id == selectedBookNumber } ?? loadedBooks.first
-                selectedBookNumber = book?.id
+                if selectedBookNumber != book?.id { selectedBookNumber = book?.id }
                 guard let book else {
                     contents = .empty
                     return
                 }
-                selectedChapterNumber = min(max(selectedChapterNumber, 1), book.chapterCount)
+                let chapter = min(max(selectedChapterNumber, 1), book.chapterCount)
+                if selectedChapterNumber != chapter { selectedChapterNumber = chapter }
 
                 let read = try await model.chapterContents(
                     translationID: translationID,
@@ -375,7 +423,11 @@ final class ReaderWorkspace: ObservableObject {
                 // reference, which is unique across the Bible: one made in
                 // either window is then seen by both, and by the window that
                 // made it without reading the chapter again.
-                model.absorbChapterContents(read)
+                // Only from the reader the library follows, as `mirror()`:
+                // the library keeps one translation's highlights for a
+                // chapter, and a tab out of sight on the same chapter in
+                // another translation must not swap them for its own.
+                if model.activeReader === self { model.absorbChapterContents(read) }
                 mirror()
             } catch {
                 guard !Task.isCancelled else { return }
@@ -387,7 +439,8 @@ final class ReaderWorkspace: ObservableObject {
 }
 
 /// The chapters a window read last, most recent last, a few at most.
-struct ReaderRecentChapters {
+@MainActor
+final class ReaderRecentChapters {
     private struct Entry {
         let translationID: String
         let books: [LampTranslationBook]
@@ -408,7 +461,7 @@ struct ReaderRecentChapters {
         }.map { ($0.books, $0.contents) }
     }
 
-    mutating func keep(_ contents: ReaderChapterContents, books: [LampTranslationBook], translationID: String) {
+    func keep(_ contents: ReaderChapterContents, books: [LampTranslationBook], translationID: String) {
         guard let read = contents.chapter else { return }
         entries.removeAll { entry in
             entry.translationID == translationID
@@ -419,7 +472,7 @@ struct ReaderRecentChapters {
         if entries.count > Self.capacity { entries.removeFirst(entries.count - Self.capacity) }
     }
 
-    mutating func removeAll() { entries.removeAll() }
+    func removeAll() { entries.removeAll() }
 }
 
 /// Where each of a window's tabs was scrolled.
@@ -499,6 +552,13 @@ final class ReaderScrollMemory {
     /// — or a crash — keeps it.
     func saveCurrent() {
         if let currentTab { save(tab: currentTab) }
+    }
+
+    /// Makes `tab` the one a settled scroll is noted for, with nothing to put
+    /// back: a tab opened at a place asked for, not where it was left.
+    func track(tab: UUID) {
+        currentTab = tab
+        pending = nil
     }
 
     /// Readies a tab being shown to go back to where it was left: chosen in
@@ -634,5 +694,250 @@ struct ScrollMemoryLink: NSViewRepresentable {
         }
 
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+}
+
+/// A window's reader tabs that are kept laid out, so choosing one again
+/// shows it at once rather than laying its chapter out anew, which took
+/// about a quarter of a second (owner, 2026-11-12: "far too laggy").
+///
+/// One `ReaderWorkspace` per kept tab; the window's reader is the current
+/// one's (`current`), and this object passes on the current one's changes
+/// to the window that observes it. Kept tabs out of sight are frozen by the
+/// reader's own gate for being hidden (`TranslationReaderView ==`).
+///
+/// Bounded three ways, as browsers bound background tabs:
+/// - at most `capacity` kept, the most recently shown;
+/// - one not shown for `unseenLimit` is let go when a tab is next chosen;
+/// - all but the current are let go when the system warns that memory is
+///   short, and when the installed translations change.
+/// A tab let go opens again as any tab did before: its chapter read (from
+/// the recent ones where it can be), at the place it was scrolled to.
+@MainActor
+final class ReaderTabPool: ObservableObject {
+    static let capacity = 8
+    static let unseenLimit: TimeInterval = 24 * 60 * 60
+
+    /// The window's reader: the current tab's.
+    private(set) var current: ReaderWorkspace
+    @Published private(set) var currentID: UUID
+    /// The kept tabs, least recently shown first.
+    @Published private(set) var keptIDs: [UUID]
+    private var workspaces: [UUID: ReaderWorkspace]
+    /// Each kept tab's study pane, kept with it, so its entry, its scroll
+    /// and the pane's own state are there when it is shown again.
+    private var studyPanes: [UUID: StudyPaneState]
+    private let studyRecents = StudyPaneRecents(capacity: 24)
+    private let studyRecentAnalyses = StudyPaneRecents(capacity: 4)
+    private var lastShown: [UUID: Date] = [:]
+    /// The size each kept tab was laid out at when it was hidden, so a
+    /// window resized meanwhile lays out only the tab on screen.
+    private(set) var hiddenSizes: [UUID: CGSize] = [:]
+    /// The reader's size as last drawn, noted (not published) by the view.
+    var liveSize: CGSize = .zero
+    let recentChapters = ReaderRecentChapters()
+    private var forwarding: AnyCancellable?
+    private var pressure: DispatchSourceMemoryPressure?
+
+    init() {
+        let id = UUID()
+        let workspace = ReaderWorkspace(recentChapters: recentChapters)
+        current = workspace
+        currentID = id
+        keptIDs = [id]
+        workspaces = [id: workspace]
+        studyPanes = [:]
+        lastShown[id] = Date()
+        studyPanes[id] = newStudyPane()
+        forward()
+        watchMemoryPressure()
+    }
+
+    func workspace(for tab: UUID) -> ReaderWorkspace? { workspaces[tab] }
+    func studyPane(for tab: UUID) -> StudyPaneState? { studyPanes[tab] }
+    /// The window's study pane: the current tab's.
+    var currentStudyPane: StudyPaneState { studyPanes[currentID] ?? newStudyPane() }
+
+    private func newStudyPane() -> StudyPaneState {
+        StudyPaneState(recents: studyRecents, recentAnalyses: studyRecentAnalyses)
+    }
+
+    /// Names the workspace the window started with after the tab it turns
+    /// out to be showing, once the window's tabs have been read.
+    func claimFirst(for tab: UUID) {
+        guard tab != currentID else { return }
+        workspaces[tab] = workspaces.removeValue(forKey: currentID)
+        studyPanes[tab] = studyPanes.removeValue(forKey: currentID)
+        lastShown[tab] = lastShown.removeValue(forKey: currentID)
+        keptIDs = keptIDs.map { $0 == currentID ? tab : $0 }
+        currentID = tab
+    }
+
+    /// Makes `tab` the one on screen: kept, it is shown as it was left;
+    /// otherwise it gets a workspace of its own, returned as `isNew` for the
+    /// window to open at the tab's place.
+    @discardableResult
+    func show(_ tab: UUID) -> (workspace: ReaderWorkspace, isNew: Bool) {
+        let now = Date()
+        if tab != currentID { hiddenSizes[currentID] = liveSize }
+        hiddenSizes[tab] = nil
+        let isNew = workspaces[tab] == nil
+        let workspace = workspaces[tab] ?? ReaderWorkspace(recentChapters: recentChapters)
+        workspaces[tab] = workspace
+        if studyPanes[tab] == nil { studyPanes[tab] = newStudyPane() }
+        if tab != currentID {
+            studyPanes[currentID]?.isOnScreen = false
+            workspaces[currentID]?.isOnScreen = false
+        }
+        studyPanes[tab]?.isOnScreen = true
+        workspace.isOnScreen = true
+        lastShown[tab] = now
+        current = workspace
+        currentID = tab
+        var order = keptIDs.filter { $0 != tab }
+        order.append(tab)
+        // Let go of what has not been looked at for a day, then of the
+        // longest unseen beyond the cap. Never the one being shown.
+        let stale = order.filter { id in
+            id != tab && now.timeIntervalSince(lastShown[id] ?? now) > Self.unseenLimit
+        }
+        stale.forEach(release)
+        order.removeAll { stale.contains($0) }
+        while order.count > Self.capacity {
+            release(order.removeFirst())
+        }
+        keptIDs = order
+        forward()
+        objectWillChange.send()
+        return (workspace, isNew)
+    }
+
+    /// Forgets a tab that has been closed.
+    func close(_ tab: UUID) {
+        guard tab != currentID else { return }
+        release(tab)
+        keptIDs.removeAll { $0 == tab }
+    }
+
+    /// Lets go of every kept tab but the one on screen.
+    func releaseHidden() {
+        let hidden = keptIDs.filter { $0 != currentID }
+        guard !hidden.isEmpty else { return }
+        hidden.forEach(release)
+        keptIDs = [currentID]
+    }
+
+    /// Notes where a tab was scrolled, then lets its workspace go.
+    private func release(_ tab: UUID) {
+        if let workspace = workspaces[tab] { workspace.scrollMemory.save(tab: tab) }
+        studyPanes[tab]?.scrollMemory.save(tab: tab)
+        workspaces[tab] = nil
+        studyPanes[tab] = nil
+        lastShown[tab] = nil
+        hiddenSizes[tab] = nil
+    }
+
+    /// The window observes this pool, so the current workspace's changes are
+    /// passed on as the pool's own. The others', out of sight, are not.
+    private func forward() {
+        forwarding = current.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+    }
+
+    private func watchMemoryPressure() {
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+        source.setEventHandler { [weak self] in
+            MainActor.assumeIsolated { self?.releaseHidden() }
+        }
+        source.resume()
+        pressure = source
+    }
+
+    deinit { pressure?.cancel() }
+}
+
+/// Each kept reader tab in an AppKit hosting view of its own, the one on
+/// screen shown and the rest hidden at the AppKit level.
+///
+/// Kept in the window's own SwiftUI tree, a tab out of sight was still part
+/// of every layout pass, and showing it again re-ran its body and laid its
+/// chapter out again: a switch cost as much as reading the chapter afresh.
+/// A hidden NSView is left out of layout and drawing altogether, so showing
+/// a kept tab is showing a view that is already laid out.
+///
+/// The tab on screen is handed its view on every update, as the reader
+/// always was, except in the frame it is chosen; a tab going out of sight
+/// is left alone until it is shown again.
+struct ReaderTabHosts: NSViewRepresentable {
+    let keptIDs: [UUID]
+    let currentID: UUID
+    /// A tab's view. Only the tab on screen is handed its view: one going
+    /// out of sight is left as it was, since the window stops what a tab
+    /// leaving should stop (`showReaderTab`).
+    let content: (_ tab: UUID) -> AnyView
+
+    func makeNSView(context: Context) -> Container { Container() }
+
+    func updateNSView(_ container: Container, context: Context) {
+        let environment = context.environment
+        func view(_ tab: UUID) -> AnyView {
+            // Everything the view would have read from the window around
+            // it: the library, the scroll link, the study pane and the rest.
+            AnyView(content(tab).environment(\.self, environment))
+        }
+        for (tab, host) in container.hosts where !keptIDs.contains(tab) {
+            // Emptied before it goes, so its views disappear as views do and
+            // let go of what they registered elsewhere (a chat's queue).
+            host.rootView = AnyView(EmptyView())
+            host.removeFromSuperview()
+            container.hosts[tab] = nil
+        }
+        // A tab just chosen is shown as it was left, in this frame, and
+        // brought up to date in the next: handing it its view now would lay
+        // out its update before the switch could be drawn.
+        let switchedTo = container.lastCurrentID != currentID ? currentID : nil
+        container.lastCurrentID = currentID
+        for tab in keptIDs {
+            let isCurrent = tab == currentID
+            if let host = container.hosts[tab] {
+                if isCurrent, tab == switchedTo {
+                    container.pendingUpdate = (tab, view(tab))
+                    DispatchQueue.main.async { [weak container] in
+                        afterNextDraw {
+                            guard let container, let pending = container.pendingUpdate,
+                                  pending.tab == tab, container.lastCurrentID == tab else { return }
+                            container.pendingUpdate = nil
+                            container.hosts[tab]?.rootView = pending.view
+                        }
+                    }
+                } else if isCurrent {
+                    container.pendingUpdate = nil
+                    host.rootView = view(tab)
+                }
+                host.isHidden = !isCurrent
+            } else if isCurrent {
+                // Made when first shown: a kept tab never shown here — its
+                // column shut while it was open — costs nothing.
+                let host = NSHostingView(rootView: view(tab))
+                host.sizingOptions = []
+                host.translatesAutoresizingMaskIntoConstraints = true
+                host.autoresizingMask = [.width, .height]
+                host.frame = container.bounds
+                container.addSubview(host)
+                container.hosts[tab] = host
+            }
+        }
+    }
+
+    final class Container: NSView {
+        var hosts: [UUID: NSHostingView<AnyView>] = [:]
+        /// The tab on screen at the last update, to tell a switch from any
+        /// other update.
+        var lastCurrentID: UUID?
+        /// A tab just chosen's view, handed over once the switch is drawn.
+        /// Superseded by any update that comes first.
+        var pendingUpdate: (tab: UUID, view: AnyView)?
+        override var isFlipped: Bool { true }
     }
 }

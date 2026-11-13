@@ -71,9 +71,23 @@ struct LibraryRootView: View {
     @EnvironmentObject private var model: LibraryModel
     /// This window's own place in scripture. Each reader window has one, which
     /// is what lets two of them sit on different chapters.
-    @StateObject private var workspace = ReaderWorkspace()
+    // The reader's settings, for the window's reader toolbar.
+    @AppStorage("reader.fontSize") private var fontSize = LampTextScale.readerText.defaultValue
+    @AppStorage("reader.lineSpacing") private var lineSpacing = LampTextScale.readerLineSpacing.defaultValue
+    @AppStorage("reader.typeface") private var typeface = ProseTypeface.readerDefault
+    @AppStorage("reader.layoutMode") private var readerLayoutMode = ReaderLayoutMode.continuousParagraphs
+    @AppStorage("reader.layoutModeBeforeSideBySide") private var layoutModeBeforeSideBySide =
+        ReaderLayoutMode.continuousParagraphs
+    @AppStorage("reader.readAloud.voice") private var readAloudVoice = ""
+    @AppStorage("reader.readAloud.rate") private var readAloudRate = 0.5
+    /// The window's reader tabs kept laid out (`ReaderTabPool`). The window's
+    /// reader is the current tab's.
+    @StateObject private var readerPool = ReaderTabPool()
+    private var workspace: ReaderWorkspace { readerPool.current }
     @EnvironmentObject private var syncController: LibrarySyncController
-    @EnvironmentObject private var scrollLink: ReaderScrollLink
+    /// The window's own: its reader and its study pane scroll together,
+    /// and another window's must not move them.
+    @StateObject private var scrollLink = ReaderScrollLink()
     @State private var selection: LibrarySelection? = .section(.reader)
     /// The search's own query, so the reader's reference field can hand words
     /// to it. The same key the search reads, in the same scene.
@@ -137,7 +151,8 @@ struct LibraryRootView: View {
     /// chosen one starts on. Each tab's own is kept with the tab.
     @AppStorage("studyInspector.tab") private var lastStudyTool = "commentary"
     /// The open tab's study pane, written back to the tab as it changes.
-    @State private var studyPane = StudyPaneState()
+    /// The window's study pane: the current tab's, kept with it.
+    private var studyPane: StudyPaneState { readerPool.currentStudyPane }
     /// Set when moving to a tab whose column is open where this one's was
     /// shut, or the reverse: the column is that tab's, so it is simply there
     /// or not, rather than sliding in as if just asked for.
@@ -241,6 +256,7 @@ struct LibraryRootView: View {
             }
         }
         .environmentObject(workspace)
+        .environmentObject(scrollLink)
         .task {
             // Read again only when a pass ran, since only then can anything
             // have changed underneath.
@@ -255,13 +271,18 @@ struct LibraryRootView: View {
         .onChange(of: model.selectedTranslationID) { _, _ in
             workspace.adoptIfUnplaced()
         }
+        // A kept tab out of sight may be reading a translation just removed:
+        // let them go, and each opens afresh when chosen.
+        .onChange(of: model.translations.map(\.id)) { _, _ in
+            readerPool.releaseHidden()
+        }
         .onChange(of: controlActiveState) { _, state in
             // The reader last used is the one other windows mean by "the
             // current verse". Set as this window comes forward rather than as
             // another goes back, so closing one does not leave the library
             // pointing at a window that has gone.
             guard state == .key, hasRestoredReaderTabs else { return }
-            model.activeReader = workspace
+            workspace.becomeActive(in: model)
         }
         // Publishing what is done here, without being asked for it. Checking
         // costs a couple of aggregates and a small blob, and only a change
@@ -651,15 +672,27 @@ struct LibraryRootView: View {
         // at its verse: ⌥↩ on John 3:16 in the palette opens a new window
         // there, not at the top of John 3.
         let pending = model.takePendingReaderLocation()
+        // The workspace the window started with is the open tab's.
+        readerPool.claimFirst(for: readerTabs.selectedID)
         // The open tab as it was left: where it was scrolled, and its
         // selected verse. A place asked for instead goes to its verse.
-        if pending == nil { workspace.scrollMemory.prepare(tab: readerTabs.selectedID) }
+        if pending == nil {
+            workspace.scrollMemory.prepare(tab: readerTabs.selectedID)
+        } else {
+            workspace.scrollMemory.track(tab: readerTabs.selectedID)
+        }
         studyPane.scrollMemory.prepare(tab: readerTabs.selectedID)
+        // The library's reader before it starts, so what it reads is
+        // mirrored: if this window is in front, or no reader is yet. A window
+        // behind finishing its restore last must not take the library from
+        // the one being used.
+        if model.activeReader == nil || controlActiveState == .key {
+            model.activeReader = workspace
+        }
         workspace.start(model: model, at: pending ?? readerTabs.selectedTab?.location)
         if let verse = (pending ?? readerTabs.selectedTab?.location)?.verseReference {
             workspace.focusVerse(verse)
         }
-        model.activeReader = workspace
     }
 
     private func presentNewReaderTabChooser() {
@@ -679,10 +712,7 @@ struct LibraryRootView: View {
         studyPane.scrollMemory.save(tab: readerTabs.selectedID)
         recordTabSidebar()
         guard let location = readerTabs.duplicate(id) else { return }
-        workspace.scrollMemory.prepare(tab: readerTabs.selectedID)
-        studyPane.scrollMemory.prepare(tab: readerTabs.selectedID)
-        adoptTabSidebar()
-        workspace.openTab(at: location)
+        showReaderTab(readerTabs.selectedID, at: location)
         selection = .section(.reader)
     }
 
@@ -696,31 +726,58 @@ struct LibraryRootView: View {
         studyPane.scrollMemory.save(tab: readerTabs.selectedID)
         recordTabSidebar()
         let added = readerTabs.add(location: location)
-        workspace.scrollMemory.prepare(tab: added)
-        studyPane.scrollMemory.prepare(tab: added)
-        adoptTabSidebar()
-        workspace.openTab(at: location)
+        showReaderTab(added, at: location)
         selection = .section(.reader)
+    }
+
+    /// Puts a tab on screen. A kept tab is shown as it was left, at once; any
+    /// other gets a workspace of its own, opened at the tab's place and put
+    /// back where it was scrolled. Either way the library's reader is it.
+    private func showReaderTab(_ id: UUID, at location: ReaderLocation?) {
+        // What a tab going out of sight should stop, done here: its reader is
+        // kept as it is, not told, so as not to redraw it on the way out.
+        let leaving = workspace
+        // Only a change is published, here as everywhere a switch writes:
+        // a set of the same value still lays out every view that watches.
+        leaving.readAloud.stop()
+        if leaving.isChoosingPassage { leaving.isChoosingPassage = false }
+        if readerLexicalHoverStore.details != nil { readerLexicalHoverStore.details = nil }
+        let (shown, isNew) = readerPool.show(id)
+        // The window's shared stores, for the tab now on screen.
+        scrollLink.reset()
+        readerLexicalHoverStore.configure(isDetailsEnabled: StrongsKey.hasAnnotations(
+            (shown.chapter?.verses ?? []).lazy.flatMap { $0.annotations }.map(\.strongs)
+        ))
+        // The tab's column, open or shut, on its pane. Its pane's state is
+        // its own and kept with it; a tab new to the pool takes it up from
+        // what the tab saved.
+        adoptTabSidebar(adoptingPane: isNew)
+        // The library's reader before it reads, since only that one is
+        // mirrored: if this window's reader was it, or the window is in
+        // front, or no reader is yet — not a window behind.
+        if model.activeReader == nil || model.activeReader === leaving || controlActiveState == .key {
+            model.activeReader = shown
+        }
+        if isNew {
+            shown.scrollMemory.prepare(tab: id)
+            studyPane.scrollMemory.prepare(tab: id)
+            shown.start(model: model, at: location)
+            if let verse = location?.verseReference { shown.focusVerse(verse) }
+        } else {
+            // Kept out of sight, it may have missed a highlight or a note:
+            // read again quietly, and tell the library where the window is.
+            shown.refreshQuietly()
+        }
     }
 
     private func selectReaderTab(_ id: UUID) {
         guard id != readerTabs.selectedID else { return }
         readerTabs.updateSelected(location: workspace.currentLocation)
         workspace.scrollMemory.save(tab: readerTabs.selectedID)
-        workspace.scrollMemory.prepare(tab: id)
         studyPane.scrollMemory.save(tab: readerTabs.selectedID)
-        studyPane.scrollMemory.prepare(tab: id)
         recordTabSidebar()
         let location = readerTabs.select(id)
-        adoptTabSidebar()
-        if let location {
-            workspace.openTab(at: location)
-        }
-        // Two tabs on one chapter lay nothing out anew, so nothing else
-        // would put this one back where it was left.
-        DispatchQueue.main.async { [scrollMemory = workspace.scrollMemory] in
-            scrollMemory.restoreIfReady()
-        }
+        showReaderTab(id, at: location)
         selection = .section(.reader)
     }
 
@@ -730,15 +787,13 @@ struct LibraryRootView: View {
         let chat = readerTabs.tabs.first { $0.id == id }?.chatID
         if wasSelected { readerTabs.updateSelected(location: workspace.currentLocation) }
         let destination = readerTabs.close(id)
-        workspace.scrollMemory.forget(tab: id)
-        studyPane.scrollMemory.forget(tab: id)
+        readerPool.workspace(for: id)?.scrollMemory.forget(tab: id)
+        readerPool.studyPane(for: id)?.scrollMemory.forget(tab: id)
         if let chat { letGoOfChat(chat) }
         if wasSelected {
-            workspace.scrollMemory.prepare(tab: readerTabs.selectedID)
-            studyPane.scrollMemory.prepare(tab: readerTabs.selectedID)
-            adoptTabSidebar()
-            if let destination { workspace.openTab(at: destination) }
+            showReaderTab(readerTabs.selectedID, at: destination)
         }
+        readerPool.close(id)
     }
 
     /// Frees a closed tab's conversation, and takes the workspace with it
@@ -752,6 +807,13 @@ struct LibraryRootView: View {
         let workspace = ReaderChatWorkspaceStore.workspaceURL(
             libraryRootURL: model.library.rootURL, chatID: chat
         )
+        // And the chat itself, whichever provider it is on, which is kept for
+        // the life of the app otherwise. Held off while a reply is arriving or
+        // a pane shows it, and let go once neither is so. Only here, where the
+        // tab is going: a kept reader let go (`ReaderTabPool`) keeps its chat.
+        for provider in AIProviderCLI.allCases {
+            KeptAgentChats.release(provider: provider, workspace: workspace)
+        }
         guard ReaderChatWorkspaceStore.lastSpoken(in: workspace) == nil else { return }
         try? FileManager.default.removeItem(at: workspace)
     }
@@ -802,6 +864,37 @@ struct LibraryRootView: View {
         readerTabs.forgetChats(lost)
     }
 
+    /// A tab's side pane: its chat, or its study tools on its own pane state.
+    /// Asked only for the tab on screen (`ReaderTabHosts`), so the window's
+    /// column state is that tab's.
+    private func tabSidebarContent(for id: UUID) -> AnyView {
+        guard let reader = readerPool.workspace(for: id),
+              let pane = readerPool.studyPane(for: id) else { return AnyView(EmptyView()) }
+        if aiFeaturesEnabled,
+           (readerSidebar ?? lastReaderSidebar) == .chat,
+           let chat = readerTabs.tabs.first(where: { $0.id == id })?.chatID {
+            return AnyView(ReaderChatSidebarView(
+                chatID: chat,
+                resume: resumeChat,
+                close: { readerSidebar = nil },
+                reader: reader
+            ))
+        }
+        return AnyView(
+            StudyInspectorView(
+                isPresented: showingStudyInspector,
+                recordTypedQuery: recordTabSidebar,
+                readerTranslationID: reader.selectedTranslationID
+            )
+            .environmentObject(model)
+            .environmentObject(scrollLink)
+            // The tab's, over the window's: its chapter and verse are what
+            // the pane shows, on screen or kept out of sight.
+            .environmentObject(reader)
+            .environment(pane)
+        )
+    }
+
     /// Writes the column as it stands into the open tab.
     private func recordTabSidebar() {
         guard hasRestoredReaderTabs else { return }
@@ -809,9 +902,9 @@ struct LibraryRootView: View {
     }
 
     /// Shows the open tab's column: open or shut, on its pane and its tool.
-    private func adoptTabSidebar() {
+    private func adoptTabSidebar(adoptingPane: Bool = true) {
         let sidebar = readerTabs.selectedTab?.sidebar ?? ReaderTabSidebar()
-        studyPane.adopt(sidebar, defaultTool: lastStudyTool)
+        if adoptingPane { studyPane.adopt(sidebar, defaultTool: lastStudyTool) }
         // A tab left on chat opens with its column shut while AI is off.
         let pane = sidebar.pane == .chat && !aiFeaturesEnabled ? nil : sidebar.pane
         if (pane != nil) != (readerSidebar != nil) {
@@ -850,7 +943,7 @@ struct LibraryRootView: View {
         var activatedMode = mode
         activatedMode.activeReadingID = lastReadingID
         planReadingMode = activatedMode
-        workspace.openTab(at: lastLocation)
+        showReaderTab(readerTabs.selectedID, at: lastLocation)
         selection = .section(.reader)
     }
 
@@ -903,6 +996,428 @@ struct LibraryRootView: View {
         }
     }
 
+
+    // MARK: Reader toolbar
+
+    /// The passage picker's flag, the current tab's.
+    private var readerLocationPickerBinding: Binding<Bool> {
+        Binding(get: { workspace.isChoosingPassage }, set: { workspace.isChoosingPassage = $0 })
+    }
+
+    private var activePlanReadingIndex: Int? {
+        guard let mode = planReadingMode else { return nil }
+        return mode.readings.firstIndex { $0.id == mode.activeReadingID }
+    }
+
+    private var canNavigateReaderBackward: Bool {
+        if planReadingMode != nil {
+            return activePlanReadingIndex.map { $0 > 0 } ?? false
+        }
+        return workspace.canNavigateBackward
+    }
+
+    private var canNavigateReaderForward: Bool {
+        if let mode = planReadingMode {
+            return activePlanReadingIndex.map { $0 < mode.readings.index(before: mode.readings.endIndex) } ?? false
+        }
+        return workspace.canNavigateForward
+    }
+
+    private var canNavigateBookBackward: Bool {
+        guard planReadingMode == nil,
+              let bookNumber = workspace.selectedBookNumber,
+              let index = workspace.books.firstIndex(where: { $0.id == bookNumber }) else { return false }
+        return index > workspace.books.startIndex
+    }
+
+    private var canNavigateBookForward: Bool {
+        guard planReadingMode == nil,
+              let bookNumber = workspace.selectedBookNumber,
+              let index = workspace.books.firstIndex(where: { $0.id == bookNumber }) else { return false }
+        return index < workspace.books.index(before: workspace.books.endIndex)
+    }
+
+    private var backwardNavigationTitle: String {
+        planReadingMode == nil ? "Previous Chapter" : "Previous Plan Reading"
+    }
+
+    private var forwardNavigationTitle: String {
+        planReadingMode == nil ? "Next Chapter" : "Next Plan Reading"
+    }
+
+    /// Moves the plan's open reading to `reading`, in the current tab.
+    private func openPlanReadingStep(_ reading: LampPlanReading) {
+        guard var mode = planReadingMode else { return }
+        mode.activeReadingID = reading.id
+        planReadingMode = mode
+        workspace.openReference(reading.startReference)
+    }
+
+    private func navigateReaderBackward() {
+        guard let mode = planReadingMode else {
+            workspace.navigateBackward()
+            return
+        }
+        guard let index = activePlanReadingIndex, index > mode.readings.startIndex else { return }
+        openPlanReadingStep(mode.readings[mode.readings.index(before: index)])
+    }
+
+    private func navigateReaderForward() {
+        guard let mode = planReadingMode else {
+            workspace.navigateForward()
+            return
+        }
+        guard let index = activePlanReadingIndex,
+              index < mode.readings.index(before: mode.readings.endIndex) else { return }
+        openPlanReadingStep(mode.readings[mode.readings.index(after: index)])
+    }
+
+    /// Goes where the passage picker was pointed. A reference that named a
+    /// verse is opened as a reference, so the reader lands on the verse; a
+    /// chapter is a passage, which the history records as one move.
+    private func goToPassage(_ location: ReaderLocation) {
+        if let verse = location.verseReference {
+            workspace.openReference(verse, translationID: location.translationID)
+        } else {
+            workspace.selectPassage(
+                translationID: location.translationID,
+                bookNumber: location.bookNumber,
+                chapterNumber: location.chapterNumber
+            )
+        }
+    }
+
+    private func navigateBookBackward() {
+        guard canNavigateBookBackward,
+              let bookNumber = workspace.selectedBookNumber,
+              let index = workspace.books.firstIndex(where: { $0.id == bookNumber }) else { return }
+        workspace.selectBook(workspace.books[workspace.books.index(before: index)].id)
+    }
+
+    private func navigateBookForward() {
+        guard canNavigateBookForward,
+              let bookNumber = workspace.selectedBookNumber,
+              let index = workspace.books.firstIndex(where: { $0.id == bookNumber }) else { return }
+        workspace.selectBook(workspace.books[workspace.books.index(after: index)].id)
+    }
+
+    private var readerLocationTitle: String {
+        let translation = model.selectedTranslation?.abbreviation ?? "Translation"
+        if let reading = planReadingMode?.activeReading {
+            return "\(translation) \u{00B7} \(reading.displayDescription)"
+        }
+        let book = workspace.selectedBook?.name ?? "Book"
+        return "\(translation) \u{00B7} \(book) \(workspace.selectedChapterNumber)"
+    }
+
+    private func historyLabel(_ location: ReaderLocation) -> String {
+        let book = LampBibleReferenceFormatter.bookName(location.bookNumber)
+        let translation = model.translations.first { $0.id == location.translationID }
+        let name = translation?.abbreviation ?? translation?.name ?? location.translationID
+        return "\(book) \(location.chapterNumber) (\(name))"
+    }
+
+    private var readAloudButtonTitle: String {
+        switch workspace.readAloud.state {
+        case .stopped: "Read Aloud"
+        case .playing: "Pause Read Aloud"
+        case .paused: "Resume Read Aloud"
+        }
+    }
+
+    private var readAloudButtonImage: String {
+        switch workspace.readAloud.state {
+        case .stopped: "play.fill"
+        case .playing: "pause.fill"
+        case .paused: "play.fill"
+        }
+    }
+
+    private func toggleReadAloud() {
+        let verses = readAloudVerses
+        guard !verses.isEmpty else { return }
+        workspace.readAloud.toggle(
+            items: verses.map {
+                ReadAloudItem(reference: $0.id, verseNumber: $0.number, text: $0.text)
+            },
+            startingAt: workspace.selectedVerseReference,
+            voiceIdentifier: readAloudVoice,
+            rate: readAloudRate
+        )
+    }
+
+    private func startReadAloud(at reference: Int?) {
+        let verses = readAloudVerses
+        guard !verses.isEmpty else { return }
+        workspace.readAloud.play(
+            items: verses.map {
+                ReadAloudItem(reference: $0.id, verseNumber: $0.number, text: $0.text)
+            },
+            startingAt: reference,
+            voiceIdentifier: readAloudVoice,
+            rate: readAloudRate
+        )
+    }
+
+    /// The verses on screen: a plan reading's, or the chapter's.
+    private var readAloudVerses: [LampVerse] {
+        if let translationID = workspace.selectedTranslationID,
+           let reading = planReadingMode?.activeReading,
+           workspace.loadedPlanReadingRequest == PlanReadingChapterRequest(
+               translationID: translationID,
+               readingID: reading.id,
+               startReference: reading.startReference,
+               endReference: reading.endReference
+           ),
+           !workspace.planReadingChapters.isEmpty {
+            return workspace.planReadingChapters.flatMap(\.verses)
+        }
+        return workspace.chapter?.verses ?? []
+    }
+
+    /// The reader's layout, remembering the one side by side is chosen from.
+    private var readerLayoutSelection: Binding<ReaderLayoutMode> {
+        Binding(
+            get: { readerLayoutMode },
+            set: { mode in
+                if mode == .sideBySide, readerLayoutMode != .sideBySide {
+                    layoutModeBeforeSideBySide = readerLayoutMode
+                }
+                readerLayoutMode = mode
+            }
+        )
+    }
+
+    /// Whether the reader is side by side, for the toolbar's toggle: off, it
+    /// goes back to the layout side by side was chosen from.
+    private var readsSideBySide: Binding<Bool> {
+        Binding(
+            get: { readerLayoutMode == .sideBySide },
+            set: { isOn in
+                if isOn {
+                    readerLayoutSelection.wrappedValue = .sideBySide
+                } else if readerLayoutMode == .sideBySide {
+                    readerLayoutMode = layoutModeBeforeSideBySide == .sideBySide
+                        ? .continuousParagraphs
+                        : layoutModeBeforeSideBySide
+                }
+            }
+        )
+    }
+
+    @ToolbarContentBuilder
+    private var readerToolbar: some ToolbarContent {
+        // One capsule for the whole of where you are and how to move from it,
+        // rather than five: the passage reads as the control, and the steps
+        // either side of it as its own. The chapter steps stay one click
+        // away; the book steps beside them are quieter.
+        ToolbarItem(placement: .principal) {
+            HStack(spacing: 0) {
+                Button {
+                    navigateBookBackward()
+                } label: {
+                    Image(systemName: "chevron.left.2")
+                }
+                .disabled(!canNavigateBookBackward || workspace.isLoadingChapter || workspace.isLoadingPlanReading)
+                .keyboardShortcut("[", modifiers: [.command, .shift])
+                .help("Previous Book")
+                .accessibilityLabel("Previous Book")
+
+                Button {
+                    navigateReaderBackward()
+                } label: {
+                    Image(systemName: "chevron.left")
+                }
+                .disabled(!canNavigateReaderBackward || workspace.isLoadingChapter || workspace.isLoadingPlanReading)
+                .keyboardShortcut("[", modifiers: .command)
+                .help(backwardNavigationTitle)
+                .accessibilityLabel(backwardNavigationTitle)
+
+                Button {
+                    workspace.isChoosingPassage.toggle()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "books.vertical")
+                        Text(readerLocationTitle)
+                            .lineLimit(1)
+                        Image(systemName: "chevron.down")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .fixedSize()
+                }
+                // Says what the field behind it takes, since the button
+                // itself cannot show that it now accepts a reference, a
+                // Strong's key or words to search for.
+                .help("Go to a passage, or search (⌘L)")
+                .accessibilityLabel("Go to a passage, or search")
+                .popover(isPresented: readerLocationPickerBinding, arrowEdge: .bottom) {
+                    PassagePickerPopover(
+                        isPresented: readerLocationPickerBinding,
+                        open: { goToPassage($0) },
+                        openSearch: { workspace.requestedSearch = $0 },
+                        openAnalysis: { workspace.requestedStrongsKey = $0 }
+                    )
+                        .environmentObject(model)
+                }
+
+                Button {
+                    navigateReaderForward()
+                } label: {
+                    Image(systemName: "chevron.right")
+                }
+                .disabled(!canNavigateReaderForward || workspace.isLoadingChapter || workspace.isLoadingPlanReading)
+                .keyboardShortcut("]", modifiers: .command)
+                .help(forwardNavigationTitle)
+                .accessibilityLabel(forwardNavigationTitle)
+
+                Button {
+                    navigateBookForward()
+                } label: {
+                    Image(systemName: "chevron.right.2")
+                }
+                .disabled(!canNavigateBookForward || workspace.isLoadingChapter || workspace.isLoadingPlanReading)
+                .keyboardShortcut("]", modifiers: [.command, .shift])
+                .help("Next Book")
+                .accessibilityLabel("Next Book")
+            }
+            .buttonStyle(.accessoryBar)
+            .controlSize(.regular)
+        }
+
+        ToolbarItemGroup(placement: .navigation) {
+            Button("Back in Reading History", systemImage: "arrow.uturn.backward") {
+                workspace.goBackInHistory()
+            }
+            .disabled(!workspace.canGoBackInHistory)
+            .keyboardShortcut("[", modifiers: [.command, .option])
+
+            Button("Forward in Reading History", systemImage: "arrow.uturn.forward") {
+                workspace.goForwardInHistory()
+            }
+            .disabled(!workspace.canGoForwardInHistory)
+            .keyboardShortcut("]", modifiers: [.command, .option])
+
+            Menu("Reading History", systemImage: "clock.arrow.circlepath") {
+                if workspace.recentLocations.isEmpty {
+                    Text("No Reading History")
+                } else {
+                    ForEach(workspace.recentLocations, id: \.self) { location in
+                        Button(historyLabel(location)) {
+                            workspace.openHistoryLocation(location)
+                        }
+                    }
+                    Divider()
+                    Button("Clear History", role: .destructive) {
+                        workspace.clearHistory()
+                    }
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+        }
+
+        ToolbarItemGroup {
+            Toggle(isOn: readsSideBySide) {
+                Label(ReaderLayoutMode.sideBySide.title, systemImage: ReaderLayoutMode.sideBySide.systemImage)
+            }
+            .toggleStyle(.button)
+            .disabled(readerLayoutMode != .sideBySide && model.translations.count < 2)
+            .help(
+                readerLayoutMode == .sideBySide
+                    ? "Read this translation on its own"
+                    : "Read another translation beside this one"
+            )
+
+            Menu("Reader Appearance", systemImage: "textformat") {
+                Picker("Layout", selection: readerLayoutSelection) {
+                    ForEach(ReaderLayoutMode.allCases) { mode in
+                        Label(mode.title, systemImage: mode.systemImage)
+                            .tag(mode)
+                    }
+                }
+                .pickerStyle(.inline)
+
+                Divider()
+
+                TextSizeMenuItems(
+                    fontSize: $fontSize,
+                    lineSpacing: $lineSpacing,
+                    typeface: $typeface,
+                    defaultTypeface: .readerDefault,
+                    fontScale: .readerText,
+                    lineSpacingScale: .readerLineSpacing,
+                    usesKeyboardShortcuts: true
+                )
+
+                Divider()
+                Section("Verse marks") {
+                    Text("Bar in the margin — selected verse")
+                    Text("Orange note in the margin — your note")
+                    Text("Purple book in the margin — study notes")
+                    Text("Blue letter in the text — translator’s note")
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Choose the reader layout, typeface, and text size, and see what the verse marks mean")
+
+            // One control, as Music's play button is: a click plays or pauses,
+            // and the arrow beside it holds where to start from and stop.
+            Menu {
+                Button(
+                    planReadingMode == nil ? "Read Chapter from Beginning" : "Read Reading from Beginning",
+                    systemImage: "text.book.closed"
+                ) {
+                    startReadAloud(at: nil)
+                }
+                if workspace.selectedVerseReference != nil {
+                    Button("Read from Selected Verse", systemImage: "text.line.first.and.arrowtriangle.forward") {
+                        startReadAloud(at: workspace.selectedVerseReference)
+                    }
+                }
+                if workspace.readAloud.state == .playing {
+                    Button("Pause", systemImage: "pause") { workspace.readAloud.pause() }
+                } else if workspace.readAloud.state == .paused {
+                    Button("Resume", systemImage: "play") { workspace.readAloud.resume() }
+                }
+                Button("Stop", systemImage: "stop") { workspace.readAloud.stop() }
+                    .disabled(workspace.readAloud.state == .stopped)
+            } label: {
+                Label(readAloudButtonTitle, systemImage: readAloudButtonImage)
+            } primaryAction: {
+                toggleReadAloud()
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .disabled(readAloudVerses.isEmpty)
+            .help("\(readAloudButtonTitle) — the arrow has where to start from")
+        }
+
+        ToolbarItemGroup(placement: .primaryAction) {
+            // With AI off there is no button and no ⇧⌘J: nothing about the
+            // reader mentions a chat at all.
+            if aiFeaturesEnabled {
+                Button {
+                    showingReaderChat.wrappedValue.toggle()
+                } label: {
+                    Label("Reader Chat", systemImage: "bubble.left.and.bubble.right")
+                }
+                .help(showingReaderChat.wrappedValue ? "Hide Reader Chat" : "Show Reader Chat")
+                .keyboardShortcut("j", modifiers: [.command, .shift])
+            }
+
+            Button {
+                showingStudyInspector.wrappedValue.toggle()
+            } label: {
+                Label("Study Tools", systemImage: "sidebar.trailing")
+            }
+            .help(showingStudyInspector.wrappedValue ? "Hide Study Tools" : "Show Study Tools")
+            .keyboardShortcut("i", modifiers: [.command, .shift])
+        }
+    }
+
+
     private func readerDetail(isShown: Bool) -> some View {
         VStack(spacing: 0) {
             if planReadingMode == nil {
@@ -950,27 +1465,44 @@ struct LibraryRootView: View {
                 let revealProgress = columnWidth > 0 ? revealedWidth / columnWidth : 0
                 // A plain row, not an overlay: the column is a sibling of the
                 // reader so the layout itself decides where it sits.
+                let readerSize = CGSize(
+                    width: max(geometry.size.width - revealedWidth, 0),
+                    height: geometry.size.height
+                )
+                // Noted, not published: the size a tab is laid out at when it
+                // goes out of sight.
+                let _ = (readerPool.liveSize = readerSize)
                 HStack(spacing: 0) {
-                    TranslationReaderView(
-                        model: model,
-                        workspace: workspace,
-                        isShown: isShown,
-                        planReadingMode: $planReadingMode,
-                        readerSidebar: $readerSidebar,
-                        lexicalHoverStore: readerLexicalHoverStore,
-                        isSidebarTransitioning: isReaderSidebarTransitioning,
-                        showImporter: { showingImporter = true }
-                    )
-                    .equatable()
-                    // Animated, and the passage re-wraps as it goes — the same
-                    // thing the plan-reading quiz panel does, which is smooth.
-                    // The reflow was never the expensive part; measuring the
-                    // passage to *derive* a width was, and the exact frames here
-                    // and around the ScrollView are what stop that happening.
-                    .frame(
-                        width: max(geometry.size.width - revealedWidth, 0),
-                        height: geometry.size.height
-                    )
+                    // A reader per kept tab (`ReaderTabPool`), each in a
+                    // hosting view of its own (`ReaderTabHosts`): the one on
+                    // screen shown, the rest hidden at the AppKit level and
+                    // left out of layout, so choosing one shows a view already
+                    // laid out. Not told when hidden: the window stops what a
+                    // tab leaving should stop (`showReaderTab`), and a hidden
+                    // reader neither hears nor speaks to what is shared
+                    // (`isActiveReader`).
+                    ReaderTabHosts(
+                        keptIDs: readerPool.keptIDs,
+                        currentID: readerPool.currentID
+                    ) { id in
+                        guard let kept = readerPool.workspace(for: id) else { return AnyView(EmptyView()) }
+                        return AnyView(
+                            TranslationReaderView(
+                                model: model,
+                                workspace: kept,
+                                isShown: isShown,
+                                planReadingMode: $planReadingMode,
+                                readerSidebar: $readerSidebar,
+                                lexicalHoverStore: readerLexicalHoverStore,
+                                isSidebarTransitioning: isReaderSidebarTransitioning,
+                                showImporter: { showingImporter = true }
+                            )
+                            .equatable()
+                            .environmentObject(kept)
+                            .environment(readerPool.studyPane(for: id) ?? studyPane)
+                        )
+                    }
+                    .frame(width: readerSize.width, height: readerSize.height, alignment: .topLeading)
                     // No blur or opacity on the reader. Both force a full window
                     // of text into an offscreen buffer for every frame they are
                     // animated over.
@@ -988,22 +1520,14 @@ struct LibraryRootView: View {
                                 // included, and is shown again on return.
                                 Color.clear
                             } else if isReaderSidebarContentReady {
-                                if aiFeaturesEnabled,
-                                   (readerSidebar ?? lastReaderSidebar) == .chat,
-                                   let chat = readerTabs.selectedTab?.chatID {
-                                    ReaderChatSidebarView(
-                                        chatID: chat,
-                                        resume: resumeChat,
-                                        close: { readerSidebar = nil }
-                                    )
-                                } else {
-                                    StudyInspectorView(
-                                        isPresented: showingStudyInspector,
-                                        recordTypedQuery: recordTabSidebar,
-                                        readerTranslationID: workspace.selectedTranslationID
-                                    )
-                                        .environmentObject(model)
-                                        .environmentObject(scrollLink)
+                                // A pane per kept tab, each in a hosting view of
+                                // its own, as the readers are: the one shown is
+                                // already laid out on its entry, chat or notes.
+                                ReaderTabHosts(
+                                    keptIDs: readerPool.keptIDs,
+                                    currentID: readerPool.currentID
+                                ) { id in
+                                    tabSidebarContent(for: id)
                                 }
                             } else {
                                 ProgressView("Opening Study Tools…")
@@ -1105,6 +1629,17 @@ struct LibraryRootView: View {
                 }
             }
         }
+        // The window's toolbar and menus belong to whichever section is
+        // shown. Here, the window's own, not in each tab's reader: kept tabs'
+        // readers would each bring theirs, and the toolbar was rebuilt on
+        // every switch — a third of a switch's work.
+        .toolbar { if isShown { readerToolbar } }
+        // On the view, not on the toolbar button: a toolbar item is not in
+        // the focus chain, so a focused value published from one never
+        // reaches the menu and the command stays greyed out.
+        .focusedSceneValue(\.goToPassageAction, isShown ? { workspace.isChoosingPassage = true } : nil)
+        .toolbar(removing: isShown ? .title : nil)
+        .focusedObject(isShown ? scrollLink : nil)
     }
 
     /// The passage this window's reader is on, for Today's way back to it:
@@ -2390,7 +2925,7 @@ private final class ReaderMarginView: NSView {
     }
 }
 
-private struct PlanReadingChapterRequest: Equatable, Hashable {
+struct PlanReadingChapterRequest: Equatable, Hashable {
     let translationID: String
     let readingID: Int
     let startReference: Int
@@ -4065,7 +4600,8 @@ private struct TranslationReaderView: View, Equatable {
     /// Set, never read here, so typing in the dictionary does not redraw
     /// the reader.
     @Environment(StudyPaneState.self) private var studyPane
-    @StateObject private var readAloud = ReadAloudController()
+    /// The tab's, so the window's toolbar can work it (`ReaderWorkspace`).
+    private var readAloud: ReadAloudController { workspace.readAloud }
     @State private var showingPlanQuiz = false
     /// Mount and reveal are separate so the panel exists before it is asked to
     /// appear — SwiftUI does not animate a view's first layout.
@@ -4102,12 +4638,28 @@ private struct TranslationReaderView: View, Equatable {
     @State private var chapterFootnotes: [Int: LampVerseStudyData] = [:]
     /// The note the reader has opened, by verse and by its place in that verse.
     @State private var revealedFootnote: ReaderFootnoteKey?
-    @State private var showingReaderLocationPicker = false
+    private var showingReaderLocationPicker: Bool {
+        get { workspace.isChoosingPassage }
+        nonmutating set { workspace.isChoosingPassage = newValue }
+    }
     @State private var highlightVerse: LampVerse?
-    @State private var planReadingChapters: [LampChapter] = []
-    @State private var loadedPlanReadingRequest: PlanReadingChapterRequest?
-    @State private var isLoadingPlanReading = false
-    @State private var planReadingError: String?
+    // The tab's, which the window's toolbar reads too (`ReaderWorkspace`).
+    private var planReadingChapters: [LampChapter] {
+        get { workspace.planReadingChapters }
+        nonmutating set { workspace.planReadingChapters = newValue }
+    }
+    private var loadedPlanReadingRequest: PlanReadingChapterRequest? {
+        get { workspace.loadedPlanReadingRequest }
+        nonmutating set { workspace.loadedPlanReadingRequest = newValue }
+    }
+    private var isLoadingPlanReading: Bool {
+        get { workspace.isLoadingPlanReading }
+        nonmutating set { workspace.isLoadingPlanReading = newValue }
+    }
+    private var planReadingError: String? {
+        get { workspace.planReadingError }
+        nonmutating set { workspace.planReadingError = newValue }
+    }
     /// Set by the reader's own click handlers, so the selection they make does not
     /// come back as an instruction to scroll to it.
     @State private var isSelectingVerseFromReader = false
@@ -4201,14 +4753,10 @@ private struct TranslationReaderView: View, Equatable {
             }
             isQuizTransitioning = false
         }
-        // The window's toolbar and menus belong to whichever section is shown.
-        .toolbar { if isShown { readerToolbar } }
-        // On the view, not on the toolbar button: a toolbar item is not in
-        // the focus chain, so a focused value published from one never
-        // reaches the menu and the command stays greyed out.
-        .focusedSceneValue(\.goToPassageAction, isShown ? { showingReaderLocationPicker = true } : nil)
-        .toolbar(removing: isShown ? .title : nil)
-        .focusedObject(isShown ? scrollLink : nil)
+        // The toolbar, ⌘L and the scroll link's focus are the window's
+        // (`LibraryRootView.readerDetail`): readers kept for other tabs would
+        // otherwise each bring their own, and the toolbar was rebuilt on
+        // every switch.
         .onChange(of: isShown) { _, isShown in
             if isShown { readerDidReturn() } else { readerDidLeave() }
         }
@@ -4242,8 +4790,17 @@ private struct TranslationReaderView: View, Equatable {
         .environment(\.openURL, OpenURLAction { url in
             handleReaderLink(url) ? .handled : .systemAction
         })
-        .environment(\.readerTextSelection, model.readerTextSelection)
+        // The tab's own: a chat reads the selection of the tab it belongs to.
+        .environment(\.readerTextSelection, workspace.textSelection)
     }
+
+    /// Whether this is the window's reader on screen: kept readers of other
+    /// tabs stay live out of sight and must neither act on what the window's
+    /// shared stores send nor send anything to them. Read live from the
+    /// workspace, since a reader out of sight is never handed a new view.
+    /// Not the library's active reader: a window behind is still on screen,
+    /// and its reader and pane still scroll together.
+    private var isActiveReader: Bool { workspace.isOnScreen }
 
     /// A hidden reader ignores everything handed to it until it is shown again.
     /// Every library change would otherwise rebuild a passage nobody can see:
@@ -4603,13 +5160,16 @@ private struct TranslationReaderView: View, Equatable {
                 .frame(width: viewport.size.width, height: viewport.size.height)
                 .scrollIndicators(isPanelTransitioning ? .hidden : .automatic)
                 .onReceive(lexicalHoverStore.linkActivations) { url in
+                    // The store is the window's, shared by its kept tabs: only
+                    // the tab on screen follows a link clicked in it.
+                    guard isShown, isActiveReader else { return }
                     _ = handleReaderLink(url)
                 }
                 // A new passage gets a fresh scroll container at its natural zero
                 // offset, including the padding above the book heading.
                 .id(passageIdentity)
                 .onScrollTargetVisibilityChange(idType: Int.self) { visible in
-                    guard !isPanelTransitioning,
+                    guard isActiveReader, !isPanelTransitioning,
                           readerLayoutMode.drawsVerseRows else { return }
                     scrollLink.readerDidScroll(to: visible.min())
                 }
@@ -4619,12 +5179,12 @@ private struct TranslationReaderView: View, Equatable {
                 .onScrollGeometryChange(for: CGFloat.self) { geometry in
                     geometry.contentOffset.y
                 } action: { _, _ in
-                    guard !isPanelTransitioning,
+                    guard isActiveReader, !isPanelTransitioning,
                           readerLayoutMode == .continuousParagraphs else { return }
                     scrollLink.readerDidScroll(to: paragraphAnchors.topEdgeReference)
                 }
                 .onScrollPhaseChange { oldPhase, newPhase, context in
-                    if oldPhase.isUserDriven != newPhase.isUserDriven {
+                    if isActiveReader, oldPhase.isUserDriven != newPhase.isUserDriven {
                         // Keep scroll phase outside SwiftUI state. Invalidating the
                         // reader here makes SwiftUI reconstruct the selectable
                         // attributed-text overlay while the passage is moving.
@@ -4633,7 +5193,7 @@ private struct TranslationReaderView: View, Equatable {
                             lexicalHoverStore.clearForScrolling()
                         }
                     }
-                    if !oldPhase.isUserDriven, newPhase.isUserDriven {
+                    if isActiveReader, !oldPhase.isUserDriven, newPhase.isUserDriven {
                         scrollLink.readerUserScrollDidBegin()
                     }
                     // Where the open tab is, each time a scroll settles, so
@@ -4648,8 +5208,9 @@ private struct TranslationReaderView: View, Equatable {
                     // A study pane appearing or disappearing lays out, reports its
                     // position, and would drag the reader to it. The link is for
                     // following a pane the reader is scrolling, not for being
-                    // rearranged by one that just arrived.
-                    guard !isPanelTransitioning else { return }
+                    // rearranged by one that just arrived. Nor for moving a kept
+                    // tab out of sight.
+                    guard isShown, isActiveReader, !isPanelTransitioning else { return }
                     proxy.scrollTo(scrollTarget(for: reference, in: chapters), anchor: .top)
                 }
                 .onAppear { scrollToReaderLocation(proxy, chapters: chapters) }
@@ -4670,6 +5231,7 @@ private struct TranslationReaderView: View, Equatable {
                 }
                 .onChange(of: passageIdentity, initial: true) { _, _ in
                     paragraphAnchors.prepare(for: chapters)
+                    guard isActiveReader else { return }
                     scrollLink.reset()
                     // Translation changes temporarily disable the shared store
                     // while the next passage loads. Re-enable it for every new
@@ -4682,12 +5244,12 @@ private struct TranslationReaderView: View, Equatable {
                 // pane before scrolling still finds a position to adopt.
                 .task(id: passageIdentity) {
                     await Task.yield()
-                    guard !isPanelTransitioning,
+                    guard isActiveReader, !isPanelTransitioning,
                           readerLayoutMode == .continuousParagraphs else { return }
                     scrollLink.readerDidScroll(to: paragraphAnchors.topEdgeReference)
                 }
                 .onChange(of: readerLayoutMode) { _, _ in
-                    scrollLink.reset()
+                    if isActiveReader { scrollLink.reset() }
                     scrollToReaderLocation(proxy, chapters: chapters)
                 }
                 // Side by side, the rows arrive with the companion's text,
@@ -5966,7 +6528,7 @@ private struct TranslationReaderView: View, Equatable {
                 systemImage: "highlighter",
                 entries: highlightColorEntries(for: verse, includesRemoval: false)
             ),
-        ] + (model.personalHighlights(for: verse.id).isEmpty ? [] : [
+        ] + (model.personalHighlights(for: verse.id, in: workspace.selectedTranslationID).isEmpty ? [] : [
             .action("Remove Highlight", systemImage: "eraser") {
                 setHighlight(nil, for: verse)
             },
@@ -5982,7 +6544,7 @@ private struct TranslationReaderView: View, Equatable {
                 setHighlight(item.hex, for: verse)
             }
         }
-        if includesRemoval, !model.personalHighlights(for: verse.id).isEmpty {
+        if includesRemoval, !model.personalHighlights(for: verse.id, in: workspace.selectedTranslationID).isEmpty {
             entries.append(.separator)
             entries.append(.action("Remove Highlight", systemImage: "eraser") {
                 setHighlight(nil, for: verse)
@@ -6261,7 +6823,7 @@ private struct TranslationReaderView: View, Equatable {
         // Each column its own translation's: offsets made in one translation
         // would colour the wrong words of another.
         let highlights = column.companionID.map { companionText.columns[$0]?.highlights[verse.id] ?? [] }
-            ?? model.highlights(for: verse.id)
+            ?? model.highlights(for: verse.id, in: workspace.selectedTranslationID)
         for highlight in highlights {
             let startOffset = min(max(highlight.startOffset, 0), verse.text.count)
             let endOffset = min(max(highlight.endOffset, startOffset), verse.text.count)
@@ -6459,218 +7021,6 @@ private struct TranslationReaderView: View, Equatable {
         // in the same chapter must not win when the app is opened again.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [scrollMemory = workspace.scrollMemory] in
             scrollMemory.saveCurrent()
-        }
-    }
-
-    @ToolbarContentBuilder
-    private var readerToolbar: some ToolbarContent {
-        // One capsule for the whole of where you are and how to move from it,
-        // rather than five: the passage reads as the control, and the steps
-        // either side of it as its own. The chapter steps stay one click
-        // away; the book steps beside them are quieter.
-        ToolbarItem(placement: .principal) {
-            HStack(spacing: 0) {
-                Button {
-                    navigateBookBackward()
-                } label: {
-                    Image(systemName: "chevron.left.2")
-                }
-                .disabled(!canNavigateBookBackward || workspace.isLoadingChapter || isLoadingPlanReading)
-                .keyboardShortcut("[", modifiers: [.command, .shift])
-                .help("Previous Book")
-                .accessibilityLabel("Previous Book")
-
-                Button {
-                    navigateReaderBackward()
-                } label: {
-                    Image(systemName: "chevron.left")
-                }
-                .disabled(!canNavigateReaderBackward || workspace.isLoadingChapter || isLoadingPlanReading)
-                .keyboardShortcut("[", modifiers: .command)
-                .help(backwardNavigationTitle)
-                .accessibilityLabel(backwardNavigationTitle)
-
-                Button {
-                    showingReaderLocationPicker.toggle()
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "books.vertical")
-                        Text(readerLocationTitle)
-                            .lineLimit(1)
-                        Image(systemName: "chevron.down")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                    }
-                    .fixedSize()
-                }
-                // Says what the field behind it takes, since the button
-                // itself cannot show that it now accepts a reference, a
-                // Strong's key or words to search for.
-                .help("Go to a passage, or search (⌘L)")
-                .accessibilityLabel("Go to a passage, or search")
-                .popover(isPresented: $showingReaderLocationPicker, arrowEdge: .bottom) {
-                    PassagePickerPopover(
-                        isPresented: $showingReaderLocationPicker,
-                        open: { goToPassage($0) },
-                        openSearch: { workspace.requestedSearch = $0 },
-                        openAnalysis: { workspace.requestedStrongsKey = $0 }
-                    )
-                        .environmentObject(model)
-                }
-
-                Button {
-                    navigateReaderForward()
-                } label: {
-                    Image(systemName: "chevron.right")
-                }
-                .disabled(!canNavigateReaderForward || workspace.isLoadingChapter || isLoadingPlanReading)
-                .keyboardShortcut("]", modifiers: .command)
-                .help(forwardNavigationTitle)
-                .accessibilityLabel(forwardNavigationTitle)
-
-                Button {
-                    navigateBookForward()
-                } label: {
-                    Image(systemName: "chevron.right.2")
-                }
-                .disabled(!canNavigateBookForward || workspace.isLoadingChapter || isLoadingPlanReading)
-                .keyboardShortcut("]", modifiers: [.command, .shift])
-                .help("Next Book")
-                .accessibilityLabel("Next Book")
-            }
-            .buttonStyle(.accessoryBar)
-            .controlSize(.regular)
-        }
-
-        ToolbarItemGroup(placement: .navigation) {
-            Button("Back in Reading History", systemImage: "arrow.uturn.backward") {
-                workspace.goBackInHistory()
-            }
-            .disabled(!workspace.canGoBackInHistory)
-            .keyboardShortcut("[", modifiers: [.command, .option])
-
-            Button("Forward in Reading History", systemImage: "arrow.uturn.forward") {
-                workspace.goForwardInHistory()
-            }
-            .disabled(!workspace.canGoForwardInHistory)
-            .keyboardShortcut("]", modifiers: [.command, .option])
-
-            Menu("Reading History", systemImage: "clock.arrow.circlepath") {
-                if workspace.recentLocations.isEmpty {
-                    Text("No Reading History")
-                } else {
-                    ForEach(workspace.recentLocations, id: \.self) { location in
-                        Button(historyLabel(location)) {
-                            workspace.openHistoryLocation(location)
-                        }
-                    }
-                    Divider()
-                    Button("Clear History", role: .destructive) {
-                        workspace.clearHistory()
-                    }
-                }
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-        }
-
-        ToolbarItemGroup {
-            Toggle(isOn: readsSideBySide) {
-                Label(ReaderLayoutMode.sideBySide.title, systemImage: ReaderLayoutMode.sideBySide.systemImage)
-            }
-            .toggleStyle(.button)
-            .disabled(readerLayoutMode != .sideBySide && model.translations.count < 2)
-            .help(
-                readerLayoutMode == .sideBySide
-                    ? "Read this translation on its own"
-                    : "Read another translation beside this one"
-            )
-
-            Menu("Reader Appearance", systemImage: "textformat") {
-                Picker("Layout", selection: readerLayoutSelection) {
-                    ForEach(ReaderLayoutMode.allCases) { mode in
-                        Label(mode.title, systemImage: mode.systemImage)
-                            .tag(mode)
-                    }
-                }
-                .pickerStyle(.inline)
-
-                Divider()
-
-                TextSizeMenuItems(
-                    fontSize: $fontSize,
-                    lineSpacing: $lineSpacing,
-                    typeface: $typeface,
-                    defaultTypeface: .readerDefault,
-                    fontScale: .readerText,
-                    lineSpacingScale: .readerLineSpacing,
-                    usesKeyboardShortcuts: true
-                )
-
-                Divider()
-                Section("Verse marks") {
-                    Text("Bar in the margin — selected verse")
-                    Text("Orange note in the margin — your note")
-                    Text("Purple book in the margin — study notes")
-                    Text("Blue letter in the text — translator’s note")
-                }
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            .help("Choose the reader layout, typeface, and text size, and see what the verse marks mean")
-
-            // One control, as Music's play button is: a click plays or pauses,
-            // and the arrow beside it holds where to start from and stop.
-            Menu {
-                Button(
-                    planReadingMode == nil ? "Read Chapter from Beginning" : "Read Reading from Beginning",
-                    systemImage: "text.book.closed"
-                ) {
-                    startReadAloud(at: nil)
-                }
-                if workspace.selectedVerseReference != nil {
-                    Button("Read from Selected Verse", systemImage: "text.line.first.and.arrowtriangle.forward") {
-                        startReadAloud(at: workspace.selectedVerseReference)
-                    }
-                }
-                if readAloud.state == .playing {
-                    Button("Pause", systemImage: "pause") { readAloud.pause() }
-                } else if readAloud.state == .paused {
-                    Button("Resume", systemImage: "play") { readAloud.resume() }
-                }
-                Button("Stop", systemImage: "stop") { readAloud.stop() }
-                    .disabled(readAloud.state == .stopped)
-            } label: {
-                Label(readAloudButtonTitle, systemImage: readAloudButtonImage)
-            } primaryAction: {
-                toggleReadAloud()
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            .disabled(readAloudVerses.isEmpty)
-            .help("\(readAloudButtonTitle) — the arrow has where to start from")
-        }
-
-        ToolbarItemGroup(placement: .primaryAction) {
-            // With AI off there is no button and no ⇧⌘J: nothing about the
-            // reader mentions a chat at all.
-            if aiFeaturesEnabled {
-                Button {
-                    showingReaderChat.toggle()
-                } label: {
-                    Label("Reader Chat", systemImage: "bubble.left.and.bubble.right")
-                }
-                .help(showingReaderChat ? "Hide Reader Chat" : "Show Reader Chat")
-                .keyboardShortcut("j", modifiers: [.command, .shift])
-            }
-
-            Button {
-                showingStudyInspector.toggle()
-            } label: {
-                Label("Study Tools", systemImage: "sidebar.trailing")
-            }
-            .help(showingStudyInspector ? "Hide Study Tools" : "Show Study Tools")
-            .keyboardShortcut("i", modifiers: [.command, .shift])
         }
     }
 

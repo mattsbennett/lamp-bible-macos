@@ -138,6 +138,11 @@ struct VerseAnchoredScrollView<Content: View>: View {
     @ViewBuilder let content: Content
 
     @EnvironmentObject private var scrollLink: ReaderScrollLink
+    /// The tab's pane, to tell whether it is on screen: the scroll link is
+    /// the window's, and a pane kept out of sight must neither follow the
+    /// reader on screen nor speak for it.
+    @Environment(StudyPaneState.self) private var pane: StudyPaneState?
+    private var isOnScreen: Bool { pane?.isOnScreen ?? true }
     @State private var isAdoptingReaderPosition = true
     @State private var pendingInitialAnchor: Int?
     @State private var visibleAnchors: [Int] = []
@@ -168,6 +173,7 @@ struct VerseAnchoredScrollView<Content: View>: View {
                 .padding(StudyPaneMetrics.contentInset)
             }
             .onScrollTargetVisibilityChange(idType: Int.self) { visible in
+                guard isOnScreen else { return }
                 // The scroll view first lays out at its first item, even when it
                 // is about to adopt a retained reader position. Never publish
                 // that transient position back to the reader.
@@ -184,13 +190,20 @@ struct VerseAnchoredScrollView<Content: View>: View {
                 scrollLink.toolDidScroll(to: visible.min())
             }
             .onScrollPhaseChange { oldPhase, newPhase in
-                guard !oldPhase.isUserDriven, newPhase.isUserDriven else { return }
+                guard isOnScreen, !oldPhase.isUserDriven, newPhase.isUserDriven else { return }
                 scrollLink.toolUserScrollDidBegin()
             }
             .onReceive(scrollLink.readerAnchors) { reference in
+                guard isOnScreen else { return }
                 scroll(proxy, to: reference)
             }
             .task {
+                // Out of sight, it neither adopts the reader's place nor tells
+                // the window's link anything; shown, it reports as it scrolls.
+                guard isOnScreen else {
+                    isAdoptingReaderPosition = false
+                    return
+                }
                 // A newly mounted tool has not subscribed to the reader's last
                 // PassthroughSubject event. Adopt the durable reader position
                 // before its initial visibility report can become authoritative.
@@ -216,11 +229,17 @@ struct VerseAnchoredScrollView<Content: View>: View {
                 try? await Task.sleep(for: .milliseconds(100))
                 guard !Task.isCancelled,
                       pendingInitialAnchor == target else { return }
+                guard isOnScreen else {
+                    pendingInitialAnchor = nil
+                    isAdoptingReaderPosition = false
+                    return
+                }
                 scrollLink.toolDidAdopt(visibleAnchors.min() ?? target)
                 pendingInitialAnchor = nil
                 isAdoptingReaderPosition = false
             }
             .onChange(of: focusedReference) { _, reference in
+                guard isOnScreen else { return }
                 scrollLink.reset()
                 scroll(proxy, to: reference)
             }

@@ -158,9 +158,6 @@ final class LibraryModel: ObservableObject {
     @Published private(set) var highlightsByReference: [Int: [LampVerseHighlight]] = [:]
     @Published private(set) var installedHighlightsByReference: [Int: [LampVerseHighlight]] = [:]
     @Published private(set) var noteReferences: Set<Int> = []
-    /// What is selected in the reader, for the reader chat. Its own object,
-    /// so a selection made does not redraw everything that watches the library.
-    let readerTextSelection = ReaderTextSelectionStore()
     @Published private(set) var installedNotesByReference: [Int: [LampVerseNote]] = [:]
     @Published private(set) var plans: [LampReadingPlan] = []
     @Published private(set) var devotionals: [LampDevotional] = []
@@ -184,6 +181,10 @@ final class LibraryModel: ObservableObject {
     private var searchToken: UUID?
     private let lexiconMappingStore: LexiconMappingStore
     private let defaults: UserDefaults
+    /// Where the reader's place is kept: apart from the standard defaults,
+    /// since a write there wakes every view that reads a setting, and the
+    /// place changes with every chapter turned and every tab chosen.
+    private let locationDefaults: UserDefaults
     @Published private(set) var hiddenModuleIDs: Set<String>
     /// The background index build, cancelled when the library is read again
     /// so two refreshes do not index at once.
@@ -253,11 +254,15 @@ final class LibraryModel: ObservableObject {
         self.library = resolvedLibrary
         self.lexiconMappingStore = LexiconMappingStore(library: resolvedLibrary)
         self.defaults = defaults
+        let locationDefaults = defaults === UserDefaults.standard
+            ? Self.locationStore(adoptingFrom: defaults)
+            : defaults
+        self.locationDefaults = locationDefaults
         hiddenModuleIDs = Set(defaults.stringArray(forKey: "modules.hiddenIDs") ?? [])
-        selectedTranslationID = defaults.string(forKey: "reader.translationID")
-        let storedBook = defaults.integer(forKey: "reader.bookNumber")
+        selectedTranslationID = locationDefaults.string(forKey: "reader.translationID")
+        let storedBook = locationDefaults.integer(forKey: "reader.bookNumber")
         selectedBookNumber = storedBook > 0 ? storedBook : nil
-        selectedChapterNumber = max(defaults.integer(forKey: "reader.chapterNumber"), 1)
+        selectedChapterNumber = max(locationDefaults.integer(forKey: "reader.chapterNumber"), 1)
         errorMessage = settingsRecoveryError?.localizedDescription
         // Before any window draws, so a library that uses AI never shows a
         // moment without it; then whenever the preferences change, however
@@ -845,13 +850,20 @@ final class LibraryModel: ObservableObject {
         return (loadedChapter, installedHighlights + personalHighlights)
     }
 
-    func highlights(for reference: Int) -> [LampVerseHighlight] {
+    /// `translationID`: the translation the verse is read in. A highlight of
+    /// the reader's own marks words by where they fall in the translation it
+    /// was made in, and the library holds the chapters of every tab and
+    /// window, so one is drawn on that translation's text alone. Nil for
+    /// every translation's.
+    func highlights(for reference: Int, in translationID: String? = nil) -> [LampVerseHighlight] {
         (installedHighlightsByReference[reference] ?? [])
-            + (highlightsByReference[reference] ?? [])
+            + personalHighlights(for: reference, in: translationID)
     }
 
-    func personalHighlights(for reference: Int) -> [LampVerseHighlight] {
-        highlightsByReference[reference] ?? []
+    func personalHighlights(for reference: Int, in translationID: String? = nil) -> [LampVerseHighlight] {
+        let highlights = highlightsByReference[reference] ?? []
+        guard let translationID else { return highlights }
+        return highlights.filter { $0.translationID == translationID }
     }
 
     /// Every verse in the chapter with a note of either kind, including any
@@ -1406,13 +1418,21 @@ final class LibraryModel: ObservableObject {
         books: [LampTranslationBook],
         contents: ReaderChapterContents
     ) {
-        selectedTranslationID = translationID
-        selectedBookNumber = book
-        selectedChapterNumber = chapter
-        selectedVerseReference = verse
-        self.books = books
-        apply(contents)
-        persistLocation()
+        // Only a change is published, and only a change is written: every
+        // reader in every kept tab watches the library, and a write to the
+        // standard defaults wakes every view that reads a setting. A tab
+        // shown again reports the place it was already known to be.
+        let moved = selectedTranslationID != translationID
+            || selectedBookNumber != book
+            || selectedChapterNumber != chapter
+        if selectedTranslationID != translationID { selectedTranslationID = translationID }
+        if selectedBookNumber != book { selectedBookNumber = book }
+        if selectedChapterNumber != chapter { selectedChapterNumber = chapter }
+        if selectedVerseReference != verse { selectedVerseReference = verse }
+        if self.books != books { self.books = books }
+        if self.chapter != contents.chapter { self.chapter = contents.chapter }
+        absorbChapterContents(contents)
+        if moved { persistLocation() }
     }
 
     /// Takes in what a reader window read for a chapter.
@@ -1431,33 +1451,50 @@ final class LibraryModel: ObservableObject {
         let first = loaded.book.id * 1_000_000 + loaded.number * 1_000
         let references = first..<(first + 1_000)
 
-        highlightsByReference = highlightsByReference
+        // Only a change is published: every reader watches these.
+        let highlights = highlightsByReference
             .filter { !references.contains($0.key) }
             .merging(contents.highlightsByReference) { _, read in read }
-        installedHighlightsByReference = installedHighlightsByReference
+        if highlights != highlightsByReference { highlightsByReference = highlights }
+        let installedHighlights = installedHighlightsByReference
             .filter { !references.contains($0.key) }
             .merging(contents.installedHighlightsByReference) { _, read in read }
-        installedNotesByReference = installedNotesByReference
+        if installedHighlights != installedHighlightsByReference {
+            installedHighlightsByReference = installedHighlights
+        }
+        let installedNotes = installedNotesByReference
             .filter { !references.contains($0.key) }
             .merging(contents.installedNotesByReference) { _, read in read }
-        noteReferences = noteReferences
+        if installedNotes != installedNotesByReference { installedNotesByReference = installedNotes }
+        let notes = noteReferences
             .filter { !references.contains($0) }
             .union(contents.noteReferences)
-    }
-
-    /// Shows what was read for a chapter.
-    private func apply(_ contents: ReaderChapterContents) {
-        chapter = contents.chapter
-        highlightsByReference = contents.highlightsByReference
-        installedHighlightsByReference = contents.installedHighlightsByReference
-        noteReferences = contents.noteReferences
-        installedNotesByReference = contents.installedNotesByReference
+        if notes != noteReferences { noteReferences = notes }
     }
 
     private func persistLocation() {
-        defaults.set(selectedTranslationID, forKey: "reader.translationID")
-        defaults.set(selectedBookNumber ?? 0, forKey: "reader.bookNumber")
-        defaults.set(selectedChapterNumber, forKey: "reader.chapterNumber")
+        locationDefaults.set(selectedTranslationID, forKey: "reader.translationID")
+        locationDefaults.set(selectedBookNumber ?? 0, forKey: "reader.bookNumber")
+        locationDefaults.set(selectedChapterNumber, forKey: "reader.chapterNumber")
+    }
+
+    static let locationKeys = ["reader.translationID", "reader.bookNumber", "reader.chapterNumber"]
+
+    /// The reader's own defaults, holding the place an earlier Lamp kept in
+    /// `old` until it saves one of its own.
+    static func locationStore(adoptingFrom old: UserDefaults) -> UserDefaults {
+        let suiteName = (Bundle.main.bundleIdentifier ?? "Lamp") + ".reader-location"
+        guard let suite = UserDefaults(suiteName: suiteName) else { return old }
+        adoptEarlierLocation(from: old, into: suite)
+        return suite
+    }
+
+    /// Copies the place kept in `old` into `new` where `new` has none yet.
+    static func adoptEarlierLocation(from old: UserDefaults, into new: UserDefaults) {
+        guard locationKeys.allSatisfy({ new.object(forKey: $0) == nil }) else { return }
+        for key in locationKeys {
+            if let value = old.object(forKey: key) { new.set(value, forKey: key) }
+        }
     }
 
     private var currentReaderLocation: ReaderLocation? {

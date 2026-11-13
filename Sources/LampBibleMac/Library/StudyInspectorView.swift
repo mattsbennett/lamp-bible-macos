@@ -76,12 +76,24 @@ final class StudyPaneRecents {
 final class StudyPaneState {
     /// What the tools looked up lately, so a tab chosen again shows its
     /// entry or its commentary at once rather than looking it up afresh.
-    @ObservationIgnored let recents = StudyPaneRecents(capacity: 24)
+    /// Shared by a window's tabs (`ReaderTabPool`).
+    @ObservationIgnored let recents: StudyPaneRecents
     /// Analyses apart, and fewer: one holds the verses of a common key,
     /// about a megabyte.
-    @ObservationIgnored let recentAnalyses = StudyPaneRecents(capacity: 4)
-    /// Where each tab's dictionary entry or analysis was scrolled.
+    @ObservationIgnored let recentAnalyses: StudyPaneRecents
+    /// Where this tab's dictionary entry or analysis was scrolled, for when
+    /// it opens again after it was let go.
     @ObservationIgnored let scrollMemory = ReaderScrollMemory(keyPrefix: "reader.tabs.studyScroll.")
+    /// Whether this pane's tab is the one on screen, set by the window's
+    /// `ReaderTabPool`. A pane out of sight is kept as it was, never handed a
+    /// new view, so this is read live: what the window shares — a word looked
+    /// up, the reader's scrolling — belongs to the pane on screen alone.
+    @ObservationIgnored var isOnScreen = true
+
+    init(recents: StudyPaneRecents? = nil, recentAnalyses: StudyPaneRecents? = nil) {
+        self.recents = recents ?? StudyPaneRecents(capacity: 24)
+        self.recentAnalyses = recentAnalyses ?? StudyPaneRecents(capacity: 4)
+    }
     var tool = "commentary"
     var dictionaryQuery = ""
     var dictionaryLookup: DictionaryLookup?
@@ -126,6 +138,8 @@ final class StudyPaneState {
 struct StudyInspectorView: View {
     @EnvironmentObject private var model: LibraryModel
     @EnvironmentObject private var scrollLink: ReaderScrollLink
+    /// The tab's reader, to tell whether this is the pane a lookup is for.
+    @EnvironmentObject private var reader: ReaderWorkspace
     @Environment(StudyPaneState.self) private var pane
     @Binding var isPresented: Bool
     /// Writes the pane back to its tab once typing in the dictionary has
@@ -219,17 +233,25 @@ struct StudyInspectorView: View {
         .onAppear {
             // Inspector content can exist while its column is hidden. Leave the
             // request pending until the presented instance can retain the lookup.
-            guard isPresented else { return }
+            guard isPresented, isLookupDestination else { return }
             adoptDictionaryLookup(model.dictionaryLookupRequest)
         }
         .onChange(of: model.dictionaryLookupRequest) { _, request in
-            guard isPresented else { return }
+            guard isPresented, isLookupDestination else { return }
             adoptDictionaryLookup(request)
         }
         .onChange(of: isPresented) { _, presented in
-            guard presented else { return }
+            guard presented, isLookupDestination else { return }
             adoptDictionaryLookup(model.dictionaryLookupRequest)
         }
+    }
+
+    /// Whether a word looked up is this pane's to show. The request is the
+    /// library's, one for the whole app: it belongs to the tab on screen in
+    /// the window being used, not to a tab kept out of sight or to a window
+    /// behind.
+    private var isLookupDestination: Bool {
+        pane.isOnScreen && (model.activeReader == nil || model.activeReader === reader)
     }
 
     private var scrollLinkHelp: String {
@@ -312,6 +334,10 @@ private enum NoteEditorField: Hashable {
 
 private struct NotesInspectorView: View {
     @EnvironmentObject private var model: LibraryModel
+    /// The tab's own reader, for its chapter and its verse: kept out of
+    /// sight, a pane must go on showing its tab's, not follow the library to
+    /// another tab's and drop what was written in it.
+    @EnvironmentObject private var reader: ReaderWorkspace
     @State private var isExporting = false
     @State private var exportedURL: URL?
     @State private var transferStatus: String?
@@ -325,19 +351,19 @@ private struct NotesInspectorView: View {
     /// scroll through rather than a single form, and there is always somewhere to
     /// start writing.
     private var groups: [NoteGroup] {
-        guard let chapter = model.chapter else { return [] }
+        guard let chapter = reader.chapter else { return [] }
         let verses = Dictionary(uniqueKeysWithValues: chapter.verses.map { ($0.id, $0) })
         // The chapter's verses, and any verse it leaves out that has notes or
         // is selected: a note written while reading another translation, or a
         // verse chosen from the companion side by side.
         var references = Set(verses.keys).union(model.notedReferences)
-        if let selected = model.selectedVerseReference { references.insert(selected) }
+        if let selected = reader.selectedVerseReference { references.insert(selected) }
         return references.sorted().compactMap { reference in
             let place = LampBibleReferenceFormatter.components(of: reference)
             guard place.book == chapter.book.id, place.chapter == chapter.number else { return nil }
             let installed = model.installedNotes(for: reference)
             let hasPersonal = model.hasPersonalNote(for: reference)
-            let isSelected = model.selectedVerseReference == reference
+            let isSelected = reader.selectedVerseReference == reference
             guard hasPersonal || !installed.isEmpty || isSelected else { return nil }
             return NoteGroup(
                 id: reference,
@@ -351,7 +377,7 @@ private struct NotesInspectorView: View {
 
     var body: some View {
         Group {
-            if model.chapter == nil {
+            if reader.chapter == nil {
                 ContentUnavailableView(
                     "No Chapter Selected",
                     systemImage: "note.text",
@@ -371,7 +397,7 @@ private struct NotesInspectorView: View {
                     } else {
                         VerseAnchoredScrollView(
                             anchors: groups.map { VerseAnchor(reference: $0.id, endReference: $0.endReference) },
-                            focusedReference: model.selectedVerseReference
+                            focusedReference: reader.selectedVerseReference
                         ) {
                             ForEach(groups) { group in
                                 noteCard(group)
@@ -399,7 +425,7 @@ private struct NotesInspectorView: View {
 
     @ViewBuilder
     private func noteCard(_ group: NoteGroup) -> some View {
-        if group.id == model.selectedVerseReference {
+        if group.id == reader.selectedVerseReference {
             PersonalNoteEditor(
                 reference: group.id,
                 verse: group.verse,
@@ -410,7 +436,7 @@ private struct NotesInspectorView: View {
             )
         } else {
             Button {
-                model.focusVerse(group.id)
+                reader.focusVerse(group.id)
             } label: {
                 VStack(alignment: .leading, spacing: 7) {
                     HStack(spacing: 8) {
@@ -458,7 +484,7 @@ private struct NotesInspectorView: View {
     @ViewBuilder
     private var chapterHighlights: some View {
         let rows = highlightRows
-        if !rows.isEmpty, let chapter = model.chapter {
+        if !rows.isEmpty, let chapter = reader.chapter {
             VStack(alignment: .leading, spacing: 8) {
                 Label("Highlights in \(chapter.book.name) \(chapter.number)", systemImage: "highlighter")
                     .lampSectionHeading()
@@ -475,7 +501,7 @@ private struct NotesInspectorView: View {
     }
 
     private var highlightRows: [(verse: LampVerse, color: Color)] {
-        guard let chapter = model.chapter else { return [] }
+        guard let chapter = reader.chapter else { return [] }
         return chapter.verses.compactMap { verse in
             guard let highlight = model.personalHighlights(for: verse.id).first else { return nil }
             return (verse, Color(lampHex: highlight.color ?? "FFCC00") ?? .yellow)
@@ -483,9 +509,9 @@ private struct NotesInspectorView: View {
     }
 
     private func highlightRow(_ row: (verse: LampVerse, color: Color), chapter: LampChapter) -> some View {
-        let isSelected = model.selectedVerseReference == row.verse.id
+        let isSelected = reader.selectedVerseReference == row.verse.id
         return Button {
-            model.focusVerse(row.verse.id)
+            reader.focusVerse(row.verse.id)
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 RoundedRectangle(cornerRadius: 2)
@@ -564,12 +590,12 @@ private struct NotesInspectorView: View {
     }
 
     private var currentBookName: String {
-        model.chapter?.book.name ?? "Current Book"
+        reader.chapter?.book.name ?? "Current Book"
     }
 
     private func export(_ kind: PersonalStudyExportKind, format: PersonalStudyExportFormat) {
-        guard let bookNumber = model.chapter?.book.id,
-              let translationID = model.selectedTranslationID else { return }
+        guard let bookNumber = reader.chapter?.book.id,
+              let translationID = reader.selectedTranslationID else { return }
         isExporting = true
         exportError = nil
         exportedURL = nil
@@ -727,6 +753,10 @@ private struct InstalledNoteContent: View {
 
 private struct PersonalNoteEditor: View {
     @EnvironmentObject private var model: LibraryModel
+    /// The tab's own reader, for its chapter and its verse: kept out of
+    /// sight, a pane must go on showing its tab's, not follow the library to
+    /// another tab's and drop what was written in it.
+    @EnvironmentObject private var reader: ReaderWorkspace
     @EnvironmentObject private var scrollLink: ReaderScrollLink
     let reference: Int
     /// Nil for a verse the translation being read leaves out: it can carry a
@@ -828,7 +858,7 @@ private struct PersonalNoteEditor: View {
                 noteEditor
             }
 
-            if let chapter = model.chapter {
+            if let chapter = reader.chapter {
                 // One row, the picker's own label saying what it sets: a
                 // heading over it as well cost the chapter's highlights list
                 // its room.
@@ -964,7 +994,7 @@ private struct PersonalNoteEditor: View {
         errorMessage = nil
         do {
             let note = try await model.personalNote(for: reference)
-            guard !Task.isCancelled, model.selectedVerseReference == reference else { return }
+            guard !Task.isCancelled, reader.selectedVerseReference == reference else { return }
             title = note?.title ?? ""
             content = note?.content ?? ""
             rangeEndVerse = note?.verseReferences
@@ -1003,7 +1033,7 @@ private struct PersonalNoteEditor: View {
         let submittedFootnotes = personalFootnotes.compactMap(\.lampFootnote)
         // The verse itself always, though the translation being read may leave
         // it out, then the verses the range runs on through.
-        let submittedReferences = [reference] + (model.chapter?.verses
+        let submittedReferences = [reference] + (reader.chapter?.verses
             .filter { $0.id > reference && $0.number <= submittedRangeEndVerse }
             .map(\.id) ?? [])
         isSaving = true
@@ -1018,7 +1048,7 @@ private struct PersonalNoteEditor: View {
                     footnotes: submittedFootnotes,
                     mediaJSON: mediaJSON
                 )
-                if model.selectedVerseReference == reference {
+                if reader.selectedVerseReference == reference {
                     savedTitle = submittedTitle
                     savedContent = submittedContent
                     savedRangeEndVerse = submittedRangeEndVerse
@@ -2041,6 +2071,10 @@ private struct VerseStudyGroup: Identifiable {
 
 private struct VerseInspectorView: View {
     @EnvironmentObject private var model: LibraryModel
+    /// The tab's own reader, for its chapter and its verse: kept out of
+    /// sight, a pane must go on showing its tab's, not follow the library to
+    /// another tab's and drop what was written in it.
+    @EnvironmentObject private var reader: ReaderWorkspace
     @AppStorage("reader.showStrongsHints") private var showStrongsHints = true
     @AppStorage("reader.crossReferences.canonicalOrder") private var canonicalCrossReferenceOrder = false
     @AppStorage("commentary.typeface") private var typeface = ProseTypeface.commentaryDefault
@@ -2053,10 +2087,10 @@ private struct VerseInspectorView: View {
 
     private var request: VerseStudyRequest {
         VerseStudyRequest(
-            translationID: model.selectedTranslationID,
-            bookNumber: model.chapter?.book.id,
-            chapterNumber: model.chapter?.number,
-            reference: model.selectedVerseReference
+            translationID: reader.selectedTranslationID,
+            bookNumber: reader.chapter?.book.id,
+            chapterNumber: reader.chapter?.number,
+            reference: reader.selectedVerseReference
         )
     }
 
@@ -2068,8 +2102,8 @@ private struct VerseInspectorView: View {
     /// This listed every annotated verse in the chapter and tinted the one
     /// selected, which made a pane named for a verse into a chapter to search.
     private var groups: [VerseStudyGroup] {
-        guard let chapter = model.chapter,
-              let reference = model.selectedVerseReference
+        guard let chapter = reader.chapter,
+              let reference = reader.selectedVerseReference
         else { return [] }
         return chapter.verses.filter { $0.id == reference }.compactMap { verse in
             let group = VerseStudyGroup(
@@ -2089,7 +2123,7 @@ private struct VerseInspectorView: View {
 
     var body: some View {
         Group {
-            if model.chapter == nil {
+            if reader.chapter == nil {
                 ContentUnavailableView(
                     "No Chapter Selected",
                     systemImage: "text.book.closed",
@@ -2106,7 +2140,7 @@ private struct VerseInspectorView: View {
             } else if isLoading && footnotesByReference.isEmpty && groups.isEmpty {
                 ProgressView("Loading Verse Details…")
                     .studyPaneState()
-            } else if model.selectedVerseReference == nil {
+            } else if reader.selectedVerseReference == nil {
                 ContentUnavailableView(
                     "No Verse Chosen",
                     systemImage: "hand.tap",
@@ -2131,7 +2165,7 @@ private struct VerseInspectorView: View {
                 let groups = groups
                 VerseAnchoredScrollView(
                     anchors: groups.map { VerseAnchor(reference: $0.id) },
-                    focusedReference: model.selectedVerseReference
+                    focusedReference: reader.selectedVerseReference
                 ) {
                     ForEach(groups) { group in
                         verseGroupView(group)
@@ -2285,7 +2319,7 @@ private struct VerseInspectorView: View {
 
     private func loadFootnotes() async {
         guard let translationID = request.translationID,
-              let chapter = model.chapter else {
+              let chapter = reader.chapter else {
             footnotesByReference = [:]
             isLoading = false
             errorMessage = nil
@@ -2296,7 +2330,7 @@ private struct VerseInspectorView: View {
         // on every chapter opened, for a pane that showed one of them at a
         // time.
         let references = chapter.verses
-            .filter { $0.id == model.selectedVerseReference && $0.hasFootnotes }
+            .filter { $0.id == reader.selectedVerseReference && $0.hasFootnotes }
             .map(\.id)
         guard !references.isEmpty else {
             footnotesByReference = [:]
@@ -2330,7 +2364,7 @@ private struct VerseInspectorView: View {
     }
 
     private var contextDescription: String {
-        guard let reference = model.selectedVerseReference else { return "the verse being read" }
+        guard let reference = reader.selectedVerseReference else { return "the verse being read" }
         return LampBibleReferenceFormatter.describeRange(from: reference, to: reference)
     }
 
@@ -2339,8 +2373,8 @@ private struct VerseInspectorView: View {
     /// companion, or one in another chapter of a reading that spans several.
     /// Saying the translation has no notes for the chapter would be false.
     private var missingVerse: (title: String, detail: String)? {
-        guard let chapter = model.chapter,
-              let reference = model.selectedVerseReference,
+        guard let chapter = reader.chapter,
+              let reference = reader.selectedVerseReference,
               !chapter.verses.contains(where: { $0.id == reference })
         else { return nil }
         let place = LampBibleReferenceFormatter.components(of: reference)
@@ -2721,6 +2755,10 @@ private struct CommentaryRequest: Hashable {
 
 private struct CommentaryInspectorView: View {
     @EnvironmentObject private var model: LibraryModel
+    /// The tab's own reader, for its chapter and its verse: kept out of
+    /// sight, a pane must go on showing its tab's, not follow the library to
+    /// another tab's and drop what was written in it.
+    @EnvironmentObject private var reader: ReaderWorkspace
     @Environment(StudyPaneState.self) private var studyPane
     /// The request `units` answers, when it was put up from the recent ones.
     @State private var shownRequest: CommentaryRequest?
@@ -2748,8 +2786,8 @@ private struct CommentaryInspectorView: View {
     /// verse would make following the reader a stutter of database reads.
     private var request: CommentaryRequest {
         CommentaryRequest(
-            bookNumber: model.chapter?.book.id,
-            chapterNumber: model.chapter?.number,
+            bookNumber: reader.chapter?.book.id,
+            chapterNumber: reader.chapter?.number,
             moduleID: activeModuleID
         )
     }
@@ -2850,7 +2888,7 @@ private struct CommentaryInspectorView: View {
                     description: Text("Install a commentary .lamp module from the Modules section.")
                 )
                 .studyPaneState()
-            } else if model.chapter == nil {
+            } else if reader.chapter == nil {
                 ContentUnavailableView(
                     "No Chapter Selected",
                     systemImage: "book",
@@ -2878,7 +2916,7 @@ private struct CommentaryInspectorView: View {
                 let groups = commentaryGroups
                 VerseAnchoredScrollView(
                     anchors: groups.map(\.anchor),
-                    focusedReference: model.selectedVerseReference
+                    focusedReference: reader.selectedVerseReference
                 ) {
                     Text(contextDescription)
                         .font(.title3.weight(.bold))
@@ -2925,7 +2963,7 @@ private struct CommentaryInspectorView: View {
     }
 
     private var contextDescription: String {
-        guard let chapter = model.chapter else { return "Current passage" }
+        guard let chapter = reader.chapter else { return "Current passage" }
         return "\(chapter.book.name) \(chapter.number)"
     }
 

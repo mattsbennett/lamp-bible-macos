@@ -78,8 +78,10 @@ final class ReadAloudController: NSObject, ObservableObject {
     func stop() {
         references.removeAll()
         pendingUtterances.removeAll()
-        currentReference = nil
-        state = .stopped
+        // Only a change is published: a reader stopped when nothing was
+        // playing must not lay itself out again.
+        if currentReference != nil { currentReference = nil }
+        if state != .stopped { state = .stopped }
         if synthesizer.isSpeaking || synthesizer.isPaused {
             synthesizer.stopSpeaking(at: .immediate)
         }

@@ -1780,8 +1780,32 @@ public enum ReaderTabSessionStore {
         "reader.tabs.session.\(session.uuidString)"
     }
 
+    /// Where windows' tabs are kept: a store of their own, apart from the
+    /// app's settings. Written to those, every tab chosen woke each view in
+    /// the window that reads a setting — about a tenth of a switch on the
+    /// owner's Mac (2026-11-12). Tabs kept in the settings before are copied
+    /// across the first time, so none are lost.
+    public static let store: UserDefaults = {
+        let suiteName = (Bundle.main.bundleIdentifier ?? "Lamp") + ".reader-tabs"
+        guard let suite = UserDefaults(suiteName: suiteName) else { return .standard }
+        adoptEarlierSessions(from: .standard, into: suite)
+        return suite
+    }()
+
+    /// Copies the tabs kept in `old` into `new` where `new` has none yet.
+    static func adoptEarlierSessions(from old: UserDefaults, into new: UserDefaults) {
+        guard new.stringArray(forKey: sessionsKey) == nil, new.data(forKey: lastSessionKey) == nil else { return }
+        if let last = old.data(forKey: lastSessionKey) { new.set(last, forKey: lastSessionKey) }
+        guard let sessions = old.stringArray(forKey: sessionsKey) else { return }
+        for session in sessions {
+            let key = "reader.tabs.session.\(session)"
+            if let data = old.data(forKey: key) { new.set(data, forKey: key) }
+        }
+        new.set(sessions, forKey: sessionsKey)
+    }
+
     /// The sessions tabs have been saved under, the most recently saved first.
-    public static func sessions(defaults: UserDefaults = .standard) -> [UUID] {
+    public static func sessions(defaults: UserDefaults = store) -> [UUID] {
         (defaults.stringArray(forKey: sessionsKey) ?? []).compactMap(UUID.init(uuidString:))
     }
 
@@ -1814,7 +1838,7 @@ public enum ReaderTabSessionStore {
     public static func load(
         session: UUID,
         resumingLastSession: Bool,
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = store,
         translationIDs: Set<String>,
         fallbackLocation: ReaderLocation?
     ) -> ReaderTabCollection {
@@ -1835,7 +1859,7 @@ public enum ReaderTabSessionStore {
     public static func save(
         _ collection: ReaderTabCollection,
         session: UUID,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = store
     ) {
         guard let data = try? JSONEncoder().encode(collection) else { return }
         defaults.set(data, forKey: key(for: session))
