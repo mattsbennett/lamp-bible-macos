@@ -46,7 +46,7 @@ struct LibraryTabStripItem: Identifiable, Equatable {
 /// One view for the reader and for Search, so the two cannot drift: what
 /// differs between them — what a new tab opens on, and what a name falls
 /// back to — comes in from the pane.
-struct LibraryTabBar<NewTabPopover: View>: View {
+struct LibraryTabBar: View {
     let items: [LibraryTabStripItem]
     let selectedID: UUID
     let select: (UUID) -> Void
@@ -59,10 +59,6 @@ struct LibraryTabBar<NewTabPopover: View>: View {
     let clearNameTitle: String
     let newTabHelp: String
     let newTab: () -> Void
-    /// A popover the new-tab button presents, for a pane where a new tab is
-    /// chosen before it opens. Nil where it simply opens.
-    var newTabPopover: Binding<Bool>? = nil
-    @ViewBuilder var popoverContent: () -> NewTabPopover
 
     @State private var hoveredID: UUID?
     @State private var isHoveringNewTab = false
@@ -284,9 +280,8 @@ struct LibraryTabBar<NewTabPopover: View>: View {
         renamingID = nil
     }
 
-    @ViewBuilder
     private var newTabButton: some View {
-        let button = Button(action: newTab) {
+        Button(action: newTab) {
             Image(systemName: "plus")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
@@ -302,11 +297,6 @@ struct LibraryTabBar<NewTabPopover: View>: View {
         .onHover { isHoveringNewTab = $0 }
         .help(newTabHelp)
         .accessibilityLabel("New Tab")
-        if let newTabPopover {
-            button.popover(isPresented: newTabPopover, arrowEdge: .bottom) { popoverContent() }
-        } else {
-            button
-        }
     }
 }
 
@@ -341,28 +331,6 @@ private final class CurrentTabs {
         let start = chosen ?? selectedID
         guard ids.count > 1, let index = ids.firstIndex(where: { $0 == start }) else { return nil }
         return ids[((index + offset) % ids.count + ids.count) % ids.count]
-    }
-}
-
-extension LibraryTabBar where NewTabPopover == EmptyView {
-    init(
-        items: [LibraryTabStripItem],
-        selectedID: UUID,
-        select: @escaping (UUID) -> Void,
-        close: @escaping (UUID) -> Void,
-        duplicate: @escaping (UUID) -> Void,
-        rename: @escaping (UUID, String?) -> Void,
-        move: @escaping (UUID, Int) -> Void,
-        clearNameTitle: String,
-        newTabHelp: String,
-        newTab: @escaping () -> Void
-    ) {
-        self.init(
-            items: items, selectedID: selectedID, select: select, close: close,
-            duplicate: duplicate, rename: rename, move: move,
-            clearNameTitle: clearNameTitle, newTabHelp: newTabHelp, newTab: newTab,
-            newTabPopover: nil, popoverContent: { EmptyView() }
-        )
     }
 }
 

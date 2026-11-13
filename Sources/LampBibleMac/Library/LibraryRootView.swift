@@ -106,7 +106,6 @@ struct LibraryRootView: View {
     /// Whether this window is picking up where the app left off, which decides
     /// whether it opens on the last tabs any window saved or on a fresh one.
     @State private var isResumingReaderSession = false
-    @State private var showingNewReaderTab = false
     @State private var readerSidebar: ReaderSidebar?
     /// Whether AI features are shown (`AIFeatures`). Off, the reader's chat
     /// has no button, no shortcut and no pane, and no conversation is taken
@@ -448,10 +447,6 @@ struct LibraryRootView: View {
             // The study or chat column stays open out of sight, and is open
             // when the reader comes back. Closing it on the way out looked
             // like losing the chat in it (user, 2026-11-05).
-            if !isReaderSelection(newValue) {
-                // Its popover hangs from the reader's tab bar.
-                showingNewReaderTab = false
-            }
         }
         .onChange(of: workspace.currentLocation) { _, location in
             if hasRestoredReaderTabs, let location {
@@ -695,9 +690,26 @@ struct LibraryRootView: View {
         }
     }
 
+    /// A new tab at once, on the chapter being read, with the passage picker
+    /// open for it to go somewhere else: Safari's and Finder's new tab,
+    /// which opens before anything is chosen. A popover hanging from the
+    /// tab bar's new-tab button sat at the window's edge, where macOS pushed
+    /// its arrow into its corner.
     private func presentNewReaderTabChooser() {
         selection = .section(.reader)
-        showingNewReaderTab = true
+        guard let place = workspace.currentLocation ?? readerTabs.selectedTab?.location else {
+            workspace.isChoosingPassage = true
+            return
+        }
+        openReaderTab(at: ReaderLocation(
+            translationID: place.translationID,
+            bookNumber: place.bookNumber,
+            chapterNumber: place.chapterNumber
+        ))
+        // Once the new tab's toolbar is drawn: asked for in the same update,
+        // the picker would hang from the toolbar the switch is replacing.
+        let opened = workspace
+        DispatchQueue.main.async { opened.isChoosingPassage = true }
     }
 
     /// Copies the tab that was asked for, which is not always the open one.
@@ -1424,13 +1436,12 @@ struct LibraryRootView: View {
                 ReaderTabBar(
                     tabs: readerTabs.tabs,
                     selectedID: readerTabs.selectedID,
-                    showingNewTab: $showingNewReaderTab,
                     select: selectReaderTab,
                     close: closeReaderTab,
                     duplicate: duplicateReaderTab,
                     rename: renameReaderTab,
                     move: { readerTabs.move($0, to: $1) },
-                    openLocation: { openReaderTab(at: $0) }
+                    newTab: presentNewReaderTabChooser
                 )
             }
             // Laid out beside the reader rather than with `.inspector`, whose
@@ -1880,18 +1891,17 @@ private struct StudyInspectorColumn<Content: View>: View {
     }
 }
 
-/// The reader's tabs: the shared bar (`LibraryTabBar`), with a new tab
-/// chosen from the reader's passage picker before it opens.
+/// The reader's tabs: the shared bar (`LibraryTabBar`).
 private struct ReaderTabBar: View {
     let tabs: [ReaderTab]
     let selectedID: UUID
-    @Binding var showingNewTab: Bool
     let select: (UUID) -> Void
     let close: (UUID) -> Void
     let duplicate: (UUID) -> Void
     let rename: (UUID, String?) -> Void
     let move: (UUID, Int) -> Void
-    let openLocation: (ReaderLocation) -> Void
+    /// Opens a tab on the chapter being read, with the passage picker open.
+    let newTab: () -> Void
 
     var body: some View {
         LibraryTabBar(
@@ -1904,18 +1914,8 @@ private struct ReaderTabBar: View {
             move: move,
             clearNameTitle: "Use the Chapter's Name",
             newTabHelp: "New reader tab (⌘T)",
-            newTab: { showingNewTab = true },
-            newTabPopover: $showingNewTab
-        ) {
-            // The reader's own passage picker, less the two things a tab
-            // cannot do: a tab opens a chapter, so words to search for and
-            // Strong's keys have nowhere to go here.
-            PassagePickerPopover(
-                isPresented: $showingNewTab,
-                open: openLocation,
-                headline: "Open in a new tab"
-            )
-        }
+            newTab: newTab
+        )
     }
 
     private func tabTitle(_ tab: ReaderTab) -> String {

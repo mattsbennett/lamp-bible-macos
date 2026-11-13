@@ -652,6 +652,23 @@ struct ReaderSupportTests {
         #expect(!secondReader.isOnScreen && !secondPane.isOnScreen)
     }
 
+    /// ⌘T opens a tab at once, so a new tab must not take up the chat open
+    /// in the tab it came from: an open chat pane starts a conversation
+    /// workspace in the synced library, and holding ⌘T would make one per
+    /// key repeat.
+    @Test func aNewTabOpensWithItsColumnShutAndNoChat() {
+        let john = ReaderLocation(translationID: "WEB", bookNumber: 43, chapterNumber: 3)
+        var tabs = ReaderTabCollection(initialLocation: john)
+        tabs.updateSelected(sidebar: ReaderTabSidebar(pane: .chat))
+        tabs.updateSelected(chatID: UUID())
+
+        let added = tabs.add(location: john)
+        let tab = tabs.tabs.first { $0.id == added }
+        #expect(tabs.selectedID == added)
+        #expect(tab?.sidebar.pane == nil)
+        #expect(tab?.chatID == nil)
+    }
+
     @Test func aTabDoesNotLoseItsChapterToAReaderWithNoPlace() {
         let john = ReaderLocation(translationID: "WEB", bookNumber: 43, chapterNumber: 3)
         var tabs = ReaderTabCollection(initialLocation: john)
