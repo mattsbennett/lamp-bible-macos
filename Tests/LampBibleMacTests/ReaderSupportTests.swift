@@ -1534,11 +1534,15 @@ struct LampDictionaryStylingTests {
         let url = try #require(URL(string: "lampbible://read?reference=45008003"))
         // Long enough to wrap, with the link well past the first line.
         let text = NSMutableAttributedString(
-            string: "Paul now contrasts the situation he has just described, and the sending of the Son is in Rom 8:3 at the end.\nShort.",
+            string: "Paul now contrasts the situation he has just described, and the sending of the Son is in Rom 8:3 at the end.\nShort.\nA third paragraph cites Gal 5:17 here.",
             attributes: [.font: NSFont.systemFont(ofSize: 15)]
         )
         let linkRange = (text.string as NSString).range(of: "Rom 8:3")
         text.addAttribute(.link, value: url, range: linkRange)
+        // In a later paragraph too, which only a right paragraph offset finds.
+        let laterURL = try #require(URL(string: "lampbible://read?reference=48005017"))
+        let laterRange = (text.string as NSString).range(of: "Gal 5:17")
+        text.addAttribute(.link, value: laterURL, range: laterRange)
         textView.textStorage?.setAttributedString(text)
         let layoutManager = try #require(textView.textLayoutManager)
         layoutManager.ensureLayout(for: layoutManager.documentRange)
@@ -1561,10 +1565,16 @@ struct LampDictionaryStylingTests {
         #expect(hit?.link == url)
         #expect(hit?.word == "Rom 8:3")
 
+        let later = try segment(laterRange)
+        let laterHit = ReaderTextLinkHitTester.hit(at: NSPoint(x: later.midX + origin.x, y: later.midY + origin.y), in: textView)
+        #expect(laterHit?.link == laterURL)
+        #expect(laterHit?.word == "Gal 5:17")
+
         // Past the end of a short line, and below the last line: no glyph.
         let short = try segment((text.string as NSString).range(of: "Short."))
         #expect(ReaderTextLinkHitTester.hit(at: NSPoint(x: short.maxX + origin.x + 40, y: short.midY + origin.y), in: textView) == nil)
-        #expect(ReaderTextLinkHitTester.hit(at: NSPoint(x: short.midX + origin.x, y: short.maxY + origin.y + 60), in: textView) == nil)
+        let last = try segment((text.string as NSString).range(of: "here."))
+        #expect(ReaderTextLinkHitTester.hit(at: NSPoint(x: last.midX + origin.x, y: last.maxY + origin.y + 60), in: textView) == nil)
         #expect(textView.textLayoutManager != nil)
     }
 
@@ -1598,5 +1608,17 @@ struct LampDictionaryStylingTests {
             #expect(hit?.word == "\u{05D0}\u{05B5}\u{05DC}\u{05B4}\u{05D9}", "at \(fraction)")
         }
         #expect(textView.textLayoutManager != nil)
+    }
+
+    /// The word under the pointer is found near it, not by reading a whole
+    /// chapter from its start on every move.
+    @Test @MainActor func aWordIsFoundNearTheEndOfAChapterLongText() {
+        let filler = String(repeating: "and the word of the Lord ", count: 20_000)
+        let text = filler + "Melchizedek priest"
+        let offset = (text as NSString).range(of: "Melchizedek").location + 3
+        #expect(ReaderTextLinkHitTester.word(atUTF16Offset: offset, in: text) == "Melchizedek")
+        #expect(ReaderTextLinkHitTester.word(atUTF16Offset: 2, in: "a word") == "word")
+        #expect(ReaderTextLinkHitTester.word(atUTF16Offset: 1, in: "a word") == nil)
+        #expect(ReaderTextLinkHitTester.word(atUTF16Offset: 2, in: "\u{05D0}\u{05B5}\u{05DC}\u{05B4}\u{05D9} x") == "\u{05D0}\u{05B5}\u{05DC}\u{05B4}\u{05D9}")
     }
 }

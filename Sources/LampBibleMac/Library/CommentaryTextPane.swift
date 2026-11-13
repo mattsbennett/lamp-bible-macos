@@ -612,7 +612,10 @@ struct CommentaryTextPane: NSViewRepresentable {
             let center = NotificationCenter.default
             observers = [
                 center.addObserver(forName: NSView.boundsDidChangeNotification, object: clip, queue: .main) { [weak self] _ in
-                    MainActor.assumeIsolated { self?.didScroll() }
+                    MainActor.assumeIsolated {
+                        self?.textView?.updateToolTipUnderPointer()
+                        self?.didScroll()
+                    }
                 },
                 center.addObserver(forName: NSView.frameDidChangeNotification, object: clip, queue: .main) { [weak self] _ in
                     MainActor.assumeIsolated { self?.didResize() }
@@ -648,6 +651,7 @@ struct CommentaryTextPane: NSViewRepresentable {
             moveItself {
                 textView.textStorage?.setAttributedString(document.text)
             }
+            textView.updateToolTipUnderPointer()
             if sameChapter {
                 // Only the type changed: the same words stay at the top.
                 if let pinnedAnchor { scroll(to: pinnedAnchor) } else { restoreTop() }
@@ -993,8 +997,18 @@ final class CommentaryTextView: NSTextView {
 
     override func mouseMoved(with event: NSEvent) {
         super.mouseMoved(with: event)
-        let point = convert(event.locationInWindow, from: nil)
-        let tip = toolTip(at: point)
+        updateToolTip(at: convert(event.locationInWindow, from: nil))
+    }
+
+    /// Again when the text moves under a pointer that has not, as it does
+    /// when the pane scrolls or follows the reader.
+    func updateToolTipUnderPointer() {
+        guard let window, window.isKeyWindow else { return }
+        updateToolTip(at: convert(window.mouseLocationOutsideOfEventStream, from: nil))
+    }
+
+    private func updateToolTip(at point: NSPoint) {
+        let tip = visibleRect.contains(point) ? toolTip(at: point) : nil
         if tip != toolTip { toolTip = tip }
     }
 
