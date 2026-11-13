@@ -583,9 +583,20 @@ struct CommentaryTextPane: NSViewRepresentable {
         /// Whether a person is dragging or flicking the pane, while which
         /// the layout ahead waits.
         private var isLiveScrolling = false
-        /// Where the layout ahead has reached, and which pass it belongs to.
+        /// Where the layout ahead of a move has reached, and which pass it
+        /// belongs to. A move lays out only as far as a flick reaches.
         private var layoutCursor: NSTextLocation?
         private var layoutGeneration = 0
+        /// Where the layout of the rest of the text, once per chapter and
+        /// width, has reached: nil once it is done. A move does not start it
+        /// again. Starting it again at every follow laid out the rest of a
+        /// long commentary each time, as TextKit 2 had let go of much of it,
+        /// and that was half of what following the reader cost.
+        private var wholeCursor: NSTextLocation?
+        /// The bottom of the last paragraph laid out ahead.
+        private var laidOutThrough: CGFloat = 0
+        /// How many panes' height below its bottom edge a move lays out.
+        private static let panesAhead: CGFloat = 3
         private var readerSubscription: AnyCancellable?
         private var observers: [NSObjectProtocol] = []
         /// Set while this pane moves itself, so the move is not reported as
@@ -701,7 +712,7 @@ struct CommentaryTextPane: NSViewRepresentable {
                 moveItself { scrollView.contentView.scroll(to: .zero) }
                 adoptReaderPosition()
             }
-            layOutAhead()
+            layOutAhead(throughEnd: true)
         }
 
         /// A newly shown chapter starts where the reader is, not at its own
@@ -810,6 +821,11 @@ struct CommentaryTextPane: NSViewRepresentable {
         private func didScroll() {
             guard !isMovingItself else { return }
             recordTop()
+            // Scrolled near where the layout ahead stopped: lay out further.
+            if layoutCursor == nil, wholeCursor == nil, let scrollView, let textView {
+                let bounds = scrollView.contentView.bounds
+                if bounds.maxY - textView.textContainerOrigin.y + bounds.height > laidOutThrough { layOutAhead() }
+            }
             // Pinned, the pane is where it put itself, and any move is
             // TextKit's own, not a person's scrolling to tell the reader of.
             guard pinnedAnchor == nil, isOnScreen, let document,
@@ -834,7 +850,7 @@ struct CommentaryTextPane: NSViewRepresentable {
             updateTail()
             // A new width wraps every line again; keep the same words on top.
             if let pinnedAnchor { scroll(to: pinnedAnchor) } else { restoreTop() }
-            layOutAhead()
+            layOutAhead(throughEnd: true)
         }
 
         private func userScrollDidBegin() {
@@ -921,9 +937,13 @@ struct CommentaryTextPane: NSViewRepresentable {
         /// changes height from TextKit's estimate, and TextKit's correction
         /// for that moved what was on screen. TextKit lays out what is above
         /// itself, as it comes into view.
-        private func layOutAhead() {
+        /// Lays out ahead of the pane's top edge: as far as a flick reaches,
+        /// and then, through the end, whatever of the rest is still to do.
+        private func layOutAhead(throughEnd: Bool = false) {
             layoutGeneration += 1
+            laidOutThrough = 0
             layoutCursor = viewTopLocation()
+            if throughEnd { wholeCursor = layoutCursor }
             scheduleLayoutAhead(generation: layoutGeneration)
         }
 
@@ -962,7 +982,9 @@ struct CommentaryTextPane: NSViewRepresentable {
         private func layOutSomeAhead(generation: Int) {
             guard generation == layoutGeneration,
                   let layoutManager = textView?.textLayoutManager,
-                  var start = layoutCursor else { return }
+                  let scrollView, let textView else { return }
+            let isMove = layoutCursor != nil
+            guard var start = layoutCursor ?? wholeCursor else { return }
             // Never in a frame a person is scrolling through, nor for a tab
             // kept out of sight, which waits until it is shown.
             guard !isLiveScrolling, isOnScreen else {
@@ -972,19 +994,43 @@ struct CommentaryTextPane: NSViewRepresentable {
             // A person may have scrolled past where this had reached: carry
             // on from the top edge, never above it.
             if let top = viewTopLocation(), start.compare(top) == .orderedAscending { start = top }
+            let bounds = scrollView.contentView.bounds
+            let limit = isMove
+                ? bounds.maxY - textView.textContainerOrigin.y + Self.panesAhead * bounds.height
+                : .greatestFiniteMagnitude
             let deadline = CFAbsoluteTimeGetCurrent() + 0.004
             var next: NSTextLocation? = start
             layoutManager.enumerateTextLayoutFragments(from: start, options: [.ensuresLayout]) { fragment in
                 next = fragment.rangeInElement.endLocation
-                return CFAbsoluteTimeGetCurrent() < deadline
+                laidOutThrough = fragment.layoutFragmentFrame.maxY
+                return laidOutThrough < limit && CFAbsoluteTimeGetCurrent() < deadline
             }
-            guard let next, next.compare(layoutManager.documentRange.endLocation) == .orderedAscending,
-                  next.compare(start) == .orderedDescending else {
-                layoutCursor = nil
+            guard let next, next.compare(start) == .orderedDescending else {
+                if isMove { layoutCursor = nil } else { wholeCursor = nil }
                 return
             }
-            layoutCursor = next
-            scheduleLayoutAhead(generation: generation)
+            if next.compare(layoutManager.documentRange.endLocation) != .orderedAscending {
+                // The end: nothing further to lay out however far it scrolls.
+                laidOutThrough = .greatestFiniteMagnitude
+                layoutCursor = nil
+                wholeCursor = nil
+                return
+            }
+            if isMove {
+                guard laidOutThrough >= limit else {
+                    layoutCursor = next
+                    scheduleLayoutAhead(generation: generation)
+                    return
+                }
+                // Far enough for a flick. What it laid out, the rest of the
+                // text need not walk again.
+                layoutCursor = nil
+                if let whole = wholeCursor, whole.compare(next) == .orderedAscending { wholeCursor = next }
+                if wholeCursor != nil { scheduleLayoutAhead(generation: generation) }
+            } else {
+                wholeCursor = next
+                scheduleLayoutAhead(generation: generation)
+            }
         }
 
         // MARK: TextKit
