@@ -39,9 +39,9 @@ interpretation; translators' rendering counts are neither.
    `tbesg` for Greek: prefer their fuller definitions and usage citations to a
    short gloss. If only a brief gloss is available, state that limit.
    Ask `bdb` with the Strong's key. Its entries keep BDB's own numbers, so each
-   comes back with `mappedFrom` naming the key you asked, and one key often leads
-   to more than one entry, such as two words spelled alike: choose by the passage
-   and say which. `tbesg` is mostly Abbott-Smith (1922), and BDB is from 1906;
+   comes back with `mappedFrom` listing the keys you asked that lead to it. One
+   key often leads to more than one entry, such as two words spelled alike:
+   choose by the passage and say which. `tbesg` is mostly Abbott-Smith (1922), and BDB is from 1906;
    give the date when a claim leans on the entry. `dodson_greek` gives short
    glosses only. `strongs_hebrew` and `strongs_greek` are also bundled, but their
    glosses index renderings and must not stand in for a semantic argument.

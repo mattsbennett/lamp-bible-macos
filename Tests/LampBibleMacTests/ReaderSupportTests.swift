@@ -1632,6 +1632,9 @@ struct LampDictionaryStylingTests {
             }
             #expect(ReaderTextLinkHitTester.word(atUTF16Offset: offset, in: cjk) == whole)
         }
+        // Read from its paragraph alone: the whole text would carry the
+        // dictionary's state from the Japanese into the Greek and split it.
+        #expect(ReaderTextLinkHitTester.word(atUTF16Offset: 10, in: "これは日本語です。\u{2029}Ἐν") == "Ἐν")
         let token = String(repeating: "x", count: 300)
         #expect(ReaderTextLinkHitTester.word(atUTF16Offset: 10, in: token + " end") == token)
     }

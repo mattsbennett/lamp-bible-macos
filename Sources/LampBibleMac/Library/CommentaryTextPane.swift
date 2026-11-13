@@ -30,7 +30,27 @@ struct CommentaryDocument: @unchecked Sendable {
     struct Key: Hashable, Sendable {
         let title: String
         let unitIDs: [String]
+        /// `contentFingerprint(of:)` of the units.
+        let content: Int
         let style: CommentaryTextStyle
+    }
+
+    /// The units' words and references, hashed: the same units with other
+    /// words, as a reinstalled commentary has, are another document.
+    static func contentFingerprint(of units: [LampCommentaryUnit]) -> Int {
+        var hasher = Hasher()
+        for unit in units {
+            hasher.combine(unit.id)
+            hasher.combine(unit.title)
+            hasher.combine(unit.introduction)
+            hasher.combine(unit.translation)
+            hasher.combine(unit.commentary)
+            hasher.combine(unit.footnotes)
+            hasher.combine(unit.startReference)
+            hasher.combine(unit.endReference)
+            for link in unit.scriptureLinks { hasher.combine(link.id) }
+        }
+        return hasher.finalize()
     }
 
     let key: Key
@@ -76,7 +96,7 @@ struct CommentaryDocument: @unchecked Sendable {
             }
         }
         return CommentaryDocument(
-            key: Key(title: title, unitIDs: units.map(\.id), style: style),
+            key: Key(title: title, unitIDs: units.map(\.id), content: contentFingerprint(of: units), style: style),
             text: writer.output,
             anchors: anchors,
             anchorLocations: locations
@@ -574,6 +594,9 @@ struct CommentaryTextPane: NSViewRepresentable {
             self.scrollView = scrollView
             scrollView.drawsBackground = false
             scrollView.hasVerticalScroller = true
+            let scroller = CommentaryScroller()
+            scroller.userScrollDidBegin = { [weak self] in self?.userScrollDidBegin() }
+            scrollView.verticalScroller = scroller
             scrollView.hasHorizontalScroller = false
             scrollView.autohidesScrollers = true
             scrollView.borderType = .noBorder
@@ -1080,6 +1103,17 @@ final class CommentaryTextView: NSTextView {
     override func scrollRangeToVisible(_ range: NSRange) {
         didInteract?(true)
         super.scrollRangeToVisible(range)
+    }
+}
+
+/// The pane's scroller, which tells it when VoiceOver moves it: that
+/// scrolls the pane without a live scroll or a wheel.
+final class CommentaryScroller: NSScroller {
+    var userScrollDidBegin: (() -> Void)?
+
+    override func setAccessibilityValue(_ value: Any?) {
+        userScrollDidBegin?()
+        super.setAccessibilityValue(value)
     }
 }
 

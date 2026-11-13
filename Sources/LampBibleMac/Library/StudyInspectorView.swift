@@ -2771,6 +2771,10 @@ private struct CommentaryInspectorView: View {
     /// The chapter `units` are for, named when they were read: the reader's
     /// own moves on a moment before its units do.
     @State private var unitsTitle = ""
+    /// What `units` say, fingerprinted when they were read, so a commentary
+    /// reinstalled with the same units but new words is not drawn from the
+    /// cache.
+    @State private var unitsContent = 0
     @State private var isLoading = false
     @State private var errorMessage: String?
     @EnvironmentObject private var scrollLink: ReaderScrollLink
@@ -2851,6 +2855,7 @@ private struct CommentaryInspectorView: View {
             }
             units = recent
             unitsTitle = contextDescription
+            unitsContent = CommentaryDocument.contentFingerprint(of: recent)
             errorMessage = nil
             isLoading = false
             shownRequest = request
@@ -2876,6 +2881,7 @@ private struct CommentaryInspectorView: View {
                 )
                 units = read
                 unitsTitle = title
+                unitsContent = CommentaryDocument.contentFingerprint(of: read)
                 studyPane.recents.keep(read, for: request)
             } catch {
                 errorMessage = error.localizedDescription
@@ -2906,6 +2912,7 @@ private struct CommentaryInspectorView: View {
         CommentaryDocument.Key(
             title: unitsTitle,
             unitIDs: units.map(\.id),
+            content: unitsContent,
             style: CommentaryTextStyle(fontSize: fontSize, lineSpacing: lineSpacing, typeface: typeface)
         )
     }

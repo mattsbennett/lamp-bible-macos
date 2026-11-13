@@ -121,6 +121,22 @@ struct CommentaryDocumentTests {
         }
         #expect(textView.toolTip(at: try point(over: "Opening discussion")) == "Opening discussion › Text, Exposition, and Notes")
         #expect(textView.toolTip(at: try point(over: "prominent")) == nil)
+
+        // Through the pointer's own path: a mouse move sets the view's tooltip.
+        let window = NSWindow(contentRect: textView.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = textView
+        func move(over words: String) throws {
+            let location = textView.convert(try point(over: words), to: nil)
+            let event = try #require(NSEvent.mouseEvent(
+                with: .mouseMoved, location: location, modifierFlags: [], timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0
+            ))
+            textView.mouseMoved(with: event)
+        }
+        try move(over: "Opening discussion")
+        #expect(textView.toolTip == "Opening discussion › Text, Exposition, and Notes")
+        try move(over: "prominent")
+        #expect(textView.toolTip == nil)
         #expect(textView.textLayoutManager != nil)
     }
 
