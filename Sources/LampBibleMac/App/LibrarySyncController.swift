@@ -1053,13 +1053,12 @@ extension LibrarySyncController {
         // database, and still keeps pictures under its ID.
         let otherModules = try await library.installedModules()
             .filter { $0.kind != .book }.map(\.id)
-        let bookIDs = LampBookMediaFiles.publishedBookModuleIDs(
+        let pictures = LampSyncLocalFiles.bookMedia(
             books: Set(modules.filter { $0.module.kind == .book }.map(\.module.id)),
             otherModules: Set(otherModules),
-            remotePaths: manifest.members.map(\.path)
-        )
-        let pictures = LampSyncLocalFiles.bookMedia(
-            forBookModuleIDs: bookIDs, inLibraryAt: library.rootURL, fileManager: fileManager
+            remotePaths: manifest.members.map(\.path),
+            inLibraryAt: library.rootURL,
+            fileManager: fileManager
         )
         candidates += pictures.candidates
         result.gaps += pictures.unplaceable

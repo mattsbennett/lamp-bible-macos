@@ -263,6 +263,28 @@ extension LampSyncLocalFiles {
         }
     }
 
+    /// The pictures a pass publishes for this library's books and any the
+    /// server already holds pictures for, by core's rules: an ID this Mac
+    /// also holds as another kind of module gives up only the pictures in
+    /// `Media/Books/<id>`, which no other kind of module writes to.
+    public static func bookMedia(
+        books: Set<String>,
+        otherModules: Set<String>,
+        remotePaths: [String],
+        inLibraryAt libraryRoot: URL,
+        fileManager: FileManager = .default
+    ) -> (candidates: [Candidate], unplaceable: [Unreadable]) {
+        let found = LampBookMediaFiles.outgoing(
+            books: books, otherModules: otherModules, remotePaths: remotePaths,
+            folders: { LampBookMediaFiles.libraryFolders(libraryRootURL: libraryRoot, moduleID: $0) },
+            fileManager: fileManager
+        )
+        return (
+            found.files.map { Candidate(path: $0.remotePath, kind: .bookMedia, url: $0.url) },
+            found.unplaceable.map { Unreadable(path: $0.path, reason: $0.reason) }
+        )
+    }
+
     /// The pictures a book shows, as this library keeps them.
     ///
     /// The rules are core's (`LampBookMediaFiles`): which files are a book's,

@@ -269,6 +269,21 @@ struct LampSyncLocalFilesTests {
         #expect(!found.candidates.contains { $0.path.contains("ignored") })
     }
 
+    /// A book `Study` beside a commentary `study`: only `Media/Books/Study`
+    /// is the book's for certain, since no other kind of module writes there.
+    @Test func aBookSharingItsIDPublishesOnlyFromItsOwnFolder() throws {
+        let library = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: library) }
+        try write("the book's", at: "Media/Books/Study/map.jpg", in: library)
+        try write("the commentary's", at: "Media/Modules/study/notes.jpg", in: library)
+
+        let found = LampSyncLocalFiles.bookMedia(
+            books: ["Study"], otherModules: ["study"], remotePaths: [], inLibraryAt: library
+        )
+
+        #expect(found.candidates.map(\.path) == ["BookMedia/Study/map.jpg"])
+    }
+
     @Test func aLibraryWithNoBookPicturesYieldsNothing() throws {
         let library = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: library) }
