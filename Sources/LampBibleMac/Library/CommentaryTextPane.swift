@@ -1111,6 +1111,10 @@ final class CommentaryTextView: NSTextView {
 final class CommentaryScroller: NSScroller {
     var userScrollDidBegin: (() -> Void)?
 
+    // A subclass is held to the legacy style unless it says it can overlay:
+    // always shown, it took width from the text and moved every line.
+    override class var isCompatibleWithOverlayScrollers: Bool { true }
+
     override func setAccessibilityValue(_ value: Any?) {
         userScrollDidBegin?()
         super.setAccessibilityValue(value)

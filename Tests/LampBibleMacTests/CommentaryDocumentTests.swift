@@ -164,6 +164,11 @@ struct CommentaryDocumentTests {
         let storage = try #require((scrollView.documentView as? NSTextView)?.textStorage)
         #expect(storage.attribute(.lampCommentaryTail, at: storage.length - 1, effectiveRange: nil) != nil)
         #expect(scrollView.contentInsets.bottom == 0)
+        // The pane's own scroller keeps the system's style, so an overlay
+        // scroller takes no width from the text.
+        #expect(scrollView.verticalScroller is CommentaryScroller)
+        #expect(scrollView.scrollerStyle == NSScroller.preferredScrollerStyle)
+        #expect(scrollView.verticalScroller?.scrollerStyle == NSScroller.preferredScrollerStyle)
         coordinator.detach()
     }
 }
