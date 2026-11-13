@@ -3,11 +3,15 @@
 A reader asking "why do the translations differ here?" is asking something answerable.
 Most differences are one of four things, and telling them apart is the work.
 
-## Measure first
+## When rendering practice matters
 
-`analyze_strongs` on the word's key gives every tagged translation's renderings with
-counts. That answers the question that opinion cannot: **is this translation doing
-here what it does everywhere?**
+Read the wording, lexical evidence and grammar first. Use `analyze_strongs` with
+explicit tagged translations when a claim about rendering practice needs counts,
+not as a compulsory step for every comparison. Inspect its `variants` for the
+annotated phrases behind the grouped rendering labels.
+
+This recorded example illustrates a distribution, not live evidence. Retrieve the
+current data for a real answer; only selected groups are shown below.
 
 ```
 G4561 σάρξ
@@ -15,8 +19,8 @@ G4561 σάρξ
   BSBs  127:              flesh (84), body (17), bodies (3), people (3), physical (2)
 ```
 
-A translation tagged with one rendering at 147 of 153 occurrences is more uniform
-in this dataset than one tagged with several renderings. That describes the data, not the
+Here KJVs groups 147 of 153 occurrences under "flesh", and BSBs 84 of 127.
+That describes the data, not the
 translator's intent, the fairness of a particular rendering, or a policy already
 proved. Check comparable occurrences before proposing a policy as an explanation.
 
@@ -34,8 +38,9 @@ reference, book coverage and returned text; without an apparatus or an explicit
 translator's note, leave the textual explanation unverified.
 
 **A different sense, within the range.** Both renderings are available for the word and
-the translators chose differently. Give the lexicon's range, name the lexicon, and say
-what each chose. This is the commonest kind and the least interesting to dramatise.
+the translators chose differently. Give the lexicon's range, name the lexicon, and
+show how each rendering fits it; different English words alone do not prove
+different lexical senses.
 
 **A different reading of the grammar.** The same words parsed the same way can still be
 construed differently — which noun a genitive attaches to, whether a participle is
@@ -59,9 +64,10 @@ footnotes, which `read_study_material` will show.
 
 ## How to report it
 
-Give the original, the renderings side by side, the lexical range with its source, and
-the counts. Then say which of the four kinds the difference is, and if the answer needs
-a judgement about the sentence, say so and attribute it.
+Give the original, the renderings side by side, the lexical range with its source,
+and counts only when relevant. More than one kind of difference can apply; leave
+an unchecked explanation unverified. If the answer needs a judgement about the
+sentence, say so and attribute it.
 
 For a question about fairness, explain which lexical and grammatical constraints a
 rendering satisfies and what remains interpretive. Counts alone establish neither

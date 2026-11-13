@@ -74,8 +74,9 @@ nearby verses and compatible translations, not an entire library by default.
   Use alternate wording and narrower module/book ranges when relevant.
 - `lookup_dictionary_keys` retrieves exact keys; prefer `bdb` for Hebrew and
   `tbesg` for Greek semantic range. Ask `bdb` with the Strong's key: each entry
-  names it in `mappedFrom`, and one key can lead to several. Strong's glosses and `analyze_strongs`
-  rendering counts describe tagging/rendering, not the sense in this sentence.
+  names it in `mappedFrom`, and one key can lead to several. Strong's glosses and
+  `analyze_strongs` rendering counts describe tagging/rendering, not the sense in
+  this sentence.
 
 Verify every citation in an audit. For an uncited load-bearing claim, read the
 passage's context, relevant cross-references and a targeted search; test any known

@@ -1,8 +1,8 @@
 # A worked example
 
-Romans 8:3, where four of the five bundled translations read "sinful flesh" and one
-reads "sinful man". The figures below are a recorded tool result illustrating the
-method, not live evidence: retrieve the current module's data for a real answer.
+Romans 8:3, comparing the bundled English `KJVs`, `BSBs`, `ASVs`, `WEBs` and `YLT`.
+The evidence below is a recorded tool result illustrating the method, not live
+evidence: retrieve the current module's data for a real answer.
 
 ## The text first
 
@@ -22,9 +22,18 @@ labels ὁμοιώματι dative and σαρκὸς genitive; it does not identi
 modifies what. Any attachment of the genitives, and its semantic force, is a
 construal to argue from context rather than a dependency supplied by the module.
 
+Reading the English shows the difference at issue:
+
+| module | quoted excerpt |
+|---|---|
+| KJVs | in the likeness of sinful flesh |
+| BSBs | in the likeness of sinful man |
+
 ## Then the divergence, measured
 
-`analyze_strongs` on G4561:
+If rendering practice is part of the question, `analyze_strongs` on G4561 gives
+these totals and selected grouped renderings (the BSBs and TAGNT lists are not
+exhaustive):
 
 | translation | occurrences | renderings |
 |---|---|---|
@@ -33,10 +42,12 @@ construal to argue from context rather than a dependency supplied by the module.
 | TAGNT | 147 | σάρκα (37), σαρκὸς (30), σαρκὶ (21), σαρκί (18), σὰρξ (18) |
 
 `ASVs`, `WEBs` and `YLT` are not in it: `list_modules` gives them
-`tagsStrongs: false`, and asking for them anyway returns nothing. The KJV's "of" is a tag aligned with more than the word, a reminder that a
-rendering here is an alignment. In this recorded dataset the Berean has 43 tagged
-occurrences not grouped under "flesh", while 147 of the KJV's 153 are. That establishes a distribution
-difference, not why "man" was chosen at Romans 8:3. The totals are not matched
+`tagsStrongs: false`, so do not request counts from them; their wording can still
+be read and compared. The KJV's "of" group is not a lexical sense of σάρξ: inspect
+the tagged phrases and the analysis's `variants` before interpreting an alignment.
+In this recorded dataset the Berean has 43 tagged occurrences not grouped under
+"flesh", while 147 of the KJV's 153 are grouped under it. That establishes a
+distribution difference, not why "man" was chosen at Romans 8:3. The totals are not matched
 denominators: editions and tagging can differ. Inspect comparable contexts before
 suggesting a translation policy, and mark that suggestion as an inference.
 
@@ -63,9 +74,10 @@ from a gloss.
 The Greek phrase includes σαρκὸς ἁμαρτίας; σαρκὸς is tagged as the genitive singular
 of σάρξ. Name the English translations compared and quote their different wording.
 The recorded counts show different rendering distributions, but do not settle the
-sense or construal here. The quoted glosses alone also do not settle the fairness of
-"sinful man". Identify the contextual argument and further lexical evidence needed
-instead of making the original sound more decisive than the retrieved data.
+sense or construal here. The cited lexical sense does not by itself settle the
+fairness of "sinful man". Identify the contextual argument still needed instead
+of making the original sound more decisive than the retrieved data.
 
-What the report does not say is which is right. The evidence is all above, and a reader
-can weigh it.
+This example leaves that judgement open because the evidence stops here, not
+because the skill forbids a supported judgement when the necessary contextual
+argument has actually been made.

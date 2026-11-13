@@ -36,7 +36,8 @@ interpretation; translators' rendering counts are neither.
 3. For a word the answer turns on, take parsing from that occurrence and quote a
    named lexicon for the range: `lookup_dictionary_keys`, for example
    `{"keys": ["G4561"], "module_ids": ["tbesg"]}`. Prefer `bdb` for Hebrew and
-   `tbesg` for Greek: both give numbered senses with the passages behind each.
+   `tbesg` for Greek: prefer their fuller definitions and usage citations to a
+   short gloss. If only a brief gloss is available, state that limit.
    Ask `bdb` with the Strong's key. Its entries keep BDB's own numbers, so each
    comes back with `mappedFrom` naming the key you asked, and one key often leads
    to more than one entry, such as two words spelled alike: choose by the passage
@@ -80,7 +81,8 @@ For a substantive translation comparison read
   use `TAHOT`. Hebrew/Aramaic morphemes can be joined with `/`; the decoded parsing
   belongs to the morpheme aligned with the key, not necessarily the content word.
 - **The Septuagint is a translation.** `LXX` and Brenton's English `Brenton` are
-  untagged and differently numbered. Before using either, read
+  untagged and differently numbered. Before comparing their passages or using a
+  lexicon's `septuagintHebrew` correspondence, read
   [references/septuagint.md](references/septuagint.md). They are not extra tagged
   witnesses to the Hebrew or automatic same-reference comparisons.
 - **Searches are bounded.** `search_library` accepts `strongs_key` without a text
