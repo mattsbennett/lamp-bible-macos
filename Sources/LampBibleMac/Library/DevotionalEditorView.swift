@@ -832,14 +832,16 @@ struct DevotionalEditorView: View {
 
     /// The Reader's tab height, so the two ranks line up.
 
-    /// The documents open for this writing, drawn as the Reader draws its own
-    /// tabs: contiguous full-height cells divided by hairlines, so the row
-    /// reads as a rank of tabs rather than a row of floating buttons.
+    /// The documents open for this writing, drawn as the reader and Search
+    /// draw their tabs: the rank shares the bar's width, the open one is a
+    /// raised rounded tab, and a resting tab is divided from the next by a
+    /// hairline.
     ///
-    /// Making a new file rides at the end of the rank, as the Reader's new-tab
-    /// button does, since it adds to the rank. Opening a file and revealing
-    /// the folder stay at the trailing edge: a cell in the rank says "this is
-    /// one of the documents", and neither of those is one.
+    /// Every button here sits at the trailing edge, outside the rank and so
+    /// out of the scroll. Making a new file was at the end of the rank, as
+    /// the reader's new-tab button used to be; it moved with the reader's,
+    /// because a button that scrolls away with the tabs is a button you
+    /// cannot reach when you have most need of it.
     private var documentTabBar: some View {
         HStack(spacing: 0) {
             documentTabRank
@@ -857,22 +859,18 @@ struct DevotionalEditorView: View {
                 let width = LibraryTabStrip.cellWidth(
                     available: available, count: workspaceDocuments.count + 1
                 )
+                let ids: [String?] = [nil] + workspaceDocuments.map(\.id)
                 ScrollView(.horizontal) {
                     HStack(spacing: 0) {
-                        documentTab(
-                            id: nil,
-                            title: "Main Prose",
-                            isDirty: isDirty,
-                            hasConflict: false,
-                            width: width
-                        )
-                        ForEach(workspaceDocuments) { document in
+                        ForEach(Array(ids.enumerated()), id: \.offset) { index, id in
                             documentTab(
-                                id: document.id,
-                                title: title(of: document),
-                                isDirty: document.isDirty,
-                                hasConflict: document.hasExternalConflict,
-                                canClose: document.isHandOpened,
+                                id: id,
+                                // The next tab decides the hairline: one is
+                                // drawn only between two resting tabs, since
+                                // beside a raised or hovered one it would cut
+                                // into that tab's shape.
+                                nextID: index + 1 < ids.count ? ids[index + 1] : nil,
+                                isLast: index + 1 == ids.count,
                                 width: width
                             )
                         }
@@ -955,7 +953,9 @@ struct DevotionalEditorView: View {
     }
 
     /// One document as the rank draws it, with the measures, the raised
-    /// shape and the close button the reader's and Search's tabs use.
+    /// shape, the hairline and the close button the reader's and Search's
+    /// tabs use — and arranged as they arrange theirs, so a click anywhere
+    /// on a tab chooses it.
     ///
     /// What is this rank's own is what a tab here *is*: a file, so it can be
     /// unsaved or in conflict with what is on disk, and the writing's own
@@ -964,32 +964,31 @@ struct DevotionalEditorView: View {
     /// macOS has drawn window tabs since Finder and Safari took this shape.
     private func documentTab(
         id: String?,
-        title: String,
-        isDirty: Bool,
-        hasConflict: Bool,
-        canClose: Bool = false,
+        nextID: String??,
+        isLast: Bool,
         width: CGFloat
     ) -> some View {
+        let document = id.flatMap { documentID in
+            workspaceDocuments.first { $0.id == documentID }
+        }
+        let title = document.map(title(of:)) ?? "Main Prose"
+        let isDirty = document?.isDirty ?? self.isDirty
+        let hasConflict = document?.hasExternalConflict ?? false
+        let canClose = document?.isHandOpened ?? false
         let isSelected = selectedWorkspaceDocumentID == id
         let isHovered = hoveredDocumentTab == HoveredDocumentTab(id: id)
-        let showsClose = canClose && (isSelected || isHovered)
-        // Siblings rather than a close button nested inside the tab button: a
-        // Button inside another Button's label is a fight over the click.
-        return HStack(spacing: 4) {
-            // On the leading edge, as the reader's tabs have it, and holding
-            // its width whether or not it is shown so the title does not
-            // shift as the pointer passes.
-            Group {
-                if showsClose, let id {
-                    LibraryTabCloseButton(title: title) { closeWorkspaceDocument(id) }
-                        .disabled(isDirty)
-                        .help(isDirty ? "Save this file before closing it" : "Close this file")
-                } else {
-                    Color.clear
-                }
-            }
-            .frame(width: 16, height: 16)
+        // Only between two tabs that are both at rest: beside the raised tab
+        // or a hovered one it would cut into that tab's shape.
+        let next = nextID ?? nil
+        let showsSeparator = !isLast && !isSelected && !isHovered
+            && next != selectedWorkspaceDocumentID
+            && HoveredDocumentTab(id: next) != hoveredDocumentTab
 
+        return ZStack {
+            // The whole cell chooses the document. Laid out as siblings
+            // instead, the close button's corner of the tab answered no
+            // click at all, and on a tab that cannot be closed that corner
+            // was simply dead.
             Button {
                 selectWorkspaceDocument(id)
             } label: {
@@ -997,11 +996,10 @@ struct DevotionalEditorView: View {
                     Text(title)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                        .layoutPriority(1)
-                    // Beside the title, not at the cell's trailing edge: a
-                    // tab here can be as wide as the bar divided by two, and
-                    // a mark that far from its own title reads as belonging
-                    // to the tab after it.
+                    // Beside the title rather than at the cell's trailing
+                    // edge: a tab is as wide as the bar divided by the
+                    // documents open, and a mark that far from its own title
+                    // reads as belonging to the tab after it.
                     //
                     // A file's state, which a reader tab has no equivalent of
                     // and which is why this rank is not simply `LibraryTabBar`.
@@ -1016,27 +1014,55 @@ struct DevotionalEditorView: View {
                             .frame(width: 5, height: 5)
                             .accessibilityLabel("Unsaved changes")
                     }
-                    Spacer(minLength: 0)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .frame(height: LibraryTabStrip.height)
+                // Room for the close button at the leading edge, and as much
+                // at the trailing edge so the title stays centred.
+                .padding(.horizontal, 22)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+
+            // Siblings rather than nested: a Button inside another Button's
+            // label is a fight over the click.
+            if canClose, let id {
+                HStack {
+                    LibraryTabCloseButton(title: title) { closeWorkspaceDocument(id) }
+                        .opacity(isHovered ? 1 : 0)
+                        .disabled(isDirty)
+                        .help(isDirty ? "Save this file before closing it" : "Close this file")
+                    Spacer(minLength: 0)
+                }
+                .padding(.leading, 6)
+            }
         }
         .font(.subheadline)
         .foregroundStyle(isSelected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
-        .padding(.horizontal, 6)
-        .frame(width: width)
-        .frame(height: LibraryTabStrip.height - LibraryTabStrip.inset * 2)
-        .background(LibraryTabShape(isSelected: isSelected, isHovered: isHovered))
-        .padding(.trailing, LibraryTabStrip.inset)
+        // The share it was given, and no more: padding outside this would
+        // put the rank over the width it was measured for, so the last tab
+        // would be clipped and the bar would scroll when everything fits.
+        .frame(width: width, height: LibraryTabStrip.height)
+        .background {
+            LibraryTabShape(isSelected: isSelected, isHovered: isHovered)
+                .padding(.vertical, LibraryTabStrip.inset)
+                .padding(.horizontal, 1)
+        }
+        .overlay(alignment: .trailing) {
+            Rectangle()
+                .fill(Color.primary.opacity(0.14))
+                .frame(width: 1, height: 14)
+                .opacity(showsSeparator ? 1 : 0)
+                .offset(x: 0.5)
+        }
+        .contentShape(Rectangle())
         .onHover { isHovering in
             let tab = HoveredDocumentTab(id: id)
             hoveredDocumentTab = isHovering
                 ? tab : (hoveredDocumentTab == tab ? nil : hoveredDocumentTab)
         }
         .help(title)
+        .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
         .contextMenu {
             if canClose, let id {
                 // Only files opened by hand can be closed. The rest follow the
