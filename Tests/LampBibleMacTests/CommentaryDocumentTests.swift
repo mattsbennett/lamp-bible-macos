@@ -92,4 +92,35 @@ struct CommentaryDocumentTests {
         }
         #expect(directions == [.leftToRight])
     }
+
+    /// An outline path is cut short to one line; its full path is its
+    /// tooltip, which a TextKit 2 view does not show by itself.
+    @Test @MainActor func anOutlinePathShowsItsFullPathOnHover() throws {
+        let document = CommentaryDocument.build(title: "Matthew 1", units: [
+            unit("a", start: 40_001_001, order: 1, title: "Opening discussion"),
+            unit("b", start: 40_001_001, order: 2, title: "Text, Exposition, and Notes"),
+            unit("c", start: 40_001_001, order: 3, commentary: "The prominent repetition of the title."),
+        ], style: style)
+        let textView = CommentaryTextView(usingTextLayoutManager: true)
+        textView.frame = NSRect(x: 0, y: 0, width: 360, height: 600)
+        textView.textContainerInset = NSSize(width: 16, height: 16)
+        textView.textStorage?.setAttributedString(document.text)
+        let layoutManager = try #require(textView.textLayoutManager)
+        layoutManager.ensureLayout(for: layoutManager.documentRange)
+
+        func point(over words: String) throws -> NSPoint {
+            let range = (document.text.string as NSString).range(of: words)
+            let start = try #require(layoutManager.location(layoutManager.documentRange.location, offsetBy: range.location))
+            let end = try #require(layoutManager.location(start, offsetBy: range.length))
+            var frame = CGRect.zero
+            layoutManager.enumerateTextSegments(in: try #require(NSTextRange(location: start, end: end)), type: .standard, options: []) { _, segment, _, _ in
+                frame = segment
+                return false
+            }
+            return NSPoint(x: frame.midX + textView.textContainerOrigin.x, y: frame.midY + textView.textContainerOrigin.y)
+        }
+        #expect(textView.toolTip(at: try point(over: "Opening discussion")) == "Opening discussion › Text, Exposition, and Notes")
+        #expect(textView.toolTip(at: try point(over: "prominent")) == nil)
+        #expect(textView.textLayoutManager != nil)
+    }
 }

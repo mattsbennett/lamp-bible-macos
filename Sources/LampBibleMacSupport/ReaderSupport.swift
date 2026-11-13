@@ -20,6 +20,20 @@ public enum ReaderTextLinkHitTester {
         hit(at: point, in: textView)?.link
     }
 
+    /// The character on a glyph under `point`, in the view's space, for a
+    /// TextKit 2 view; nil for a TextKit 1 one, which this never switches.
+    public static func characterIndex(at point: NSPoint, inTextKit2View textView: NSTextView) -> Int? {
+        guard let textStorage = textView.textStorage, textStorage.length > 0,
+              let textLayoutManager = textView.textLayoutManager else { return nil }
+        let containerPoint = NSPoint(
+            x: point.x - textView.textContainerOrigin.x,
+            y: point.y - textView.textContainerOrigin.y
+        )
+        guard let index = characterIndex(at: containerPoint, in: textLayoutManager, string: textStorage.string as NSString),
+              index < textStorage.length else { return nil }
+        return index
+    }
+
     public static func hit(at point: NSPoint, in textView: NSTextView) -> ReaderTextHit? {
         guard let textStorage = textView.textStorage, textStorage.length > 0 else { return nil }
         let containerPoint = NSPoint(
@@ -29,9 +43,8 @@ public enum ReaderTextLinkHitTester {
         // A TextKit 2 view, such as the study pane's commentary: asking it for
         // `layoutManager` would switch it to TextKit 1 for good, so its own
         // layout manager finds the character.
-        if let textLayoutManager = textView.textLayoutManager {
-            guard let index = characterIndex(at: containerPoint, in: textLayoutManager, string: textStorage.string as NSString),
-                  index < textStorage.length else { return nil }
+        if textView.textLayoutManager != nil {
+            guard let index = characterIndex(at: point, inTextKit2View: textView) else { return nil }
             return hit(atCharacterIndex: index, attributedString: textStorage)
         }
         guard let layoutManager = textView.layoutManager,

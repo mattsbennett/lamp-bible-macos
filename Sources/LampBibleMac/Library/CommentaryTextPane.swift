@@ -978,6 +978,33 @@ final class CommentaryTextView: NSTextView {
     /// is when it moves the view itself.
     var didLayOutViewport: (() -> Void)?
 
+    // A TextKit 2 text view shows no tooltip of its own for `.toolTip`
+    // text, which the outline path's full title is: the view's tooltip is
+    // set from the text under the pointer instead.
+    private var toolTipArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let toolTipArea { removeTrackingArea(toolTipArea) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        toolTipArea = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        let point = convert(event.locationInWindow, from: nil)
+        let tip = toolTip(at: point)
+        if tip != toolTip { toolTip = tip }
+    }
+
+    /// The `.toolTip` of the text under `point`, in the view's space.
+    func toolTip(at point: NSPoint) -> String? {
+        guard let storage = textStorage,
+              let index = ReaderTextLinkHitTester.characterIndex(at: point, inTextKit2View: self) else { return nil }
+        return storage.attribute(.toolTip, at: index, effectiveRange: nil) as? String
+    }
+
     override func textViewportLayoutControllerDidLayout(_ controller: NSTextViewportLayoutController) {
         super.textViewportLayoutControllerDidLayout(controller)
         didLayOutViewport?()
