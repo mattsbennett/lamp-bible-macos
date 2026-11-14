@@ -250,7 +250,6 @@ private struct ReaderSettingsView: View {
     @AppStorage("plans.reminder.minute")
     private var reminderMinute = LampPreferenceDefaults.plansReminderMinute
     @State private var reminderError: String?
-    @State private var isShowingBetterVoiceHelp = false
     /// Bumped when voices are installed or removed, so a voice downloaded
     /// while Settings is open shows up, and becomes Automatic, at once.
     @State private var voicesRevision = 0
@@ -293,30 +292,22 @@ private struct ReaderSettingsView: View {
     @State private var webDAVPassword = ""
     @State private var isForgettingSyncDetails = false
 
-    private var voices: [AVSpeechSynthesisVoice] {
-        _ = voicesRevision
-        return SpeechVoices.all()
-            .filter { $0.language.hasPrefix("en") }
-            .sorted {
-                ($0.name, $0.language).0.localizedStandardCompare(($1.name, $1.language).0) == .orderedAscending
-            }
-    }
-
-    /// The voice Automatic resolves to, named so the setting does not hide
-    /// which one speaks.
-    private var automaticVoice: AVSpeechSynthesisVoice? {
-        _ = voicesRevision
-        return SpeechVoices.voice(language: SpeechVoices.english, stored: nil)
-    }
-
-    private func voiceTitle(_ voice: AVSpeechSynthesisVoice) -> String {
-        // Apple's names often carry their quality already: "Ava (Premium)".
-        let quality = switch voice.quality {
-        case .premium where !voice.name.contains("Premium"): " · Premium"
-        case .enhanced where !voice.name.contains("Enhanced"): " · Enhanced"
-        default: ""
+    /// The languages Read Aloud has a voice for: English, which quizzes and
+    /// the dictionary's word speaker use too, then each other language an
+    /// enabled translation is written in, by name. Not the biblical
+    /// languages, which no voice speaks.
+    private var readAloudLanguages: [String] {
+        var others: Set<String> = []
+        for translation in enabledTranslationModules {
+            let language = SpeechVoices.language(of: translation)
+            let base = SpeechVoices.baseLanguage(language)
+            guard base != "en", !LampTranslationLanguages.isBiblical(language) else { continue }
+            others.insert(base)
         }
-        return "\(voice.name) — \(voice.language)\(quality)"
+        return [SpeechVoices.english] + others.sorted {
+            SpeechVoices.languageName($0).localizedStandardCompare(SpeechVoices.languageName($1))
+                == .orderedAscending
+        }
     }
 
     var body: some View {
@@ -387,25 +378,14 @@ private struct ReaderSettingsView: View {
                         metricSlider("Line Spacing", value: $lineSpacing, scale: .readerLineSpacing)
                     }
                     Section("Read Aloud") {
-                        LabeledContent {
-                            Picker("Voice", selection: $readAloudVoice) {
-                                Text(automaticVoice.map { "Automatic: \($0.name)" } ?? "Automatic").tag("")
-                                ForEach(voices, id: \.identifier) { voice in
-                                    Text(voiceTitle(voice)).tag(voice.identifier)
-                                }
-                            }
-                            .labelsHidden()
-                        } label: {
-                            Text("Voice")
-                            if let inUse = SpeechVoices.voice(language: SpeechVoices.english, stored: readAloudVoice),
-                               SpeechVoices.describe(inUse).isBasic {
-                                Text("\(inUse.name) is a basic voice, so words can sound slow and choppy.")
-                                Button("How to get a better voice…") { isShowingBetterVoiceHelp = true }
-                                    .buttonStyle(.link)
-                                    .popover(isPresented: $isShowingBetterVoiceHelp, arrowEdge: .bottom) {
-                                        BetterVoiceHelp()
-                                    }
-                            }
+                        let languages = readAloudLanguages
+                        ForEach(languages, id: \.self) { language in
+                            ReadAloudVoicePicker(
+                                language: language,
+                                label: languages.count == 1
+                                    ? "Voice" : "\(SpeechVoices.languageName(language)) Voice",
+                                voicesRevision: voicesRevision
+                            )
                         }
                         LabeledContent("Speed") {
                             // As a multiple of the normal pace, which the
@@ -460,6 +440,9 @@ private struct ReaderSettingsView: View {
                                 lineSpacing = LampTextScale.readerLineSpacing.defaultValue
                                 typeface = .readerDefault
                                 readAloudVoice = ""
+                                for language in readAloudLanguages {
+                                    UserDefaults.standard.removeObject(forKey: SpeechVoices.voiceKey(for: language))
+                                }
                                 readAloudRate = 0.5
                                 followReadAloud = true
                                 greekReading = ""
@@ -532,11 +515,22 @@ private struct ReaderSettingsView: View {
                                 Text("First Enabled").tag("")
                                 TranslationPickerOptions(translations: enabledTranslationModules, tag: \.id)
                             }
-                            ForEach(translationModules) { module in
-                                moduleToggle(module) {
-                                    if defaultTranslationID == module.id {
-                                        defaultTranslationID = ""
-                                        model.setDefaultTranslation(nil)
+                            // Under their languages, as every translation
+                            // picker lists them; headings within the section,
+                            // as the phone's Settings has them.
+                            let groups = LampTranslationLanguages.grouped(translationModules, language: \.language)
+                            ForEach(groups) { group in
+                                if groups.count > 1 {
+                                    Text(group.title)
+                                        .font(.callout.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                }
+                                ForEach(group.items) { module in
+                                    moduleToggle(module) {
+                                        if defaultTranslationID == module.id {
+                                            defaultTranslationID = ""
+                                            model.setDefaultTranslation(nil)
+                                        }
                                     }
                                 }
                             }
@@ -1551,9 +1545,88 @@ private struct ReaderTypePreview: View {
     }
 }
 
-/// Where to get a voice better than a basic one. Lamp cannot download
-/// voices, and Siri's, the best of them, are not offered to other apps.
+/// The voice one language is read aloud in, kept per language
+/// (`SpeechVoices.voiceKey`), and what to do when it is basic or when no
+/// voice for the language is installed.
+private struct ReadAloudVoicePicker: View {
+    let language: String
+    let label: String
+    /// Read so that Settings, redrawing when voices are installed or removed,
+    /// redraws this too.
+    let voicesRevision: Int
+    @AppStorage private var voice: String
+    @State private var isShowingHelp = false
+
+    init(language: String, label: String, voicesRevision: Int) {
+        self.language = language
+        self.label = label
+        self.voicesRevision = voicesRevision
+        _voice = AppStorage(wrappedValue: "", SpeechVoices.voiceKey(for: language))
+    }
+
+    var body: some View {
+        _ = voicesRevision
+        let voices = SpeechVoices.voices(for: language)
+        let automatic = voices.isEmpty ? nil : SpeechVoices.voice(language: language, stored: nil)
+        let name = SpeechVoices.languageName(language)
+        return LabeledContent {
+            Picker(label, selection: $voice) {
+                Text(automatic.map { "Automatic: \($0.name)" } ?? "Automatic").tag("")
+                ForEach(voices, id: \.identifier) { voice in
+                    Text(Self.title(voice)).tag(voice.identifier)
+                }
+            }
+            .labelsHidden()
+            .disabled(voices.isEmpty)
+        } label: {
+            Text(label)
+            if voices.isEmpty {
+                Text("No \(name) voice is installed, so \(name) translations can’t be read aloud.")
+                helpButton("How to add one…", name: name, hasVoice: false)
+            } else if let inUse = SpeechVoices.voice(language: language, stored: voice),
+                      SpeechVoices.describe(inUse).isBasic {
+                Text("\(inUse.name) is a basic voice, so words can sound slow and choppy.")
+                helpButton("How to get a better voice…", name: name, hasVoice: true)
+            }
+        }
+    }
+
+    private func helpButton(_ title: String, name: String, hasVoice: Bool) -> some View {
+        Button(title) { isShowingHelp = true }
+            .buttonStyle(.link)
+            .popover(isPresented: $isShowingHelp, arrowEdge: .bottom) {
+                BetterVoiceHelp(
+                    languageName: name,
+                    hasVoice: hasVoice,
+                    example: SpeechVoices.baseLanguage(language) == "en" ? "Ava (Premium)" : nil,
+                    setting: label
+                )
+            }
+    }
+
+    private static func title(_ voice: AVSpeechSynthesisVoice) -> String {
+        // Apple's names often carry their quality already: "Ava (Premium)".
+        let quality = switch voice.quality {
+        case .premium where !voice.name.contains("Premium"): " · Premium"
+        case .enhanced where !voice.name.contains("Enhanced"): " · Enhanced"
+        default: ""
+        }
+        return "\(voice.name) — \(voice.language)\(quality)"
+    }
+}
+
+/// Where to get a voice better than a basic one, or one at all. Lamp cannot
+/// download voices, and Siri's, the best of them, are not offered to other
+/// apps.
 private struct BetterVoiceHelp: View {
+    let languageName: String
+    /// Whether a voice is installed, so the help is for a better one.
+    let hasVoice: Bool
+    /// A voice to name in the steps, where one is known to exist.
+    let example: String?
+    /// The setting the last step returns to.
+    let setting: String
+
     /// The Read & Speak pane (Spoken Content before macOS 27), at its
     /// System voice row; the older Universal Access pane if this one will
     /// not open.
@@ -1564,15 +1637,15 @@ private struct BetterVoiceHelp: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Get a better voice")
+            Text(hasVoice ? "Get a better voice" : "Get a \(languageName) voice")
                 .font(.headline)
             Text("Apple’s Enhanced and Premium voices are free, and say words smoothly.")
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 6) {
                 step(1, "In System Settings, open Accessibility › Read & Speak (Spoken Content before macOS 27).")
                 step(2, "Next to System voice, click ⓘ.")
-                step(3, "Under English, download a named voice marked Premium or Enhanced, such as Ava (Premium). Siri’s voices, named “Voice” and a number, can’t be used by other apps.")
-                step(4, "Come back here: with Voice set to Automatic, Lamp picks the best voice you have.")
+                step(3, "Under \(languageName), download a named voice marked Premium or Enhanced\(example.map { ", such as \($0)" } ?? ""). Siri’s voices, named “Voice” and a number, can’t be used by other apps.")
+                step(4, "Come back here: with \(setting) set to Automatic, Lamp picks the best voice you have.")
             }
             Button("Open Voice Settings") {
                 if !NSWorkspace.shared.open(Self.readAndSpeak) {

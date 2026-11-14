@@ -29,7 +29,7 @@ final class ReadAloudController: NSObject, ObservableObject {
     func toggle(
         items: [ReadAloudItem],
         startingAt reference: Int?,
-        voiceIdentifier: String,
+        language: String,
         rate: Double
     ) {
         switch state {
@@ -38,22 +38,31 @@ final class ReadAloudController: NSObject, ObservableObject {
         case .paused:
             resume()
         case .stopped:
-            play(items: items, startingAt: reference, voiceIdentifier: voiceIdentifier, rate: rate)
+            play(items: items, startingAt: reference, language: language, rate: rate)
         }
     }
 
+    /// Reads `items` in `language`, with the reader's voice for it. With no
+    /// voice for the language nothing is read: an utterance without a voice
+    /// is spoken in the system's own, which reads Spanish with English sounds.
     func play(
         items: [ReadAloudItem],
         startingAt reference: Int?,
-        voiceIdentifier: String,
+        language: String,
         rate: Double
     ) {
         stop()
+        guard SpeechVoices.hasVoice(for: language),
+              let voice = SpeechVoices.voice(language: language, stored: SpeechVoices.storedVoice(for: language))
+        else { return }
         let queue = ReadAloudQueue(items: items, startingAt: reference)
-        let voice = SpeechVoices.voice(language: SpeechVoices.english, stored: voiceIdentifier)
+        // "Verse" is English; another language's voice says the number alone.
+        let announces = SpeechVoices.baseLanguage(language) == "en"
 
         for item in queue.remainingItems {
-            let utterance = AVSpeechUtterance(string: "Verse \(item.verseNumber). \(item.text)")
+            let utterance = AVSpeechUtterance(string: announces
+                ? "Verse \(item.verseNumber). \(item.text)"
+                : "\(item.verseNumber). \(item.text)")
             utterance.voice = voice
             utterance.rate = Float(min(max(rate, 0.3), 0.65))
             utterance.preUtteranceDelay = 0.04
@@ -229,8 +238,69 @@ extension QuizReadAloudController: AVSpeechSynthesizerDelegate {
 /// choice when it speaks the language, and otherwise the best installed, by
 /// core's rule, so the phone chooses alike.
 enum SpeechVoices {
-    /// The language verses and questions are read in, and the IPA spoken.
+    /// The language questions are read in, and the IPA spoken; and a
+    /// translation's, when it declares none.
     static let english = "en-US"
+
+    /// The language a translation is read aloud in: the one it declares, or
+    /// English, as the importer assumes of one that declares none.
+    static func language(of translation: LampInstalledModule?) -> String {
+        guard let code = translation?.language?.trimmingCharacters(in: .whitespaces),
+              !code.isEmpty else { return english }
+        return code
+    }
+
+    /// "es" from "es-ES" or "es_MX", lowercased.
+    static func baseLanguage(_ code: String) -> String {
+        String(code.lowercased().prefix { $0 != "-" && $0 != "_" })
+    }
+
+    /// Where the reader's voice for `language` is kept. English keeps the key
+    /// it always had, which the dictionary's word speaker and quizzes read
+    /// too; each other language has its own, as on the phone, so a Spanish
+    /// voice chosen never replaces the English one.
+    static func voiceKey(for language: String) -> String {
+        let base = baseLanguage(language)
+        return base == "en" ? "reader.readAloud.voice" : "reader.readAloud.voice.\(base)"
+    }
+
+    static func storedVoice(for language: String) -> String? {
+        UserDefaults.standard.string(forKey: voiceKey(for: language))
+    }
+
+    /// The voices that can read `language`, by name, for a list to choose
+    /// from.
+    @MainActor
+    static func voices(for language: String) -> [AVSpeechSynthesisVoice] {
+        let base = baseLanguage(language)
+        return all()
+            .filter { baseLanguage($0.language) == base }
+            .sorted {
+                $0.name.localizedStandardCompare($1.name) == .orderedAscending
+            }
+    }
+
+    /// Whether any installed voice reads `language`. No voice speaks Koine
+    /// Greek or biblical Hebrew, so their translations are never read aloud.
+    @MainActor
+    static func hasVoice(for language: String) -> Bool {
+        let base = baseLanguage(language)
+        return installed().contains {
+            baseLanguage($0.language) == base && !$0.isNovelty && !$0.isPersonal
+                && !$0.identifier.contains(".siri.")
+        }
+    }
+
+    /// The language's name, as a reader knows it: Greek and Hebrew rather
+    /// than the locale's "Ancient Greek", and a name for biblical Hebrew,
+    /// which the locale has none for.
+    static func languageName(_ language: String) -> String {
+        switch baseLanguage(language) {
+        case "grc": "Greek"
+        case "hbo": "Hebrew"
+        case let base: Locale.current.localizedString(forLanguageCode: base) ?? base
+        }
+    }
 
     /// The installed voices, held until the system says they changed.
     ///

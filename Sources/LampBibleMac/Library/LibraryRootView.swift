@@ -78,7 +78,6 @@ struct LibraryRootView: View {
     @AppStorage("reader.layoutMode") private var readerLayoutMode = ReaderLayoutMode.continuousParagraphs
     @AppStorage("reader.layoutModeBeforeSideBySide") private var layoutModeBeforeSideBySide =
         ReaderLayoutMode.continuousParagraphs
-    @AppStorage("reader.readAloud.voice") private var readAloudVoice = ""
     @AppStorage("reader.readAloud.rate") private var readAloudRate = 0.5
     /// The window's reader tabs kept laid out (`ReaderTabPool`). The window's
     /// reader is the current tab's.
@@ -1158,7 +1157,7 @@ struct LibraryRootView: View {
                 ReadAloudItem(reference: $0.id, verseNumber: $0.number, text: $0.text)
             },
             startingAt: workspace.selectedVerseReference,
-            voiceIdentifier: readAloudVoice,
+            language: readAloudLanguage,
             rate: readAloudRate
         )
     }
@@ -1171,13 +1170,26 @@ struct LibraryRootView: View {
                 ReadAloudItem(reference: $0.id, verseNumber: $0.number, text: $0.text)
             },
             startingAt: reference,
-            voiceIdentifier: readAloudVoice,
+            language: readAloudLanguage,
             rate: readAloudRate
         )
     }
 
-    /// The verses on screen: a plan reading's, or the chapter's.
+    /// The language the verses read aloud are written in: their chapter's
+    /// translation's, not the one chosen, which runs ahead of the chapter
+    /// while another translation loads.
+    private var readAloudLanguage: String {
+        let id = readAloudChapters.first?.translationID
+        return SpeechVoices.language(of: model.translations.first { $0.id == id })
+    }
+
+    /// The verses on screen.
     private var readAloudVerses: [LampVerse] {
+        readAloudChapters.flatMap(\.verses)
+    }
+
+    /// The chapters on screen: a plan reading's, or the chapter.
+    private var readAloudChapters: [LampChapter] {
         if let translationID = workspace.selectedTranslationID,
            let reading = planReadingMode?.activeReading,
            workspace.loadedPlanReadingRequest == PlanReadingChapterRequest(
@@ -1187,9 +1199,9 @@ struct LibraryRootView: View {
                endReference: reading.endReference
            ),
            !workspace.planReadingChapters.isEmpty {
-            return workspace.planReadingChapters.flatMap(\.verses)
+            return workspace.planReadingChapters
         }
-        return workspace.chapter?.verses ?? []
+        return workspace.chapter.map { [$0] } ?? []
     }
 
     /// The reader's layout, remembering the one side by side is chosen from.
@@ -1407,8 +1419,10 @@ struct LibraryRootView: View {
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
-            .disabled(readAloudVerses.isEmpty)
-            .help("\(readAloudButtonTitle) — the arrow has where to start from")
+            .disabled(readAloudVerses.isEmpty || !SpeechVoices.hasVoice(for: readAloudLanguage))
+            .help(SpeechVoices.hasVoice(for: readAloudLanguage)
+                ? "\(readAloudButtonTitle) — the arrow has where to start from"
+                : "No \(SpeechVoices.languageName(readAloudLanguage)) voice is installed, so this translation can’t be read aloud")
         }
 
         ToolbarItemGroup(placement: .primaryAction) {
@@ -4683,8 +4697,6 @@ private struct TranslationReaderView: View, Equatable {
     /// above is empty.
     @AppStorage("reader.companionTranslationID") private var singleCompanionTranslationID = ""
     @State private var companionText = ReaderCompanionText()
-    @AppStorage("reader.readAloud.voice") private var readAloudVoice = ""
-    @AppStorage("reader.readAloud.rate") private var readAloudRate = 0.5
     @AppStorage("reader.readAloud.followAlong") private var followReadAloud = true
     /// Set, never read here, so typing in the dictionary does not redraw
     /// the reader.
@@ -7135,51 +7147,6 @@ private struct TranslationReaderView: View, Equatable {
         return "\(book) \(location.chapterNumber) (\(name))"
     }
 
-    private var readAloudButtonTitle: String {
-        switch readAloud.state {
-        case .stopped: "Read Aloud"
-        case .playing: "Pause Read Aloud"
-        case .paused: "Resume Read Aloud"
-        }
-    }
-
-    private var readAloudButtonImage: String {
-        switch readAloud.state {
-        case .stopped: "play.fill"
-        case .playing: "pause.fill"
-        case .paused: "play.fill"
-        }
-    }
-
-    private func toggleReadAloud() {
-        let verses = readAloudVerses
-        guard !verses.isEmpty else { return }
-        readAloud.toggle(
-            items: verses.map {
-                ReadAloudItem(reference: $0.id, verseNumber: $0.number, text: $0.text)
-            },
-            startingAt: workspace.selectedVerseReference,
-            voiceIdentifier: readAloudVoice,
-            rate: readAloudRate
-        )
-    }
-
-    private func startReadAloud(at reference: Int?) {
-        let verses = readAloudVerses
-        guard !verses.isEmpty else { return }
-        readAloud.play(
-            items: verses.map {
-                ReadAloudItem(reference: $0.id, verseNumber: $0.number, text: $0.text)
-            },
-            startingAt: reference,
-            voiceIdentifier: readAloudVoice,
-            rate: readAloudRate
-        )
-    }
-
-    private var readAloudVerses: [LampVerse] {
-        displayedChapters.flatMap(\.verses)
-    }
 }
 
 private struct VerseAnnotationRange: Hashable {
