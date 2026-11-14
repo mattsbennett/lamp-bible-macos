@@ -6847,23 +6847,40 @@ private struct TranslationReaderView: View, Equatable {
         // `index(startIndex, offsetBy:)` walks the string from the front every
         // time it is asked, and a densely tagged verse asks once per annotation
         // per pass. One walk up front turns each of those into a subscript.
+        //
+        // Two walks, because two kinds of offset arrive here and they are not
+        // the same unit. A **tag** addresses its verse by code point, as every
+        // annotation in Lamp does. A **highlight** is the reader's own, made by
+        // this app and counted in `Character`s. Measuring either by the other's
+        // unit moves it: a pointed Hebrew word is seven code points and four
+        // Characters, so tagged ranges were being thrown away as out of bounds
+        // and the words under them lost their lookup.
         let characterIndices = Array(verse.text.indices) + [verse.text.endIndex]
+        let scalarIndices = Array(verse.text.unicodeScalars.indices) + [verse.text.endIndex]
 
-        func attributedRange(from startOffset: Int, to endOffset: Int) -> NSRange? {
+        func range(_ indices: [String.Index], _ startOffset: Int, _ endOffset: Int) -> NSRange? {
             guard startOffset >= 0,
                   endOffset > startOffset,
-                  endOffset < characterIndices.count,
-                  startOffset < characterIndices.count else {
+                  endOffset < indices.count,
+                  startOffset < indices.count else {
                 return nil
             }
-            return NSRange(
-                characterIndices[startOffset]..<characterIndices[endOffset],
-                in: verse.text
-            )
+            return NSRange(indices[startOffset]..<indices[endOffset], in: verse.text)
+        }
+
+        /// A tag's range: code points, which is what its offsets count.
+        func taggedRange(from startOffset: Int, to endOffset: Int) -> NSRange? {
+            range(scalarIndices, startOffset, endOffset)
+        }
+
+        /// A highlight's range: `Character`s, which is what the reader's own
+        /// marks were made in.
+        func attributedRange(from startOffset: Int, to endOffset: Int) -> NSRange? {
+            range(characterIndices, startOffset, endOffset)
         }
 
         for annotation in verse.annotations {
-            guard let range = attributedRange(
+            guard let range = taggedRange(
                 from: annotation.startOffset,
                 to: annotation.endOffset
             ) else { continue }
@@ -6908,14 +6925,14 @@ private struct TranslationReaderView: View, Equatable {
             let keys = StrongsKey.readerLookupKeys(annotations.compactMap(\.strongs))
             guard annotationRange.start >= 0,
                   annotationRange.end > annotationRange.start,
-                  annotationRange.end < characterIndices.count,
+                  annotationRange.end < scalarIndices.count,
                   !keys.isEmpty else { continue }
             let word = String(
-                verse.text[characterIndices[annotationRange.start]..<characterIndices[annotationRange.end]]
+                verse.text[scalarIndices[annotationRange.start]..<scalarIndices[annotationRange.end]]
             )
             guard let lookup = LexiconLookupLink(keys: keys, reference: verse.id, word: word),
                   let route = lookup.url?.absoluteString,
-                  let range = attributedRange(
+                  let range = taggedRange(
                       from: annotationRange.start,
                       to: annotationRange.end
                   ) else { continue }
