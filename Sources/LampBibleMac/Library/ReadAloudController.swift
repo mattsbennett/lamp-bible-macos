@@ -291,15 +291,10 @@ enum SpeechVoices {
         }
     }
 
-    /// The language's name, as a reader knows it: Greek and Hebrew rather
-    /// than the locale's "Ancient Greek", and a name for biblical Hebrew,
-    /// which the locale has none for.
+    /// The language's name, as a reader knows it (core's): "Greek", not
+    /// the locale's "Ancient Greek".
     static func languageName(_ language: String) -> String {
-        switch baseLanguage(language) {
-        case "grc": "Greek"
-        case "hbo": "Hebrew"
-        case let base: Locale.current.localizedString(forLanguageCode: base) ?? base
-        }
+        LampTranslationLanguages.name(of: language) ?? language
     }
 
     /// The installed voices, held until the system says they changed.

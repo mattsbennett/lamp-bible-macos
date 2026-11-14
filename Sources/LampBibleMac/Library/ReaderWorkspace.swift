@@ -471,7 +471,16 @@ final class ReaderWorkspace: ObservableObject {
                         mirror()
                         return
                     }
-                    book = loadedBooks.first { ($0.id <= 39) == (requested <= 39) }
+                    // Core's rule, the phone's too: the same testament's first
+                    // book, else the first, at chapter 1.
+                    let landing = LampTranslationCoverage.landing(
+                        book: requested,
+                        chapter: selectedChapterNumber,
+                        chapterCounts: Dictionary(
+                            loadedBooks.map { ($0.id, $0.chapterCount) }, uniquingKeysWith: { first, _ in first })
+                    )
+                    book = landing.flatMap { place in loadedBooks.first { $0.id == place.book } }
+                    if let landing, selectedChapterNumber != landing.chapter { selectedChapterNumber = landing.chapter }
                     // The verse chosen was in the book that isn't here.
                     if selectedVerseReference != nil { selectedVerseReference = nil }
                 }

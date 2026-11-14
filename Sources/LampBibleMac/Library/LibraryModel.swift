@@ -44,17 +44,10 @@ enum BiblicalOriginalLanguage: String, CaseIterable {
 
 extension LampInstalledModule {
     var biblicalOriginalLanguage: BiblicalOriginalLanguage? {
-        let declaredLanguage = language?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-
-        switch declaredLanguage {
-        case "greek", "grc", "el", "ell", "ancient greek", "koine greek":
-            return .greek
-        case "hebrew", "heb", "he", "hbo", "aramaic":
-            return .hebrew
-        default:
-            break
+        switch LampTranslationLanguages.strongsSide(of: language) {
+        case .greek: return .greek
+        case .hebrew: return .hebrew
+        case nil: break
         }
 
         // Some older SWORD imports describe the language of their definitions as
@@ -214,14 +207,13 @@ final class LibraryModel: ObservableObject {
     /// doesn't: one in the same language as `translationID` first, then the
     /// first listed.
     func translation(having book: Int, near translationID: String?) -> LampInstalledModule? {
-        func language(_ module: LampInstalledModule?) -> String? {
-            module?.language?.lowercased().split(whereSeparator: { $0 == "-" || $0 == "_" }).first.map(String.init)
-        }
-        let own = language(translations.first { $0.id == translationID })
-        let having = translations.filter {
-            $0.id != translationID && translationBookNames[$0.id]?[book] != nil
-        }
-        return having.first { own != nil && language($0) == own } ?? having.first
+        LampTranslationCoverage.alternative(
+            having: book,
+            near: translations.first { $0.id == translationID }?.language,
+            among: translations.filter { $0.id != translationID },
+            language: \.language,
+            covers: { translationBookNames[$0.id]?[book] != nil }
+        )
     }
 
     /// A translation's own book names, by number, for reading or naming a

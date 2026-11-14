@@ -330,15 +330,9 @@ struct InstalledModulesView: View {
     private func coverCaption(for module: LampInstalledModule) -> String? {
         switch module.kind {
         case .translation:
-            guard let code = module.language?.lowercased(), !code.isEmpty else { return "Bible" }
-            // The ancient languages by the names a reader knows them by:
-            // the locale calls Greek "Ancient Greek" and has no name at all
-            // for biblical Hebrew's code.
-            switch code {
-            case "grc": return "Greek"
-            case "hbo": return "Hebrew"
-            default: return Locale.current.localizedString(forLanguageCode: code) ?? code
-            }
+            // The ancient languages by the names a reader knows them by
+            // (core's): the locale calls Greek "Ancient Greek".
+            return LampTranslationLanguages.name(of: module.language) ?? "Bible"
         case .dictionary: return "Dictionary"
         case .commentary: return "Commentary"
         case .book: return nil
