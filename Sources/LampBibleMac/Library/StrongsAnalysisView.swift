@@ -3570,15 +3570,12 @@ private struct SeptuagintWordGroup: View {
                 // worse than either.
                 Text(reference(verse.opensAt ?? english.reference))
                     .font(.system(size: fontSize, weight: .medium))
-                if let snippet = english.snippet {
-                    (Text(snippet.isTrimmedAtStart ? "…" : "")
-                        // `before` is told what follows it: the cut falls
-                        // between a marker and the word it belongs to, so
-                        // read alone its last digits look like a number.
-                        + interlinear(snippet.before, followedBy: snippet.word)
-                        + Text.lampFindMatch(snippet.word)
-                        + interlinear(snippet.after)
-                        + Text(snippet.isTrimmedAtEnd ? "…" : ""))
+                if let text = english.text {
+                    // The verse whole, with every place it renders the word
+                    // marked — the Greek line below marks every one, and a
+                    // row marking one of two said the texts disagreed where
+                    // they agree.
+                    markedLine(text, marking: english.marks, interlinear: true)
                         .font(.system(size: fontSize))
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
@@ -3637,29 +3634,51 @@ private struct SeptuagintWordGroup: View {
     /// the text is sliced as characters. A span that does not fit the text
     /// read here draws the verse unmarked rather than cutting it in the
     /// wrong place.
+    /// The Greek of a verse, marked where the tagging says the word stands.
+    /// Its own text, never an interlinear's: the Greek a row shows is the
+    /// Septuagint itself.
     private func greekLine(_ greek: String, marking spans: [SeptuagintLoader.GreekMark]) -> Text {
-        // Code points, because that is what a tag's offsets count. Swift's
-        // Characters are grapheme clusters, so a letter written with its
-        // accent as a separate mark is one Character and two code points,
-        // and slicing by Character put the mark on the wrong word — or
-        // threw a span away as out of bounds. Brenton's Greek is composed,
-        // so nothing showed it; a decomposed text would have.
-        let scalars = Array(greek.unicodeScalars)
+        markedLine(greek, marking: spans, interlinear: false)
+    }
+
+    /// A verse with the places its tagging marks highlighted, and — for a
+    /// text that prints them — an interlinear's word-order numbers raised.
+    ///
+    /// Code points, because that is what a tag's offsets count. Swift's
+    /// Characters are grapheme clusters, so a letter written with its accent
+    /// as a separate mark is one Character and two code points, and slicing
+    /// by Character put the mark on the wrong word — or threw a span away as
+    /// out of bounds. Brenton's Greek is composed, so nothing showed it; a
+    /// decomposed text would have.
+    private func markedLine(
+        _ text: String,
+        marking spans: [LampSeptuagintSection.Span],
+        interlinear showsMarkers: Bool
+    ) -> Text {
+        let scalars = Array(text.unicodeScalars)
+        func slice(_ range: Range<Int>) -> String {
+            String(String.UnicodeScalarView(scalars[range]))
+        }
+        // A marker belongs to the word after it, and a mark cuts the line
+        // exactly between the two — the tag marks the word, not the number.
+        // So each unmarked piece is told what follows it.
+        func plain(_ range: Range<Int>, followedBy next: String?) -> Text {
+            let piece = slice(range)
+            return showsMarkers ? interlinear(piece, followedBy: next) : Text(piece)
+        }
         let wanted = spans
             .filter { $0.start >= 0 && $0.end > $0.start && $0.end <= scalars.count }
             .sorted { $0.start < $1.start }
-        guard !wanted.isEmpty else { return Text(greek) }
-        func text(_ range: Range<Int>) -> String {
-            String(String.UnicodeScalarView(scalars[range]))
-        }
+        guard !wanted.isEmpty else { return plain(0..<scalars.count, followedBy: nil) }
         var line = Text("")
         var cursor = 0
         for span in wanted where span.start >= cursor {
-            line = line + Text(text(cursor..<span.start))
-                + Text.lampFindMatch(text(span.start..<span.end))
+            let word = slice(span.start..<span.end)
+            line = line + plain(cursor..<span.start, followedBy: word)
+                + Text.lampFindMatch(word)
             cursor = span.end
         }
-        return line + Text(text(cursor..<scalars.count))
+        return line + plain(cursor..<scalars.count, followedBy: nil)
     }
 
     private func reference(_ reference: Int) -> String {
