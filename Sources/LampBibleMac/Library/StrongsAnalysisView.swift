@@ -89,6 +89,7 @@ final class StrongsAnalysisLoader {
 
     private func run(_ request: Request, library: LampLibrary) async {
         let order = asked(request)
+        var needsVerseText = true
         for (index, translationID) in order.enumerated() {
             if Task.isCancelled || requested != request { return }
             do {
@@ -96,14 +97,22 @@ final class StrongsAnalysisLoader {
                     key: request.key,
                     moduleIDs: [translationID],
                     bookRange: request.bookRange,
-                    // Only the translation being read, which is the only one
-                    // whose occurrences are listed. A common key's verses run
-                    // to about a megabyte, and Compare shows counts and
-                    // renderings — never a verse — so asking for the rest
-                    // would hold five copies nothing reads.
-                    includingVerseText: index == 0
+                    // Only the translation whose occurrences are listed,
+                    // which is the first one that *answers* — not the first
+                    // one asked. A translation that does not tag this key
+                    // returns nothing and is never shown, and giving the
+                    // verses to it left the list that was shown with none,
+                    // so every row fell back to the bare rendered word.
+                    // A common key's verses run to about a megabyte, and
+                    // Compare shows counts and renderings — never a verse —
+                    // so asking for the rest would hold five copies nothing
+                    // reads.
+                    includingVerseText: needsVerseText
                 )
                 if Task.isCancelled || requested != request { return }
+                // Answered, so this is the list that will be shown and it
+                // has its verses. The rest are counts and renderings.
+                if !found.isEmpty { needsVerseText = false }
                 analyses = LampStrongsAnalysisOrder.ordered(
                     analyses + found,
                     activeTranslationID: request.activeTranslationID
@@ -1141,6 +1150,10 @@ struct StrongsAnalysisPane: View {
     /// Which English the verse rows read. Remembered, because it is a way of
     /// working rather than a thing done once.
     @AppStorage("studyInspector.septuagintEnglishIsDirect") private var readsSeptuagintInEnglish = true
+    /// Whether the Septuagint's own Greek is shown under each verse. Off to
+    /// begin with: it is the row's evidence, and it doubles every row's
+    /// height for a reader who may not read Greek at all.
+    @AppStorage("studyInspector.septuagintShowsGreek") private var showsGreek = false
     /// Open when the reader has chosen the longer way round, so what that
     /// means is said where they chose it.
     @State private var isShowingEnglishChoiceNote = false
@@ -1900,7 +1913,10 @@ struct StrongsAnalysisPane: View {
     /// does not translate the Greek this section is about.
     @ViewBuilder
     private var englishChoice: some View {
-        if septuagint.septuagintInEnglish != nil {
+        if LampSeptuagintSection.EnglishChoice.isOffered(
+            septuagintInEnglish: septuagint.septuagintInEnglish,
+            readersTranslationID: analysis?.translationID
+        ) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
                     Text(LampSeptuagintSection.EnglishChoice.title)
@@ -1934,6 +1950,24 @@ struct StrongsAnalysisPane: View {
             }
             .padding(.bottom, 2)
         }
+    }
+
+    /// Whether the Septuagint's own Greek is drawn under each verse.
+    ///
+    /// Always offered, unlike the English choice: that one needs two texts
+    /// to choose between, and this one is about a text the section always
+    /// has. Off to begin with, so the note says what turning it on gives.
+    private var greekChoice: some View {
+        HStack(spacing: 8) {
+            Toggle(LampSeptuagintSection.OriginalLanguage.title, isOn: $showsGreek)
+                .toggleStyle(.checkbox)
+                .font(.system(size: Self.chartFinePrintSize))
+            Text(LampSeptuagintSection.OriginalLanguage.note)
+                .font(.system(size: Self.chartFinePrintSize))
+                .foregroundStyle(Color.lampSecondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.bottom, 2)
     }
 
     /// Everything about how the section's figures were reached, under one
@@ -2215,6 +2249,7 @@ struct StrongsAnalysisPane: View {
                     // counted it and said what it is.
                     VStack(alignment: .leading, spacing: 4) {
                         englishChoice
+                        greekChoice
                         Text(hebrewIntroduction)
                             .font(.system(size: Self.sectionProseSize))
                             .foregroundStyle(Color.lampSecondaryText)
@@ -2246,6 +2281,7 @@ struct StrongsAnalysisPane: View {
                                 references: references,
                                 loader: septuagint,
                                 englishID: analysis.translationID,
+                                showsGreek: showsGreek,
                                 fontSize: fontSize,
                                 analyse: analyse
                             )
@@ -3374,6 +3410,8 @@ private struct SeptuagintWordGroup: View {
     /// The translation whose English the verses are shown in: the one the
     /// analysis is of.
     let englishID: String?
+    /// Whether the Septuagint's own Greek is drawn under each verse.
+    let showsGreek: Bool
     let fontSize: Double
     let analyse: (String) -> Void
 
@@ -3569,46 +3607,52 @@ private struct SeptuagintWordGroup: View {
                 // opens: naming one verse and opening another would be
                 // worse than either.
                 Text(reference(verse.opensAt ?? english.reference))
-                    .font(.system(size: fontSize, weight: .medium))
+                    .font(.system(size: fontSize, weight: .bold))
                 if let text = english.text {
                     // The verse whole, with every place it renders the word
                     // marked — the Greek line below marks every one, and a
                     // row marking one of two said the texts disagreed where
                     // they agree.
                     markedLine(text, marking: english.marks, interlinear: true)
-                        .font(.system(size: fontSize))
+                        .font(.system(size: fontSize, design: .serif))
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             case .none, .pending:
                 Text(reference(verse.reference))
-                    .font(.system(size: fontSize, weight: .medium))
+                    .font(.system(size: fontSize, weight: .bold))
             }
-            switch verse.greek {
-            case .text(let greek):
-                // The Greek word marked where the tagging says it stands, so
-                // the reason this verse is in a narrowed list can be seen
-                // rather than taken on trust.
-                // Dimmer than the English, which a panel called "a clear
-                // and consistent system" worth keeping, but a step brighter
-                // again: at the readable grey every judge still called it
-                // dim, and two called it tiring over a long scroll. This is
-                // scripture, and `lampProse` is what the app reads scripture
-                // and commentary at — about 12:1 — so the pairing now rests
-                // on weight and size rather than on fading one side out.
-                greekLine(greek, marking: loader.greekMarks[verse.reference] ?? [])
-                    .font(.system(size: max(10, fontSize - 1), design: .serif))
-                    .foregroundStyle(Color.lampProse)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-            case .absent:
-                Text(LampSeptuagintSection.missingVerse(in: loader.septuagintName))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            case .pending:
-                // Nothing yet. The reference is worth reading on its own, and
-                // anything said about the Greek here would be a guess.
-                EmptyView()
+            // Only when asked for. Hidden is not the same as not yet read:
+            // the row still loads its Greek, because the marks and the
+            // settling are worked out from it, so turning the line on shows
+            // it at once rather than starting a load.
+            if showsGreek {
+                switch verse.greek {
+                case .text(let greek):
+                    // The Greek word marked where the tagging says it stands, so
+                    // the reason this verse is in a narrowed list can be seen
+                    // rather than taken on trust.
+                    // Dimmer than the English, which a panel called "a clear
+                    // and consistent system" worth keeping, but a step brighter
+                    // again: at the readable grey every judge still called it
+                    // dim, and two called it tiring over a long scroll. This is
+                    // scripture, and `lampProse` is what the app reads scripture
+                    // and commentary at — about 12:1 — so the pairing now rests
+                    // on weight and size rather than on fading one side out.
+                    greekLine(greek, marking: loader.greekMarks[verse.reference] ?? [])
+                        .font(.system(size: max(10, fontSize - 1), design: .serif))
+                        .foregroundStyle(Color.lampProse)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                case .absent:
+                    Text(LampSeptuagintSection.missingVerse(in: loader.septuagintName))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                case .pending:
+                    // Nothing yet. The reference is worth reading on its own, and
+                    // anything said about the Greek here would be a guess.
+                    EmptyView()
+                }
             }
             // Why this verse is not simply one word answering to one word.
             // Said only where it is so: a row with nothing under it is the
@@ -3687,24 +3731,8 @@ private struct SeptuagintWordGroup: View {
             + "\(parts.chapter):\(parts.verse)"
     }
 
-    /// An interlinear's word-order numbers set as its readers expect them —
-    /// raised and small against the word they belong to — rather than run
-    /// into the words as digits.
-    ///
-    /// The Apostolic Bible Polyglot prints them, and its readers read by
-    /// them; in plain text "[2said 3to her 1Amnon]" reads as damage. Core
-    /// decides which digits are markers and which are numbers the verse
-    /// means; this only draws them.
     private func interlinear(_ text: String, followedBy next: String? = nil) -> Text {
-        let runs = LampSeptuagintSection.interlinearRuns(in: text, followedBy: next)
-        guard runs.contains(where: \.isMarker) else { return Text(text) }
-        return runs.reduce(Text("")) { line, run in
-            guard run.isMarker else { return line + Text(run.text) }
-            return line + Text(run.text)
-                .font(.system(size: max(7, fontSize - 4)))
-                .baselineOffset(fontSize * 0.34)
-                .foregroundStyle(Color.lampSecondaryText)
-        }
+        .lampInterlinear(text, followedBy: next, size: fontSize)
     }
 }
 
@@ -4537,7 +4565,7 @@ struct StrongsOccurrenceLabel: View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 8) {
                 Text(Self.reference(occurrence.reference))
-                    .font(.system(size: fontSize, weight: .medium))
+                    .font(.system(size: fontSize, weight: .bold))
                 Spacer()
                 if let form = occurrence.form, !form.isEmpty {
                     Text(form)
@@ -4550,8 +4578,12 @@ struct StrongsOccurrenceLabel: View {
                 // the tagged word keeps the mark it was given. Scripture in
                 // the text's own colour, as every search result shows it: in
                 // the system grey these were the faintest verses in the app.
+                // Serif, as the reader draws scripture and as the phone
+                // draws these rows. The reference above is the system face,
+                // so the two are told apart by what they are rather than by
+                // half a step of weight at the same size.
                 snippet(of: verse)
-                    .font(.system(size: fontSize))
+                    .font(.system(size: fontSize, design: .serif))
                     .foregroundStyle(.primary)
                     .lineLimit(3)
             } else if !occurrence.text.isEmpty {
@@ -4578,10 +4610,40 @@ struct StrongsOccurrenceLabel: View {
             to: occurrence.endOffset
         )
         return Text(snippet.isTrimmedAtStart ? "…" : "")
-            + Text(snippet.before)
+            // The same raised markers the Septuagint section draws. This
+            // list shows the ABP's verses too, and left as digits they read
+            // as damage here exactly as they did there.
+            + .lampInterlinear(snippet.before, followedBy: snippet.word, size: fontSize)
             + Text.lampFindMatch(snippet.word)
-            + Text(snippet.after)
+            + .lampInterlinear(snippet.after, followedBy: nil, size: fontSize)
             + Text(snippet.isTrimmedAtEnd ? "…" : "")
+    }
+}
+
+extension Text {
+    /// An interlinear's word-order numbers set as its readers expect them —
+    /// raised and small against the word they belong to — rather than run
+    /// into the words as digits.
+    ///
+    /// The Apostolic Bible Polyglot prints them, and its readers read by
+    /// them; in plain text "[2said 3to her 1Amnon]" reads as damage. Core
+    /// decides which digits are markers and which are numbers the verse
+    /// means; this only draws them.
+    ///
+    /// `next` is what follows this piece, because a marker belongs to the
+    /// word after it and a marked word cuts the line exactly between the
+    /// two. One renderer, so a verse reads the same in every list that
+    /// shows it.
+    static func lampInterlinear(_ text: String, followedBy next: String?, size: Double) -> Text {
+        let runs = LampSeptuagintSection.interlinearRuns(in: text, followedBy: next)
+        guard runs.contains(where: \.isMarker) else { return Text(text) }
+        return runs.reduce(Text("")) { line, run in
+            guard run.isMarker else { return line + Text(run.text) }
+            return line + Text(run.text)
+                .font(.system(size: max(7, size - 4), design: .serif))
+                .baselineOffset(size * 0.34)
+                .foregroundStyle(Color.lampSecondaryText)
+        }
     }
 }
 
