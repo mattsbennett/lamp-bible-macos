@@ -210,6 +210,20 @@ final class LibraryModel: ObservableObject {
             ?? LampBibleReferenceFormatter.bookName(book)
     }
 
+    /// A translation that has `book`, for a reader sent to it in one that
+    /// doesn't: one in the same language as `translationID` first, then the
+    /// first listed.
+    func translation(having book: Int, near translationID: String?) -> LampInstalledModule? {
+        func language(_ module: LampInstalledModule?) -> String? {
+            module?.language?.lowercased().split(whereSeparator: { $0 == "-" || $0 == "_" }).first.map(String.init)
+        }
+        let own = language(translations.first { $0.id == translationID })
+        let having = translations.filter {
+            $0.id != translationID && translationBookNames[$0.id]?[book] != nil
+        }
+        return having.first { own != nil && language($0) == own } ?? having.first
+    }
+
     /// A translation's own book names, by number, for reading or naming a
     /// passage in it; none for a translation not yet read.
     func bookNames(of translationID: String?) -> [Int: String] {

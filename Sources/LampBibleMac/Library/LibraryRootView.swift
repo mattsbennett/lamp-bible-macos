@@ -1118,11 +1118,17 @@ struct LibraryRootView: View {
 
     private var readerLocationTitle: String {
         if workspace.isBlank { return "New Tab" }
-        let translation = model.selectedTranslation?.abbreviation ?? "Translation"
+        // This window's translation, not the library's, which follows
+        // whichever reader was used last.
+        let translation = model.translations
+            .first { $0.id == workspace.selectedTranslationID }?.abbreviation ?? "Translation"
         if let reading = planReadingMode?.activeReading {
             return "\(translation) \u{00B7} \(reading.displayDescription)"
         }
-        let book = workspace.selectedBook?.name ?? "Book"
+        // A book the translation lacks is still named: it is where the
+        // reader was sent, and the page under the title says it is missing.
+        let book = workspace.selectedBook?.name
+            ?? workspace.selectedBookNumber.map { model.bookName($0, in: nil) } ?? "Book"
         return "\(translation) \u{00B7} \(book) \(workspace.selectedChapterNumber)"
     }
 
@@ -4958,6 +4964,33 @@ private struct TranslationReaderView: View, Equatable {
         Task { await loadPlanReadingChapters(for: request, rereading: true) }
     }
 
+    /// For a place this translation doesn't have: says so, and offers the
+    /// same place in a translation that has it.
+    private func missingBookNotice(_ book: Int) -> some View {
+        let translationID = workspace.selectedTranslationID
+        let name = model.translations.first { $0.id == translationID }?.name ?? "This translation"
+        let other = model.translation(having: book, near: translationID)
+        let reference = workspace.selectedVerseReference
+            ?? book * 1_000_000 + workspace.selectedChapterNumber * 1_000 + 1
+        return ContentUnavailableView {
+            Label(
+                "\(name) doesn’t include \(model.bookName(book, in: other?.id))",
+                systemImage: "book.closed"
+            )
+        } description: {
+            Text(other == nil
+                ? "No installed translation has this book."
+                : "Choose another book, or read this passage in \(other!.name).")
+        } actions: {
+            if let other {
+                Button("Read in \(other.name)") {
+                    workspace.openReference(reference, translationID: other.id)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+    }
+
     @ViewBuilder
     private var readerContent: some View {
         if model.translations.isEmpty {
@@ -4985,6 +5018,8 @@ private struct TranslationReaderView: View, Equatable {
             } else {
                 ProgressView("Loading Reading…")
             }
+        } else if let book = workspace.missingBook {
+            missingBookNotice(book)
         } else if let chapter = workspace.chapter {
             passageView([chapter])
                 .id("\(chapter.book.id):\(chapter.number)")
@@ -5053,7 +5088,18 @@ private struct TranslationReaderView: View, Equatable {
             guard !locations.isEmpty else {
                 planReadingChapters = []
                 loadedPlanReadingRequest = nil
-                planReadingError = "The plan contains an invalid scripture range."
+                // A reading in a book the translation lacks, as a Gospel in a
+                // Septuagint, rather than a range that names nothing.
+                let first = request.startReference / 1_000_000
+                let last = request.endReference / 1_000_000
+                let covered = Set(books.map(\.id))
+                if let missing = (first...max(first, last)).first(where: { !covered.contains($0) }) {
+                    let name = model.translations.first { $0.id == request.translationID }?.name
+                        ?? "This translation"
+                    planReadingError = "\(name) doesn’t include \(model.bookName(missing, in: nil)). Choose a translation that does to read this reading."
+                } else {
+                    planReadingError = "The plan contains an invalid scripture range."
+                }
                 isLoadingPlanReading = false
                 return
             }
@@ -5777,7 +5823,7 @@ private struct TranslationReaderView: View, Equatable {
             ids[slot] = chapter.translationID
             chooseCompanions(ids)
         }
-        workspace.openReference(readingPlace(in: chapter), translationID: id)
+        workspace.openReference(readingPlace(in: chapter), translationID: id, switchingTranslation: true)
     }
 
     /// A quiet way into reading side by side from the page itself, beside each
@@ -7161,11 +7207,17 @@ private struct TranslationReaderView: View, Equatable {
     }
 
     private var readerLocationTitle: String {
-        let translation = model.selectedTranslation?.abbreviation ?? "Translation"
+        // This window's translation, not the library's, which follows
+        // whichever reader was used last.
+        let translation = model.translations
+            .first { $0.id == workspace.selectedTranslationID }?.abbreviation ?? "Translation"
         if let reading = planReadingMode?.activeReading {
             return "\(translation) \u{00B7} \(reading.displayDescription)"
         }
-        let book = workspace.selectedBook?.name ?? "Book"
+        // A book the translation lacks is still named: it is where the
+        // reader was sent, and the page under the title says it is missing.
+        let book = workspace.selectedBook?.name
+            ?? workspace.selectedBookNumber.map { model.bookName($0, in: nil) } ?? "Book"
         return "\(translation) \u{00B7} \(book) \(workspace.selectedChapterNumber)"
     }
 

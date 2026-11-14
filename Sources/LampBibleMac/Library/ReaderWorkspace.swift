@@ -40,6 +40,16 @@ final class ReaderWorkspace: ObservableObject {
     /// here is the chapter itself.
     @Published private(set) var contents = ReaderChapterContents.empty
     @Published private(set) var isLoadingChapter = false
+    /// A book this tab was sent to that its translation doesn't have:
+    /// Matthew in a Septuagint, Genesis in a New Testament. The reader says
+    /// so, rather than opening another book as if it had been asked for.
+    @Published private(set) var missingBook: Int?
+    /// Set for a move that changes the translation itself, which keeps to the
+    /// place where the new one has it and otherwise opens its first book in
+    /// the same testament. It belongs to that move until a load settles the
+    /// book: a quiet refresh before then keeps it, and any other move clears
+    /// it.
+    private var replacesMissingBook = false
 
     /// The library this workspace reads through. Set once the window has an
     /// environment to take it from, so a workspace exists before it can read.
@@ -152,7 +162,14 @@ final class ReaderWorkspace: ObservableObject {
     }
 
     /// Goes to a place, reading it if this workspace is not there already.
-    func open(translationID: String?, book: Int?, chapter: Int, verse: Int?) {
+    /// `replacingMissingBook`: see `replacesMissingBook`.
+    func open(
+        translationID: String?,
+        book: Int?,
+        chapter: Int,
+        verse: Int?,
+        replacingMissingBook: Bool = false
+    ) {
         let movedChapter = translationID != selectedTranslationID
             || book != selectedBookNumber
             || chapter != selectedChapterNumber
@@ -161,9 +178,18 @@ final class ReaderWorkspace: ObservableObject {
         selectedChapterNumber = max(chapter, 1)
         selectedVerseReference = verse
         guard movedChapter else {
-            mirror()
+            // Not a move, but a place asked for that a switch still loading
+            // was about to replace: read it again as asked. A second switch
+            // to the same place leaves the first to finish.
+            if replacesMissingBook, !replacingMissingBook {
+                replacesMissingBook = false
+                loadBooksAndChapter()
+            } else {
+                mirror()
+            }
             return
         }
+        replacesMissingBook = replacingMissingBook
         loadBooksAndChapter()
     }
 
@@ -212,6 +238,7 @@ final class ReaderWorkspace: ObservableObject {
         selectedBookNumber = nil
         selectedChapterNumber = 1
         selectedVerseReference = nil
+        replacesMissingBook = false
         loadBooksAndChapter()
     }
 
@@ -221,6 +248,7 @@ final class ReaderWorkspace: ObservableObject {
         selectedChapterNumber = 1
         selectedVerseReference = nil
         record()
+        replacesMissingBook = false
         loadBooksAndChapter()
     }
 
@@ -229,6 +257,7 @@ final class ReaderWorkspace: ObservableObject {
         selectedChapterNumber = chapterNumber
         selectedVerseReference = nil
         record()
+        replacesMissingBook = false
         loadBooksAndChapter()
     }
 
@@ -243,19 +272,30 @@ final class ReaderWorkspace: ObservableObject {
         selectedChapterNumber = chapterNumber
         selectedVerseReference = nil
         record()
+        replacesMissingBook = false
         loadBooksAndChapter()
     }
 
-    func openReference(_ encodedReference: Int, translationID: String? = nil) {
+    /// `switchingTranslation`: the move changes which translation is read,
+    /// so a book the new one lacks gives way to its nearest rather than a
+    /// notice that it is missing.
+    func openReference(
+        _ encodedReference: Int,
+        translationID: String? = nil,
+        switchingTranslation: Bool = false
+    ) {
         let parts = LampBibleReferenceFormatter.components(of: encodedReference)
         let translation = translationID ?? selectedTranslationID
         open(
             translationID: translation,
             book: parts.book,
             chapter: parts.chapter,
-            verse: encodedReference
+            verse: encodedReference,
+            replacingMissingBook: switchingTranslation
         )
-        record()
+        // A switch is recorded once its load has settled the book, so back
+        // never returns to a place the new translation doesn't have.
+        if !switchingTranslation { record() }
     }
 
     func navigateBackward() {
@@ -273,6 +313,7 @@ final class ReaderWorkspace: ObservableObject {
         }
         selectedVerseReference = nil
         record()
+        replacesMissingBook = false
         loadBooksAndChapter()
     }
 
@@ -292,6 +333,7 @@ final class ReaderWorkspace: ObservableObject {
         }
         selectedVerseReference = nil
         record()
+        replacesMissingBook = false
         loadBooksAndChapter()
     }
 
@@ -385,6 +427,9 @@ final class ReaderWorkspace: ObservableObject {
     private func loadBooksAndChapter() {
         // Anything read is a passage chosen: a new tab becomes an ordinary one.
         if isBlank { isBlank = false }
+        let replacesMissingBook = replacesMissingBook
+        // Asked again below, for the book now wanted.
+        if missingBook != nil { missingBook = nil }
         guard let model, let translationID = selectedTranslationID else {
             contents = .empty
             mirror()
@@ -402,8 +447,9 @@ final class ReaderWorkspace: ObservableObject {
             isLoadingChapter = true
         }
         // Where this window is, before what it is reading arrives: a move
-        // should reach the rest of the app at once, not a chapter later.
-        mirror()
+        // should reach the rest of the app at once, not a chapter later. Not
+        // a switch's, whose book is not settled until its books are read.
+        if !replacesMissingBook { mirror() }
         chapterTask = Task {
             defer {
                 if !Task.isCancelled {
@@ -415,7 +461,21 @@ final class ReaderWorkspace: ObservableObject {
                 let loadedBooks = try await model.library.translationBooks(moduleID: translationID)
                 guard !Task.isCancelled, selectedTranslationID == translationID else { return }
                 if books != loadedBooks { books = loadedBooks }
-                let book = loadedBooks.first { $0.id == selectedBookNumber } ?? loadedBooks.first
+                var book = loadedBooks.first { $0.id == selectedBookNumber }
+                if book == nil, let requested = selectedBookNumber {
+                    guard replacesMissingBook else {
+                        // Said, not replaced: back and history still hold
+                        // the place asked for.
+                        if missingBook != requested { missingBook = requested }
+                        if contents != .empty { contents = .empty }
+                        mirror()
+                        return
+                    }
+                    book = loadedBooks.first { ($0.id <= 39) == (requested <= 39) }
+                    // The verse chosen was in the book that isn't here.
+                    if selectedVerseReference != nil { selectedVerseReference = nil }
+                }
+                book = book ?? loadedBooks.first
                 if selectedBookNumber != book?.id { selectedBookNumber = book?.id }
                 guard let book else {
                     contents = .empty
@@ -423,6 +483,12 @@ final class ReaderWorkspace: ObservableObject {
                 }
                 let chapter = min(max(selectedChapterNumber, 1), book.chapterCount)
                 if selectedChapterNumber != chapter { selectedChapterNumber = chapter }
+                if replacesMissingBook {
+                    // The switch is settled: recorded and told where it landed.
+                    self.replacesMissingBook = false
+                    record()
+                    mirror()
+                }
 
                 let read = try await model.chapterContents(
                     translationID: translationID,
@@ -456,6 +522,12 @@ final class ReaderWorkspace: ObservableObject {
                 guard !Task.isCancelled else { return }
                 model.errorMessage = error.localizedDescription
                 contents = .empty
+                // A switch that failed is settled as it stands, and the
+                // library told, as any other move would have told it at once.
+                if replacesMissingBook {
+                    self.replacesMissingBook = false
+                    mirror()
+                }
             }
         }
     }
