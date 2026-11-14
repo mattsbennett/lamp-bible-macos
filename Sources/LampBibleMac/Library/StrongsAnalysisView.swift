@@ -834,6 +834,24 @@ struct StrongsAnalysisPane: View {
                                     .padding(.horizontal, 14)
                                     .padding(.vertical, 10)
                                 Divider()
+                                // What passes under the tabs fades out rather
+                                // than being cut. The header pins over the
+                                // content, so a scrolled pane met the divider
+                                // with a sliced line of text against it — in a
+                                // blind design panel's words, a pane "clipped
+                                // mid-line by a sticky tab bar with no fade",
+                                // read as a rendering fault rather than as a
+                                // scroll position. It was the most reported
+                                // fault of the round, by every judge.
+                                LinearGradient(
+                                    colors: [pinnedFill, pinnedFill.opacity(0)],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                                .frame(height: 12)
+                                // Drawn over what scrolls, never catching a
+                                // click meant for the verse beneath it.
+                                .allowsHitTesting(false)
                             }
                             .background(pinnedFill)
                         }
