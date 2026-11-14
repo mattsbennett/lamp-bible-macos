@@ -210,6 +210,12 @@ final class LibraryModel: ObservableObject {
             ?? LampBibleReferenceFormatter.bookName(book)
     }
 
+    /// A translation's own book names, by number, for reading or naming a
+    /// passage in it; none for a translation not yet read.
+    func bookNames(of translationID: String?) -> [Int: String] {
+        translationID.flatMap { translationBookNames[$0] } ?? [:]
+    }
+
     /// "Génesis 1:1": one verse, its book as the translation names it.
     func describeVerse(_ reference: Int, in translationID: String?) -> String {
         let place = LampBibleReferenceFormatter.components(of: reference)

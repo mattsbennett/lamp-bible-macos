@@ -722,7 +722,10 @@ struct UnifiedSearchView: View {
     /// reader knows which they meant.
     @ViewBuilder
     private var referenceOffer: some View {
-        if let reference = LampSearchQuery(query).reference {
+        // Opened in the translation being read, so read and named by its
+        // book names too.
+        let bookNames = model.bookNames(of: model.selectedTranslationID)
+        if let reference = LampSearchQuery(query).reference(bookNames: bookNames) {
             Button {
                 saveSearch()
                 openReference(reference.startReference, nil)
@@ -730,7 +733,7 @@ struct UnifiedSearchView: View {
                 HStack(spacing: 9) {
                     Image(systemName: "book").foregroundStyle(.tint)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Go to \(reference.description)").font(.headline)
+                        Text("Go to \(reference.description(bookNames: bookNames))").font(.headline)
                         Text("Open the passage in the reader.")
                             .font(.caption)
                             .foregroundStyle(.secondary)

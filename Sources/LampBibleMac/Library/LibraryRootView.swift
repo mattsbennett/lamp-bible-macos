@@ -4091,7 +4091,13 @@ private struct PassagePickerPopover: View {
     /// What the field holds, if it is a passage. The search's own parser, so
     /// the two fields understand the same things.
     private var typedReference: LampSearchReference? {
-        trimmedTyped.isEmpty ? nil : LampSearchQuery(trimmedTyped).reference
+        trimmedTyped.isEmpty ? nil : LampSearchQuery(trimmedTyped).reference(bookNames: bookNames)
+    }
+
+    /// The picker's translation's own names for its books, which a typed
+    /// passage may use ("Génesis 1") beside the English ones.
+    private var bookNames: [Int: String] {
+        Dictionary(books.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
     }
 
     /// A Strong's key, which is neither a passage nor words to search for.
@@ -4107,7 +4113,7 @@ private struct PassagePickerPopover: View {
         if let reference = typedReference {
             return PassagePickerOffer(
                 icon: "book",
-                title: "Go to \(reference.description)",
+                title: "Go to \(reference.description(bookNames: bookNames))",
                 action: { go(to: reference) }
             )
         }
@@ -7533,11 +7539,14 @@ extension LibraryRootView {
     /// Rows for what has been typed: a passage, a Strong's key, words.
     fileprivate func paletteTypedItems(_ typed: String) -> [CommandPaletteItem] {
         var items: [CommandPaletteItem] = []
-        if let reference = LampSearchQuery(typed).reference {
+        // Opened in the translation being read, so read and named by its
+        // book names too.
+        let bookNames = model.bookNames(of: model.selectedTranslationID)
+        if let reference = LampSearchQuery(typed).reference(bookNames: bookNames) {
             items.append(CommandPaletteItem(
                 id: "go:\(reference.startReference)-\(reference.endReference)",
                 group: .suggested,
-                title: "Go to \(reference.description)",
+                title: "Go to \(reference.description(bookNames: bookNames))",
                 systemImage: "book",
                 opensPlaces: true,
                 perform: { placement in
