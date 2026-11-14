@@ -88,6 +88,8 @@ struct LampBibleMacApp: App {
                 // Every window's text offers the system's Writing Tools only
                 // while AI features are on.
                 .lampWritingToolsGate()
+                // A disclosure opens from anywhere on its heading row.
+                .disclosureGroupStyle(LampDisclosureStyle())
         }
         .defaultSize(width: 1_240, height: 820)
         .commands {
@@ -106,6 +108,8 @@ struct LampBibleMacApp: App {
             StandaloneBookReaderView(request: request ?? BookReaderRequest())
                 .environmentObject(libraryModel)
                 .lampWritingToolsGate()
+                // A disclosure opens from anywhere on its heading row.
+                .disclosureGroupStyle(LampDisclosureStyle())
         }
         .restorationBehavior(.disabled)
         .defaultSize(width: 1_180, height: 820)
@@ -114,6 +118,8 @@ struct LampBibleMacApp: App {
             AddToLibraryView()
                 .environmentObject(libraryModel)
                 .lampWritingToolsGate()
+                // A disclosure opens from anywhere on its heading row.
+                .disclosureGroupStyle(LampDisclosureStyle())
         }
         .defaultSize(width: 1_100, height: 700)
 
@@ -125,6 +131,8 @@ struct LampBibleMacApp: App {
                 .environmentObject(libraryModel)
                 .environmentObject(syncController)
                 .lampWritingToolsGate()
+                // A disclosure opens from anywhere on its heading row.
+                .disclosureGroupStyle(LampDisclosureStyle())
         }
         .restorationBehavior(.disabled)
         .defaultSize(width: 1_180, height: 780)
@@ -134,6 +142,8 @@ struct LampBibleMacApp: App {
                 .environmentObject(libraryModel)
                 .environmentObject(presentationRemoteHost)
                 .lampWritingToolsGate()
+                // A disclosure opens from anywhere on its heading row.
+                .disclosureGroupStyle(LampDisclosureStyle())
         }
         .restorationBehavior(.disabled)
         .defaultSize(width: 1_360, height: 860)
@@ -173,6 +183,8 @@ struct LampBibleMacApp: App {
                 .environmentObject(syncController)
                 .environmentObject(softwareUpdater)
                 .lampWritingToolsGate()
+                // A disclosure opens from anywhere on its heading row.
+                .disclosureGroupStyle(LampDisclosureStyle())
         }
 
         MenuBarExtra("Lamp Bible", systemImage: "book.closed.fill") {

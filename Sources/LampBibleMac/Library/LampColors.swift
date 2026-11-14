@@ -310,6 +310,54 @@ extension View {
     }
 }
 
+/// A disclosure whose whole heading row opens and closes it, not only the
+/// small triangle beside it. The system's macOS style answers a click on the
+/// triangle alone, a target of a few points against a heading that can run
+/// to three lines, as the Septuagint section's does.
+///
+/// Set on every window's root, so a `DisclosureGroup` anywhere in the app
+/// takes it without asking. The dictionary's entries build the same thing
+/// by hand (`DictionaryResultView`): a chevron in a ten-point column, then
+/// the heading, the row one button.
+struct LampDisclosureStyle: DisclosureGroupStyle {
+    /// The chevron's column and the gap after it, which the content is
+    /// indented by so it lines up under the heading's words. Less than the
+    /// system's inset, which in a column as narrow as the study pane cost a
+    /// word a line.
+    static let chevronWidth: CGFloat = 10
+    static let gap: CGFloat = 6
+
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.16)) {
+                    configuration.isExpanded.toggle()
+                }
+            } label: {
+                HStack(alignment: .firstTextBaseline, spacing: Self.gap) {
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(configuration.isExpanded ? 90 : 0))
+                        .frame(width: Self.chevronWidth)
+                    configuration.label
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(configuration.isExpanded ? "Expanded" : "Collapsed")
+            .accessibilityHint(configuration.isExpanded ? "Hides what is inside" : "Shows what is inside")
+            if configuration.isExpanded {
+                configuration.content
+                    .padding(.leading, Self.chevronWidth + Self.gap)
+                    .padding(.top, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+}
+
 extension Text {
     /// Words searched for, marked as Safari marks a find: on a yellow ground,
     /// in label colour on white and in cream on the dark window's
