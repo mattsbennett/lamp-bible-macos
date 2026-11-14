@@ -249,9 +249,42 @@ final class SeptuagintLoader {
     /// The most verses listed for one Hebrew word. דָּבָר stands in some 1,400
     /// of them, which is not a list anyone reads inside a collapsed section;
     /// the rest are one click away in that word's own analysis.
-    static let shownVerses = 25
+    nonisolated static let shownVerses = 25
 
     private(set) var words: [Word] = []
+    /// The installed Septuagint's module id, for finding its own analysis
+    /// among those the pane has read.
+    private(set) var septuagintID: String?
+    /// What that text declares about its own tagging. Read here rather than
+    /// taken from the pane's own sources, which are the analysed
+    /// translation's and say nothing about the Septuagint.
+    private(set) var septuagintSources: [LampTranslationSource] = []
+    /// Each Hebrew word's verses that the Septuagint renders with the Greek
+    /// word being studied, by word id, in the Hebrew text's numbering.
+    ///
+    /// Nil until the crossing is done, which is not the same as empty: empty
+    /// means the Septuagint uses this Greek word in none of them, and the
+    /// rows must then say so rather than show every verse as though it did.
+    private(set) var renderedVerses: [String: [Int]] = [:]
+    /// Where a word stands in a verse, in characters, as every annotation in
+    /// Lamp is counted.
+    struct GreekMark: Equatable {
+        let start: Int
+        let end: Int
+    }
+
+    /// Where the Greek word stands in each crossed verse's Greek, keyed by
+    /// the verse in the Hebrew text's numbering, so the row can mark it.
+    /// Every occurrence, not the first: marking one of two would say the
+    /// pairing is settled when it is the case that is least settled.
+    private(set) var greekMarks: [Int: [SeptuagintLoader.GreekMark]] = [:]
+    /// What stands in the way of reading a verse as a pairing, by word id
+    /// and verse. Absent means nothing does.
+    private(set) var pairingDoubts: [String: [Int: String]] = [:]
+    /// How often each Hebrew word stands in each of its verses, by word id.
+    private var hebrewCounts: [String: [Int: Int]] = [:]
+    /// Whether the crossing has been done for the word on screen.
+    private(set) var hasCrossed = false
     /// What each word's verses have to show, by its id. A present value means
     /// asked, and must never read as "not asked yet".
     private(set) var verses: [String: Verses] = [:]
@@ -259,6 +292,13 @@ final class SeptuagintLoader {
     /// The name of the Greek text the verses were read from, for saying which
     /// text is missing a verse rather than blaming the whole tradition.
     private(set) var septuagintName: String?
+    /// What the installed Septuagint can say about the Greek word itself, for
+    /// the note at the top of the section.
+    ///
+    /// Looked up with the words rather than with a word's verses: the note is
+    /// drawn as soon as there are words, before any one of them is opened,
+    /// and until the lookup lands it must claim nothing either way.
+    private(set) var tagging = LampSeptuagintSection.Tagging.unknown
     /// Each Hebrew word's lemma and transliteration, by normalized key.
     private(set) var headwords: [String: LampStrongsHeadword] = [:]
     /// What each Hebrew word means, by normalized key, for where no English
@@ -285,6 +325,11 @@ final class SeptuagintLoader {
         meanings = [:]
         renderings = [:]
         countedKey = nil
+        renderedVerses = [:]
+        greekMarks = [:]
+        pairingDoubts = [:]
+        hebrewCounts = [:]
+        hasCrossed = false
         errorMessage = nil
         guard BiblicalOriginalLanguage.inferred(from: key) == .greek else { return }
         do {
@@ -320,6 +365,22 @@ final class SeptuagintLoader {
         } catch {
             errorMessage = error.localizedDescription
         }
+        if case .unknown = tagging {
+            // After the words, not before them: the note is drawn as soon as
+            // there are words, and it says nothing about tagging until this
+            // lands, so the lookup must not hold the words up. A fact about
+            // the library rather than this word, so it is kept — a Septuagint
+            // is not installed between two words of one entry.
+            let septuagint = await septuagintText(model)
+            septuagintID = septuagint?.id
+            if let septuagint {
+                septuagintSources = (try? await model.library.translationSources(
+                    moduleID: septuagint.id
+                )) ?? []
+            }
+            tagging = septuagint.map { $0.tagsStrongs ? .tagged($0.name) : .untagged($0.name) }
+                ?? .notInstalled
+        }
     }
 
     /// How often each Hebrew word stands in the Old Testament, counted in the
@@ -342,6 +403,13 @@ final class SeptuagintLoader {
                 )
                 guard countedKey == key else { return }
                 words[index].references = analyses.first?.references ?? []
+                // How often it stands in each verse, for the rows that
+                // cannot be read as one word answering to one word.
+                var counts: [Int: Int] = [:]
+                for occurrence in analyses.first?.occurrences ?? [] {
+                    counts[occurrence.reference, default: 0] += 1
+                }
+                hebrewCounts[words[index].id] = counts
             } catch is CancellationError {
                 return
             } catch {
@@ -363,15 +431,24 @@ final class SeptuagintLoader {
     /// The first `shownVerses` of a word's verses, each in English with the
     /// word marked where the English translation tags it, and with the
     /// Septuagint's Greek where the two numberings meet.
-    func loadVerses(for word: Word, englishID: String?, model: LibraryModel) async {
+    func loadVerses(
+        for word: Word,
+        englishID: String?,
+        showing limit: Int = SeptuagintLoader.shownVerses,
+        references listed: [Int]? = nil,
+        model: LibraryModel
+    ) async {
         // A read that failed is worth trying again when the word is opened
         // again. The other outcomes are settled: the verses are read, or the
         // library hasn't got a Septuagint to read them from.
         if case .unreadable = verses[word.id] { verses[word.id] = nil }
-        guard verses[word.id] == nil, let references = word.references,
+        // Already read this far: a second pass would re-read every chapter to
+        // show the same rows. Asked for more, it falls through and reads on.
+        if case .rows(let rows) = verses[word.id], rows.count >= limit { return }
+        guard let references = listed ?? word.references,
               !references.isEmpty, let hebrewText = hebrewText(model)
         else { return }
-        let shown = Array(references.prefix(Self.shownVerses))
+        let shown = Array(references.prefix(limit))
         // The references first, each still waiting for its English and Greek,
         // so they are there to read while the rest is read.
         verses[word.id] = .rows(shown.map { Verse(reference: $0, greek: .pending) })
@@ -476,6 +553,88 @@ final class SeptuagintLoader {
     }
 
     /// The Hebrew Old Testament, by its language rather than by its name.
+    /// Cross each Hebrew word's verses with the Septuagint's own, so a list
+    /// can be narrowed to the verses where that text reached for this Greek
+    /// word.
+    ///
+    /// Both sides are tagged, so this is two texts read, not an alignment
+    /// guessed: the Hebrew word's verses come from the Hebrew text's tags
+    /// and the Greek word's from the Septuagint's, and only the numbering
+    /// between them is converted.
+    func crossWithSeptuagint(
+        _ analysis: LampStrongsAnalysis?,
+        lemma: String?,
+        model: LibraryModel
+    ) async {
+        guard !hasCrossed, !words.isEmpty, let analysis else { return }
+        guard words.contains(where: { $0.references?.isEmpty == false }) else { return }
+        guard let hebrewText = hebrewText(model),
+              let hebrewNumbering = try? await model.library.versification(moduleID: hebrewText.id),
+              let greekNumbering = try? await model.library.versification(
+                  moduleID: analysis.translationID
+              )
+        else { return }
+        let septuagint = Set(analysis.references)
+        // Where the Greek word stands in each of those verses, by the first
+        // of its occurrences: enough to mark it, and a verse with two is
+        // marked at the first, as the English rows are.
+        var offsets: [Int: [SeptuagintLoader.GreekMark]] = [:]
+        for occurrence in analysis.occurrences {
+            offsets[occurrence.reference, default: []].append(
+                SeptuagintLoader.GreekMark(
+                    start: occurrence.startOffset, end: occurrence.endOffset
+                )
+            )
+        }
+        var marks: [Int: [SeptuagintLoader.GreekMark]] = [:]
+        var doubts: [String: [Int: String]] = [:]
+        var crossed: [String: [Int]] = [:]
+        for word in words {
+            guard let references = word.references, !references.isEmpty else { continue }
+            let rendered = LampSeptuagintSection.versesRenderedByGreek(
+                hebrew: references,
+                hebrewNumbering: hebrewNumbering,
+                septuagintNumbering: greekNumbering,
+                septuagintReferences: septuagint
+            )
+            crossed[word.id] = references.filter(rendered.contains)
+            let printed = LampSeptuagintSection.word(word.hebrew)
+            for reference in rendered {
+                // The marks are character offsets into the Greek verse they
+                // were found in, and the line drawn for a psalm title is its
+                // two halves joined, so only the first half's offsets land
+                // where the text does. A word standing in a title's second
+                // half is listed — the crossing above uses every counterpart
+                // — but left unmarked, rather than marked in the wrong place.
+                guard let mapped = hebrewNumbering.counterparts(of: reference, in: greekNumbering).first,
+                      let spans = offsets[mapped] else { continue }
+                marks[reference] = spans
+                // The other Hebrew words this same Greek word renders, where
+                // one of them stands in this verse too: the doubt a reader
+                // is least able to see for themselves.
+                let competing = words
+                    .filter { $0.id != word.id && $0.references?.contains(reference) == true }
+                    .map { LampSeptuagintSection.word($0.hebrew) }
+                if let doubt = LampSeptuagintSection.pairingDoubt(
+                    greek: analysis.forms.first?.text ?? lemma,
+                    hebrew: printed,
+                    hebrewOccurrences: hebrewCounts[word.id]?[reference] ?? 1,
+                    greekOccurrences: spans.count,
+                    alsoRendered: competing
+                ) {
+                    doubts[word.id, default: [:]][reference] = doubt
+                }
+            }
+        }
+        renderedVerses = crossed
+        greekMarks = marks
+        pairingDoubts = doubts
+        hasCrossed = true
+    }
+
+    /// The Hebrew text among the installed translations, which a Hebrew
+    /// word's verses are counted in rather than in an English translation
+    /// that tags it.
     private func hebrewText(_ model: LibraryModel) -> LampInstalledModule? {
         model.translations.first { $0.biblicalOriginalLanguage == .hebrew }
     }
@@ -601,6 +760,10 @@ struct StrongsAnalysisPane: View {
     /// Collapsed to begin with: the Septuagint is a second subject, and what
     /// it holds costs a search a word to work out.
     @State private var isShowingSeptuagint = false
+    /// Whether every one of a Hebrew word's verses is listed, or only the
+    /// ones the Septuagint renders with this Greek word.
+    @State private var isShowingEveryHebrewVerse = false
+    @State private var isShowingSeptuagintMethod = false
     /// Closed to begin with: where the forms' spellings come from, and what
     /// the tags leave out, read once rather than every time.
     @State private var isShowingFormNotes = false
@@ -1313,6 +1476,151 @@ struct StrongsAnalysisPane: View {
         .task(id: formsSource(of: analysis)) { await loadFormReadings(of: analysis) }
     }
 
+    /// Everything about how the section's figures were reached, under one
+    /// heading and closed.
+    ///
+    /// What a reader is told is unchanged: the same three things are said in
+    /// the same words. Only their place has moved. Written out around the
+    /// charts they were, to a blind design panel, "five grey paragraphs of
+    /// caveats" that made the pane "read as documentation" and "buried" the
+    /// figures — and every judge asked for the explanations to be both
+    /// stronger and fewer, which open prose cannot be at once.
+    ///
+    /// The order is what the reader needs first: what this text is, then
+    /// what a crossed verse list cannot promise, then what the tags are.
+    @ViewBuilder
+    private func septuagintMethodology(_ own: LampStrongsAnalysis) -> some View {
+        DisclosureGroup(isExpanded: $isShowingSeptuagintMethod) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(LampSeptuagintSection.ownUseAbout)
+                // Only where the list has in fact been narrowed. Said of a
+                // list showing every verse it would be untrue.
+                if septuagintCrossing(own) != nil, !isShowingEveryHebrewVerse {
+                    Text(LampSeptuagintSection.renderedCaveat(greek: entry?.lemma))
+                }
+                // Only a text that declares its Strong's numbers were matched
+                // rather than printed carries this: a published tagged text
+                // makes no such claim about itself. The sentences are the
+                // module's own, so what a reader is told is what its builder
+                // wrote, not a paraphrase of it kept in the app.
+                if !septuagint.septuagintSources.isEmpty {
+                    Text(LampSeptuagintSection.ownUseCaution)
+                    ForEach(septuagint.septuagintSources, id: \.source) { source in
+                        Text(source.disclosure(
+                            translationName: own.translationAbbreviation ?? own.translationName,
+                            strongsKey: own.key
+                        ))
+                    }
+                }
+            }
+            .font(.system(size: Self.sectionProseSize))
+            .foregroundStyle(Color.lampSecondaryText)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 6)
+        } label: {
+            Text(LampSeptuagintSection.methodologyTitle)
+                .font(.system(size: Self.sectionProseSize, weight: .medium))
+                .foregroundStyle(Color.lampSecondaryText)
+        }
+    }
+
+    /// The Greek word's own use in the Septuagint, above the Hebrew words it
+    /// translates.
+    ///
+    /// Drawn in the pane's own vocabulary: the spread is the pane's bars,
+    /// built by `LampStrongsSpread.bars` from the Septuagint's own canon
+    /// sections and drawn by `spreadBar`, so a division of the Greek Old
+    /// Testament reads exactly as a division of any other text does. Its
+    /// filters are not wired up — a click would narrow the English
+    /// translation's occurrences, which are not these.
+    @ViewBuilder
+    private func ownUseBody(_ own: LampStrongsAnalysis, reader: LampStrongsAnalysis) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            if let contrast = LampSeptuagintSection.contrast(
+                newTestament: greekNewTestamentAnalysis, septuagint: own
+            ) {
+                contrastBars(contrast)
+            }
+            if !own.sections.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(LampStrongsSpread.bars(own.sections, measure: chartMeasure)) { bar in
+                        spreadBar(bar, choosing: nil)
+                    }
+                    // The same key the Spread tab draws. Without it the ↑ and
+                    // ↓ beside two rows are, in a panel's words, "lone
+                    // up/down arrows at the end of two rows" with nothing to
+                    // read them by — and the grey bar has no name at all.
+                    expectationKey
+                        .padding(.top, 4)
+                }
+            }
+            septuagintMethodology(own)
+        }
+        // Drawn in the app's accent like every other figure in the pane.
+        // ColorRules.md, Charts: the word analysis "draws in the accent
+        // alone. Its marks are told apart by lightness and by words or
+        // arrows, never by a second hue." A Septuagint-coloured bar was
+        // tried and breaks that rule, and `originalLanguage` is in any case
+        // a *link* role — Strong's numbers and Greek words you can open —
+        // so on a bar it promises a tap that isn't there.
+    }
+
+    /// The two Testaments side by side.
+    ///
+    /// The pane's bar metrics, and its own row rather than `spreadBar`: that
+    /// one shades a bar by how its share of one corpus compares with what was
+    /// predicted, and prints that share as a percent. Across two texts there
+    /// is no one corpus and no prediction, so the shading and the percent
+    /// would both be claims nothing supports. One tint, the counts, and the
+    /// rate underneath.
+    @ViewBuilder
+    private func contrastBars(_ contrast: LampSeptuagintSection.Contrast) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach([contrast.newTestament, contrast.septuagint], id: \.label) { side in
+                HStack(spacing: 8) {
+                    Text(side.label)
+                        .font(.system(size: Self.chartLabelSize))
+                        .lineLimit(1)
+                        .frame(width: Self.spreadLabelWidth, alignment: .trailing)
+                    GeometryReader { proxy in
+                        ZStack(alignment: .leading) {
+                            RoundedRectangle(cornerRadius: 4).fill(Self.barTrack)
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(.tint)
+                                .frame(width: contrast.share(of: side) > 0
+                                    ? max(4, proxy.size.width * contrast.share(of: side))
+                                    : 0)
+                        }
+                    }
+                    .frame(height: Self.barHeight)
+                    Text("\(side.verseCount)")
+                        .font(.system(size: Self.chartLabelSize, weight: .medium).monospacedDigit())
+                        .frame(width: Self.barMeasureWidth, alignment: .trailing)
+                    // Held open, not filled: a share of the two sides added
+                    // together would be the one figure these counts must
+                    // never be made into, and the columns are here so the
+                    // tracks line up with the spread's below.
+                    if chartMeasure == .occurrences {
+                        Spacer().frame(width: Self.barPercentWidth)
+                    }
+                    Spacer().frame(width: Self.barStandingWidth)
+                }
+                .help("\(side.verseCount) verses of \(side.source)")
+            }
+            Text(LampSeptuagintSection.contrastCaption(contrast))
+                .font(.system(size: Self.chartFinePrintSize))
+                .foregroundStyle(Color.lampSecondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 2)
+        }
+    }
+
+    private static func referenceText(_ reference: Int) -> String {
+        let parts = LampBibleReferenceFormatter.components(of: reference)
+        return "\(LampBibleReferenceFormatter.bookName(parts.book)) "
+            + "\(parts.chapter):\(parts.verse)"
+    }
+
     /// Reads each form for someone without the language.
     ///
     /// Shared by the Overview, which lists the forms, and by the card when a
@@ -1340,25 +1648,108 @@ struct StrongsAnalysisPane: View {
     /// these verses are that word's, not this Greek word's: the Septuagint
     /// does not always use this Greek word where that Hebrew stands. Nothing
     /// here is added to the counts above.
+    /// The Hebrew words, introduced once: whose verses these are, and what
+    /// the list has been narrowed to when it has.
+    ///
+    /// Two sentences at most, and neither repeats the heading above them.
+    /// Before the crossing lands there is only the first; the list is every
+    /// verse then, and saying it was narrowed would be untrue.
+    private var hebrewIntroduction: String {
+        let note = LampSeptuagintSection.note(
+            greek: entry?.lemma, septuagint: septuagint.tagging
+        )
+        guard let crossing = septuagintCrossing(septuagintOwnAnalysis),
+              !isShowingEveryHebrewVerse
+        else { return note }
+        let narrowed = LampSeptuagintSection.renderedHeading(
+            greek: entry?.lemma, shown: crossing.shown, of: crossing.total
+        )
+        return narrowed.isEmpty ? note : note + " " + narrowed
+    }
+
+    /// A Hebrew word's verses as listed: the ones the Septuagint renders
+    /// with this Greek word, or every one of them when asked.
+    private func hebrewVerses(of word: SeptuagintLoader.Word) -> [Int]? {
+        guard !isShowingEveryHebrewVerse,
+              let rendered = septuagint.renderedVerses[word.id]
+        else { return word.references }
+        return rendered
+    }
+
+    /// How many of the Hebrew words' verses the Septuagint renders with this
+    /// Greek word, of how many there are. Nil until the crossing is done, so
+    /// nothing is said of it before it is known.
+    private func septuagintCrossing(_ own: LampStrongsAnalysis?) -> (shown: Int, total: Int)? {
+        guard own != nil, septuagint.hasCrossed else { return nil }
+        let total = septuagint.words.reduce(0) { $0 + ($1.references?.count ?? 0) }
+        let shown = septuagint.words.reduce(0) { $0 + (septuagint.renderedVerses[$1.id]?.count ?? 0) }
+        return total > 0 ? (shown, total) : nil
+    }
+
+    /// The Septuagint's own analysis among those the pane has read, when it
+    /// tags its words. Found by the module's id, since a text's name cannot
+    /// be trusted to say which text it is.
+    private var septuagintOwnAnalysis: LampStrongsAnalysis? {
+        guard case .tagged = septuagint.tagging, let id = septuagint.septuagintID
+        else { return nil }
+        return loader.analyses.first { $0.translationID == id }
+    }
+
+    /// Where a Greek key's New Testament counts are: a text in Greek that is
+    /// not the Septuagint. Found by the language a module declares.
+    private var greekNewTestamentAnalysis: LampStrongsAnalysis? {
+        loader.analyses.first { other in
+            other.translationID != septuagint.septuagintID
+                && model.translations.first { $0.id == other.translationID }?
+                    .biblicalOriginalLanguage == .greek
+        }
+    }
+
     @ViewBuilder
     private func septuagintGroup(_ analysis: LampStrongsAnalysis) -> some View {
-        if !septuagint.words.isEmpty {
+        let own = septuagintOwnAnalysis
+        if !septuagint.words.isEmpty || own != nil {
             DisclosureGroup(isExpanded: $isShowingSeptuagint) {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text(LampSeptuagintSection.note(greek: entry?.lemma))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    translatesRows
+                    if let own {
+                        ownUseBody(own, reader: analysis)
+                    }
+                    if !septuagint.words.isEmpty {
+                    // One Septuagint section, so what the Hebrew words need
+                    // is a line, not a second heading and a second
+                    // introduction: the heading above has named the text,
+                    // counted it and said what it is.
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(hebrewIntroduction)
+                            .font(.system(size: Self.sectionProseSize))
+                            .foregroundStyle(Color.lampSecondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                        // Under the sentence it acts on, where a reader is
+                        // looking by the time they want it, rather than
+                        // floated up beside the first line of it.
+                        if let crossing = septuagintCrossing(own), crossing.shown < crossing.total {
+                            Button(isShowingEveryHebrewVerse
+                                ? "Only the verses using \(entry?.lemma ?? "it")"
+                                : "Show all \(crossing.total) verses") {
+                                isShowingEveryHebrewVerse.toggle()
+                            }
+                            .buttonStyle(.link)
+                            .font(.caption)
+                            .padding(.top, 2)
+                        }
+                    }
                     // Until the Hebrew text has been counted there are no
                     // verse lists to show, and an empty space reads as none.
                     if septuagint.words.allSatisfy({ $0.references == nil }) {
                         ProgressView().controlSize(.small)
                     }
                     ForEach(septuagint.words) { word in
-                        if let references = word.references, !references.isEmpty {
+                        if let references = hebrewVerses(of: word), !references.isEmpty {
                             SeptuagintWordGroup(
                                 word: word,
+                                usingGreek: isShowingEveryHebrewVerse
+                                    ? nil
+                                    : (septuagint.renderedVerses[word.id] == nil ? nil : entry?.lemma),
                                 references: references,
                                 loader: septuagint,
                                 englishID: analysis.translationID,
@@ -1367,12 +1758,33 @@ struct StrongsAnalysisPane: View {
                             )
                         }
                     }
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 8)
+                // The counted verses are part of the id: they arrive after
+                // the words do, and a task keyed on the words alone ran once,
+                // found nothing counted yet, and never ran again.
+                .task(id: "\(own?.translationID ?? "")|\(own?.occurrenceCount ?? 0)|\(analysis.key)|"
+                    + "\(septuagint.words.reduce(0) { $0 + ($1.references?.count ?? 0) })") {
+                    await septuagint.crossWithSeptuagint(own, lemma: entry?.lemma, model: model)
+                }
             } label: {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(LampSeptuagintSection.title).lampSectionHeading()
+                    Text(own == nil
+                        ? LampSeptuagintSection.title
+                        : LampSeptuagintSection.ownUseTitle)
+                        .lampSectionHeading()
+                    if let own {
+                        Text(LampSeptuagintSection.ownUseHeadline(
+                            greek: entry?.lemma,
+                            septuagint: own,
+                            newTestament: greekNewTestamentAnalysis
+                        ))
+                            .font(.system(size: Self.sectionProseSize))
+                            .foregroundStyle(Color.lampSecondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     // What is inside, before it is opened: the Hebrew words,
                     // and how to say them. Marks around each separator keep
                     // the words in the lexicon's order, left to right,
@@ -1400,29 +1812,6 @@ struct StrongsAnalysisPane: View {
                 await septuagint.loadCounts(
                     key: analysis.key, englishID: analysis.translationID, model: model
                 )
-            }
-        }
-    }
-
-    /// The Hebrew this Greek word renders, each one followable to its own
-    /// analysis where it has a number. A word the lexicon could not pin to a
-    /// single number is shown plainly rather than left out — it is still what
-    /// the Greek translates.
-    private var translatesRows: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ForEach(septuagint.words) { word in
-                if let strongs = word.hebrew.strongs {
-                    Button {
-                        analyse(strongs)
-                    } label: {
-                        hebrewWord(word, number: strongs)
-                    }
-                    .buttonStyle(.plain)
-                    .chartClickable()
-                    .help("Analyse \(strongs)")
-                } else {
-                    hebrewWord(word, number: nil)
-                }
             }
         }
     }
@@ -1509,6 +1898,22 @@ struct StrongsAnalysisPane: View {
     private static let chartLabelSize: Double = 13
     /// The finest print a chart has: axis ends, the shade key, the cautions.
     private static let chartFinePrintSize: Double = 12
+    /// Prose that explains a section rather than labelling a drawing. A
+    /// blind panel found the explanations "both low contrast and set at a
+    /// width that makes it hard to leave" at chart fine print, and they are
+    /// sentences to be read, not an axis end.
+    private static let sectionProseSize: Double = 13
+    /// A bar's name column. Measured, not guessed: at `chartLabelSize`
+    /// "Poetry and Wisdom" is 118.3pt and was truncating in a 112pt column,
+    /// while the widest book name ("Song of Solomon") is 103.5pt.
+    private static let spreadLabelWidth: Double = 120
+    /// A bar's trailing columns. Every group of bars reserves all three,
+    /// whether or not it fills them, so their tracks start and end on the
+    /// same two lines: the contrast bars drew only the first and their
+    /// tracks ran 52pt past the spread's.
+    private static let barMeasureWidth: Double = 40
+    private static let barPercentWidth: Double = 34
+    private static let barStandingWidth: Double = 18
     /// One row of the chapter grid: the cell plus room for its book's name.
     private static let gridRowHeight: Double = 19
     /// A chapter's cell. Twelve was a speck; these are meant to be aimed at.
@@ -1708,7 +2113,7 @@ struct StrongsAnalysisPane: View {
                 Text(bar.name)
                     .font(.system(size: Self.chartLabelSize))
                     .lineLimit(1)
-                    .frame(width: 112, alignment: .trailing)
+                    .frame(width: Self.spreadLabelWidth, alignment: .trailing)
                 // Squared-off ends: a capsule only a few points long drew as a
                 // dot, which read as a different kind of mark from the bars.
                 GeometryReader { proxy in
@@ -1724,16 +2129,16 @@ struct StrongsAnalysisPane: View {
                 .frame(height: Self.barHeight)
                 Text(measureLabel(bar))
                     .font(.system(size: Self.chartLabelSize, weight: .medium).monospacedDigit())
-                    .frame(width: 40, alignment: .trailing)
+                    .frame(width: Self.barMeasureWidth, alignment: .trailing)
                 if chartMeasure == .occurrences {
                     // Blank beside a zero, which needs no "0%" to say so.
                     Text(bar.occurrenceCount > 0 ? LampStrongsSpread.percent(bar.fractionOfOccurrences) : "")
                         .font(.system(size: Self.chartLabelSize).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .frame(width: 34, alignment: .trailing)
+                        .foregroundStyle(Color.lampSecondaryText)
+                        .frame(width: Self.barPercentWidth, alignment: .trailing)
                 }
                 standing(bar.expectation)
-                    .frame(width: 18)
+                    .frame(width: Self.barStandingWidth)
             }
             .contentShape(Rectangle())
         }
@@ -1831,7 +2236,7 @@ struct StrongsAnalysisPane: View {
             Spacer(minLength: 0)
         }
         .font(.system(size: Self.chartFinePrintSize))
-        .foregroundStyle(.secondary)
+        .foregroundStyle(Color.lampSecondaryText)
         .accessibilityElement(children: .combine)
     }
 
@@ -2420,6 +2825,9 @@ struct StrongsAnalysisPane: View {
 /// DisclosureGroup can only tell its own expansion to a view that holds it.
 private struct SeptuagintWordGroup: View {
     let word: SeptuagintLoader.Word
+    /// The Greek word the list was narrowed by, when it was. Nil shows the
+    /// Hebrew word's own count, which is what an unnarrowed list is.
+    var usingGreek: String?
     /// Every verse the word stands in, which is the count in the heading even
     /// when only the first few are listed.
     let references: [Int]
@@ -2434,6 +2842,10 @@ private struct SeptuagintWordGroup: View {
     @Environment(\.readerReferenceActions) private var referenceActions
     @State private var isExpanded = false
 
+    /// How many of this word's verses are shown. Raised by the button under
+    /// them; the load reads only as far as this.
+    @State private var shownVerses = SeptuagintLoader.shownVerses
+
     private var listed: SeptuagintLoader.Verses? { loader.verses[word.id] }
 
     var body: some View {
@@ -2442,7 +2854,14 @@ private struct SeptuagintWordGroup: View {
                 if let listed {
                     switch listed {
                     case .rows(let rows):
-                        ForEach(rows) { verse in
+                        // A rule between verses. Without one a panel read the
+                        // list as "dozens of pairs run on with no rules,
+                        // spacing steps or group heading", with nothing to
+                        // show where an entry ends but its own reference.
+                        ForEach(Array(rows.enumerated()), id: \.element.id) { index, verse in
+                            if index > 0 {
+                                Divider().opacity(0.6)
+                            }
                             row(verse)
                         }
                         // One spinner for the list, not one per row: the Greek
@@ -2465,6 +2884,18 @@ private struct SeptuagintWordGroup: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 6)
+            // Inset behind a rule, so the verses read as this word's rather
+            // than as the page carrying on. Opened, a panel found "the
+            // revealed verses sit at the same indent as the row that opened
+            // them, with no rule, tint or inset to show containment, so the
+            // page becomes one continuous column of mixed prose, Greek,
+            // charts and verses".
+            .padding(.leading, 11)
+            .overlay(alignment: .leading) {
+                Rectangle()
+                    .fill(Color.lampCardStroke)
+                    .frame(width: 1)
+            }
         } label: {
             Text(LampSeptuagintSection.heading(
                 word.hebrew,
@@ -2472,14 +2903,25 @@ private struct SeptuagintWordGroup: View {
                     loader.headwords[LampStrongsKey.normalized($0)]?.transliteration
                 },
                 rendering: loader.renderings[word.id],
-                verses: references.count
+                verses: references.count,
+                usingGreek: usingGreek
             ))
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                // At reading size and in the text's own colour: in caption
+                // grey a panel found the "disclosure headings are too
+                // similar in emphasis to supporting text", and these are
+                // the only headings the list has.
+                .font(.system(size: fontSize, weight: .semibold))
+                .foregroundStyle(.primary)
         }
-        .task(id: isExpanded) {
+        .task(id: "\(isExpanded)|\(shownVerses)|\(references.count)") {
             guard isExpanded else { return }
-            await loader.loadVerses(for: word, englishID: englishID, model: model)
+            await loader.loadVerses(
+                for: word,
+                englishID: englishID,
+                showing: shownVerses,
+                references: references,
+                model: model
+            )
         }
     }
 
@@ -2489,11 +2931,24 @@ private struct SeptuagintWordGroup: View {
     @ViewBuilder
     private func allVerses(beyond shown: Int) -> some View {
         if references.count > shown, let strongs = word.hebrew.strongs {
-            Button("All \(references.count) verses in \(strongs)") {
-                analyse(strongs)
+            HStack(spacing: 10) {
+                // Read in place, a page at a time: each verse costs a read of
+                // its chapter in two texts, so a thousand of them is not one
+                // click's work.
+                Button("Show \(min(SeptuagintLoader.shownVerses, references.count - shown)) More") {
+                    shownVerses = shown + SeptuagintLoader.shownVerses
+                }
+                .buttonStyle(.link)
+                .font(.caption)
+                Text("\(shown) of \(references.count)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Analyse \(strongs)") {
+                    analyse(strongs)
+                }
+                .buttonStyle(.link)
+                .font(.caption)
             }
-            .buttonStyle(.link)
-            .font(.caption)
             .chartClickable()
             .padding(.top, 2)
         }
@@ -2550,11 +3005,15 @@ private struct SeptuagintWordGroup: View {
     }
 
     private func rowContent(_ verse: SeptuagintLoader.Verse) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 5) {
             switch verse.english {
             case .read(let english):
+                // At reading size and in the text's own colour, as
+                // `StrongsOccurrenceLabel` draws the pane's other verse
+                // rows. In caption grey it was, to a panel, a "tiny
+                // reference" the eye had to hunt for to find a row's edge.
                 Text(reference(english.reference))
-                    .font(.caption.weight(.semibold))
+                    .font(.system(size: fontSize, weight: .medium))
                 if let snippet = english.snippet {
                     (Text(snippet.isTrimmedAtStart ? "…" : "")
                         + Text(snippet.before)
@@ -2567,13 +3026,21 @@ private struct SeptuagintWordGroup: View {
                 }
             case .none, .pending:
                 Text(reference(verse.reference))
-                    .font(.caption.weight(.semibold))
+                    .font(.system(size: fontSize, weight: .medium))
             }
             switch verse.greek {
             case .text(let greek):
-                Text(greek)
+                // The Greek word marked where the tagging says it stands, so
+                // the reason this verse is in a narrowed list can be seen
+                // rather than taken on trust.
+                // Dimmer than the English, which a panel called "a clear
+                // and consistent system", but not the system grey: there the
+                // find mark over it read as a muddy olive against the dark
+                // window. `lampSecondaryText` is the readable grey, raised
+                // in an earlier round for small type exactly like this.
+                greekLine(greek, marking: loader.greekMarks[verse.reference] ?? [])
                     .font(.system(size: max(10, fontSize - 1), design: .serif))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.lampSecondaryText)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             case .absent:
@@ -2585,8 +3052,39 @@ private struct SeptuagintWordGroup: View {
                 // anything said about the Greek here would be a guess.
                 EmptyView()
             }
+            // Why this verse is not simply one word answering to one word.
+            // Said only where it is so: a row with nothing under it is the
+            // strong case, and should read as one.
+            if let doubt = loader.pairingDoubts[word.id]?[verse.reference] {
+                Text(doubt)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The Greek verse, with the word marked where the tagging puts it.
+    ///
+    /// Offsets are counted in characters, as every annotation in Lamp is, so
+    /// the text is sliced as characters. A span that does not fit the text
+    /// read here draws the verse unmarked rather than cutting it in the
+    /// wrong place.
+    private func greekLine(_ greek: String, marking spans: [SeptuagintLoader.GreekMark]) -> Text {
+        let characters = Array(greek)
+        let wanted = spans
+            .filter { $0.start >= 0 && $0.end > $0.start && $0.end <= characters.count }
+            .sorted { $0.start < $1.start }
+        guard !wanted.isEmpty else { return Text(greek) }
+        var line = Text("")
+        var cursor = 0
+        for span in wanted where span.start >= cursor {
+            line = line + Text(String(characters[cursor..<span.start]))
+                + Text.lampFindMatch(String(characters[span.start..<span.end]))
+            cursor = span.end
+        }
+        return line + Text(String(characters[cursor...]))
     }
 
     private func reference(_ reference: Int) -> String {

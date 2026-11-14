@@ -5510,8 +5510,12 @@ private struct TranslationReaderView: View, Equatable {
                 // verse converts to, as the WEB's Romans 14:24 is the KJV's 16:25.
                 var places: Set<[Int]> = [[chapter.book.id, chapter.number]]
                 for verse in chapter.verses {
-                    guard let partner = mainVersification.convert(verse.id, to: versification) else { continue }
-                    places.insert([partner / 1_000_000, partner / 1_000 % 1_000])
+                    // Every chapter a verse reaches, not the first: one verse
+                    // can answer to two, and a companion column that misses
+                    // the second shows an empty row where text stands.
+                    for partner in mainVersification.counterparts(of: verse.id, in: versification) {
+                        places.insert([partner / 1_000_000, partner / 1_000 % 1_000])
+                    }
                 }
                 var verses: [LampVerse] = []
                 for place in places.sorted(by: { ($0[0], $0[1]) < ($1[0], $1[1]) }) {
@@ -5575,8 +5579,10 @@ private struct TranslationReaderView: View, Equatable {
             }
             return ReaderParallelCompanion(
                 verses: verses,
-                fromMain: { main.convert($0, to: other) },
-                toMain: { other.convert($0, to: main) }
+                // One row against one row: a parallel column lines a verse
+                // up with a single partner, which is what `opens` answers.
+                fromMain: { main.opens($0, in: other) },
+                toMain: { other.opens($0, in: main) }
             )
         }
         return ReaderParallelRows.rows(main: chapter.verses, companions: companions)

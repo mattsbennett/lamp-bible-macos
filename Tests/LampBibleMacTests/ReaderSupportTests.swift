@@ -1314,15 +1314,17 @@ struct ReaderSupportTests {
         )
     }
 
+    // Parallel columns pair one row with one row, which is the question
+    // `opens` answers.
     private func englishToSeptuagint(_ reference: Int) -> Int? {
-        LampVersification.standard(.english).convert(
-            reference, to: LampVersification.standard(.septuagint)
+        LampVersification.standard(.english).opens(
+            reference, in: LampVersification.standard(.septuagint)
         )
     }
 
     private func septuagintToEnglish(_ reference: Int) -> Int? {
-        LampVersification.standard(.septuagint).convert(
-            reference, to: LampVersification.standard(.english)
+        LampVersification.standard(.septuagint).opens(
+            reference, in: LampVersification.standard(.english)
         )
     }
 
