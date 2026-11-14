@@ -315,10 +315,12 @@ extension View {
 /// triangle alone, a target of a few points against a heading that can run
 /// to three lines, as the Septuagint section's does.
 ///
-/// Set on every window's root, so a `DisclosureGroup` anywhere in the app
-/// takes it without asking. The dictionary's entries build the same thing
-/// by hand (`DictionaryResultView`): a chevron in a ten-point column, then
-/// the heading, the row one button.
+/// Set on each `DisclosureGroup` itself, never on a window or a container
+/// holding a `List`: a sidebar's sections are disclosure groups inside
+/// SwiftUI, and set on the window this style drew the main sidebar's rows
+/// and icons tiny. The dictionary's entries build the same thing by hand
+/// (`DictionaryResultView`): a chevron in a ten-point column, then the
+/// heading, the row one button.
 struct LampDisclosureStyle: DisclosureGroupStyle {
     /// The chevron's column and the gap after it, which the content is
     /// indented by so it lines up under the heading's words. Less than the

@@ -322,6 +322,7 @@ private struct ReadingPlanCard: View {
                             .font(.callout.weight(.medium))
                             .foregroundStyle(Color.lampSecondaryText)
                     }
+                    .disclosureGroupStyle(LampDisclosureStyle())
                 }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

@@ -2267,6 +2267,7 @@ private struct LampSlideScripturePicker: View {
             Label("Choose Scripture", systemImage: "quote.opening")
                 .font(.callout.weight(.medium))
         }
+        .disclosureGroupStyle(LampDisclosureStyle())
         .onAppear { chooseDefaultTranslationIfNeeded() }
         .onChange(of: model.translations.map(\.id)) { _, _ in
             chooseDefaultTranslationIfNeeded()

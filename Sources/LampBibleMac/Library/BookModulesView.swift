@@ -2047,6 +2047,7 @@ private struct BookAudioView: View {
                         .textSelection(.enabled)
                         .padding(.top, 6)
                 }
+                .disclosureGroupStyle(LampDisclosureStyle())
             }
         }
         .padding(14)

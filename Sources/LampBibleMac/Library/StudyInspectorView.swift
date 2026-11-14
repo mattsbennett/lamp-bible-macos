@@ -1733,6 +1733,7 @@ private struct DictionaryInspectorView: View {
                                             dictionaryResult(result)
                                         }
                                     }
+                                    .disclosureGroupStyle(LampDisclosureStyle())
                                     .font(.caption)
                                 }
                             } header: {
