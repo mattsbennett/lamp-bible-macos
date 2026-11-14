@@ -61,14 +61,14 @@ The Mac app ships as a notarized direct download with Sparkle auto-updates. The 
 
 ## Development
 
-The package uses a local sibling dependency while both repositories are evolving:
+The package uses a local sibling dependency while both repositories are evolving, so check the repositories out side by side:
 
 ```text
-Personal Repos/
-├── lamp-bible-core/
-├── lamp-bible-ios/
-├── lamp-bible-macos/
-└── lamp-bible-modules/
+<parent folder>/
+├── lamp-bible-core/      shared Swift package (local path dependency)
+├── lamp-bible-ios/       the iPhone and iPad app
+├── lamp-bible-macos/     this repository
+└── lamp-bible-modules/   module sources and the bundled database (private)
 ```
 
 Build and test from the command line:
@@ -81,6 +81,8 @@ swift test
 Open `Lamp Bible.xcodeproj` in Xcode, choose the **Lamp Bible** scheme and **My Mac**, then press `⌘R`. The Xcode target builds a real macOS application bundle using `com.neus.Lamp-Bible.macOS`; `Package.swift` remains available for library-focused command-line builds and tests.
 
 The Xcode target copies `../lamp-bible-modules/modules_db/bundled_modules.db.zlib` into the application bundle. Keep the sibling repositories in the layout above and rebuild that canonical archive from `lamp-bible-modules` when bundled content changes; both Apple apps consume the same artifact.
+
+**`lamp-bible-modules` is a private repository.** Without access to it, the archive is missing and Xcode cannot copy it. Remove `bundled_modules.db.zlib` from the app target's Copy Bundle Resources phase to build anyway; the app then starts with no bundled content, and modules can be added by installing `.lamp` files or importing a Bible you own. `swift build` and `swift test` don't need it.
 
 Install a translation with File → Install Module… (`⌘O`), import editable study data with `⌥⌘O`, navigate chapters with `⌘[` and `⌘]`, and toggle study tools with `⇧⌘I`. Clicking a verse number focuses the inspector; right-clicking a verse exposes highlight and personal-note actions.
 

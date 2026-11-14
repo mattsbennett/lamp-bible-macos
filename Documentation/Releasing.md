@@ -50,7 +50,8 @@ recalled once a disk image is public.
 ### 1. Bundled content is cleared
 
 The app copies `../lamp-bible-modules/modules_db/bundled_modules.db.zlib` into its bundle.
-Rebuild it without pending-rights content, from the modules repository:
+Rebuild it without pending-rights content, from the modules repository (private, so a release
+needs access to it):
 
 ```sh
 python3 scripts/bundle_all.py --book-modules outputs/books -o modules_db/bundled_modules.db

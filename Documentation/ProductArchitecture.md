@@ -46,7 +46,7 @@ The settings policy controls whether agents may query modules, whether they see 
 
 - `lamp-bible-macos`: SwiftUI/AppKit views, commands, windows, drag and drop, file panels, and Mac lifecycle.
 - `lamp-bible-core`: reusable Swift models, GRDB databases, compiler/importer, search, and sync protocols.
-- `lamp-bible-modules`: canonical JSON Schemas, authoring sources, Python pipelines, and generated module fixtures.
+- `lamp-bible-modules` (private): canonical JSON Schemas, authoring sources, Python pipelines, and generated module fixtures.
 - `lamp-bible-ios`: UIKit/SwiftUI views and iOS lifecycle.
 
 ## Dependency policy
