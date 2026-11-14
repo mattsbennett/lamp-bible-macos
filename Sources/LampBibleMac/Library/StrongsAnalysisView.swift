@@ -267,6 +267,12 @@ final class SeptuagintLoader {
     /// the rest are one click away in that word's own analysis.
     nonisolated static let shownVerses = 25
 
+    /// How many a word's list opens with. Every group in the Septuagint tab
+    /// is open from the start, so this is what a key pays on arrival: a word
+    /// with five Hebrew words behind it reads fifty verses, not a hundred
+    /// and twenty-five. The control under each list fetches the next 25.
+    nonisolated static let firstVerses = 10
+
     private(set) var words: [Word] = []
     /// The installed Septuagint's module id, for finding its own analysis
     /// among those the pane has read.
@@ -3454,7 +3460,7 @@ private struct SeptuagintWordGroup: View {
 
     /// How many of this word's verses are shown. Raised by the button under
     /// them; the load reads only as far as this.
-    @State private var shownVerses = SeptuagintLoader.shownVerses
+    @State private var shownVerses = SeptuagintLoader.firstVerses
 
     private var listed: SeptuagintLoader.Verses? { loader.verses[word.id] }
 
