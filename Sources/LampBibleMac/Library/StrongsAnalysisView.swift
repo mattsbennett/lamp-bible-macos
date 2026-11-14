@@ -1044,6 +1044,10 @@ struct StrongsAnalysisPane: View {
         case spread = "Spread"
         case companions = "Companions"
         case compare = "Compare"
+        /// The Greek Old Testament: what the key does there, and the Hebrew
+        /// words it renders. Offered only where the key stands in it, which
+        /// is a Greek key the Septuagint uses — see `offeredSections`.
+        case septuagint = "Septuagint"
         /// The occurrences themselves, where nothing beside the pane lists
         /// them: the reader's sidebar, which has no room for a second column.
         case verses = "Verses"
@@ -1141,9 +1145,6 @@ struct StrongsAnalysisPane: View {
     @EnvironmentObject private var model: LibraryModel
     @Environment(\.colorScheme) private var colorScheme
     @State private var septuagint = SeptuagintLoader()
-    /// Collapsed to begin with: the Septuagint is a second subject, and what
-    /// it holds costs a search a word to work out.
-    @State private var isShowingSeptuagint = false
     /// Whether every one of a Hebrew word's verses is listed, or only the
     /// ones the Septuagint renders with this Greek word.
     @State private var isShowingSeptuagintMethod = false
@@ -1255,6 +1256,10 @@ struct StrongsAnalysisPane: View {
             }
         }
         .frame(minWidth: 320, idealWidth: 400)
+        .task(id: analysis?.key) {
+            guard let key = analysis?.key else { return }
+            await septuagint.loadWords(key: key, model: model)
+        }
         .onChange(of: filter) { _, chosen in
             // Where the occurrences are a section, choosing a figure has to
             // show them: otherwise the click narrows a list out of sight.
@@ -1268,7 +1273,7 @@ struct StrongsAnalysisPane: View {
     private var sectionPicker: some View {
         UnderlinedTabs(
             label: "Section",
-            items: sections.map { ($0, $0.rawValue) },
+            items: offeredSections.map { ($0, $0.rawValue) },
             selection: Binding(get: { shownSection }, set: { section = $0 }),
             spacing: 14
         )
@@ -1276,10 +1281,32 @@ struct StrongsAnalysisPane: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// Whether this key stands in the Greek Old Testament at all. Known
+    /// once `loadWords` has run, which is why that load is not tied to the
+    /// tab: a tab cannot appear on the strength of a load it is gating.
+    private var hasSeptuagint: Bool {
+        !septuagint.words.isEmpty || septuagintOwnAnalysis != nil
+    }
+
+    /// The tabs offered for this key. The Septuagint is one only where the
+    /// key stands in it, so the row changes shape between a Greek key the
+    /// Septuagint uses and one it does not — which is the honest shape: a
+    /// tab that was always there and usually empty would promise a subject
+    /// most keys do not have.
+    ///
+    /// Before Verses, which is the occurrence list and belongs last.
+    private var offeredSections: [Section] {
+        guard hasSeptuagint, !sections.contains(.septuagint) else { return sections }
+        guard let index = sections.firstIndex(of: .verses) else { return sections + [.septuagint] }
+        return Array(sections[..<index]) + [.septuagint] + Array(sections[index...])
+    }
+
     /// The section chosen, or the first offered: a pane that offers no
-    /// Definition opens on what it does offer.
+    /// Definition opens on what it does offer. A key with no Septuagint
+    /// falls back here too, rather than showing a tab that is not there.
     private var shownSection: Section {
-        section.flatMap { sections.contains($0) ? $0 : nil } ?? sections.first ?? .overview
+        section.flatMap { offeredSections.contains($0) ? $0 : nil }
+            ?? offeredSections.first ?? .overview
     }
 
     @ViewBuilder
@@ -1291,6 +1318,7 @@ struct StrongsAnalysisPane: View {
         case .spread: spread(analysis)
         case .companions: companions(analysis)
         case .compare: compare
+        case .septuagint: septuagintBody(analysis)
         case .verses:
             if let verseRow {
                 let shown = analysis.occurrences(matching: filter)
@@ -1887,13 +1915,9 @@ struct StrongsAnalysisPane: View {
                     }
                 }
             }
-            septuagintGroup(analysis)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .task(id: analysis.key) {
-            await septuagint.loadWords(key: analysis.key, model: model)
-        }
         .task(id: formsSource(of: analysis)) { await loadFormReadings(of: analysis) }
     }
 
@@ -2016,6 +2040,7 @@ struct StrongsAnalysisPane: View {
                 .font(.system(size: Self.sectionProseSize, weight: .medium))
                 .foregroundStyle(Color.lampSecondaryText)
         }
+        .disclosureGroupStyle(LampDisclosureStyle())
     }
 
     /// The Greek word's own use in the Septuagint, above the Hebrew words it
@@ -2036,13 +2061,12 @@ struct StrongsAnalysisPane: View {
                 contrastBars(contrast)
             }
             if !own.books.isEmpty {
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 16) {
                     // Told apart from the Testament bars above: with none, a
                     // panel read the two groups stacked together as "one
                     // broken chart".
                     Text("Where it stands in the Septuagint")
                         .lampSectionHeading()
-                        .padding(.bottom, 4)
                     // Books rather than canon sections, because the click a
                     // reader wants is "show me the ones in Psalms", and a
                     // book is the one division a verse list can be narrowed
@@ -2095,7 +2119,10 @@ struct StrongsAnalysisPane: View {
     /// rate underneath.
     @ViewBuilder
     private func contrastBars(_ contrast: LampSeptuagintSection.Contrast) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+        // 16 between bars, as the Spread tab stacks its own: these are the
+        // same bars drawn by the same `spreadBar` vocabulary, and at 2 they
+        // read as a denser chart of a different kind.
+        VStack(alignment: .leading, spacing: 16) {
             ForEach([contrast.newTestament, contrast.septuagint], id: \.label) { side in
                 HStack(spacing: 8) {
                     Text(side.label)
@@ -2233,23 +2260,46 @@ struct StrongsAnalysisPane: View {
         }
     }
 
-    @ViewBuilder
-    private func septuagintGroup(_ analysis: LampStrongsAnalysis) -> some View {
+    /// The Greek Old Testament tab: what the key does there, and the Hebrew
+    /// words it renders.
+    private func septuagintBody(_ analysis: LampStrongsAnalysis) -> some View {
         let own = septuagintOwnAnalysis
-        if !septuagint.words.isEmpty || own != nil {
-            DisclosureGroup(isExpanded: $isShowingSeptuagint) {
-                VStack(alignment: .leading, spacing: 16) {
+        return Group {
+            if hasSeptuagint {
+                VStack(alignment: .leading, spacing: 24) {
+                    // The sentence that used to sit under the chevron as a
+                    // subtitle. The tab names the subject, so the heading it
+                    // had would only say "Septuagint" twice; this says what
+                    // the key does there, which is the thing worth reading
+                    // first.
                     if let own {
-                        ownUseBody(own, reader: analysis)
+                        // The sentence belongs to the bars under it, so it
+                        // keeps their spacing rather than a subject's.
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text(LampSeptuagintSection.ownUseHeadline(
+                                greek: entry?.lemma,
+                                septuagint: own,
+                                newTestament: greekNewTestamentAnalysis
+                            ))
+                                .font(.system(size: Self.sectionProseSize))
+                                .foregroundStyle(Color.lampSecondaryText)
+                                .fixedSize(horizontal: false, vertical: true)
+                            ownUseBody(own, reader: analysis)
+                        }
                     }
                     if !septuagint.words.isEmpty {
                     // One Septuagint section, so what the Hebrew words need
                     // is a line, not a second heading and a second
                     // introduction: the heading above has named the text,
                     // counted it and said what it is.
-                    VStack(alignment: .leading, spacing: 4) {
+                    // How the rows are read, together and apart from them:
+                    // two switches stacked tight to each other and a clear
+                    // step before the lists they act on.
+                    VStack(alignment: .leading, spacing: 10) {
                         englishChoice
                         greekChoice
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
                         Text(hebrewIntroduction)
                             .font(.system(size: Self.sectionProseSize))
                             .foregroundStyle(Color.lampSecondaryText)
@@ -2282,6 +2332,7 @@ struct StrongsAnalysisPane: View {
                                 loader: septuagint,
                                 englishID: analysis.translationID,
                                 showsGreek: showsGreek,
+                                startsExpanded: true,
                                 fontSize: fontSize,
                                 analyse: analyse
                             )
@@ -2290,7 +2341,8 @@ struct StrongsAnalysisPane: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, 8)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
                 // The counted verses are part of the id: they arrive after
                 // the words do, and a task keyed on the words alone ran once,
                 // found nothing counted yet, and never ran again.
@@ -2320,49 +2372,18 @@ struct StrongsAnalysisPane: View {
                     septuagint.readsSeptuagintInEnglish = now
                     septuagint.forgetVerses()
                 }
-            } label: {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(own == nil
-                        ? LampSeptuagintSection.title
-                        : LampSeptuagintSection.ownUseTitle)
-                        .lampSectionHeading()
-                    if let own {
-                        Text(LampSeptuagintSection.ownUseHeadline(
-                            greek: entry?.lemma,
-                            septuagint: own,
-                            newTestament: greekNewTestamentAnalysis
-                        ))
-                            .font(.system(size: Self.sectionProseSize))
-                            .foregroundStyle(Color.lampSecondaryText)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    // What is inside, before it is opened: the Hebrew words,
-                    // and how to say them. Marks around each separator keep
-                    // the words in the lexicon's order, left to right,
-                    // rather than letting the Hebrew run them as one phrase.
-                    Text("\u{200E}" + septuagint.words
-                        .map { LampSeptuagintSection.word($0.hebrew) }
-                        .joined(separator: "\u{200E}  ·  \u{200E}"))
-                        .font(.system(size: fontSize + 1))
-                        .lineLimit(1)
-                    let said = septuagint.words.compactMap { word in
-                        word.hebrew.strongs.flatMap {
-                            septuagint.headwords[LampStrongsKey.normalized($0)]?.transliteration
-                        }
-                    }.filter { !$0.isEmpty }
-                    if !said.isEmpty {
-                        Text(said.joined(separator: "  ·  "))
-                            .font(.system(size: max(10, fontSize - 1)).italic())
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
+                // The Hebrew words the chevron used to list as a preview of
+                // what was inside are no longer needed: the tab opens on
+                // them, in full, with their verses under each.
+                // Counting is what the chevron used to gate, and the tab
+                // gates it now: this body is built only when the tab is
+                // chosen, and `loadCounts` returns at once for a key it has
+                // already counted, so coming back costs nothing.
+                .task(id: analysis.key) {
+                    await septuagint.loadCounts(
+                        key: analysis.key, englishID: analysis.translationID, model: model
+                    )
                 }
-            }
-            .task(id: isShowingSeptuagint) {
-                guard isShowingSeptuagint else { return }
-                await septuagint.loadCounts(
-                    key: analysis.key, englishID: analysis.translationID, model: model
-                )
             }
         }
     }
@@ -2431,6 +2452,7 @@ struct StrongsAnalysisPane: View {
                         }
                     }
                 }
+                .disclosureGroupStyle(LampDisclosureStyle())
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.leading, 6)
@@ -3121,6 +3143,7 @@ struct StrongsAnalysisPane: View {
                     : "Where \(name)\u{2019}s spellings come from")
                     .font(.callout)
             }
+            .disclosureGroupStyle(LampDisclosureStyle())
         }
         if showsGaps, let original, let openIn {
             let originalName = original.translationAbbreviation ?? original.translationName
@@ -3412,12 +3435,22 @@ private struct SeptuagintWordGroup: View {
     let englishID: String?
     /// Whether the Septuagint's own Greek is drawn under each verse.
     let showsGreek: Bool
+    /// Whether this group opens with its verses showing. True in the
+    /// Septuagint tab, whose whole subject is these verses: a tab that
+    /// opened on a chevron would have moved the reveal rather than removed
+    /// it.
+    let startsExpanded: Bool
     let fontSize: Double
     let analyse: (String) -> Void
 
     @EnvironmentObject private var model: LibraryModel
     @Environment(\.readerReferenceActions) private var referenceActions
-    @State private var isExpanded = false
+    /// Nil until the reader says otherwise, so the group opens as the pane
+    /// asks and still closes when they close it. A plain `false` here, with
+    /// the pane's wish applied in `onAppear`, would open every group a
+    /// reader had deliberately shut the moment the view came back.
+    @State private var chosenExpansion: Bool?
+    private var isExpanded: Bool { chosenExpansion ?? startsExpanded }
 
     /// How many of this word's verses are shown. Raised by the button under
     /// them; the load reads only as far as this.
@@ -3426,7 +3459,10 @@ private struct SeptuagintWordGroup: View {
     private var listed: SeptuagintLoader.Verses? { loader.verses[word.id] }
 
     var body: some View {
-        DisclosureGroup(isExpanded: $isExpanded) {
+        DisclosureGroup(isExpanded: Binding(
+            get: { isExpanded },
+            set: { chosenExpansion = $0 }
+        )) {
             VStack(alignment: .leading, spacing: 10) {
                 if let listed {
                     switch listed {
@@ -3490,6 +3526,7 @@ private struct SeptuagintWordGroup: View {
                 .font(.system(size: fontSize, weight: .semibold))
                 .foregroundStyle(.primary)
         }
+        .disclosureGroupStyle(LampDisclosureStyle())
         // `forgets` is in the id because forgetting the rows is exactly the
         // moment they have to be read again: without it, a Septuagint in
         // English discovered while a group was open cleared its rows and
