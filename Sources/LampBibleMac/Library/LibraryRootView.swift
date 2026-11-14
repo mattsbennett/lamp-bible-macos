@@ -1127,7 +1127,7 @@ struct LibraryRootView: View {
     }
 
     private func historyLabel(_ location: ReaderLocation) -> String {
-        let book = LampBibleReferenceFormatter.bookName(location.bookNumber)
+        let book = model.bookName(location.bookNumber, in: location.translationID)
         let translation = model.translations.first { $0.id == location.translationID }
         let name = translation?.abbreviation ?? translation?.name ?? location.translationID
         return "\(book) \(location.chapterNumber) (\(name))"
@@ -1460,7 +1460,8 @@ struct LibraryRootView: View {
                     duplicate: duplicateReaderTab,
                     rename: renameReaderTab,
                     move: { readerTabs.move($0, to: $1) },
-                    newTab: presentNewReaderTabChooser
+                    newTab: presentNewReaderTabChooser,
+                    bookName: { model.bookName($0, in: $1) }
                 )
             }
             // Laid out beside the reader rather than with `.inspector`, whose
@@ -1962,7 +1963,7 @@ private struct NewReaderTabPage: View {
     }
 
     private func label(_ place: ReaderLocation) -> String {
-        let book = LampBibleReferenceFormatter.bookName(place.bookNumber)
+        let book = model.bookName(place.bookNumber, in: place.translationID)
         let translation = model.translations.first { $0.id == place.translationID }
         let name = translation?.abbreviation ?? translation?.name ?? place.translationID
         return "\(book) \(place.chapterNumber) · \(name)"
@@ -1992,6 +1993,8 @@ private struct ReaderTabBar: View {
     let move: (UUID, Int) -> Void
     /// Opens a tab on the chapter being read, with the passage picker open.
     let newTab: () -> Void
+    /// A book as the tab's translation names it.
+    let bookName: (Int, String) -> String
 
     var body: some View {
         LibraryTabBar(
@@ -2011,7 +2014,7 @@ private struct ReaderTabBar: View {
     private func tabTitle(_ tab: ReaderTab) -> String {
         if let name = tab.name { return name }
         guard let location = tab.location else { return tab.isBlank ? "New Tab" : "Reader" }
-        return "\(LampBibleReferenceFormatter.bookName(location.bookNumber)) \(location.chapterNumber)"
+        return "\(bookName(location.bookNumber, location.translationID)) \(location.chapterNumber)"
     }
 }
 
@@ -4145,7 +4148,10 @@ private struct PassagePickerPopover: View {
     /// while you are still deciding between John and Joshua.
     private var matchingBooks: [LampTranslationBook] {
         guard !trimmedTyped.isEmpty, typedReference == nil else { return books }
-        return books.filter { $0.name.localizedCaseInsensitiveContains(trimmedTyped) }
+        // Accents aside, so "Genesis" finds a Spanish translation's Génesis.
+        return books.filter {
+            $0.name.range(of: trimmedTyped, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+        }
     }
 
     private var booksList: some View {
@@ -7141,7 +7147,7 @@ private struct TranslationReaderView: View, Equatable {
     }
 
     private func historyLabel(_ location: ReaderLocation) -> String {
-        let book = LampBibleReferenceFormatter.bookName(location.bookNumber)
+        let book = model.bookName(location.bookNumber, in: location.translationID)
         let translation = model.translations.first { $0.id == location.translationID }
         let name = translation?.abbreviation ?? translation?.name ?? location.translationID
         return "\(book) \(location.chapterNumber) (\(name))"
@@ -7788,7 +7794,7 @@ extension LibraryRootView {
 
     /// "John 3 (BSB)", as the reader's history menu names a place.
     private func paletteLabel(_ location: ReaderLocation) -> String {
-        let book = LampBibleReferenceFormatter.bookName(location.bookNumber)
+        let book = model.bookName(location.bookNumber, in: location.translationID)
         let translation = model.translations.first { $0.id == location.translationID }
         let name = translation?.abbreviation ?? translation?.name ?? location.translationID
         return "\(book) \(location.chapterNumber) (\(name))"

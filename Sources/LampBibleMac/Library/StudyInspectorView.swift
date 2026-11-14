@@ -2365,7 +2365,7 @@ private struct VerseInspectorView: View {
 
     private var contextDescription: String {
         guard let reference = reader.selectedVerseReference else { return "the verse being read" }
-        return LampBibleReferenceFormatter.describeRange(from: reference, to: reference)
+        return model.describeVerse(reference, in: reader.chapter?.translationID)
     }
 
     /// What to say when the chosen verse isn't in the chapter this pane reads:
@@ -2378,7 +2378,7 @@ private struct VerseInspectorView: View {
               !chapter.verses.contains(where: { $0.id == reference })
         else { return nil }
         let place = LampBibleReferenceFormatter.components(of: reference)
-        let verse = LampBibleReferenceFormatter.describeRange(from: reference, to: reference)
+        let verse = model.describeVerse(reference, in: chapter.translationID)
         if place.book == chapter.book.id, place.chapter == chapter.number {
             let translation = model.translations.first { $0.id == chapter.translationID }
             return (

@@ -113,6 +113,10 @@ actor LexiconMappingStore {
 @MainActor
 final class LibraryModel: ObservableObject {
     @Published private(set) var modules: [LampInstalledModule] = []
+    /// Each translation's own book names, by translation and book number,
+    /// read with the modules: a Spanish translation's Génesis rather than
+    /// the app's Genesis.
+    @Published private(set) var translationBookNames: [String: [Int: String]] = [:]
     /// The reader's own highlight sets, for the search filters: a custom
     /// set's module ID is a UUID, which is no use in a menu.
     @Published private(set) var highlightSets: [LampHighlightSet] = []
@@ -196,6 +200,20 @@ final class LibraryModel: ObservableObject {
 
     var translations: [LampInstalledModule] {
         visibleModules(kind: .translation)
+    }
+
+    /// `book` as the translation names it, for a place named away from its
+    /// text, as a tab or a history entry names it; the app's own name for
+    /// a translation not yet read or one without that book.
+    func bookName(_ book: Int, in translationID: String?) -> String {
+        translationID.flatMap { translationBookNames[$0]?[book] }
+            ?? LampBibleReferenceFormatter.bookName(book)
+    }
+
+    /// "Génesis 1:1": one verse, its book as the translation names it.
+    func describeVerse(_ reference: Int, in translationID: String?) -> String {
+        let place = LampBibleReferenceFormatter.components(of: reference)
+        return "\(bookName(place.book, in: translationID)) \(place.chapter):\(place.verse)"
     }
 
     var dictionaries: [LampInstalledModule] {
@@ -1448,6 +1466,13 @@ final class LibraryModel: ObservableObject {
         }
         do {
             modules = try await library.installedModules()
+            var bookNames: [String: [Int: String]] = [:]
+            for translation in modules where translation.kind == .translation {
+                guard let books = try? await library.translationBooks(moduleID: translation.id) else { continue }
+                bookNames[translation.id] = Dictionary(
+                    books.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+            }
+            if translationBookNames != bookNames { translationBookNames = bookNames }
             highlightSets = (try? await library.highlightSets()) ?? []
             plans = try await library.readingPlans()
             devotionals = try await library.devotionals()

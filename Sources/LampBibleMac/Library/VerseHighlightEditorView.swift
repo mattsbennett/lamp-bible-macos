@@ -132,7 +132,7 @@ struct VerseHighlightEditorView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 5) {
-                Text("Highlight \(LampBibleReferenceFormatter.describeRange(from: verse.id, to: verse.id))")
+                Text("Highlight \(model.describeVerse(verse.id, in: model.selectedTranslationID))")
                     .font(.title2.bold())
                 Text("Select the exact words to highlight, then choose a set, color, and style.")
                     .foregroundStyle(.secondary)
