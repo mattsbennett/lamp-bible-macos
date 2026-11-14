@@ -1137,7 +1137,6 @@ struct StrongsAnalysisPane: View {
     @State private var isShowingSeptuagint = false
     /// Whether every one of a Hebrew word's verses is listed, or only the
     /// ones the Septuagint renders with this Greek word.
-    @State private var isShowingEveryHebrewVerse = false
     @State private var isShowingSeptuagintMethod = false
     /// Which English the verse rows read. Remembered, because it is a way of
     /// working rather than a thing done once.
@@ -1885,6 +1884,13 @@ struct StrongsAnalysisPane: View {
         .task(id: formsSource(of: analysis)) { await loadFormReadings(of: analysis) }
     }
 
+    /// A module's own short name, for naming it in a control.
+    private func name(of moduleID: String?) -> String? {
+        guard let moduleID else { return nil }
+        let module = model.translations.first { $0.id == moduleID }
+        return module?.abbreviation ?? module?.name
+    }
+
     /// Which English the verses read, where a reader has both.
     ///
     /// Only drawn when there is a choice: without a Septuagint in English
@@ -1900,12 +1906,19 @@ struct StrongsAnalysisPane: View {
                     Text(LampSeptuagintSection.EnglishChoice.title)
                         .font(.system(size: Self.chartFinePrintSize))
                         .foregroundStyle(Color.lampSecondaryText)
+                    // Each reading named by the text it is: "Septuagint in
+                    // English" and "Your Bible" named no module a reader
+                    // could check against the one they installed.
+                    let titles = LampSeptuagintSection.EnglishChoice.titles(
+                        septuagintInEnglish: name(of: septuagint.septuagintInEnglish),
+                        readersBible: name(of: analysis?.translationID)
+                    )
                     LampSegmentedPicker(
                         LampSeptuagintSection.EnglishChoice.title,
                         selection: $readsSeptuagintInEnglish,
                         items: [
-                            .init(id: true, title: LampSeptuagintSection.EnglishChoice.direct),
-                            .init(id: false, title: LampSeptuagintSection.EnglishChoice.indirect),
+                            .init(id: true, title: titles.direct),
+                            .init(id: false, title: titles.indirect),
                         ]
                     )
                     .controlSize(.small)
@@ -1942,7 +1955,7 @@ struct StrongsAnalysisPane: View {
                 Text(LampSeptuagintSection.ownUseAbout)
                 // Only where the list has in fact been narrowed. Said of a
                 // list showing every verse it would be untrue.
-                if septuagintCrossing(own) != nil, !isShowingEveryHebrewVerse {
+                if septuagintCrossing(own) != nil {
                     Text(LampSeptuagintSection.renderedCaveat(greek: entry?.lemma))
                 }
                 // Only a text that declares its Strong's numbers were matched
@@ -2131,9 +2144,7 @@ struct StrongsAnalysisPane: View {
         let note = LampSeptuagintSection.note(
             greek: entry?.lemma, septuagint: septuagint.tagging
         )
-        guard let crossing = septuagintCrossing(septuagintOwnAnalysis),
-              !isShowingEveryHebrewVerse
-        else { return note }
+        guard let crossing = septuagintCrossing(septuagintOwnAnalysis) else { return note }
         let narrowed = LampSeptuagintSection.renderedHeading(
             greek: entry?.lemma, shown: crossing.shown, of: crossing.total
         )
@@ -2144,11 +2155,7 @@ struct StrongsAnalysisPane: View {
     /// with this Greek word, or every one of them when asked.
     private func hebrewVerses(of word: SeptuagintLoader.Word) -> [Int]? {
         let all: [Int]?
-        if !isShowingEveryHebrewVerse, let rendered = septuagint.renderedVerses[word.id] {
-            all = rendered
-        } else {
-            all = word.references
-        }
+        all = septuagint.renderedVerses[word.id] ?? word.references
         // Book numbers are the same in both texts — the two numberings differ
         // in chapter and verse, not in which book a verse is in — so a
         // Septuagint book narrows the Hebrew word's verses exactly.
@@ -2215,16 +2222,14 @@ struct StrongsAnalysisPane: View {
                         // Under the sentence it acts on, where a reader is
                         // looking by the time they want it, rather than
                         // floated up beside the first line of it.
-                        if let crossing = septuagintCrossing(own), crossing.shown < crossing.total {
-                            Button(isShowingEveryHebrewVerse
-                                ? "Only the verses using \(entry?.lemma ?? "it")"
-                                : "Show all \(crossing.total) verses") {
-                                isShowingEveryHebrewVerse.toggle()
-                            }
-                            .buttonStyle(.link)
-                            .font(.caption)
-                            .padding(.top, 2)
-                        }
+                        // No "show all": the verses it added are the ones
+                        // where the Septuagint used a *different* Greek word,
+                        // which is not what a section about this Greek word
+                        // is asking — and with the Septuagint's own English
+                        // chosen those rows cannot show English at all, since
+                        // the English is marked on this key and that text has
+                        // no such tag there. "Analyse H…" already goes where
+                        // the Hebrew word's whole range belongs.
                     }
                     // Until the Hebrew text has been counted there are no
                     // verse lists to show, and an empty space reads as none.
@@ -2236,9 +2241,8 @@ struct StrongsAnalysisPane: View {
                             SeptuagintWordGroup(
                                 word: word,
                                 readsSeptuagintInEnglish: readsSeptuagintInEnglish,
-                                usingGreek: isShowingEveryHebrewVerse
-                                    ? nil
-                                    : (septuagint.renderedVerses[word.id] == nil ? nil : entry?.lemma),
+                                usingGreek: septuagint.renderedVerses[word.id] == nil
+                                    ? nil : entry?.lemma,
                                 references: references,
                                 loader: septuagint,
                                 englishID: analysis.translationID,
@@ -3568,9 +3572,9 @@ private struct SeptuagintWordGroup: View {
                     .font(.system(size: fontSize, weight: .medium))
                 if let snippet = english.snippet {
                     (Text(snippet.isTrimmedAtStart ? "…" : "")
-                        + Text(snippet.before)
+                        + interlinear(snippet.before)
                         + Text.lampFindMatch(snippet.word)
-                        + Text(snippet.after)
+                        + interlinear(snippet.after)
                         + Text(snippet.isTrimmedAtEnd ? "…" : ""))
                         .font(.system(size: fontSize))
                         .textSelection(.enabled)
@@ -3659,6 +3663,26 @@ private struct SeptuagintWordGroup: View {
         let parts = LampBibleReferenceFormatter.components(of: reference)
         return "\(LampBibleReferenceFormatter.bookName(parts.book)) "
             + "\(parts.chapter):\(parts.verse)"
+    }
+
+    /// An interlinear's word-order numbers set as its readers expect them —
+    /// raised and small against the word they belong to — rather than run
+    /// into the words as digits.
+    ///
+    /// The Apostolic Bible Polyglot prints them, and its readers read by
+    /// them; in plain text "[2said 3to her 1Amnon]" reads as damage. Core
+    /// decides which digits are markers and which are numbers the verse
+    /// means; this only draws them.
+    private func interlinear(_ text: String) -> Text {
+        let runs = LampSeptuagintSection.interlinearRuns(in: text)
+        guard runs.contains(where: \.isMarker) else { return Text(text) }
+        return runs.reduce(Text("")) { line, run in
+            guard run.isMarker else { return line + Text(run.text) }
+            return line + Text(run.text)
+                .font(.system(size: max(7, fontSize - 4)))
+                .baselineOffset(fontSize * 0.34)
+                .foregroundStyle(Color.lampSecondaryText)
+        }
     }
 }
 
