@@ -1818,6 +1818,8 @@ struct StrongsAnalysisPane: View {
                                     help: readings[form.id]?.parsing
                                 ))
                             }),
+                            whole: analysis.occurrenceCount,
+                            leftOut: unspelledLine(analysis),
                             choose: choose
                         )
                     } else {
@@ -3094,6 +3096,18 @@ struct StrongsAnalysisPane: View {
         return formReadings.byID
     }
 
+    /// Under the Forms ring, where some occurrences have no spelling and so
+    /// no slice: why its total is short of the occurrence list's.
+    private func unspelledLine(_ analysis: LampStrongsAnalysis) -> String? {
+        let missing = analysis.occurrenceCount - analysis.forms.reduce(0) { $0 + $1.count }
+        guard missing > 0 else { return nil }
+        let language = LampStrongsKey.normalized(analysis.key).first == "H" ? "Hebrew" : "Greek"
+        let name = analysis.translationAbbreviation ?? analysis.translationName
+        return missing == 1
+            ? "1 occurrence is tagged in \(name) without a \(language) spelling, so the ring leaves it out."
+            : "\(missing) occurrences are tagged in \(name) without a \(language) spelling, so the ring leaves them out."
+    }
+
     /// A form's line under its spelling: what it does, and the English it
     /// became, as "“of …” · here “of love”". Only this translation's own:
     /// a Greek or Hebrew text has no English, and none is borrowed.
@@ -4169,6 +4183,13 @@ private struct ShareRing: View {
     let divisions: [LampStrongsChartDivision]
     /// By division ID.
     var details: [Int: Detail] = [:]
+    /// The count the slices are a part of, where it is more than they add
+    /// up to: the word's occurrences, when some have no spelling to be a
+    /// slice of. The hole then says "113 of 116", not a total that the
+    /// occurrence list beside it contradicts.
+    var whole: Int?
+    /// What the ring leaves out of `whole`, said under it.
+    var leftOut: String?
     let choose: (LampStrongsFilter) -> Void
 
     @State private var hovered: LampStrongsShare.Slice?
@@ -4176,22 +4197,50 @@ private struct ShareRing: View {
     private static let size: Double = 164
     /// The ring's share of its radius.
     private static let thickness: Double = 0.38
+    /// The smallest slice whose percentage is printed on it: at the ring's
+    /// middle a 5% slice has about 21pt of arc, room for "5%" with a margin.
+    /// Smaller ones are left to the key beside the ring.
+    private static let labelledFraction = 0.05
 
     var body: some View {
         let slices = LampStrongsShare.slices(from: divisions.map(\.division))
         // Side by side where the column allows, the legend under the ring
         // where it does not.
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .center, spacing: 20) {
-                ring(slices)
-                legend(slices).frame(minWidth: 180)
+        VStack(alignment: .leading, spacing: 8) {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .center, spacing: 20) {
+                    ring(slices)
+                    legend(slices).frame(minWidth: 180)
+                }
+                VStack(alignment: .leading, spacing: 14) {
+                    ring(slices)
+                    legend(slices)
+                }
             }
-            VStack(alignment: .leading, spacing: 14) {
-                ring(slices)
-                legend(slices)
+            if let leftOut, leftOutCount(slices) > 0 {
+                Text(leftOut)
+                    .font(.caption)
+                    .foregroundStyle(Color.lampSecondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(.vertical, 4)
+    }
+
+    /// How many of `whole` no slice holds.
+    private func leftOutCount(_ slices: [LampStrongsShare.Slice]) -> Int {
+        guard let whole else { return 0 }
+        return max(0, whole - slices.reduce(0) { $0 + $1.value })
+    }
+
+    /// The middle of a slice's band, where its percentage is printed.
+    private func labelPoint(start: Double, extent: Double) -> CGPoint {
+        let radius = Self.size / 2 * (1 - Self.thickness / 2)
+        let angle = ((start + extent / 2) * 360 - 90) * .pi / 180
+        return CGPoint(
+            x: Self.size / 2 + radius * cos(angle),
+            y: Self.size / 2 + radius * sin(angle)
+        )
     }
 
     /// The filter a slice stands for. Found by ID, not position: slices are
@@ -4239,6 +4288,24 @@ private struct ShareRing: View {
                     }
                 }
             }
+            // Each slice's percentage on it. One hue in steps of strength
+            // could not be told apart at 31, 27 and 25%: the key was doing
+            // all the matching and the ring was nearly decoration. Black on
+            // every step, light or dark, since it reads at 4.6:1 or better
+            // on all of them, white falling to 1.3:1 on the palest.
+            ForEach(Array(slices.enumerated()), id: \.element.id) { index, slice in
+                if slice.fraction >= Self.labelledFraction {
+                    Text(LampStrongsSpread.percent(slice.fraction))
+                        .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(.black)
+                        .position(labelPoint(
+                            start: slices.prefix(index).reduce(0) { $0 + $1.fraction },
+                            extent: slice.fraction
+                        ))
+                        .opacity(hovered == nil || hovered?.id == slice.id ? 1 : 0.35)
+                        .allowsHitTesting(false)
+                }
+            }
             // The hole holds the total, the one number a share otherwise
             // leaves you to add up.
             VStack(spacing: 0) {
@@ -4255,7 +4322,9 @@ private struct ShareRing: View {
                 } else {
                     Text("\(slices.reduce(0) { $0 + $1.value })")
                         .font(.title3.weight(.semibold).monospacedDigit())
-                    Text("in all").font(.caption).foregroundStyle(.secondary)
+                    Text(leftOutCount(slices) > 0 ? "of \(whole ?? 0)" : "in all")
+                        .font(.caption)
+                        .foregroundStyle(Color.lampSecondaryText)
                 }
             }
             .frame(width: 92)
