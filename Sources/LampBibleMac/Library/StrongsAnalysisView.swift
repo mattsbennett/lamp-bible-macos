@@ -309,6 +309,60 @@ final class SeptuagintLoader {
     /// stamp, so a load begun before a change can never write after it.
     private(set) var forgets = 0
 
+    /// The work in flight, one task per thing the loader does.
+    ///
+    /// SwiftUI starts and cancels these tasks as the section and its word
+    /// groups come and go, and cancellation only *asks* a task to stop: it
+    /// goes on running until its next suspension, and may wake after the
+    /// task that replaced it has already written. Guarding each write
+    /// against that took six rounds of review and was still leaking,
+    /// because every new await is another place to forget.
+    ///
+    /// So one task per concern runs at a time, and a replacement waits for
+    /// its predecessor to actually stop before it starts. "A stale writer"
+    /// then stops being a case the bodies have to think about: there is no
+    /// older body still running to do the writing.
+    private var running: [String: Task<Void, Never>] = [:]
+
+    /// Run `work` as the only task for `concern`, once whatever was there
+    /// has stopped.
+    ///
+    /// Awaiting a cancelled task from the main actor is safe here: these
+    /// tasks are main-actor-isolated, so the await yields and lets the one
+    /// being waited for run on to its end.
+    private func only(_ concern: String, _ work: @escaping @MainActor () async -> Void) async {
+        // A caller that has already been cancelled takes no part. Without
+        // this it would cancel the live replacement on its way past, and
+        // then its own cancellation handler would cancel the successor it
+        // had just queued — both stopping, and the group left pending with
+        // nothing left to fill it.
+        guard !Task.isCancelled else { return }
+        // The slot is claimed without suspending: read the task in flight,
+        // make the one that will follow it, and store it, all before the
+        // first await. Cancelling and awaiting the old one *here* would
+        // suspend with the slot still holding a finished task, and a second
+        // caller arriving in that window would chain onto the same one — two
+        // tasks for a concern that is meant to have one.
+        let previous = running[concern]
+        let task = Task { @MainActor in
+            // Waited for inside the new task, so the queue forms here rather
+            // than in whoever called.
+            _ = await previous?.value
+            guard !Task.isCancelled else { return }
+            await work()
+        }
+        previous?.cancel()
+        running[concern] = task
+        // The caller's own cancellation reaches this work: a section that
+        // goes away should stop reading chapters nobody will see.
+        await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
+        if running[concern] == task { running[concern] = nil }
+    }
+
     /// What a load is *for*. A load writes only while this still describes
     /// the loader, so a stale task cannot publish whatever it was reading —
     /// whichever order the tasks happen to reach the code in.
@@ -386,6 +440,10 @@ final class SeptuagintLoader {
     /// note. No dictionary is named here: the note is a property of an entry,
     /// not of a particular lexicon, and TBESG is simply the one that has it.
     func loadWords(key: String, model: LibraryModel) async {
+        await only("words") { [self] in await loadWordsBody(key: key, model: model) }
+    }
+
+    private func loadWordsBody(key: String, model: LibraryModel) async {
         guard !Task.isCancelled, loadedKey != key else { return }
         loadedKey = key
         words = []
@@ -459,6 +517,12 @@ final class SeptuagintLoader {
     /// How often each Hebrew word stands in the Old Testament, counted in the
     /// Hebrew text itself rather than in an English translation that tags it.
     func loadCounts(key: String, englishID: String?, model: LibraryModel) async {
+        await only("counts") { [self] in
+            await loadCountsBody(key: key, englishID: englishID, model: model)
+        }
+    }
+
+    private func loadCountsBody(key: String, englishID: String?, model: LibraryModel) async {
         guard countedKey != key, !words.isEmpty else { return }
         countedKey = key
         guard let hebrewText = hebrewText(model) else {
@@ -524,6 +588,23 @@ final class SeptuagintLoader {
     /// word marked where the English translation tags it, and with the
     /// Septuagint's Greek where the two numberings meet.
     func loadVerses(
+        for word: Word,
+        englishID: String?,
+        showing limit: Int = SeptuagintLoader.shownVerses,
+        references listed: [Int]? = nil,
+        model: LibraryModel
+    ) async {
+        // One concern per word: two words' verses may be read at once, and
+        // should be, but a word's own second load replaces its first.
+        await only("verses:\(word.id)") { [self] in
+            await loadVersesBody(
+                for: word, englishID: englishID, showing: limit,
+                references: listed, model: model
+            )
+        }
+    }
+
+    private func loadVersesBody(
         for word: Word,
         englishID: String?,
         showing limit: Int = SeptuagintLoader.shownVerses,
@@ -789,6 +870,16 @@ final class SeptuagintLoader {
         lemma: String?,
         model: LibraryModel
     ) async {
+        await only("cross") { [self] in
+            await crossWithSeptuagintBody(analysis, lemma: lemma, model: model)
+        }
+    }
+
+    private func crossWithSeptuagintBody(
+        _ analysis: LampStrongsAnalysis?,
+        lemma: String?,
+        model: LibraryModel
+    ) async {
         guard !hasCrossed, !words.isEmpty, let analysis else { return }
         // Every word counted, not merely one of them: `countedKey` is set
         // before counting starts, so crossing on the first word's arrival
@@ -881,6 +972,12 @@ final class SeptuagintLoader {
     /// restarted. So it is safe, and necessary, to call this whenever the
     /// section appears.
     func resolveSeptuagintInEnglish(key: String, model: LibraryModel) async {
+        await only("english") { [self] in
+            await resolveSeptuagintInEnglishBody(key: key, model: model)
+        }
+    }
+
+    private func resolveSeptuagintInEnglishBody(key: String, model: LibraryModel) async {
         guard septuagintInEnglishFor != key else { return }
         guard BiblicalOriginalLanguage.inferred(from: key) == .greek else {
             settle(septuagintInEnglish: nil, for: key)
