@@ -764,6 +764,14 @@ struct StrongsAnalysisPane: View {
     /// ones the Septuagint renders with this Greek word.
     @State private var isShowingEveryHebrewVerse = false
     @State private var isShowingSeptuagintMethod = false
+    /// The Septuagint book the section is narrowed to, if any.
+    ///
+    /// The section's own, not the pane's. `LampStrongsFilter` narrows the
+    /// occurrence list, which belongs to the translation being read, so a
+    /// Septuagint bar driving it would narrow the wrong text's verses. The
+    /// lists under this section are its own — a Hebrew word's verses — and
+    /// nothing outside it needs to know they have been narrowed.
+    @State private var septuagintBook: Int?
     /// Closed to begin with: where the forms' spellings come from, and what
     /// the tags leave out, read once rather than every time.
     @State private var isShowingFormNotes = false
@@ -1541,10 +1549,36 @@ struct StrongsAnalysisPane: View {
             ) {
                 contrastBars(contrast)
             }
-            if !own.sections.isEmpty {
+            if !own.books.isEmpty {
                 VStack(alignment: .leading, spacing: 2) {
-                    ForEach(LampStrongsSpread.bars(own.sections, measure: chartMeasure)) { bar in
-                        spreadBar(bar, choosing: nil)
+                    // Told apart from the Testament bars above: with none, a
+                    // panel read the two groups stacked together as "one
+                    // broken chart".
+                    Text("Where it stands in the Septuagint")
+                        .lampSectionHeading()
+                        .padding(.bottom, 4)
+                    // Books rather than canon sections, because the click a
+                    // reader wants is "show me the ones in Psalms", and a
+                    // book is the one division a verse list can be narrowed
+                    // by exactly. Only books the word stands in: a row of
+                    // empty tracks reads as missing figures, which a panel
+                    // said of the zero rows in the sections.
+                    let books = own.books.filter { $0.occurrenceCount > 0 }
+                    ForEach(LampStrongsSpread.bars(books, measure: chartMeasure)) { bar in
+                        spreadBar(
+                            bar,
+                            choosing: nil,
+                            isChosen: septuagintBook == bar.id,
+                            select: { septuagintBook = septuagintBook == bar.id ? nil : bar.id }
+                        )
+                    }
+                    if let book = septuagintBook {
+                        Button("Showing \(LampBibleReferenceFormatter.bookName(book)) only · show every book") {
+                            septuagintBook = nil
+                        }
+                        .buttonStyle(.link)
+                        .font(.system(size: Self.chartFinePrintSize))
+                        .padding(.top, 2)
                     }
                     // The same key the Spread tab draws. Without it the ↑ and
                     // ↓ beside two rows are, in a panel's words, "lone
@@ -1670,10 +1704,17 @@ struct StrongsAnalysisPane: View {
     /// A Hebrew word's verses as listed: the ones the Septuagint renders
     /// with this Greek word, or every one of them when asked.
     private func hebrewVerses(of word: SeptuagintLoader.Word) -> [Int]? {
-        guard !isShowingEveryHebrewVerse,
-              let rendered = septuagint.renderedVerses[word.id]
-        else { return word.references }
-        return rendered
+        let all: [Int]?
+        if !isShowingEveryHebrewVerse, let rendered = septuagint.renderedVerses[word.id] {
+            all = rendered
+        } else {
+            all = word.references
+        }
+        // Book numbers are the same in both texts — the two numberings differ
+        // in chapter and verse, not in which book a verse is in — so a
+        // Septuagint book narrows the Hebrew word's verses exactly.
+        guard let book = septuagintBook else { return all }
+        return all?.filter { $0 / 1_000_000 == book }
     }
 
     /// How many of the Hebrew words' verses the Septuagint renders with this
@@ -1681,8 +1722,15 @@ struct StrongsAnalysisPane: View {
     /// nothing is said of it before it is known.
     private func septuagintCrossing(_ own: LampStrongsAnalysis?) -> (shown: Int, total: Int)? {
         guard own != nil, septuagint.hasCrossed else { return nil }
-        let total = septuagint.words.reduce(0) { $0 + ($1.references?.count ?? 0) }
-        let shown = septuagint.words.reduce(0) { $0 + (septuagint.renderedVerses[$1.id]?.count ?? 0) }
+        // Both sides inside the chosen book, so the sentence never counts
+        // verses the lists below it are not showing.
+        func inBook(_ references: [Int]?) -> Int {
+            guard let references else { return 0 }
+            guard let book = septuagintBook else { return references.count }
+            return references.filter { $0 / 1_000_000 == book }.count
+        }
+        let total = septuagint.words.reduce(0) { $0 + inBook($1.references) }
+        let shown = septuagint.words.reduce(0) { $0 + inBook(septuagint.renderedVerses[$1.id]) }
         return total > 0 ? (shown, total) : nil
     }
 
@@ -2100,9 +2148,17 @@ struct StrongsAnalysisPane: View {
 
     private func spreadBar(
         _ bar: LampStrongsSpreadBar,
-        choosing filter: LampStrongsFilter?
+        choosing filter: LampStrongsFilter?,
+        isChosen: Bool = false,
+        select: (() -> Void)? = nil
     ) -> some View {
         Button {
+            // A bar that was given something of its own to do does it. The
+            // Septuagint's bars narrow that section's lists, not the pane's.
+            if let select {
+                select()
+                return
+            }
             guard let filter else { return }
             if case .book(let number) = filter {
                 openBook = openBook == number ? nil : number
@@ -2111,7 +2167,7 @@ struct StrongsAnalysisPane: View {
         } label: {
             HStack(spacing: 8) {
                 Text(bar.name)
-                    .font(.system(size: Self.chartLabelSize))
+                    .font(.system(size: Self.chartLabelSize, weight: isChosen ? .semibold : .regular))
                     .lineLimit(1)
                     .frame(width: Self.spreadLabelWidth, alignment: .trailing)
                 // Squared-off ends: a capsule only a few points long drew as a
@@ -3034,13 +3090,15 @@ private struct SeptuagintWordGroup: View {
                 // the reason this verse is in a narrowed list can be seen
                 // rather than taken on trust.
                 // Dimmer than the English, which a panel called "a clear
-                // and consistent system", but not the system grey: there the
-                // find mark over it read as a muddy olive against the dark
-                // window. `lampSecondaryText` is the readable grey, raised
-                // in an earlier round for small type exactly like this.
+                // and consistent system" worth keeping, but a step brighter
+                // again: at the readable grey every judge still called it
+                // dim, and two called it tiring over a long scroll. This is
+                // scripture, and `lampProse` is what the app reads scripture
+                // and commentary at — about 12:1 — so the pairing now rests
+                // on weight and size rather than on fading one side out.
                 greekLine(greek, marking: loader.greekMarks[verse.reference] ?? [])
                     .font(.system(size: max(10, fontSize - 1), design: .serif))
-                    .foregroundStyle(Color.lampSecondaryText)
+                    .foregroundStyle(Color.lampProse)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             case .absent:
@@ -3056,9 +3114,14 @@ private struct SeptuagintWordGroup: View {
             // Said only where it is so: a row with nothing under it is the
             // strong case, and should read as one.
             if let doubt = loader.pairingDoubts[word.id]?[verse.reference] {
+                // Was caption2 in the tertiary grey, which a panel called
+                // "a sub-10px footnote" and "nearly invisible against
+                // charcoal" in four reports. It is the one line that says
+                // this row may not be what it looks like, so it is read at
+                // the size of the other explanations.
                 Text(doubt)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .font(.system(size: max(10, fontSize - 2)))
+                    .foregroundStyle(Color.lampSecondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
