@@ -2019,10 +2019,12 @@ private struct LampSlideChartEditor: View {
             Divider()
             // Only those tagged with Strong's: no other can be compared.
             let tagged = model.translations.filter(\.tagsStrongs)
-            let groups = LampTranslationLanguages.grouped(tagged, language: \.language)
+            let groups = TranslationGroups.of(tagged)
             ForEach(groups) { group in
                 Section(groups.count > 1 ? group.title : "") {
-                    compareToggles(group.items, chart: chart, chosen: chosen)
+                    TranslationGroups.parts(of: group) { items in
+                        compareToggles(items, chart: chart, chosen: chosen)
+                    }
                 }
             }
         }

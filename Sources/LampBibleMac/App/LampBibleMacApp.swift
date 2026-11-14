@@ -518,18 +518,27 @@ private struct ReaderSettingsView: View {
                             // Under their languages, as every translation
                             // picker lists them; headings within the section,
                             // as the phone's Settings has them.
-                            let groups = LampTranslationLanguages.grouped(translationModules, language: \.language)
+                            let groups = TranslationGroups.of(translationModules)
                             ForEach(groups) { group in
                                 if groups.count > 1 {
                                     Text(group.title)
                                         .font(.callout.weight(.semibold))
                                         .foregroundStyle(.secondary)
                                 }
-                                ForEach(group.items) { module in
-                                    moduleToggle(module) {
-                                        if defaultTranslationID == module.id {
-                                            defaultTranslationID = ""
-                                            model.setDefaultTranslation(nil)
+                                // Whole Bibles, then the parts under a
+                                // heading of their own within the language.
+                                ForEach(group.parts) { part in
+                                    if let title = part.title {
+                                        Text(title)
+                                            .font(.caption)
+                                            .foregroundStyle(Color.lampSecondaryText)
+                                    }
+                                    ForEach(part.items) { module in
+                                        moduleToggle(module) {
+                                            if defaultTranslationID == module.id {
+                                                defaultTranslationID = ""
+                                                model.setDefaultTranslation(nil)
+                                            }
                                         }
                                     }
                                 }

@@ -467,6 +467,31 @@ extension LampInstalledModule {
     }
 }
 
+/// Translations as every picker groups them: by language, and within one,
+/// whole Bibles before the Septuagint, a Testament or any other part.
+enum TranslationGroups {
+    static func of(_ translations: [LampInstalledModule]) -> [LampTranslationLanguages.Group<LampInstalledModule>] {
+        LampTranslationLanguages.grouped(
+            translations, language: \.language, holdsWholeBible: \.holdsWholeBible
+        )
+    }
+
+    /// A language's whole Bibles, then a separator, then its parts, all in
+    /// the language's one section. Not a section of their own inside it: a
+    /// picker draws the options of a nested section disabled, so the
+    /// Septuagint could not be chosen at all.
+    @ViewBuilder
+    static func parts<Rows: View>(
+        of group: LampTranslationLanguages.Group<LampInstalledModule>,
+        @ViewBuilder rows: @escaping ([LampInstalledModule]) -> Rows
+    ) -> some View {
+        ForEach(Array(group.parts.enumerated()), id: \.element.id) { index, part in
+            if index > 0 { Divider() }
+            rows(part.items)
+        }
+    }
+}
+
 /// A menu's translations as buttons, grouped by language the way
 /// `TranslationPickerOptions` groups a picker's: the same sections, in the
 /// same order, with the same Strong's badge. For a menu that acts on the
@@ -476,13 +501,13 @@ struct TranslationMenuOptions: View {
     let choose: (LampInstalledModule) -> Void
 
     var body: some View {
-        let groups = LampTranslationLanguages.grouped(translations, language: \.language)
+        let groups = TranslationGroups.of(translations)
         if groups.count > 1 {
             ForEach(groups) { group in
-                Section(group.title) { rows(group.items) }
+                Section(group.title) { TranslationGroups.parts(of: group, rows: rows) }
             }
-        } else {
-            rows(translations)
+        } else if let group = groups.first {
+            TranslationGroups.parts(of: group, rows: rows)
         }
     }
 
@@ -504,20 +529,22 @@ struct TranslationMenuOptions: View {
 
 /// A picker's translations under the languages they are written in —
 /// English, any other modern language, then the biblical languages — or one
-/// plain list when they share a language. Each carries its Strong's badge.
+/// plain list when they share a language. Within each, whole Bibles first and
+/// then, below a separator, translations of part of it. Each carries its
+/// Strong's badge.
 struct TranslationPickerOptions<Tag: Hashable>: View {
     let translations: [LampInstalledModule]
     var title: (LampInstalledModule) -> String = { $0.name }
     let tag: (LampInstalledModule) -> Tag
 
     var body: some View {
-        let groups = LampTranslationLanguages.grouped(translations, language: \.language)
+        let groups = TranslationGroups.of(translations)
         if groups.count > 1 {
             ForEach(groups) { group in
-                Section(group.title) { rows(group.items) }
+                Section(group.title) { TranslationGroups.parts(of: group, rows: rows) }
             }
-        } else {
-            rows(translations)
+        } else if let group = groups.first {
+            TranslationGroups.parts(of: group, rows: rows)
         }
     }
 
