@@ -3572,7 +3572,10 @@ private struct SeptuagintWordGroup: View {
                     .font(.system(size: fontSize, weight: .medium))
                 if let snippet = english.snippet {
                     (Text(snippet.isTrimmedAtStart ? "…" : "")
-                        + interlinear(snippet.before)
+                        // `before` is told what follows it: the cut falls
+                        // between a marker and the word it belongs to, so
+                        // read alone its last digits look like a number.
+                        + interlinear(snippet.before, followedBy: snippet.word)
                         + Text.lampFindMatch(snippet.word)
                         + interlinear(snippet.after)
                         + Text(snippet.isTrimmedAtEnd ? "…" : ""))
@@ -3673,8 +3676,8 @@ private struct SeptuagintWordGroup: View {
     /// them; in plain text "[2said 3to her 1Amnon]" reads as damage. Core
     /// decides which digits are markers and which are numbers the verse
     /// means; this only draws them.
-    private func interlinear(_ text: String) -> Text {
-        let runs = LampSeptuagintSection.interlinearRuns(in: text)
+    private func interlinear(_ text: String, followedBy next: String? = nil) -> Text {
+        let runs = LampSeptuagintSection.interlinearRuns(in: text, followedBy: next)
         guard runs.contains(where: \.isMarker) else { return Text(text) }
         return runs.reduce(Text("")) { line, run in
             guard run.isMarker else { return line + Text(run.text) }
