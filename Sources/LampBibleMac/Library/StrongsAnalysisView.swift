@@ -224,6 +224,13 @@ final class SeptuagintLoader {
 
         /// In the Hebrew text's numbering.
         let reference: Int
+        /// The verse to open, in the numbering of the translation being read.
+        ///
+        /// Not the English line's own number: that belongs to whichever text
+        /// the line came from, and a Septuagint in English numbers some
+        /// verses its own way. Opening its number in the reader's Bible lands
+        /// on another passage — ABP's Psalm 51:1 is not the reader's.
+        var opensAt: Int?
         var english: English = .pending
         /// The Septuagint's Greek for the verse, where it has that verse: the
         /// numbering does not always line up, and some books it does not carry.
@@ -266,12 +273,10 @@ final class SeptuagintLoader {
     /// means the Septuagint uses this Greek word in none of them, and the
     /// rows must then say so rather than show every verse as though it did.
     private(set) var renderedVerses: [String: [Int]] = [:]
-    /// Where a word stands in a verse, in characters, as every annotation in
-    /// Lamp is counted.
-    struct GreekMark: Equatable {
-        let start: Int
-        let end: Int
-    }
+    /// Where a word stands in a verse. Core's, so the section's working-out
+    /// speaks one language on both platforms — and so the offsets keep their
+    /// unit, which is code points rather than Swift's Characters.
+    typealias GreekMark = LampSeptuagintSection.Span
 
     /// Where the Greek word stands in each crossed verse's Greek, keyed by
     /// the verse in the Hebrew text's numbering, so the row can mark it.
@@ -283,6 +288,70 @@ final class SeptuagintLoader {
     private(set) var pairingDoubts: [String: [Int: String]] = [:]
     /// How often each Hebrew word stands in each of its verses, by word id.
     private var hebrewCounts: [String: [Int: Int]] = [:]
+    /// Where each Hebrew occurrence stands in its verse, by word and verse:
+    /// the spans themselves, which are a handful of integers, never the
+    /// verses they came from. Used to settle which Greek occurrence answers
+    /// to which Hebrew one, and only for the rows a reader is looking at.
+    private var hebrewSpans: [String: [Int: [GreekMark]]] = [:]
+    /// The other Hebrew words this Greek word renders that stand in the same
+    /// verse, by word and verse, with the Greek word's own form. Kept so a
+    /// verse whose occurrence counts are settled by position can have its
+    /// doubt rewritten rather than dropped: position says which occurrence
+    /// answers to this word, and nothing at all about a different Hebrew
+    /// word standing beside it.
+    private var pairingCompeting: [String: [Int: LampSeptuagintSection.Competing]] = [:]
+    /// Which word's pages have had their doubts settled, as "word|rows".
+    /// A page whose settling was cut short is not one of them, so opening
+    /// the word again reads it rather than keeping warnings that position
+    /// would have taken away.
+    private var settledPages: Set<String> = []
+    /// How many times the rows have been thrown away. Part of a load's
+    /// stamp, so a load begun before a change can never write after it.
+    private(set) var forgets = 0
+
+    /// What a load is *for*. A load writes only while this still describes
+    /// the loader, so a stale task cannot publish whatever it was reading —
+    /// whichever order the tasks happen to reach the code in.
+    ///
+    /// A counter incremented on entry was tried first and is not enough: an
+    /// old task entering late claims the newest number and locks out the
+    /// replacement that started before it. A stamp has no such order to get
+    /// wrong, because it describes the state rather than the sequence.
+    private struct LoadStamp: Equatable {
+        let key: String?
+        let word: String
+        let limit: Int
+        let readsSeptuagintInEnglish: Bool
+        let septuagintInEnglish: String?
+        let forgets: Int
+    }
+
+    /// Which page of which word's verses. The count alone is not the page:
+    /// narrowing the section to one Septuagint book gives a different set of
+    /// references, which can be the same length — and the cache would then
+    /// hand back the other book's rows.
+    private func pageKey(_ word: String, _ references: [Int]) -> String {
+        "\(word)|\(references.count)|\(references.first ?? 0)|\(references.last ?? 0)"
+    }
+
+    private func stamp(word: String, limit: Int) -> LoadStamp {
+        LoadStamp(
+            key: loadedKey, word: word, limit: limit,
+            readsSeptuagintInEnglish: readsSeptuagintInEnglish,
+            septuagintInEnglish: septuagintInEnglish, forgets: forgets
+        )
+    }
+    /// Which key detection has answered for. Unset after a failed read, so
+    /// the question is put again rather than answered from a failure.
+    private var septuagintInEnglishFor: String?
+    /// An installed translation of the Greek Old Testament, where there is
+    /// one. Found once for a key rather than once for each of its Hebrew
+    /// words: it costs an analysis per candidate, and the answer cannot
+    /// differ between the words of one key.
+    private(set) var septuagintInEnglish: String?
+    /// Whether to read that text rather than the reader's own Bible. The
+    /// reader's choice, and only ever asked when there is a choice to make.
+    var readsSeptuagintInEnglish = true
     /// Whether the crossing has been done for the word on screen.
     private(set) var hasCrossed = false
     /// What each word's verses have to show, by its id. A present value means
@@ -317,7 +386,7 @@ final class SeptuagintLoader {
     /// note. No dictionary is named here: the note is a property of an entry,
     /// not of a particular lexicon, and TBESG is simply the one that has it.
     func loadWords(key: String, model: LibraryModel) async {
-        guard loadedKey != key else { return }
+        guard !Task.isCancelled, loadedKey != key else { return }
         loadedKey = key
         words = []
         verses = [:]
@@ -329,9 +398,13 @@ final class SeptuagintLoader {
         greekMarks = [:]
         pairingDoubts = [:]
         hebrewCounts = [:]
+        hebrewSpans = [:]
+        pairingCompeting = [:]
+        settledPages = []
         hasCrossed = false
         errorMessage = nil
         guard BiblicalOriginalLanguage.inferred(from: key) == .greek else { return }
+        await resolveSeptuagintInEnglish(key: key, model: model)
         do {
             let found = try await model.library.dictionaryEntries(
                 keys: [key, LampStrongsKey.normalized(key)]
@@ -406,13 +479,32 @@ final class SeptuagintLoader {
                 // How often it stands in each verse, for the rows that
                 // cannot be read as one word answering to one word.
                 var counts: [Int: Int] = [:]
+                var spans: [Int: [GreekMark]] = [:]
                 for occurrence in analyses.first?.occurrences ?? [] {
                     counts[occurrence.reference, default: 0] += 1
+                    // Offsets only. The verses themselves are not asked for:
+                    // a common Hebrew word stands in well over a thousand,
+                    // and holding their text to place a note that shows on
+                    // twenty-five rows would be the wrong trade.
+                    spans[occurrence.reference, default: []].append(
+                        GreekMark(start: occurrence.startOffset, end: occurrence.endOffset)
+                    )
                 }
                 hebrewCounts[words[index].id] = counts
+                hebrewSpans[words[index].id] = spans
             } catch is CancellationError {
+                // Cut short part way: the rest of the words are uncounted,
+                // and leaving the key marked counted would make reopening
+                // the section return at once and leave them that way. Only
+                // this key's marker, though — a newer count has its own.
+                if countedKey == key { countedKey = nil }
                 return
             } catch {
+                // The words may have been thrown away while this read was
+                // out — another key's load clears them — and the index would
+                // then be past the end. A read that failed under a key
+                // nobody is looking at has nothing to report.
+                guard countedKey == key, words.indices.contains(index) else { return }
                 words[index].references = []
             }
             // What the English most often renders it by. A rendering missed
@@ -438,23 +530,37 @@ final class SeptuagintLoader {
         references listed: [Int]? = nil,
         model: LibraryModel
     ) async {
+        // What this load is for, taken before it touches anything. Checked
+        // before every write, including the ones that give up and the one
+        // that clears a previous failure: a load that is no longer the
+        // current one must not replace a newer load's rows with its own
+        // result, nor delete one.
+        let began = stamp(word: word.id, limit: limit)
+        func isCurrent() -> Bool { !Task.isCancelled && stamp(word: word.id, limit: limit) == began }
+        guard isCurrent() else { return }
         // A read that failed is worth trying again when the word is opened
         // again. The other outcomes are settled: the verses are read, or the
         // library hasn't got a Septuagint to read them from.
         if case .unreadable = verses[word.id] { verses[word.id] = nil }
         // Already read this far: a second pass would re-read every chapter to
         // show the same rows. Asked for more, it falls through and reads on.
-        if case .rows(let rows) = verses[word.id], rows.count >= limit { return }
+        if case .rows(let rows) = verses[word.id], rows.count >= limit,
+           settledPages.contains(pageKey(word.id, rows.map(\.reference))) { return }
         guard let references = listed ?? word.references,
               !references.isEmpty, let hebrewText = hebrewText(model)
         else { return }
         let shown = Array(references.prefix(limit))
         // The references first, each still waiting for its English and Greek,
-        // so they are there to read while the rest is read.
-        verses[word.id] = .rows(shown.map { Verse(reference: $0, greek: .pending) })
+        // so they are there to read while the rest is read. Guarded like
+        // every other write: a cancelled task entering late with the same
+        // word and limit would otherwise put pending rows over a newer
+        // load's finished ones.
+        guard isCurrent() else { return }
+        verses[word.id] = .rows(shown.map { Verse(reference: $0, opensAt: nil, greek: .pending) })
         let library = model.library
         guard let hebrewNumbering = try? await library.versification(moduleID: hebrewText.id)
         else {
+            guard isCurrent() else { return }
             verses[word.id] = .unreadable(hebrewText.name)
             return
         }
@@ -468,16 +574,33 @@ final class SeptuagintLoader {
         // by; only the mark needs the analysis. Without this a key-less word's
         // verses kept the Hebrew numbers, and opened at them.
         var english: [Int: LampSeptuagintSection.English] = [:]
-        if let englishID, englishID != hebrewText.id {
+        // Which text the English comes from, and which word is marked in it.
+        // The reader's own Bible renders the Hebrew; a Septuagint in English
+        // renders the Greek, which is the word this section is about.
+        let source = LampSeptuagintSection.englishSource(
+            hebrewKey: word.hebrew.strongs,
+            greekKey: loadedKey ?? "",
+            readersTranslationID: englishID ?? "",
+            septuagintInEnglish: readsSeptuagintInEnglish ? septuagintInEnglish : nil
+        )
+        let englishModule: String?
+        let englishMark: String?
+        switch source {
+        case .septuagintInEnglish(let moduleID, let key): englishModule = moduleID; englishMark = key
+        case .readersBible(let moduleID, let key): englishModule = moduleID; englishMark = key
+        case nil: englishModule = englishID; englishMark = nil
+        }
+        if let englishID = englishModule, !englishID.isEmpty, englishID != hebrewText.id {
             do {
                 var analysis: LampStrongsAnalysis?
-                if let strongs = word.hebrew.strongs {
+                if let strongs = englishMark {
                     analysis = try await library.strongsAnalyses(
                         key: strongs, moduleIDs: [englishID], includingVerseText: true
                     ).first
                 }
                 let numbering = try await library.versification(moduleID: englishID)
                 if Task.isCancelled {
+                    guard isCurrent() else { return }
                     verses[word.id] = nil
                     return
                 }
@@ -489,8 +612,10 @@ final class SeptuagintLoader {
                 )
             } catch {
                 if Task.isCancelled {
+                    guard isCurrent() else { return }
                     verses[word.id] = nil
                 } else {
+                    guard isCurrent() else { return }
                     verses[word.id] = .unreadable(
                         model.translations.first { $0.id == englishID }?.name
                     )
@@ -498,23 +623,44 @@ final class SeptuagintLoader {
                 return
             }
         }
-        guard case .rows(let waiting) = verses[word.id], waiting.count == shown.count
+        guard isCurrent(),
+              case .rows(let waiting) = verses[word.id], waiting.count == shown.count
         else { return }
+        // Where each row opens, in the translation being read. Asked of the
+        // reader's own text even when the English line came from a Septuagint
+        // in English, whose numbering is its own.
+        var opensAt: [Int: Int] = [:]
+        if let readersID = englishID,
+           let readersNumbering = try? await library.versification(moduleID: readersID) {
+            for reference in shown {
+                opensAt[reference] = hebrewNumbering.opens(reference, in: readersNumbering)
+            }
+        }
+        // Checked here too: the English and the numbering above are both
+        // awaits, and a newer load may have put its rows up meanwhile.
+        guard isCurrent() else { return }
         verses[word.id] = .rows(shown.map {
             Verse(
                 reference: $0,
+                opensAt: opensAt[$0],
                 english: english[$0].map(Verse.English.read) ?? .none,
                 greek: .pending
             )
         })
 
         guard let septuagint = await septuagintText(model) else {
+            guard isCurrent() else { return }
             verses[word.id] = .withoutSeptuagint
             return
         }
+        // Guarded like the rows it names: a stale load naming a different
+        // Septuagint would make the newer load's "not in this text" rows
+        // blame the wrong one.
+        guard isCurrent() else { return }
         septuagintName = septuagint.name
         guard let greekNumbering = try? await library.versification(moduleID: septuagint.id)
         else {
+            guard isCurrent() else { return }
             verses[word.id] = .unreadable(septuagint.name)
             return
         }
@@ -540,16 +686,93 @@ final class SeptuagintLoader {
             // word's verses rather than keep them: a verse not reached would
             // otherwise say the Greek text lacks it, and the empty rows would
             // stay, since a word with verses is never read again.
+            guard isCurrent() else { return }
             verses[word.id] = nil
             return
         }
-        guard case .rows(let pending) = verses[word.id], pending.count == shown.count
+        guard isCurrent(),
+              case .rows(let pending) = verses[word.id], pending.count == shown.count
         else { return }
         verses[word.id] = .rows(pending.map {
             var verse = $0
             verse.greek = greek[$0.reference].map(Verse.Greek.text) ?? .absent
             return verse
         })
+        await settlePairings(
+            for: word, shown: shown, greek: greek,
+            hebrewText: hebrewText, hebrewNumbering: hebrewNumbering,
+            greekNumbering: greekNumbering, library: library, isCurrent: isCurrent
+        )
+    }
+
+    /// Drop the doubt from the rows where the words' places settle it.
+    ///
+    /// Only the rows on this page, and only those that carry a doubt at all:
+    /// four verses in five have nothing to settle, so the usual page costs
+    /// nothing. Where one does, the Hebrew of those verses is read — the
+    /// same chapter reads the Greek above just made, shared within the call
+    /// — and the positions are worked out from the spans already held.
+    ///
+    /// `pairingIsSettled` is only ever allowed to take a warning away. It
+    /// never writes which Hebrew word a Greek word renders, because no
+    /// source says so; see its own note for what it was measured at.
+    private func settlePairings(
+        for word: Word,
+        shown: [Int],
+        greek: [Int: String],
+        hebrewText: LampInstalledModule,
+        hebrewNumbering: LampVersification,
+        greekNumbering: LampVersification,
+        library: LampLibrary,
+        isCurrent: () -> Bool
+    ) async {
+        let wanted = LampSeptuagintSection.versesNeedingHebrew(
+            among: shown,
+            doubted: Set((pairingDoubts[word.id] ?? [:]).keys),
+            hebrewNumbering: hebrewNumbering,
+            septuagintNumbering: greekNumbering
+        )
+        // Nothing to settle is a settled page: the rows are as they will be.
+        guard !wanted.isEmpty, let spansByVerse = hebrewSpans[word.id] else {
+            // Nothing to settle is a settled page — but only for the load
+            // that is still current. A stale one marking it settled would
+            // make a later open take the cache and show rows nobody filled.
+            if isCurrent() { settledPages.insert(pageKey(word.id, shown)) }
+            return
+        }
+        let hebrew = (try? await LampSeptuagintSection.verses(
+            for: wanted,
+            numbering: hebrewNumbering,
+            textNumbering: hebrewNumbering
+        ) { book, chapter in
+            let read = try await library.chapter(
+                moduleID: hebrewText.id, bookNumber: book, chapterNumber: chapter
+            )
+            return Dictionary(
+                read.verses.map { ($0.number, $0.text) }, uniquingKeysWith: { first, _ in first }
+            )
+        }) ?? [:]
+        // Cut short, or the reader moved on: leave the page unsettled so
+        // opening the word again tries it, rather than keeping warnings that
+        // position would have lifted. A page spanning two chapters where one
+        // read failed comes back with part of what was asked for, and part
+        // is not a settled page — the rows in the chapter that failed would
+        // keep warnings for good.
+        guard isCurrent(), wanted.allSatisfy({ hebrew[$0] != nil }) else { return }
+        // Code points, which is the unit the tags count in.
+        let changed = LampSeptuagintSection.settle(
+            verses: wanted,
+            hebrewWord: LampSeptuagintSection.word(word.hebrew),
+            hebrewSpans: spansByVerse,
+            hebrewLengths: hebrew.mapValues { $0.unicodeScalars.count },
+            greekSpans: greekMarks,
+            greekLengths: greek.mapValues { $0.unicodeScalars.count },
+            competing: pairingCompeting[word.id] ?? [:]
+        )
+        for (reference, note) in changed {
+            pairingDoubts[word.id]?[reference] = note
+        }
+        settledPages.insert(pageKey(word.id, shown))
     }
 
     /// The Hebrew Old Testament, by its language rather than by its name.
@@ -567,6 +790,11 @@ final class SeptuagintLoader {
         model: LibraryModel
     ) async {
         guard !hasCrossed, !words.isEmpty, let analysis else { return }
+        // Every word counted, not merely one of them: `countedKey` is set
+        // before counting starts, so crossing on the first word's arrival
+        // would cross a few and set `hasCrossed`, and the words counted
+        // afterwards would never be crossed at all.
+        guard words.allSatisfy({ $0.references != nil }) else { return }
         guard words.contains(where: { $0.references?.isEmpty == false }) else { return }
         guard let hebrewText = hebrewText(model),
               let hebrewNumbering = try? await model.library.versification(moduleID: hebrewText.id),
@@ -574,61 +802,47 @@ final class SeptuagintLoader {
                   moduleID: analysis.translationID
               )
         else { return }
-        let septuagint = Set(analysis.references)
-        // Where the Greek word stands in each of those verses, by the first
-        // of its occurrences: enough to mark it, and a verse with two is
-        // marked at the first, as the English rows are.
-        var offsets: [Int: [SeptuagintLoader.GreekMark]] = [:]
+        // Where the Greek word stands in each verse it is in.
+        var greekOccurrences: [Int: [LampSeptuagintSection.Span]] = [:]
         for occurrence in analysis.occurrences {
-            offsets[occurrence.reference, default: []].append(
-                SeptuagintLoader.GreekMark(
+            greekOccurrences[occurrence.reference, default: []].append(
+                LampSeptuagintSection.Span(
                     start: occurrence.startOffset, end: occurrence.endOffset
                 )
             )
         }
-        var marks: [Int: [SeptuagintLoader.GreekMark]] = [:]
-        var doubts: [String: [Int: String]] = [:]
-        var crossed: [String: [Int]] = [:]
-        for word in words {
-            guard let references = word.references, !references.isEmpty else { continue }
-            let rendered = LampSeptuagintSection.versesRenderedByGreek(
-                hebrew: references,
-                hebrewNumbering: hebrewNumbering,
-                septuagintNumbering: greekNumbering,
-                septuagintReferences: septuagint
-            )
-            crossed[word.id] = references.filter(rendered.contains)
-            let printed = LampSeptuagintSection.word(word.hebrew)
-            for reference in rendered {
-                // The marks are character offsets into the Greek verse they
-                // were found in, and the line drawn for a psalm title is its
-                // two halves joined, so only the first half's offsets land
-                // where the text does. A word standing in a title's second
-                // half is listed — the crossing above uses every counterpart
-                // — but left unmarked, rather than marked in the wrong place.
-                guard let mapped = hebrewNumbering.counterparts(of: reference, in: greekNumbering).first,
-                      let spans = offsets[mapped] else { continue }
-                marks[reference] = spans
-                // The other Hebrew words this same Greek word renders, where
-                // one of them stands in this verse too: the doubt a reader
-                // is least able to see for themselves.
-                let competing = words
-                    .filter { $0.id != word.id && $0.references?.contains(reference) == true }
-                    .map { LampSeptuagintSection.word($0.hebrew) }
-                if let doubt = LampSeptuagintSection.pairingDoubt(
-                    greek: analysis.forms.first?.text ?? lemma,
-                    hebrew: printed,
-                    hebrewOccurrences: hebrewCounts[word.id]?[reference] ?? 1,
-                    greekOccurrences: spans.count,
-                    alsoRendered: competing
-                ) {
-                    doubts[word.id, default: [:]][reference] = doubt
-                }
-            }
-        }
-        renderedVerses = crossed
-        greekMarks = marks
-        pairingDoubts = doubts
+        let crossing = LampSeptuagintSection.cross(
+            words: words.map {
+                LampSeptuagintSection.CrossingWord(
+                    id: $0.id,
+                    printed: LampSeptuagintSection.word($0.hebrew),
+                    references: $0.references ?? [],
+                    occurrences: hebrewCounts[$0.id] ?? [:]
+                )
+            },
+            greekForm: analysis.forms.first?.text ?? lemma,
+            septuagintReferences: Set(analysis.references),
+            greekOccurrences: greekOccurrences,
+            hebrewNumbering: hebrewNumbering,
+            septuagintNumbering: greekNumbering
+        )
+        // Still the key this analysis is of. Comparing two current fields
+        // said only that the loader was consistent with itself: both become
+        // the newer key while an older crossing is suspended, so its Greek
+        // references were crossed against the newer key's Hebrew words — and
+        // `hasCrossed` then stopped the right crossing ever running.
+        // Still this analysis's key, still wanted, and not cancelled. The
+        // last two matter because a crossing that resumes after a newer one
+        // has finished would put its own doubts back over rows that had
+        // already been settled — and `settledPages` would stop them being
+        // settled again.
+        guard !Task.isCancelled, !hasCrossed,
+              loadedKey == analysis.key, countedKey == analysis.key
+        else { return }
+        renderedVerses = crossing.rendered
+        greekMarks = crossing.marks
+        pairingDoubts = crossing.doubts
+        pairingCompeting = crossing.competing
         hasCrossed = true
     }
 
@@ -642,6 +856,70 @@ final class SeptuagintLoader {
     /// The Septuagint among the installed translations: a Greek text that
     /// numbers its verses the Septuagint's way. Its own versification says so,
     /// which an id or a name cannot be trusted to.
+    /// A translation of the Greek Old Testament in another language, found
+    /// by what it tags rather than by what it is called: a Greek key
+    /// standing in Old Testament books, in a text that is not itself Greek.
+    /// The Apostolic Bible Polyglot is one, and says so nowhere in its
+    /// metadata — it even declares King James versification.
+    /// Forget the rows so they are read again from the other English. The
+    /// counts, the crossing and the marks are unchanged by the choice — only
+    /// which text each row's English comes from, and which word is marked.
+    func forgetVerses() {
+        verses = [:]
+        settledPages = []
+        // Every load in flight is now reading for a state that has gone.
+        forgets += 1
+    }
+
+    /// Ask, for this key, whether a translation of the Greek Old Testament
+    /// into English is installed — and act on the answer.
+    ///
+    /// Asked of **this** key, because a key standing only in the New
+    /// Testament says nothing about the next one. Answered once per key and
+    /// not again, except after a read that failed: that is not an answer, and
+    /// settling on "there is none" would hide the choice until the app was
+    /// restarted. So it is safe, and necessary, to call this whenever the
+    /// section appears.
+    func resolveSeptuagintInEnglish(key: String, model: LibraryModel) async {
+        guard septuagintInEnglishFor != key else { return }
+        guard BiblicalOriginalLanguage.inferred(from: key) == .greek else {
+            settle(septuagintInEnglish: nil, for: key)
+            return
+        }
+        do {
+            let found = try await septuagintInEnglishModule(key: key, model: model)
+            guard loadedKey == key else { return }
+            settle(septuagintInEnglish: found, for: key)
+        } catch {
+            // Unanswered, not answered "no": asked again next time.
+            septuagintInEnglishFor = nil
+        }
+    }
+
+    /// Take the answer, whatever it is — including that there is none, which
+    /// an earlier key may have had a different answer to. A module since
+    /// uninstalled would otherwise go on being read from.
+    private func settle(septuagintInEnglish found: String?, for key: String) {
+        septuagintInEnglishFor = key
+        guard found != septuagintInEnglish else { return }
+        septuagintInEnglish = found
+        // Rows already read came from the other text, and nothing else in
+        // them would say so.
+        forgetVerses()
+    }
+
+    private func septuagintInEnglishModule(key: String, model: LibraryModel) async throws -> String? {
+        try await LampSeptuagintSection.septuagintInEnglish(
+            among: model.translations.map {
+                (id: $0.id, tagsStrongs: $0.tagsStrongs,
+                 isOriginalLanguage: $0.biblicalOriginalLanguage != nil)
+            },
+            key: key
+        ) { id in
+            try await model.library.strongsAnalyses(key: key, moduleIDs: [id]).first
+        }
+    }
+
     private func septuagintText(_ model: LibraryModel) async -> LampInstalledModule? {
         for module in model.translations where module.biblicalOriginalLanguage == .greek {
             if let numbering = try? await model.library.versification(moduleID: module.id),
@@ -764,6 +1042,12 @@ struct StrongsAnalysisPane: View {
     /// ones the Septuagint renders with this Greek word.
     @State private var isShowingEveryHebrewVerse = false
     @State private var isShowingSeptuagintMethod = false
+    /// Which English the verse rows read. Remembered, because it is a way of
+    /// working rather than a thing done once.
+    @AppStorage("studyInspector.septuagintEnglishIsDirect") private var readsSeptuagintInEnglish = true
+    /// Open when the reader has chosen the longer way round, so what that
+    /// means is said where they chose it.
+    @State private var isShowingEnglishChoiceNote = false
     /// The Septuagint book the section is narrowed to, if any.
     ///
     /// The section's own, not the pane's. `LampStrongsFilter` narrows the
@@ -1502,6 +1786,44 @@ struct StrongsAnalysisPane: View {
         .task(id: formsSource(of: analysis)) { await loadFormReadings(of: analysis) }
     }
 
+    /// Which English the verses read, where a reader has both.
+    ///
+    /// Only drawn when there is a choice: without a Septuagint in English
+    /// installed there is one reading, and the row already says what it is.
+    /// The note opens on the indirect choice and not on the direct one,
+    /// because only one of them needs explaining — the reader's own Bible
+    /// does not translate the Greek this section is about.
+    @ViewBuilder
+    private var englishChoice: some View {
+        if septuagint.septuagintInEnglish != nil {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(LampSeptuagintSection.EnglishChoice.title)
+                        .font(.system(size: Self.chartFinePrintSize))
+                        .foregroundStyle(Color.lampSecondaryText)
+                    LampSegmentedPicker(
+                        LampSeptuagintSection.EnglishChoice.title,
+                        selection: $readsSeptuagintInEnglish,
+                        items: [
+                            .init(id: true, title: LampSeptuagintSection.EnglishChoice.direct),
+                            .init(id: false, title: LampSeptuagintSection.EnglishChoice.indirect),
+                        ]
+                    )
+                    .controlSize(.small)
+                    .fixedSize()
+                }
+                Text(readsSeptuagintInEnglish
+                    ? LampSeptuagintSection.directEnglishNote
+                    : LampSeptuagintSection.indirectEnglishWarning)
+                    .font(.system(size: Self.chartFinePrintSize))
+                    .foregroundStyle(Color.lampSecondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .transition(.opacity)
+            }
+            .padding(.bottom, 2)
+        }
+    }
+
     /// Everything about how the section's figures were reached, under one
     /// heading and closed.
     ///
@@ -1786,6 +2108,7 @@ struct StrongsAnalysisPane: View {
                     // introduction: the heading above has named the text,
                     // counted it and said what it is.
                     VStack(alignment: .leading, spacing: 4) {
+                        englishChoice
                         Text(hebrewIntroduction)
                             .font(.system(size: Self.sectionProseSize))
                             .foregroundStyle(Color.lampSecondaryText)
@@ -1813,6 +2136,7 @@ struct StrongsAnalysisPane: View {
                         if let references = hebrewVerses(of: word), !references.isEmpty {
                             SeptuagintWordGroup(
                                 word: word,
+                                readsSeptuagintInEnglish: readsSeptuagintInEnglish,
                                 usingGreek: isShowingEveryHebrewVerse
                                     ? nil
                                     : (septuagint.renderedVerses[word.id] == nil ? nil : entry?.lemma),
@@ -1831,9 +2155,31 @@ struct StrongsAnalysisPane: View {
                 // The counted verses are part of the id: they arrive after
                 // the words do, and a task keyed on the words alone ran once,
                 // found nothing counted yet, and never ran again.
+                // The count of *counted* words as well as their verses: a
+                // word whose count failed has no verses to add, so a total
+                // of references alone never changes and the crossing that
+                // was waiting for it never runs.
                 .task(id: "\(own?.translationID ?? "")|\(own?.occurrenceCount ?? 0)|\(analysis.key)|"
-                    + "\(septuagint.words.reduce(0) { $0 + ($1.references?.count ?? 0) })") {
+                    + "\(septuagint.words.reduce(0) { $0 + ($1.references?.count ?? 0) })|"
+                    + "\(septuagint.words.filter { $0.references != nil }.count)") {
                     await septuagint.crossWithSeptuagint(own, lemma: entry?.lemma, model: model)
+                }
+                // The reader's choice of English, told to the loader before
+                // any row is read and again whenever it changes.
+                .task(id: readsSeptuagintInEnglish) {
+                    septuagint.readsSeptuagintInEnglish = readsSeptuagintInEnglish
+                }
+                // Asked again whenever the section appears, because a read
+                // that failed leaves the question open rather than answered.
+                // It returns at once once it has an answer for this key.
+                .task(id: analysis.key) {
+                    await septuagint.resolveSeptuagintInEnglish(
+                        key: analysis.key, model: model
+                    )
+                }
+                .onChange(of: readsSeptuagintInEnglish) { _, now in
+                    septuagint.readsSeptuagintInEnglish = now
+                    septuagint.forgetVerses()
                 }
             } label: {
                 VStack(alignment: .leading, spacing: 4) {
@@ -2899,6 +3245,10 @@ struct StrongsAnalysisPane: View {
 /// DisclosureGroup can only tell its own expansion to a view that holds it.
 private struct SeptuagintWordGroup: View {
     let word: SeptuagintLoader.Word
+    /// Which English the rows read. Part of what a load is, so a change to
+    /// it has to read them again — the loader forgets the rows, and without
+    /// this the task that fills them never runs and the group spins.
+    let readsSeptuagintInEnglish: Bool
     /// The Greek word the list was narrowed by, when it was. Nil shows the
     /// Hebrew word's own count, which is what an unnarrowed list is.
     var usingGreek: String?
@@ -2987,7 +3337,18 @@ private struct SeptuagintWordGroup: View {
                 .font(.system(size: fontSize, weight: .semibold))
                 .foregroundStyle(.primary)
         }
-        .task(id: "\(isExpanded)|\(shownVerses)|\(references.count)") {
+        // `forgets` is in the id because forgetting the rows is exactly the
+        // moment they have to be read again: without it, a Septuagint in
+        // English discovered while a group was open cleared its rows and
+        // nothing started the load that would refill them.
+        // The verses themselves, not merely how many: narrowing to another
+        // Septuagint book can give a different set of the same length, and
+        // the rows would otherwise stay on the book just left. `hasCrossed`
+        // too, because a page read before the crossing landed has none of
+        // its doubts and must be read again once it has.
+        .task(id: "\(isExpanded)|\(shownVerses)|\(references.count)"
+            + "|\(references.first ?? 0)|\(references.last ?? 0)"
+            + "|\(readsSeptuagintInEnglish)|\(loader.forgets)|\(loader.hasCrossed)") {
             guard isExpanded else { return }
             await loader.loadVerses(
                 for: word,
@@ -3042,12 +3403,14 @@ private struct SeptuagintWordGroup: View {
     /// The reference is the English one once the English is read: that is
     /// the number a reader of the English looks it up by, and opens it at.
     private func row(_ verse: SeptuagintLoader.Verse) -> some View {
-        let opens: Int
-        if case .read(let english) = verse.english {
-            opens = english.reference
-        } else {
-            opens = verse.reference
-        }
+        // The reader's own number. The English line's number belongs to
+        // whichever text it came from, and a Septuagint in English numbers
+        // some verses its own way, so opening that number in the reader's
+        // Bible lands on a different passage.
+        let opens = verse.opensAt ?? {
+            if case .read(let english) = verse.english { return english.reference }
+            return verse.reference
+        }()
         let name = reference(opens)
         // Not before its English is read: until then its number may be the
         // Hebrew one, and the reader would open on the wrong verse. Refused in
@@ -3086,7 +3449,11 @@ private struct SeptuagintWordGroup: View {
                 // `StrongsOccurrenceLabel` draws the pane's other verse
                 // rows. In caption grey it was, to a panel, a "tiny
                 // reference" the eye had to hunt for to find a row's edge.
-                Text(reference(english.reference))
+                //
+                // The reader's own number, which is also where the row
+                // opens: naming one verse and opening another would be
+                // worse than either.
+                Text(reference(verse.opensAt ?? english.reference))
                     .font(.system(size: fontSize, weight: .medium))
                 if let snippet = english.snippet {
                     (Text(snippet.isTrimmedAtStart ? "…" : "")
@@ -3153,19 +3520,28 @@ private struct SeptuagintWordGroup: View {
     /// read here draws the verse unmarked rather than cutting it in the
     /// wrong place.
     private func greekLine(_ greek: String, marking spans: [SeptuagintLoader.GreekMark]) -> Text {
-        let characters = Array(greek)
+        // Code points, because that is what a tag's offsets count. Swift's
+        // Characters are grapheme clusters, so a letter written with its
+        // accent as a separate mark is one Character and two code points,
+        // and slicing by Character put the mark on the wrong word — or
+        // threw a span away as out of bounds. Brenton's Greek is composed,
+        // so nothing showed it; a decomposed text would have.
+        let scalars = Array(greek.unicodeScalars)
         let wanted = spans
-            .filter { $0.start >= 0 && $0.end > $0.start && $0.end <= characters.count }
+            .filter { $0.start >= 0 && $0.end > $0.start && $0.end <= scalars.count }
             .sorted { $0.start < $1.start }
         guard !wanted.isEmpty else { return Text(greek) }
+        func text(_ range: Range<Int>) -> String {
+            String(String.UnicodeScalarView(scalars[range]))
+        }
         var line = Text("")
         var cursor = 0
         for span in wanted where span.start >= cursor {
-            line = line + Text(String(characters[cursor..<span.start]))
-                + Text.lampFindMatch(String(characters[span.start..<span.end]))
+            line = line + Text(text(cursor..<span.start))
+                + Text.lampFindMatch(text(span.start..<span.end))
             cursor = span.end
         }
-        return line + Text(String(characters[cursor...]))
+        return line + Text(text(cursor..<scalars.count))
     }
 
     private func reference(_ reference: Int) -> String {
