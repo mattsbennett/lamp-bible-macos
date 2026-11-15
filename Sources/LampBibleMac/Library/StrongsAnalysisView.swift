@@ -2127,12 +2127,11 @@ struct StrongsAnalysisPane: View {
                 // wrote, not a paraphrase of it kept in the app.
                 if !septuagint.septuagintSources.isEmpty {
                     Text(LampSeptuagintSection.ownUseCaution)
-                    ForEach(septuagint.septuagintSources, id: \.source) { source in
-                        Text(source.disclosure(
-                            translationName: own.translationAbbreviation ?? own.translationName,
-                            strongsKey: own.key
-                        ))
-                    }
+                    ForEach(LampTranslationSource.disclosures(
+                        septuagint.septuagintSources,
+                        translationName: own.translationAbbreviation ?? own.translationName,
+                        strongsKey: own.key
+                    ), id: \.self) { Text($0) }
                 }
             }
             .font(.system(size: Self.sectionProseSize))
@@ -3261,9 +3260,9 @@ struct StrongsAnalysisPane: View {
             // stays, so it is still said that there is something to know.
             DisclosureGroup(isExpanded: $isShowingFormNotes) {
                 VStack(alignment: .leading, spacing: 6) {
-                    ForEach(matched, id: \.source) { source in
-                        Text(source.disclosure(translationName: name, strongsKey: analysis.key))
-                    }
+                    ForEach(LampTranslationSource.disclosures(
+                        matched, translationName: name, strongsKey: analysis.key
+                    ), id: \.self) { Text($0) }
                     if showsGaps {
                         ForEach(gaps, id: \.self) { Text($0) }
                     }
