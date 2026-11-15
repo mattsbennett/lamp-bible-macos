@@ -322,7 +322,50 @@ enum SpeechVoices {
     /// same notification, so the order the two observers happen to fire in
     /// cannot leave it drawing a list the system has already changed.
     @MainActor
-    static func forget() { held = nil }
+    static func forget() {
+        held = nil
+        generation &+= 1
+        NotificationCenter.default.post(name: didChange, object: nil)
+    }
+
+    /// Advanced whenever what is held is dropped, so a background read begun
+    /// before cannot put back a list the system has since changed.
+    @MainActor private static var generation = 0
+
+    /// Posted whenever what is held changes: dropped because the system said
+    /// the voices changed, or replaced by a background read that found them
+    /// changed. Anything that draws from the voices redraws on it; the
+    /// reader's toolbar has no other way to know.
+    static let didChange = Notification.Name("LampSpeechVoicesDidChange")
+
+    @MainActor private static var isRefreshing = false
+
+    /// Reads the voices again off the main thread, keeping what is held until
+    /// the new list is in. Coming back to the app used to drop the list, and
+    /// the reader's toolbar, which asks on every draw whether the translation
+    /// has a voice, then enumerated them on the main thread: 67 ms, measured,
+    /// at every return to Lamp. Held meanwhile rather than dropped, so Read
+    /// Aloud never draws disabled while the new list is read.
+    @MainActor
+    static func refreshInBackground() {
+        guard held != nil, !isRefreshing else { return }
+        isRefreshing = true
+        let begun = generation
+        Task.detached(priority: .utility) {
+            let voices = AVSpeechSynthesisVoice.speechVoices()
+            let described = voices.map(describe)
+            await MainActor.run {
+                isRefreshing = false
+                // Dropped meanwhile: the system said the voices changed after
+                // this read began, and the next ask reads them afresh. A list
+                // read since then is newer than this one.
+                guard generation == begun, held != nil,
+                      held?.described != described else { return }
+                held = (voices: voices, described: described)
+                NotificationCenter.default.post(name: didChange, object: nil)
+            }
+        }
+    }
 
     @MainActor
     private static func enumerated()
@@ -333,16 +376,18 @@ enum SpeechVoices {
             // not only in the Settings list but in every speaking path. The
             // second cannot be missed: voices are installed in System
             // Settings, so coming back to Lamp is the one thing a reader who
-            // has just downloaded one is certain to do. It costs one
-            // enumeration per return to the app, against one per frame.
+            // has just downloaded one is certain to do. That one reads the
+            // voices again in the background, not on the next draw.
             watching = [
-                AVSpeechSynthesizer.availableVoicesDidChangeNotification,
-                NSApplication.didBecomeActiveNotification,
-            ].map { name in
                 NotificationCenter.default.addObserver(
-                    forName: name, object: nil, queue: .main
-                ) { _ in MainActor.assumeIsolated { forget() } }
-            }
+                    forName: AVSpeechSynthesizer.availableVoicesDidChangeNotification,
+                    object: nil, queue: .main
+                ) { _ in MainActor.assumeIsolated { forget() } },
+                NotificationCenter.default.addObserver(
+                    forName: NSApplication.didBecomeActiveNotification,
+                    object: nil, queue: .main
+                ) { _ in MainActor.assumeIsolated { refreshInBackground() } },
+            ]
         }
         if let held { return held }
         let enumerated = AVSpeechSynthesisVoice.speechVoices()

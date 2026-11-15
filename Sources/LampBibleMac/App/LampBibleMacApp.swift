@@ -427,6 +427,11 @@ private struct ReaderSettingsView: View {
                         SpeechVoices.forget()
                         voicesRevision += 1
                     }
+                    // A voice downloaded in System Settings, found when the
+                    // reader came back to Lamp, or the list dropped.
+                    .onReceive(NotificationCenter.default.publisher(for: SpeechVoices.didChange)) { _ in
+                        voicesRevision += 1
+                    }
                     Section {
                         Toggle("Show Strong’s number hints", isOn: $showStrongsHints)
                         Toggle("Sort cross-references canonically", isOn: $canonicalCrossReferenceOrder)

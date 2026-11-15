@@ -1181,6 +1181,18 @@ struct LibraryRootView: View {
         )
     }
 
+    /// Bumped when the speech voices change: read again in the background
+    /// after a return to the app, or dropped because the system said they
+    /// changed. The Read Aloud button
+    /// reads it, so a voice just installed in System Settings enables it
+    /// without waiting for some other redraw.
+    @State private var speechVoicesRevision = 0
+
+    private var readAloudHasVoice: Bool {
+        _ = speechVoicesRevision
+        return SpeechVoices.hasVoice(for: readAloudLanguage)
+    }
+
     /// The language the verses read aloud are written in: their chapter's
     /// translation's, not the one chosen, which runs ahead of the chapter
     /// while another translation loads.
@@ -1425,10 +1437,13 @@ struct LibraryRootView: View {
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
-            .disabled(readAloudVerses.isEmpty || !SpeechVoices.hasVoice(for: readAloudLanguage))
-            .help(SpeechVoices.hasVoice(for: readAloudLanguage)
+            .disabled(readAloudVerses.isEmpty || !readAloudHasVoice)
+            .help(readAloudHasVoice
                 ? "\(readAloudButtonTitle) — the arrow has where to start from"
                 : "No \(SpeechVoices.languageName(readAloudLanguage)) voice is installed, so this translation can’t be read aloud")
+            .onReceive(NotificationCenter.default.publisher(for: SpeechVoices.didChange)) { _ in
+                speechVoicesRevision &+= 1
+            }
         }
 
         ToolbarItemGroup(placement: .primaryAction) {

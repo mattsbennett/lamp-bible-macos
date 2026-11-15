@@ -1438,6 +1438,15 @@ final class NativeAgentChatModel: ObservableObject {
                 self.absorb(batch)
             }
         }
+        // Asked off the main thread. The first time for each CLI it finds the
+        // executable through the login shell, which launches zsh with the
+        // reader's startup files: about two seconds, measured, during which
+        // the whole window froze on the first message to that provider.
+        let executable = provider.executable
+        let runner = self.runner
+        let providerMajorVersion = await Task.detached {
+            runner.majorVersion(ofExecutableNamed: executable)
+        }.value
         let result = await runner.run(
             executableName: provider.executable,
             arguments: AgentChatLaunchArguments.make(
@@ -1465,7 +1474,7 @@ final class NativeAgentChatModel: ObservableObject {
                         forKey: AgentChatEffortChoice.defaultsKey(wire)
                     )
                 ),
-                providerMajorVersion: runner.majorVersion(ofExecutableNamed: provider.executable)
+                providerMajorVersion: providerMajorVersion
             ),
             workingDirectory: workspace,
             onLine: { line in
