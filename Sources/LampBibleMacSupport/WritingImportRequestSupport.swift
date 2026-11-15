@@ -29,6 +29,9 @@ public enum LampWritingImportRequests {
         /// the request's folder.
         public let attachments: [String: String]?
         public let deck: Deck?
+        /// Why the file could not be read, carried so Lamp shows the same
+        /// reason the helper saw.
+        public let readError: String?
 
         public struct Deck: Codable, Equatable, Sendable {
             public let path: String
@@ -39,8 +42,9 @@ public enum LampWritingImportRequests {
 
         init(
             path: String, markdown: String, modified: Date?, created: Date?,
-            ancestry: [String]?, attachments: [String: String]?, deck: Deck?
+            ancestry: [String]?, attachments: [String: String]?, deck: Deck?, readError: String?
         ) {
+            self.readError = readError
             self.path = path
             self.markdown = markdown
             self.modified = modified
@@ -62,7 +66,8 @@ public enum LampWritingImportRequests {
                         path: $0.path, data: $0.data,
                         assetsDirectory: folder.appendingPathComponent($0.assets, isDirectory: true)
                     )
-                }
+                },
+                readError: readError
             )
         }
     }
@@ -207,7 +212,8 @@ public enum LampWritingImportRequests {
             entries.append(File(
                 path: file.path, markdown: file.markdown, modified: file.modified,
                 created: file.created, ancestry: file.ancestry,
-                attachments: attachments.isEmpty ? nil : attachments, deck: deck
+                attachments: attachments.isEmpty ? nil : attachments, deck: deck,
+                readError: file.readError
             ))
         }
         let request = Request(id: id, sourceName: sourceName, files: entries, note: note)

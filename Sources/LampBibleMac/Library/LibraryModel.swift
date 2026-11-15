@@ -711,6 +711,9 @@ final class LibraryModel: ObservableObject {
                 if !result.refused.isEmpty {
                     message += " \(result.refused.count) changed in Lamp while you were choosing and \(result.refused.count == 1 ? "was" : "were") left as \(result.refused.count == 1 ? "it was" : "they were"); import again to see them."
                 }
+                if !result.problems.isEmpty {
+                    message += " " + result.problems.joined(separator: " ")
+                }
                 if !result.failed.isEmpty {
                     message += " Not imported: " + result.failed
                         .map { "\($0.item.title) (\($0.reason))" }.joined(separator: "; ") + "."
@@ -754,7 +757,7 @@ final class LibraryModel: ObservableObject {
                 )
                 refreshWritingImportUndo(applicationSupportURL: applicationSupportURL)
                 await refreshLibrary()
-                var message = "Undid the import from \(entry.sourceName): \(result.undone.count) put back as \(result.undone.count == 1 ? "it was" : "they were")."
+                var message = "Undid the import from \(entry.sourceName): \(result.undone.count) taken away or put back as before."
                 if !result.kept.isEmpty {
                     message += " Left as \(result.kept.count == 1 ? "it is" : "they are"), changed since: \(result.kept.joined(separator: ", "))."
                 }

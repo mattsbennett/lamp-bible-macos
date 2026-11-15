@@ -52,6 +52,16 @@ public enum LampWritingImportUndoHistory {
             .sorted { $0.undo.importedAt > $1.undo.importedAt }
     }
 
+    /// The pictures the decks in the history show, before and after their
+    /// imports, which pruning must leave while the imports can be undone.
+    public static func deckAssetNames(inApplicationSupport root: URL) -> Set<String> {
+        Set(entries(inApplicationSupport: root).flatMap { entry in
+            entry.undo.decks.flatMap { deck in
+                Array(deck.previous?.referencedAssetNames ?? []) + Array(deck.written.referencedAssetNames)
+            }
+        })
+    }
+
     /// After an undo put writings back, each earlier import that left
     /// them so takes them as its own again (`LampWritingImportUndo.carrying`),
     /// so it can still be undone in turn.

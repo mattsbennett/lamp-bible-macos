@@ -278,8 +278,13 @@ public enum LampPresentationDeckSync {
         in libraryRoot: URL,
         fileManager: FileManager = .default
     ) throws {
+        // Pictures a deck an import changed or made would show again if that
+        // import were undone are kept while it can be.
+        let undoable = LampAgentDescriptorStore.defaultApplicationSupportURL().map {
+            LampWritingImportUndoHistory.deckAssetNames(inApplicationSupport: $0)
+        } ?? []
         try LampPresentationDeckStore(rootURL: libraryRoot)
-            .pruneUnreferencedAssets(fileManager: fileManager)
+            .pruneUnreferencedAssets(keeping: undoable, fileManager: fileManager)
     }
 
     // MARK: - Files
