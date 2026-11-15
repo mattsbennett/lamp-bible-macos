@@ -1316,11 +1316,13 @@ struct StrongsAnalysisPane: View {
 
     /// The chart for a tab whose whole content is one, beside the tabs.
     ///
-    /// Compare and Companions each spent a row on this button with nothing
-    /// beside it, and the row pushed their lists down. They have no heading
-    /// to hang it from — the tab's name is the heading — and the other tabs
-    /// put theirs beside the figure it charts, which is better where there
-    /// is more than one figure.
+    /// Compare, Companions and Spread each chart one figure, so a button in
+    /// the tab row can only mean that one. Compare and Companions each spent
+    /// a row on it with nothing beside it; Spread had it at the end of the
+    /// By/Measure row, which put the same control in three different places
+    /// across the pane. Overview and the Septuagint tab keep theirs inline,
+    /// because each holds several figures and a button up here could not say
+    /// which it charted.
     @ViewBuilder
     private var sectionDeck: some View {
         if let analysis {
@@ -1330,6 +1332,8 @@ struct StrongsAnalysisPane: View {
                     analysis, name: "Companions", by: .companion,
                     title: "Words found with \(headword(analysis))"
                 )])
+            case .spread:
+                addToDeck(analysis, [spreadDeckChart(analysis)])
             case .compare:
                 addToDeck(analysis, [deckChart(
                     analysis, name: "Compare", by: .translation,
@@ -2691,7 +2695,6 @@ struct StrongsAnalysisPane: View {
                     .help("What to count")
                 }
                 Spacer(minLength: 0)
-                addToDeck(analysis, [spreadDeckChart(analysis)])
             }
 
             if spreadGrouping == .chapters {
