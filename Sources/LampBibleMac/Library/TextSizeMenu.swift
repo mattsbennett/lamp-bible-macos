@@ -12,7 +12,11 @@ typealias ProseTypeface = LampProseTypeface
 
 extension LampProseTypeface: @retroactive Identifiable {
     static let readerDefault = ProseTypeface.serif
-    static let commentaryDefault = ProseTypeface.sansSerif
+    /// The study panel's, and every popover's that opens on a reference or a
+    /// word: serif to begin with, as the reader's is (owner, Nov 2026).
+    static let commentaryDefault = ProseTypeface.serif
+    /// Quiz cards keep the sans serif the panel had before.
+    static let quizDefault = ProseTypeface.sansSerif
 
     public var id: String { rawValue }
 
@@ -47,6 +51,28 @@ extension ScripturePreviewContextAmount: Identifiable {
         case .threeVerses: "3 Verses"
         case .chapter: "Chapter"
         }
+    }
+}
+
+/// The study panel's text, as Settings and the panel's own menu set it: its
+/// size, typeface and line spacing.
+///
+/// Every popover that opens on a reference or a word reads it, whatever
+/// opened it — the panel, a book, a writing, a quiz or a search — so a verse
+/// glanced at reads the same everywhere (owner, Nov 2026, as on the phone).
+/// Read here rather than handed in, so no caller can hand in another.
+struct StudyPanelText: DynamicProperty {
+    @AppStorage("commentary.fontSize") private var storedSize = LampTextScale.commentaryText.defaultValue
+    @AppStorage("commentary.typeface") private var storedTypeface = ProseTypeface.commentaryDefault
+    @AppStorage("commentary.lineSpacing") private var storedLineSpacing =
+        LampTextScale.commentaryLineSpacing.defaultValue
+
+    var fontSize: Double { LampTextScale.commentaryText.clamped(storedSize) }
+    var typeface: ProseTypeface { storedTypeface }
+    var lineSpacing: Double { LampTextScale.commentaryLineSpacing.clamped(storedLineSpacing) }
+
+    func font(size: Double? = nil, weight: Font.Weight = .regular) -> Font {
+        .system(size: size ?? fontSize, weight: weight, design: typeface.design)
     }
 }
 

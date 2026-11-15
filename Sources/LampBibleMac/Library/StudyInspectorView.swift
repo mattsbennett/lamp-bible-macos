@@ -2252,9 +2252,7 @@ private struct VerseInspectorView: View {
                                 text: description,
                                 startReference: reference,
                                 endReference: annotation.endReference
-                            ), typeface: typeface,
-                               lineSpacing: LampTextScale.commentaryLineSpacing.clamped(lineSpacing),
-                               contextAmount: previewContextAmount)
+                            ), contextAmount: previewContextAmount)
                         }
                     }
                 }
@@ -2976,8 +2974,6 @@ private struct CommentaryInspectorView: View {
                 ) { link in
                     ScriptureReferencePopover(
                         link: link,
-                        typeface: typeface,
-                        lineSpacing: LampTextScale.commentaryLineSpacing.clamped(lineSpacing),
                         contextAmount: previewContextAmount
                     )
                 }
@@ -3062,16 +3058,12 @@ private struct ScriptureLinkedText: View {
                 case .scripture(let link):
                     ScriptureReferencePopover(
                         link: link,
-                        typeface: typeface,
-                        lineSpacing: LampTextScale.commentaryLineSpacing.clamped(lineSpacing),
                         contextAmount: previewContextAmount
                     )
                 case .dictionary(let link, let moduleID):
                     DictionaryReferencePopover(
                         link: link,
-                        preferredModuleID: moduleID,
-                        typeface: typeface,
-                        lineSpacing: LampTextScale.commentaryLineSpacing.clamped(lineSpacing)
+                        preferredModuleID: moduleID
                     )
                 }
             }
@@ -3249,8 +3241,6 @@ private extension LampDictionaryLink {
 
 struct ScriptureReferenceButton: View {
     let link: LampScriptureLink
-    let typeface: ProseTypeface
-    let lineSpacing: Double
     let contextAmount: ScripturePreviewContextAmount
     @State private var isShowingPreview = false
 
@@ -3265,8 +3255,6 @@ struct ScriptureReferenceButton: View {
         .popover(isPresented: $isShowingPreview) {
             ScriptureReferencePopover(
                 link: link,
-                typeface: typeface,
-                lineSpacing: lineSpacing,
                 contextAmount: contextAmount
             )
         }
@@ -3278,9 +3266,11 @@ struct ScriptureReferencePopover: View {
     @Environment(\.readerReferenceActions) private var referenceActions
     @EnvironmentObject private var model: LibraryModel
     let link: LampScriptureLink
-    let typeface: ProseTypeface
-    let lineSpacing: Double
     let contextAmount: ScripturePreviewContextAmount
+    /// The panel's text, whatever opened this: see `StudyPanelText`.
+    private var panel = StudyPanelText()
+    private var typeface: ProseTypeface { panel.typeface }
+    private var lineSpacing: Double { panel.lineSpacing }
     @AppStorage("reader.layoutMode") private var readerLayoutMode = ReaderLayoutMode.continuousParagraphs
     @State private var chapters: [LampChapter] = []
     @State private var errorMessage: String?
@@ -3418,7 +3408,7 @@ struct ScriptureReferencePopover: View {
     private func verseRow(_ item: ScripturePreviewVerse) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(item.verse.number.formatted())
-                .font(.caption.weight(.semibold))
+                .font(panel.font(size: max(9, panel.fontSize - 4), weight: .semibold))
                 .foregroundStyle(
                     item.isContext
                         ? Color.secondary.opacity(0.55)
@@ -3426,7 +3416,7 @@ struct ScriptureReferencePopover: View {
                 )
                 .frame(minWidth: 20, alignment: .trailing)
             Text(item.verse.text)
-                .font(.system(.body, design: typeface.design))
+                .font(panel.font())
                 .lineSpacing(lineSpacing)
                 .foregroundStyle(
                     item.isContext
@@ -3479,8 +3469,8 @@ struct ScriptureReferencePopover: View {
     }
 
     private func continuousText(_ verses: [ScripturePreviewVerse]) -> some View {
-        Text(scriptureParagraphText(verses, typeface: typeface, numberSize: 11))
-            .font(.system(.body, design: typeface.design))
+        Text(scriptureParagraphText(verses, typeface: typeface, numberSize: max(9, panel.fontSize - 4)))
+            .font(panel.font())
             .lineSpacing(lineSpacing)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
@@ -3650,8 +3640,8 @@ private struct DictionaryReferencePopover: View {
     @EnvironmentObject private var model: LibraryModel
     let link: LampDictionaryLink
     let preferredModuleID: String?
-    let typeface: ProseTypeface
-    let lineSpacing: Double
+    /// The panel's text, whatever opened this: see `StudyPanelText`.
+    private var panel = StudyPanelText()
     @State private var results: [LampDictionaryResult] = []
     @State private var errorMessage: String?
     @State private var isLoading = false
@@ -3695,8 +3685,9 @@ private struct DictionaryReferencePopover: View {
                             ForEach(results) { result in
                                 DictionaryPopoverEntryView(
                                     result: result,
-                                    typeface: typeface,
-                                    lineSpacing: lineSpacing
+                                    fontSize: panel.fontSize,
+                                    typeface: panel.typeface,
+                                    lineSpacing: panel.lineSpacing
                                 )
                                 if result.id != results.last?.id { Divider() }
                             }
@@ -3753,6 +3744,7 @@ private struct DictionaryReferencePopover: View {
 
 private struct DictionaryPopoverEntryView: View {
     let result: LampDictionaryResult
+    let fontSize: Double
     let typeface: ProseTypeface
     let lineSpacing: Double
 
@@ -3789,13 +3781,16 @@ private struct DictionaryPopoverEntryView: View {
                     }
                     if let derivation = sense.derivation {
                         Text(styled(derivation, sense, .derivation, label: "Derivation: "))
-                            .font(.callout)
+                            .font(.system(size: max(9, fontSize - 2)))
                             .foregroundStyle(.secondary)
                     }
                 }
                 if index < result.senses.count - 1 { Divider() }
             }
         }
+        // The definitions at the panel's size; the labels above them keep
+        // their own.
+        .font(.system(size: fontSize))
         .fontDesign(typeface.design)
         .lineSpacing(lineSpacing)
         .frame(maxWidth: .infinity, alignment: .leading)

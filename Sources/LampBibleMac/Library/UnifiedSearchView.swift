@@ -606,7 +606,6 @@ struct UnifiedSearchView: View {
                                     moduleName: analysis.translationName,
                                     translationID: translationID,
                                     query: occurrence.text,
-                                    fontSize: hitFontSize,
                                     context: $previewContext,
                                     open: {
                                         previewedOccurrence = nil
@@ -1075,7 +1074,6 @@ struct UnifiedSearchView: View {
                 moduleName: result.moduleName,
                 translationID: translationID,
                 query: query,
-                fontSize: hitFontSize,
                 context: $previewContext,
                 open: {
                     previewedResult = nil
@@ -1676,9 +1674,11 @@ private struct SearchHitPreview: View {
     let moduleName: String
     let translationID: String
     let query: String
-    let fontSize: Double
     @Binding var context: Int
     let open: () -> Void
+    /// The panel's text, as every verse preview has: see `StudyPanelText`.
+    private var panel = StudyPanelText()
+    private var fontSize: Double { panel.fontSize }
 
     @State private var verses: [LampVerse] = []
     @State private var bookName = ""
@@ -1723,7 +1723,8 @@ private struct SearchHitPreview: View {
                                     .foregroundStyle(.secondary)
                                     + markedText(verse.text)
                             )
-                            .font(.system(size: fontSize, design: .serif))
+                            .font(panel.font())
+                            .lineSpacing(panel.lineSpacing)
                             // The hit itself, so the eye lands on it among
                             // its neighbours. The words that matched are
                             // marked within it as find matches.

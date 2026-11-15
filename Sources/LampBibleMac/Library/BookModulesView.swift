@@ -1816,8 +1816,6 @@ private struct BookInlineText: View {
             ) { link in
                 ScriptureReferencePopover(
                     link: link,
-                    typeface: .readerDefault,
-                    lineSpacing: LampTextScale.bookLineSpacing.defaultValue,
                     contextAmount: .oneVerse
                 )
             }

@@ -29,11 +29,13 @@ public extension LampTextScale {
         defaultValue: 20
     )
 
+    /// Nine to begin with, as on the phone (owner, Nov 2026). The two apps
+    /// each declare this; keep them the same.
     static let readerLineSpacing = LampTextScale(
         minimum: 2,
         maximum: 16,
         step: 1,
-        defaultValue: 7
+        defaultValue: 9
     )
 
     /// Commentary is prose about the text rather than the text itself, and it sits
@@ -49,12 +51,14 @@ public extension LampTextScale {
     )
 
     /// Commentary runs to dense paragraphs of it; the default is deliberately
-    /// looser than the near-zero spacing SwiftUI gives a plain `Text`.
+    /// looser than the near-zero spacing SwiftUI gives a plain `Text`. Seven
+    /// to begin with, as the phone's tool panel (owner, Nov 2026): reference
+    /// reading, set closer than the reader's.
     static let commentaryLineSpacing = LampTextScale(
         minimum: 0,
         maximum: 14,
         step: 1,
-        defaultValue: 6
+        defaultValue: 7
     )
 
     /// Quiz cards need to stay compact beside a plan reading, but their prompts

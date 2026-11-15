@@ -1506,7 +1506,7 @@ struct QuizzesView: View {
 struct QuizOptionsMenu: View {
     @AppStorage("quiz.fontSize") private var fontSize = LampTextScale.quizText.defaultValue
     @AppStorage("quiz.lineSpacing") private var lineSpacing = LampTextScale.quizLineSpacing.defaultValue
-    @AppStorage("quiz.typeface") private var typeface = ProseTypeface.commentaryDefault
+    @AppStorage("quiz.typeface") private var typeface = ProseTypeface.quizDefault
     @AppStorage("quiz.previewContextAmount") private var previewContextAmount = ScripturePreviewContextAmount.oneVerse
     @AppStorage("quiz.alwaysShowAnswers") private var alwaysShowAnswers = false
 
@@ -1520,7 +1520,7 @@ struct QuizOptionsMenu: View {
                 fontSize: $fontSize,
                 lineSpacing: $lineSpacing,
                 typeface: $typeface,
-                defaultTypeface: .commentaryDefault,
+                defaultTypeface: .quizDefault,
                 previewContextAmount: $previewContextAmount,
                 fontScale: .quizText,
                 lineSpacingScale: .quizLineSpacing
@@ -1535,7 +1535,7 @@ struct QuizOptionsMenu: View {
 struct QuizQuestionCard: View {
     @AppStorage("quiz.fontSize") private var fontSize = LampTextScale.quizText.defaultValue
     @AppStorage("quiz.lineSpacing") private var lineSpacing = LampTextScale.quizLineSpacing.defaultValue
-    @AppStorage("quiz.typeface") private var typeface = ProseTypeface.commentaryDefault
+    @AppStorage("quiz.typeface") private var typeface = ProseTypeface.quizDefault
     @AppStorage("quiz.previewContextAmount") private var previewContextAmount = ScripturePreviewContextAmount.oneVerse
     @AppStorage("reader.readAloud.voice") private var readAloudVoice = ""
     @AppStorage("reader.readAloud.rate") private var readAloudRate = 0.5
@@ -1631,9 +1631,7 @@ struct QuizQuestionCard: View {
                             ForEach(references, id: \.self) { reference in
                                 ScriptureReferenceButton(link: LampScriptureLink(
                                     startReference: reference
-                                ), typeface: typeface,
-                                   lineSpacing: LampTextScale.quizLineSpacing.clamped(lineSpacing),
-                                   contextAmount: previewContextAmount)
+                                ), contextAmount: previewContextAmount)
                             }
                         }
                     }
@@ -1689,8 +1687,6 @@ struct QuizQuestionCard: View {
         .popover(item: $previewLink, attachmentAnchor: .point(previewAnchor)) { link in
             ScriptureReferencePopover(
                 link: link,
-                typeface: typeface,
-                lineSpacing: LampTextScale.quizLineSpacing.clamped(lineSpacing),
                 contextAmount: previewContextAmount
             )
         }
