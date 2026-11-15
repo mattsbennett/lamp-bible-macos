@@ -14,7 +14,15 @@ public enum LampWorkspaceSync {
     public static let portableDirectoryName = LampPortableBackupLayout.workspacesDirectory
 
     private static let agentWorkspacesPath = ["AgentWorkspaces", "Devotionals"]
-    private static let portableWorkspacesPath = [portableDirectoryName, "Devotionals"]
+
+    /// The writing workspaces' folder under `Workspaces/`. A portable backup
+    /// and the archive sync keep `Devotionals`, which every backup already
+    /// made holds; the per-file sync layout calls it `Writing` since bundle
+    /// format 4 (`LampSyncFolderLayout.writingWorkspacesDirectory`).
+    public enum WritingFolder: String, Sendable {
+        case backup = "Devotionals"
+        case perFile = "Writing"
+    }
     private static let supportedDocumentExtensions: Set<String> = [
         "md", "markdown", "txt", "text",
     ]
@@ -59,6 +67,7 @@ public enum LampWorkspaceSync {
     public static func exportPortableWorkspaces(
         from libraryRoot: URL,
         to backupRoot: URL,
+        writingFolder: WritingFolder = .backup,
         installID: String = LampInstallIdentity.current(),
         fileManager: FileManager = .default
     ) throws {
@@ -82,7 +91,7 @@ public enum LampWorkspaceSync {
         let sourceRoot = appending(agentWorkspacesPath, to: libraryRoot)
         guard fileManager.fileExists(atPath: sourceRoot.path) else { return }
 
-        let destinationRoot = appending(portableWorkspacesPath, to: backupRoot)
+        let destinationRoot = appending([portableDirectoryName, writingFolder.rawValue], to: backupRoot)
         for workspace in try childDirectories(of: sourceRoot, fileManager: fileManager) {
             let portableWorkspace = destinationRoot
                 .appendingPathComponent(workspace.lastPathComponent, isDirectory: true)
@@ -149,6 +158,7 @@ public enum LampWorkspaceSync {
     public static func importPortableWorkspaces(
         from backupRoot: URL,
         into libraryRoot: URL,
+        writingFolder: WritingFolder = .backup,
         fileManager: FileManager = .default
     ) throws {
         // Preserve and catalog any pre-centralization local skills before
@@ -171,7 +181,7 @@ public enum LampWorkspaceSync {
 
         try LampPresentationDeckSync.importDecks(from: backupRoot, into: libraryRoot, fileManager: fileManager)
 
-        let sourceRoot = appending(portableWorkspacesPath, to: backupRoot)
+        let sourceRoot = appending([portableDirectoryName, writingFolder.rawValue], to: backupRoot)
         guard fileManager.fileExists(atPath: sourceRoot.path) else { return }
 
         let destinationRoot = appending(agentWorkspacesPath, to: libraryRoot)

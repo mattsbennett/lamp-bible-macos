@@ -241,8 +241,8 @@ struct LampSyncLocalFilesTests {
         )
 
         #expect(found.allSatisfy { $0.kind == .workspaceFile })
-        #expect(found.contains { $0.path == "Workspaces/Devotionals/talk-123/Documents/outline.md" })
-        #expect(found.contains { $0.path == "Workspaces/Devotionals/talk-123/Context/fact.md" })
+        #expect(found.contains { $0.path == "Workspaces/Writing/talk-123/Documents/outline.md" })
+        #expect(found.contains { $0.path == "Workspaces/Writing/talk-123/Context/fact.md" })
         #expect(
             !found.contains { $0.path.hasPrefix("Workspaces/Presentations/") },
             "decks and their images are their own kinds, enumerated from the library"

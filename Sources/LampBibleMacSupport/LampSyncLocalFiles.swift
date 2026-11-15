@@ -238,7 +238,7 @@ extension LampSyncLocalFiles {
     ///
     /// Not enumerated from the library directly, because the published shape
     /// is not the stored one: `AgentWorkspaces/Devotionals/<ws>/outline.md`
-    /// becomes `Workspaces/Devotionals/<ws>/Documents/outline.md`, with
+    /// becomes `Workspaces/Writing/<ws>/Documents/outline.md`, with
     /// context, enabled skills, revisions and conversations each moved and
     /// some of them transformed. That mapping has one home — the exporter —
     /// and reimplementing it here as path arithmetic would be a second copy
@@ -262,7 +262,7 @@ extension LampSyncLocalFiles {
     ) throws -> [Candidate] {
         try fileManager.createDirectory(at: scratch, withIntermediateDirectories: true)
         try LampWorkspaceSync.exportPortableWorkspaces(
-            from: libraryRoot, to: scratch, fileManager: fileManager
+            from: libraryRoot, to: scratch, writingFolder: .perFile, fileManager: fileManager
         )
         let root = scratch.appendingPathComponent(
             LampPortableBackupLayout.workspacesDirectory, isDirectory: true

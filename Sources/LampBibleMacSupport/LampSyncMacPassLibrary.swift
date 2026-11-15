@@ -361,7 +361,7 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
     public func finishInstalling() async throws {
         guard fileManager.fileExists(atPath: workspaceStaging.path) else { return }
         try LampWorkspaceSync.importPortableWorkspaces(
-            from: workspaceStaging, into: library.rootURL, fileManager: fileManager
+            from: workspaceStaging, into: library.rootURL, writingFolder: .perFile, fileManager: fileManager
         )
     }
 
