@@ -2176,15 +2176,14 @@ struct StrongsAnalysisPane: View {
                                 name: "Testaments",
                                 by: .translation,
                                 translations: [newTestament.translationID, own.translationID],
+                                measure: .verses,
                                 title: "\(headword(own)) in each Testament",
-                                // Occurrences, because that is what a chart
-                                // can count: `Measure` offers occurrences and
-                                // a per-thousand rate, and the bars above are
-                                // verses. The two differ wherever the word
-                                // stands twice in one verse, so the slide
-                                // says which it is rather than being read as
-                                // a picture of these bars.
-                                caption: "Occurrences, counted separately in each text"
+                                // Verses, as the bars above count them. A
+                                // chart could only count occurrences until
+                                // core gained the measure, and the two
+                                // differ wherever the word stands twice in
+                                // one verse.
+                                caption: "Verses, counted separately in each text"
                             )]
                             )
                         }

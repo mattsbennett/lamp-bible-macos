@@ -39,7 +39,11 @@ CHART_GROUPINGS = {
 # the whole again, and a companion is measured against chance. Neither makes a
 # ring or a percentage.
 CHART_NOT_PART_OF_WHOLE = {"translation", "companion"}
-CHART_MEASURES = {"occurrences", "perThousandWords"}
+CHART_MEASURES = {"occurrences", "verses", "perThousandWords"}
+# Verses are only countable where a division holds them: a book, a canon
+# section and a translation do; a rendering or a grammatical value is a
+# count of occurrences, and the verses behind it are not divided that way.
+GROUPINGS_COUNTING_VERSES = {"book", "section", "translation"}
 # How a chart is drawn. Absent means bars, and an unknown style is read as
 # bars too, so a deck from a newer Lamp still opens on an older one.
 CHART_STYLES = {"bars", "columns", "grid", "share", "card"}
@@ -647,6 +651,16 @@ def chart_issues(block: dict) -> tuple[list[str], list[str]]:
                 if grouping == "translation"
                 else "Companions are measured against chance, not counted, so they make no ring."
             )
+        )
+    if measure == "verses" and grouping not in GROUPINGS_COUNTING_VERSES:
+        errors.append(
+            "chart.measure: Only a chart by book, section or translation can count "
+            "verses; other groupings count occurrences."
+        )
+    if measure == "verses" and drawn == "grid":
+        errors.append(
+            "chart.measure: A grid shades chapters, which hold no verse count; count "
+            "occurrences or draw it as bars."
         )
     if drawn == "share" and measure == "perThousandWords":
         warnings.append(

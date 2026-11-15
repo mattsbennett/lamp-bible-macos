@@ -403,10 +403,20 @@ and overwrites anything it finds there.
 
 ### How to measure it: `measure`
 
-`occurrences` (the default when absent) or `perThousandWords`. Use the rate when
-comparing books or translations of unequal length, where a raw count mostly
-measures how long a book is. A companion is measured against chance, so the
-measure is not read for one.
+`occurrences` (the default when absent), `verses`, or `perThousandWords`. Use the
+rate when comparing books or translations of unequal length, where a raw count
+mostly measures how long a book is. A companion is measured against chance, so
+the measure is not read for one.
+
+`verses` counts verses holding the key rather than times it stands, which are
+different figures: a word twice in one verse is two occurrences and one verse.
+The analysis pane counts verses in several places, so a slide that is meant to
+show what the pane shows wants this. Only `book`, `section` and `translation`
+can count verses — a rendering, a spelling or a grammatical value is a count of
+occurrences, and the verses behind it are not divided that way — and a `grid`
+cannot, because it shades chapters, which hold no verse count. Both are errors
+rather than warnings: the chart would otherwise draw occurrences under a verses
+label.
 
 ### How to draw it: `style`
 
