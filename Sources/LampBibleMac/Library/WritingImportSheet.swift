@@ -1,0 +1,182 @@
+import LampCore
+import SwiftUI
+
+/// Markdown files that have been read and planned, waiting for the person to
+/// choose which become writing.
+struct PendingWritingImport: Identifiable {
+    let id = UUID()
+    let sourceName: String
+    let plan: LampWritingImportPlan
+}
+
+/// What importing a folder or files of writing would do, file by file, with
+/// nothing written until Import. New and updated writings come ticked; one
+/// changed in Lamp since its file was saved waits to be chosen, and one that
+/// cannot be imported says why.
+struct WritingImportSheet: View {
+    let pending: PendingWritingImport
+    let onImport: (Set<String>) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var selection: Set<String>
+    @State private var onlyWithNotes = false
+
+    init(pending: PendingWritingImport, onImport: @escaping (Set<String>) -> Void) {
+        self.pending = pending
+        self.onImport = onImport
+        _selection = State(initialValue: Set(
+            pending.plan.items.filter(\.importsByDefault).map(\.id)
+        ))
+    }
+
+    private var items: [LampWritingImportItem] { pending.plan.items }
+
+    private var shownItems: [LampWritingImportItem] {
+        onlyWithNotes ? items.filter(Self.hasNotes) : items
+    }
+
+    private var summary: String {
+        let parts: [(LampWritingImportItem.Action, String)] = [
+            (.create, "new"), (.update, "updated"), (.conflict, "changed in Lamp"),
+            (.unchanged, "unchanged"), (.rejected, "can’t be imported"),
+        ]
+        return parts.compactMap { action, label in
+            let count = pending.plan.count(action)
+            return count == 0 ? nil : "\(count) \(label)"
+        }.joined(separator: " · ")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Import Writing from \(pending.sourceName)")
+                    .font(.title2.bold())
+                    .lineLimit(2)
+                Text(summary)
+                    .foregroundStyle(.secondary)
+            }
+
+            List {
+                ForEach(shownItems) { item in
+                    WritingImportRow(
+                        item: item,
+                        isSelected: Binding(
+                            get: { selection.contains(item.id) },
+                            set: { isOn in
+                                if isOn { selection.insert(item.id) } else { selection.remove(item.id) }
+                            }
+                        )
+                    )
+                }
+            }
+            .listStyle(.bordered(alternatesRowBackgrounds: true))
+            .frame(minHeight: 280)
+
+            HStack(spacing: 12) {
+                Button("Tick New and Updated") {
+                    selection = Set(items.filter(\.importsByDefault).map(\.id))
+                }
+                Button("Untick All") { selection = [] }
+                Spacer()
+                Toggle("Only files with notes", isOn: $onlyWithNotes)
+                    .toggleStyle(.checkbox)
+            }
+            .controlSize(.small)
+
+            Text("Nothing is written until you import. A file with no id of its own keeps one made from its path in the folder, so importing the folder again updates these writings rather than adding copies.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button(selection.count == 1 ? "Import 1 Writing" : "Import \(selection.count) Writings") {
+                    onImport(selection)
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(selection.isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 640, height: 560)
+    }
+
+    static func hasNotes(_ item: LampWritingImportItem) -> Bool {
+        !item.errors.isEmpty || !item.warnings.isEmpty || item.action == .conflict
+    }
+}
+
+private struct WritingImportRow: View {
+    let item: LampWritingImportItem
+    @Binding var isSelected: Bool
+
+    private var canImport: Bool {
+        [.create, .update, .conflict].contains(item.action)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Toggle(isOn: $isSelected) { EmptyView() }
+                    .toggleStyle(.checkbox)
+                    .labelsHidden()
+                    .disabled(!canImport)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(item.title)
+                        .lineLimit(1)
+                    Text(item.path)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                }
+                Spacer(minLength: 8)
+                Text(actionLabel)
+                    .font(.caption)
+                    .foregroundStyle(item.action == .rejected ? Color.red : .secondary)
+            }
+            let notes = noteLines
+            if !notes.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(Array(notes.enumerated()), id: \.offset) { _, note in
+                        Text(note.text)
+                            .foregroundStyle(note.isError ? Color.red : .secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .font(.caption)
+                .padding(.leading, 26)
+            }
+        }
+        .padding(.vertical, 2)
+        .opacity(canImport || item.action == .rejected ? 1 : 0.6)
+    }
+
+    private var actionLabel: String {
+        switch item.action {
+        case .create: "New"
+        case .update: "Update"
+        case .conflict: "Changed in Lamp"
+        case .unchanged: "Unchanged"
+        case .rejected: "Can’t import"
+        }
+    }
+
+    private var noteLines: [(text: String, isError: Bool)] {
+        var lines = item.errors.map { ($0, true) }
+        if item.action == .conflict {
+            let when = item.libraryModified.map {
+                " on \($0.formatted(date: .abbreviated, time: .shortened))"
+            } ?? ""
+            lines.append(("Edited in Lamp\(when), after this file was saved. Tick it to replace Lamp’s copy with the file.", false))
+        }
+        if item.action == .update || item.action == .conflict, !item.changes.isEmpty {
+            lines.append(("Differs in: \(item.changes.joined(separator: ", ")).", false))
+        }
+        lines += item.warnings.map { ($0, false) }
+        return lines
+    }
+}

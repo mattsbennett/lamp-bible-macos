@@ -129,6 +129,7 @@ final class LibraryModel: ObservableObject {
     @Published private(set) var isReadingTranslation = false
     /// A Bible file read and waiting for the user to name it.
     @Published var pendingTranslationImport: PendingTranslationImport?
+    @Published var pendingWritingImport: PendingWritingImport?
     @Published var translationUnlockRequest: TranslationUnlockRequest?
     @Published var translationImportMessage: String?
     /// What the last install of finished modules did, for the pane whose
@@ -621,6 +622,59 @@ final class LibraryModel: ObservableObject {
                 studyImportMessage = skippedCount == 0
                     ? "Imported \(importedCount) note or highlight entr\(importedCount == 1 ? "y" : "ies")."
                     : "Imported \(importedCount); kept \(skippedCount) existing entr\(skippedCount == 1 ? "y" : "ies")."
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isImportingStudyData = false
+        }
+    }
+
+    /// Reads the chosen Markdown files or folders and plans their import,
+    /// for the review sheet. Nothing is written here.
+    func planWritingImport(_ urls: [URL]) {
+        guard !urls.isEmpty, !isImportingStudyData else { return }
+        isImportingStudyData = true
+        errorMessage = nil
+        studyImportMessage = nil
+        Task {
+            do {
+                let files = try await Task.detached {
+                    try urls.flatMap { url in
+                        let scoped = url.startAccessingSecurityScopedResource()
+                        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                        return try LampWritingImport.files(at: url)
+                    }
+                }.value
+                guard !files.isEmpty else {
+                    throw LampLibraryError.invalidPersonalContent("There are no Markdown files there.")
+                }
+                let plan = try await library.planWritingImport(files)
+                pendingWritingImport = PendingWritingImport(
+                    sourceName: urls.count == 1
+                        ? urls[0].lastPathComponent
+                        : "\(urls.count) Items",
+                    plan: plan
+                )
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isImportingStudyData = false
+        }
+    }
+
+    func applyWritingImport(_ pending: PendingWritingImport, selecting itemIDs: Set<String>) {
+        guard !itemIDs.isEmpty else { return }
+        isImportingStudyData = true
+        Task {
+            do {
+                let result = try await library.applyWritingImport(pending.plan, selecting: itemIDs)
+                await refreshLibrary()
+                let count = result.imported.count
+                var message = "Imported \(count) writing\(count == 1 ? "" : "s")."
+                if !result.refused.isEmpty {
+                    message += " \(result.refused.count) changed in Lamp while you were choosing and \(result.refused.count == 1 ? "was" : "were") left as \(result.refused.count == 1 ? "it was" : "they were"); import again to see them."
+                }
+                studyImportMessage = message
             } catch {
                 errorMessage = error.localizedDescription
             }

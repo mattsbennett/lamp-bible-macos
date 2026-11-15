@@ -150,6 +150,7 @@
 		A100000000000000000000F5 /* AgentMarkdownMessageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000F5 /* AgentMarkdownMessageView.swift */; };
 		A100000000000000000000F2 /* PresentationImportStatusSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000F2 /* PresentationImportStatusSupport.swift */; };
 		A10000000000000000000111 /* TranslationImportSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000111 /* TranslationImportSheet.swift */; };
+		A1000000000000000000E900 /* WritingImportSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000E900 /* WritingImportSheet.swift */; };
 		A1000000000000000000004E /* WritingChangesSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000004E /* WritingChangesSupport.swift */; };
 		A1000000000000000000022A /* WritingWriteSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000021D /* WritingWriteSupport.swift */; };
 		A1000000000000000000022C /* StrongsAnalysisSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000021E /* StrongsAnalysisSupport.swift */; };
@@ -288,6 +289,7 @@
 		B100000000000000000000F5 /* AgentMarkdownMessageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/AgentMarkdownMessageView.swift; sourceTree = SOURCE_ROOT; };
 		B100000000000000000000F2 /* PresentationImportStatusSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/PresentationImportStatusSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000111 /* TranslationImportSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/TranslationImportSheet.swift; sourceTree = SOURCE_ROOT; };
+		B1000000000000000000E900 /* WritingImportSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/WritingImportSheet.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000004E /* WritingChangesSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/WritingChangesSupport.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000021D /* WritingWriteSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/WritingWriteSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000220 /* NewReadingPlanSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/NewReadingPlanSheet.swift; sourceTree = SOURCE_ROOT; };
@@ -415,6 +417,7 @@
 				B1000000000000000000E806 /* ModuleExportWizard.swift */,
 				B1000000000000000000002E /* AddToLibraryView.swift */,
 				B10000000000000000000111 /* TranslationImportSheet.swift */,
+				B1000000000000000000E900 /* WritingImportSheet.swift */,
 				B1000000000000000000002D /* BookModulesView.swift */,
 				B1000000000000000000000C /* DevotionalsAndQuizzesView.swift */,
 				B1000000000000000000002F /* SlideStudioView.swift */,
@@ -722,6 +725,7 @@
 				A1000000000000000000E806 /* ModuleExportWizard.swift in Sources */,
 				A10000000000000000000032 /* AddToLibraryView.swift in Sources */,
 				A10000000000000000000111 /* TranslationImportSheet.swift in Sources */,
+				A1000000000000000000E900 /* WritingImportSheet.swift in Sources */,
 				A10000000000000000000031 /* BookModulesView.swift in Sources */,
 				A10000000000000000000033 /* SlideStudioView.swift in Sources */,
 				A100000000000000000000FA /* SlideThumbnail.swift in Sources */,

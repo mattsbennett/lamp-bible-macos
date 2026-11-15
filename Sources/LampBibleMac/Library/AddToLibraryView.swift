@@ -158,11 +158,16 @@ struct AddToLibraryView: View {
         }
         .fileImporter(
             isPresented: $showingDevotionalsMarkdownImporter,
-            allowedContentTypes: [.markdownFile],
+            allowedContentTypes: [.markdownFile, .folder],
             allowsMultipleSelection: true
         ) { result in
             if case .success(let urls) = result {
-                model.importPersonalMarkdown(urls, as: .devotionals)
+                model.planWritingImport(urls)
+            }
+        }
+        .sheet(item: $model.pendingWritingImport) { pending in
+            WritingImportSheet(pending: pending) { selection in
+                model.applyWritingImport(pending, selecting: selection)
             }
         }
         .alert(
@@ -274,7 +279,8 @@ struct AddToLibraryView: View {
             description: "Bring editable Markdown into My Notes or My Writing, or restore notes and highlights from a structured Lamp Bible export.",
             distinction: "Markdown (.md) imports editable notes or writing. Lamp exports (.json or .lamp) restore structured notes or highlights. None of these install reference-library content.",
             steps: [
-                ("Import editable Markdown.", "Choose whether each .md file contains verse-linked notes or writing entries."),
+                ("Import writing.", "Choose .md files or a whole folder of them. Lamp shows what each file becomes before anything is written, and importing the same files again updates their writings rather than adding copies."),
+                ("Import verse-linked notes.", "A notes .md file is read by its verse headings, such as ## John 3 and ### 3:16."),
                 ("Or restore a Lamp export.", "A personal-study .json or .lamp file preserves structured notes or highlights."),
             ]
         ) {
@@ -285,7 +291,7 @@ struct AddToLibraryView: View {
                     }
                     .buttonStyle(.borderedProminent)
 
-                    Button("Import Writing from .md…", systemImage: "book.closed") {
+                    Button("Import Writing…", systemImage: "book.closed") {
                         showingDevotionalsMarkdownImporter = true
                     }
                 }
