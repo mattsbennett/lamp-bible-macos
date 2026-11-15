@@ -1174,6 +1174,8 @@ struct StrongsAnalysisPane: View {
     /// Whether every one of a Hebrew word's verses is listed, or only the
     /// ones the Septuagint renders with this Greek word.
     @State private var isShowingSeptuagintMethod = false
+    /// Open when a reader questions which English they are reading.
+    @State private var isShowingEnglishAbout = false
     @State private var isShowingSeptuagintNarrowing = false
     /// Which English the verse rows read. Remembered, because it is a way of
     /// working rather than a thing done once.
@@ -1995,6 +1997,38 @@ struct StrongsAnalysisPane: View {
         }
     }
 
+    /// What the chosen English is, under the control that chose it.
+    ///
+    /// Named for the module rather than "About this reading": a reader who
+    /// has just pressed ABP is told about ABP. Closed, because the choice is
+    /// usually made once and the note is for the time it is questioned.
+    @ViewBuilder
+    private var englishAbout: some View {
+        let named = LampSeptuagintSection.EnglishChoice.titles(
+            septuagintInEnglish: name(of: septuagint.septuagintInEnglish),
+            readersBible: name(of: analysis?.translationID)
+        )
+        if LampSeptuagintSection.EnglishChoice.isOffered(
+            septuagintInEnglish: septuagint.septuagintInEnglish,
+            readersTranslationID: analysis?.translationID
+        ) {
+            DisclosureGroup(isExpanded: $isShowingEnglishAbout) {
+                Text(readsSeptuagintInEnglish
+                    ? LampSeptuagintSection.directEnglishNote
+                    : LampSeptuagintSection.indirectEnglishWarning)
+                    .font(.system(size: Self.chartFinePrintSize))
+                    .foregroundStyle(Color.lampSecondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 6)
+            } label: {
+                Text("About \(readsSeptuagintInEnglish ? named.direct : named.indirect)")
+                    .font(.system(size: Self.chartFinePrintSize, weight: .medium))
+                    .foregroundStyle(Color.lampSecondaryText)
+            }
+            .disclosureGroupStyle(LampDisclosureStyle())
+        }
+    }
+
     /// Whether the Septuagint's own Greek is drawn under each verse.
     ///
     /// Always offered, unlike the English choice: that one needs two texts
@@ -2046,16 +2080,6 @@ struct StrongsAnalysisPane: View {
                 // say which books; this says what pressing one does.
                 if !own.books.filter({ $0.occurrenceCount > 0 }).isEmpty {
                     Text("Click a book to narrow the Hebrew words’ verses to it.")
-                }
-                // The reading the rows are actually in, explained where the
-                // explanation is asked for rather than under the control.
-                if LampSeptuagintSection.EnglishChoice.isOffered(
-                    septuagintInEnglish: septuagint.septuagintInEnglish,
-                    readersTranslationID: analysis?.translationID
-                ) {
-                    Text(readsSeptuagintInEnglish
-                        ? LampSeptuagintSection.directEnglishNote
-                        : LampSeptuagintSection.indirectEnglishWarning)
                 }
                 // Only a text that declares its Strong's numbers were matched
                 // rather than printed carries this: a published tagged text
@@ -2110,7 +2134,9 @@ struct StrongsAnalysisPane: View {
                     // Told apart from the Testament bars above: with none, a
                     // panel read the two groups stacked together as "one
                     // broken chart".
-                    Text("Verses in each book")
+                    Text(chartMeasure == .perThousandWords
+                        ? "Per 1,000 words in each book"
+                        : "Occurrences in each book")
                         .lampSectionHeading()
                     // Books rather than canon sections, because the click a
                     // reader wants is "show me the ones in Psalms", and a
@@ -2353,18 +2379,20 @@ struct StrongsAnalysisPane: View {
                         ownUseBody(own, reader: analysis)
                     }
                     if !septuagint.words.isEmpty {
-                    // One Septuagint section, so what the Hebrew words need
-                    // is a line, not a second heading and a second
-                    // introduction: the heading above has named the text,
-                    // counted it and said what it is.
-                    // How the rows are read, together and apart from them:
-                    // two switches stacked tight to each other and a clear
-                    // step before the lists they act on.
+                    // The controls belong to the lists under them and not
+                    // to the chart above, and read as "a dog's breakfast"
+                    // when they sat between the two belonging to neither.
+                    // A sub-heading names what follows; the controls are
+                    // gathered tight beneath it, then a clear step down to
+                    // the lists they act on.
                     VStack(alignment: .leading, spacing: 10) {
+                        Text(LampSeptuagintSection.title)
+                            .font(.system(size: Self.chartFinePrintSize, weight: .medium))
+                            .foregroundStyle(Color.lampSecondaryText)
+                            .textCase(.uppercase)
                         englishChoice
+                        englishAbout
                         greekChoice
-                    }
-                    VStack(alignment: .leading, spacing: 4) {
                         if !hebrewIntroduction.isEmpty {
                             Text(hebrewIntroduction)
                                 .font(.system(size: Self.sectionProseSize))
@@ -2576,8 +2604,11 @@ struct StrongsAnalysisPane: View {
             if spreadGrouping == .chapters {
                 gridChart(analysis)
             } else {
-                expectationKey
                 barsChart(analysis)
+                // Under the bars it reads, as the Septuagint tab's is: a key
+                // above the figures is read before there is anything to read
+                // it against.
+                expectationKey
                 Text("“More” and “fewer” mean beyond chance, not simply above or "
                     + "below average.")
                     .font(.system(size: Self.chartFinePrintSize))
