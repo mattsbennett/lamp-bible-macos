@@ -413,6 +413,17 @@ final class SeptuagintLoader {
     /// Which key detection has answered for. Unset after a failed read, so
     /// the question is put again rather than answered from a failure.
     private var septuagintInEnglishFor: String?
+    /// The key the question "which text gives the English" has been put for,
+    /// whatever came back. A row waits for this rather than for an answer,
+    /// so a read that failed costs one unmarked list and not a list that
+    /// never arrives.
+    private(set) var englishAskedFor: String?
+
+    /// Whether the question has been put for the key now loaded. Rows read
+    /// before it is answered are read against the wrong text and then
+    /// forgotten, which costs a second read and shows the reader a list
+    /// that rewrites itself.
+    var hasAskedWhichEnglish: Bool { englishAskedFor != nil && englishAskedFor == loadedKey }
     /// An installed translation of the Greek Old Testament, where there is
     /// one. Found once for a key rather than once for each of its Hebrew
     /// words: it costs an analysis per candidate, and the answer cannot
@@ -467,6 +478,7 @@ final class SeptuagintLoader {
         meanings = [:]
         renderings = [:]
         countedKey = nil
+        englishAskedFor = nil
         renderedVerses = [:]
         greekMarks = [:]
         pairingDoubts = [:]
@@ -477,7 +489,11 @@ final class SeptuagintLoader {
         hasCrossed = false
         errorMessage = nil
         guard BiblicalOriginalLanguage.inferred(from: key) == .greek else { return }
-        await resolveSeptuagintInEnglish(key: key, model: model)
+        // Which text gives the English is NOT asked here. It costs a full
+        // analysis per candidate translation — a median 24.5 ms a key when
+        // measured on 2026-11-14, 2.4x the reader's own analysis and
+        // serialised against it on the library actor — and only the
+        // Septuagint tab ever uses the answer. The tab asks for itself.
         do {
             let found = try await model.library.dictionaryEntries(
                 keys: [key, LampStrongsKey.normalized(key)]
@@ -1003,8 +1019,11 @@ final class SeptuagintLoader {
             guard loadedKey == key else { return }
             settle(septuagintInEnglish: found, for: key)
         } catch {
-            // Unanswered, not answered "no": asked again next time.
+            // Unanswered, not answered "no": asked again next time. Asked,
+            // though — so the rows go ahead rather than wait on a question
+            // that may never answer.
             septuagintInEnglishFor = nil
+            englishAskedFor = key
         }
     }
 
@@ -1013,6 +1032,7 @@ final class SeptuagintLoader {
     /// uninstalled would otherwise go on being read from.
     private func settle(septuagintInEnglish found: String?, for key: String) {
         septuagintInEnglishFor = key
+        englishAskedFor = key
         guard found != septuagintInEnglish else { return }
         septuagintInEnglish = found
         // Rows already read came from the other text, and nothing else in
@@ -3544,8 +3564,9 @@ private struct SeptuagintWordGroup: View {
         // its doubts and must be read again once it has.
         .task(id: "\(isExpanded)|\(shownVerses)|\(references.count)"
             + "|\(references.first ?? 0)|\(references.last ?? 0)"
-            + "|\(readsSeptuagintInEnglish)|\(loader.forgets)|\(loader.hasCrossed)") {
-            guard isExpanded else { return }
+            + "|\(readsSeptuagintInEnglish)|\(loader.forgets)|\(loader.hasCrossed)"
+            + "|\(loader.englishAskedFor ?? "")") {
+            guard isExpanded, loader.hasAskedWhichEnglish else { return }
             await loader.loadVerses(
                 for: word,
                 englishID: englishID,
