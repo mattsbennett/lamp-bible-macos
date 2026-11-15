@@ -1820,21 +1820,54 @@ private struct OutOfSightUpdates<Content: View>: View, Equatable {
 /// Shown while the library is being read, in place of an interface that would
 /// otherwise assemble itself around an empty reader and a progress spinner in the
 /// corner.
+///
+/// A lamp being lit: a warm glow comes up behind the icon's flame and settles
+/// into a slow breath, with the verse the app is named for beneath it. With
+/// Reduce Motion the glow is simply there, and nothing moves but fades.
 private struct LampSplashView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isShowingSlowStartMessage = false
+    @State private var isLit = false
+    @State private var isBreathing = false
+    @State private var isShowingVerse = false
+
+    /// Lamplight: amber, warmed toward the icon's red.
+    private static let glow = Color(red: 0.96, green: 0.62, blue: 0.32)
+    private static let ember = Color(red: 0.86, green: 0.20, blue: 0.29)
 
     var body: some View {
-        VStack(spacing: 16) {
-            Image(nsImage: NSApp.applicationIconImage)
-                .resizable()
-                .frame(width: 108, height: 108)
-                .accessibilityHidden(true)
+        VStack(spacing: 0) {
+            ZStack {
+                glowLayer
+                flame
+            }
+            .frame(width: 320, height: 240)
 
             Text("Lamp Bible")
-                .font(.title2.weight(.semibold))
+                .font(.system(size: 30, weight: .semibold, design: .serif))
+                .padding(.top, 4)
 
-            ProgressView()
-                .controlSize(.small)
+            LampSplashShimmer(isAnimated: !reduceMotion, gleam: Self.glow)
+                // Made afresh when the setting changes, so its gleam starts
+                // from its own beginning in the new manner.
+                .id(reduceMotion)
+                .frame(width: 180, height: 2)
+                .padding(.top, 14)
+
+            VStack(spacing: 6) {
+                Text("“Your word is a lamp to my feet\nand a light to my path.”")
+                    .font(.system(size: 15, design: .serif).italic())
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(3)
+                Text("Psalm 119:105")
+                    .font(.system(size: 11, weight: .medium, design: .serif))
+                    .tracking(0.6)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.top, 28)
+            .opacity(isShowingVerse ? 1 : 0)
+            .accessibilityElement(children: .combine)
 
             Text(isShowingSlowStartMessage
                 ? "Preparing your library. This happens once after an update."
@@ -1842,16 +1875,133 @@ private struct LampSplashView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 280)
+                .frame(maxWidth: 380)
+                // Room for two lines from the start, so the page doesn't
+                // shift up when the longer message replaces the short one.
+                .frame(height: 40, alignment: .top)
+                .padding(.top, 30)
+                .contentTransition(.opacity)
         }
+        .padding(.bottom, 40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.background)
+        .onAppear {
+            withAnimation(.easeOut(duration: reduceMotion ? 0.4 : 1.6)) { isLit = true }
+            withAnimation(.easeIn(duration: 0.8).delay(reduceMotion ? 0 : 0.6)) { isShowingVerse = true }
+            if !reduceMotion { breathe(after: 1.6) }
+        }
+        // The setting can change while a long first launch is on screen.
+        .onChange(of: reduceMotion) { _, reduce in
+            if reduce {
+                var still = Transaction()
+                still.disablesAnimations = true
+                withTransaction(still) { isBreathing = false }
+            } else {
+                breathe(after: 0)
+            }
+        }
         // The bundled modules are unpacked and verified on a first run or after an
         // update, which takes long enough to be worth explaining.
         .task {
             try? await Task.sleep(for: .seconds(2.5))
             guard !Task.isCancelled else { return }
             withAnimation { isShowingSlowStartMessage = true }
+        }
+    }
+
+    /// The icon's flame on its own (the phone's `lampflame.fill`), lit from
+    /// its base: pale gold low, deepening to the icon's red at the tip. The
+    /// whole icon stands in where the asset catalog isn't built in, as in a
+    /// SwiftPM build.
+    @ViewBuilder
+    private var flame: some View {
+        if NSImage(named: "lampflame.fill") != nil {
+            Image("lampflame.fill")
+                .resizable()
+                .scaledToFit()
+                .frame(height: 120)
+                .foregroundStyle(LinearGradient(
+                    colors: [Color(red: 1.0, green: 0.93, blue: 0.78), Self.glow, Self.ember],
+                    startPoint: .bottom, endPoint: .top
+                ))
+                // A flame gathers itself from the wick: the breath lifts it
+                // from its base, never sideways.
+                .scaleEffect(
+                    x: 1, y: reduceMotion ? 1 : (isBreathing ? 1.03 : 0.99),
+                    anchor: .bottom
+                )
+                .shadow(color: Self.glow.opacity(isLit ? 0.55 : 0), radius: 22)
+                .opacity(isLit ? 1 : 0.35)
+                .accessibilityHidden(true)
+        } else {
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .frame(width: 112, height: 112)
+                .accessibilityHidden(true)
+        }
+    }
+
+    private func breathe(after delay: Double) {
+        withAnimation(.easeInOut(duration: 3.2).repeatForever(autoreverses: true).delay(delay)) {
+            isBreathing = true
+        }
+    }
+
+    /// Two soft discs of light, a wide amber one and a closer, redder one.
+    private var glowLayer: some View {
+        ZStack {
+            Circle()
+                .fill(RadialGradient(
+                    colors: [Self.glow.opacity(0.32), Self.glow.opacity(0)],
+                    center: .center, startRadius: 0, endRadius: 150
+                ))
+                .frame(width: 300, height: 300)
+            Circle()
+                .fill(RadialGradient(
+                    colors: [Self.ember.opacity(0.22), Self.ember.opacity(0)],
+                    center: .center, startRadius: 0, endRadius: 85
+                ))
+                .frame(width: 170, height: 170)
+        }
+        // With Reduce Motion it never changes size, only fades in.
+        .scaleEffect(reduceMotion ? 1 : (isLit ? (isBreathing ? 1.04 : 0.97) : 0.55))
+        .opacity(isLit ? (reduceMotion ? 0.9 : (isBreathing ? 1 : 0.82)) : 0)
+        .accessibilityHidden(true)
+    }
+}
+
+/// A hairline with a gleam passing along it, for "working on it" without a
+/// spinner. Unanimated, the gleam rests in the middle and only brightens and
+/// dims.
+private struct LampSplashShimmer: View {
+    let isAnimated: Bool
+    let gleam: Color
+    @State private var phase = false
+
+    var body: some View {
+        GeometryReader { proxy in
+            let width = proxy.size.width
+            Capsule()
+                .fill(Color.secondary.opacity(0.16))
+                .overlay(alignment: .leading) {
+                    Capsule()
+                        .fill(LinearGradient(
+                            colors: [gleam.opacity(0), gleam, gleam.opacity(0)],
+                            startPoint: .leading, endPoint: .trailing
+                        ))
+                        .frame(width: width * 0.4)
+                        .offset(x: isAnimated
+                            ? (phase ? width : -width * 0.4)
+                            : width * 0.3)
+                        .opacity(isAnimated ? 1 : (phase ? 1 : 0.35))
+                }
+                .clipShape(Capsule())
+        }
+        .accessibilityHidden(true)
+        .onAppear {
+            withAnimation(.easeInOut(duration: isAnimated ? 1.6 : 1.2).repeatForever(autoreverses: !isAnimated)) {
+                phase = true
+            }
         }
     }
 }
