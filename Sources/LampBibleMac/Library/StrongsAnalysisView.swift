@@ -1300,14 +1300,45 @@ struct StrongsAnalysisPane: View {
     /// Search used a segmented control here, filled with the accent, and so
     /// drew the same pane two ways and outshouted the figures under it.
     private var sectionPicker: some View {
-        UnderlinedTabs(
-            label: "Section",
-            items: offeredSections.map { ($0, $0.rawValue) },
-            selection: Binding(get: { shownSection }, set: { section = $0 }),
-            spacing: 14
-        )
-        .font(.callout)
+        HStack(spacing: 10) {
+            UnderlinedTabs(
+                label: "Section",
+                items: offeredSections.map { ($0, $0.rawValue) },
+                selection: Binding(get: { shownSection }, set: { section = $0 }),
+                spacing: 14
+            )
+            .font(.callout)
+            Spacer(minLength: 8)
+            sectionDeck
+        }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The chart for a tab whose whole content is one, beside the tabs.
+    ///
+    /// Compare and Companions each spent a row on this button with nothing
+    /// beside it, and the row pushed their lists down. They have no heading
+    /// to hang it from — the tab's name is the heading — and the other tabs
+    /// put theirs beside the figure it charts, which is better where there
+    /// is more than one figure.
+    @ViewBuilder
+    private var sectionDeck: some View {
+        if let analysis {
+            switch shownSection {
+            case .companions where !analysis.companions.isEmpty:
+                addToDeck(analysis, [deckChart(
+                    analysis, name: "Companions", by: .companion,
+                    title: "Words found with \(headword(analysis))"
+                )])
+            case .compare:
+                addToDeck(analysis, [deckChart(
+                    analysis, name: "Compare", by: .translation,
+                    title: "\(headword(analysis)) across translations",
+                    caption: "Counts depend on how each translation was tagged"
+                )])
+            default: EmptyView()
+            }
+        }
     }
 
     /// Whether this key stands in the Greek Old Testament at all. Known
@@ -2141,10 +2172,30 @@ struct StrongsAnalysisPane: View {
                     // Told apart from the Testament bars above: with none, a
                     // panel read the two groups stacked together as "one
                     // broken chart".
-                    Text(chartMeasure == .perThousandWords
-                        ? "Per 1,000 words in each book"
-                        : "Occurrences in each book")
-                        .lampSectionHeading()
+                    // The heading carries the chart's button, as the
+                    // pane's other figures do, so it costs no row of its
+                    // own. The chart is of the *Septuagint's* analysis —
+                    // its own module and this Greek key — so Slide Studio
+                    // and the agent rebuild these very bars from the source
+                    // they already understand, with no new chart kind.
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(chartMeasure == .perThousandWords
+                            ? "Per 1,000 words in each book"
+                            : "Occurrences in each book")
+                            .lampSectionHeading()
+                        Spacer(minLength: 8)
+                        addToDeck(own, [deckChart(
+                            own,
+                            name: "In the Septuagint",
+                            by: .book,
+                            measure: chartMeasure == .perThousandWords
+                                ? .perThousandWords : .occurrences,
+                            title: "\(headword(own)) in the Greek Old Testament",
+                            caption: ([own.translationAbbreviation ?? own.translationName,
+                                       deckRange] as [String?])
+                                .compactMap { $0 }.joined(separator: " · ")
+                        )])
+                    }
                     // Books rather than canon sections, because the click a
                     // reader wants is "show me the ones in Psalms", and a
                     // book is the one division a verse list can be narrowed
@@ -2930,15 +2981,6 @@ struct StrongsAnalysisPane: View {
 
     private func companions(_ analysis: LampStrongsAnalysis) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            if !analysis.companions.isEmpty {
-                HStack {
-                    Spacer(minLength: 0)
-                    addToDeck(analysis, [deckChart(
-                        analysis, name: "Companions", by: .companion,
-                        title: "Words found with \(headword(analysis))"
-                    )])
-                }
-            }
             if analysis.companions.isEmpty {
                 Text("No other key shares enough verses with this one.")
                     .font(.caption)
@@ -3023,16 +3065,6 @@ struct StrongsAnalysisPane: View {
 
     private var compare: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if let analysis {
-                HStack {
-                    Spacer(minLength: 0)
-                    addToDeck(analysis, [deckChart(
-                        analysis, name: "Compare", by: .translation,
-                        title: "\(headword(analysis)) across translations",
-                        caption: "Counts depend on how each translation was tagged"
-                    )])
-                }
-            }
             ForEach(loader.analyses, id: \.translationID) { other in
                 // Each row opens the word in that translation, its own
                 // Translated As, Forms and Spread with it: the way between
