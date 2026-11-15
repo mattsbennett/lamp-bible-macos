@@ -103,13 +103,19 @@ public enum LampWritingImportRequests {
         public let refused: [String]
         /// The person cancelled the review, so nothing was imported.
         public let cancelled: Bool
+        /// Chosen, but not imported because something went wrong, with why.
+        public let failed: [String: String]?
 
-        public init(requestID: String, decidedAt: Date = Date(), imported: [String], refused: [String], cancelled: Bool) {
+        public init(
+            requestID: String, decidedAt: Date = Date(), imported: [String], refused: [String],
+            cancelled: Bool, failed: [String: String]? = nil
+        ) {
             self.requestID = requestID
             self.decidedAt = decidedAt
             self.imported = imported
             self.refused = refused
             self.cancelled = cancelled
+            self.failed = failed
         }
     }
 
@@ -182,10 +188,16 @@ public enum LampWritingImportRequests {
                 let assets = "deck-\(index + 1)"
                 if let directory = delivered.assetsDirectory,
                    let parsed = try? LampPresentationDeckStore.decodeUnvalidated(delivered.data) {
+                    let base = directory.resolvingSymlinksInPath().standardizedFileURL.path
                     for path in Set(parsed.slides.flatMap(\.blocks).compactMap(\.assetPath))
                     where LampPresentationDeckValidator.isSafeAssetPath(path) {
+                        // Only a file truly inside the deck's folder: a linked
+                        // `Assets` must not carry in one from elsewhere.
                         let source = directory.appendingPathComponent(path)
-                        guard fileManager.fileExists(atPath: source.path) else { continue }
+                            .resolvingSymlinksInPath().standardizedFileURL
+                        guard source.path.hasPrefix(base + "/"),
+                              (try? source.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true
+                        else { continue }
                         _ = try copy(source, into: assets + "/" + (path as NSString).deletingLastPathComponent,
                                      as: (path as NSString).lastPathComponent)
                     }

@@ -52,6 +52,18 @@ public enum LampWritingImportUndoHistory {
             .sorted { $0.undo.importedAt > $1.undo.importedAt }
     }
 
+    /// After an undo put writings back, each earlier import that left
+    /// them so takes them as its own again (`LampWritingImportUndo.carrying`),
+    /// so it can still be undone in turn.
+    public static func carry(restored: [String: String], inApplicationSupport root: URL) throws {
+        guard !restored.isEmpty else { return }
+        for entry in entries(inApplicationSupport: root) {
+            let carried = entry.undo.carrying(restored: restored)
+            guard carried != entry.undo else { continue }
+            try record(carried, sourceName: entry.sourceName, inApplicationSupport: root)
+        }
+    }
+
     public static func forget(
         id: String, inApplicationSupport root: URL, fileManager: FileManager = .default
     ) {
@@ -86,7 +98,7 @@ public struct LampMacWritingImportStore: LampWritingImportStore {
 
     public func saveImportedWriting(
         _ writing: LampDevotional, expecting current: LampDevotional?
-    ) async throws -> Bool {
+    ) async throws -> LampDevotional? {
         try await library.saveImportedWriting(writing, expecting: current)
     }
 
@@ -112,13 +124,16 @@ public struct LampMacWritingImportStore: LampWritingImportStore {
         try await library.importableDecks()
     }
 
-    public func saveImportedDeck(_ deck: LampPresentationDeck, assetsFrom directory: URL?) async throws {
-        try await library.saveImportedDeck(deck, assetsFrom: directory)
+    public func saveImportedDeck(
+        _ deck: LampPresentationDeck, assets: [String: URL], expecting current: LampPresentationDeck?
+    ) async throws -> Bool {
+        try await library.saveImportedDeck(deck, assets: assets, expecting: current)
     }
 
-    public func deleteImportedDeck(id: String) async throws {
+    public func deleteImportedDeck(id: String, expecting current: LampPresentationDeck) async throws -> Bool {
+        guard try await library.deleteImportedDeck(id: id, expecting: current) else { return false }
         try LampPresentationDeckSync.recordDeletion(of: id, in: library.rootURL)
-        try await library.deleteImportedDeck(id: id)
         try? LampPresentationDeckSync.pruneUnreferencedAssets(in: library.rootURL)
+        return true
     }
 }

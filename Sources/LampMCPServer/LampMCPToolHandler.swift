@@ -579,6 +579,7 @@ public actor LampMCPToolHandler {
                 state: outcome.cancelled ? "cancelled" : "reviewed",
                 imported: outcome.imported,
                 refused: outcome.refused,
+                failed: outcome.failed ?? [:],
                 message: outcome.cancelled
                     ? "The person cancelled the review; nothing was imported."
                     : "Reviewed. The writings from the files in `imported` are in the library; any file not listed was left out by the person or could not be imported."
@@ -900,6 +901,8 @@ struct WritingImportStatus: Codable, Sendable {
     var state: String
     var imported: [String]
     var refused: [String]
+    /// Chosen but not imported because something went wrong, by path.
+    var failed: [String: String] = [:]
     var message: String
 }
 

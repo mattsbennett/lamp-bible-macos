@@ -950,7 +950,7 @@ extension LampMCPClientCompatibilityTests {
         for index in 0..<12 {
             let undo = LampWritingImportUndo(
                 id: "import-\(index)", importedAt: Date(timeIntervalSince1970: TimeInterval(index)),
-                writings: [.init(id: "w\(index)", title: "W", written: 0, previous: nil, addedMedia: [])],
+                writings: [.init(id: "w\(index)", title: "W", written: "{}", previous: nil, addedMedia: [])],
                 decks: []
             )
             try LampWritingImportUndoHistory.record(undo, sourceName: "talks", inApplicationSupport: support)

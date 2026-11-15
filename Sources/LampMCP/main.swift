@@ -244,8 +244,6 @@ private struct Options {
                 index += 1
                 guard arguments.indices.contains(index) else { throw OptionError.missingValue(argument) }
                 planWritingImportURL = URL(fileURLWithPath: (arguments[index] as NSString).expandingTildeInPath)
-                // Compared with the library Lamp describes, unless one is named.
-                if libraryRootURL == nil { usesDescriptor = true }
             case "--manuscript":
                 index += 1
                 guard arguments.indices.contains(index) else { throw OptionError.missingValue(argument) }
@@ -301,6 +299,9 @@ private struct Options {
             }
             index += 1
         }
+        // A writing import is compared with the library Lamp describes,
+        // unless one was named, wherever in the arguments it was.
+        if planWritingImportURL != nil && libraryRootURL == nil { usesDescriptor = true }
         // Rendering a deck reads the deck and the images beside it, so it needs
         // no library; every other mode serves one, named here or in the
         // descriptor.

@@ -691,7 +691,10 @@ final class LibraryModel: ObservableObject {
                     requestID: pending.requestID ?? "",
                     imported: result.imported.map(\.path),
                     refused: result.refused.map(\.path),
-                    cancelled: false
+                    cancelled: false,
+                    failed: Dictionary(
+                        result.failed.map { ($0.item.path, $0.reason) }, uniquingKeysWith: { first, _ in first }
+                    )
                 ))
                 if let applicationSupportURL = LampAgentDescriptorStore.defaultApplicationSupportURL() {
                     try? LampWritingImportUndoHistory.record(
@@ -707,6 +710,10 @@ final class LibraryModel: ObservableObject {
                     + (decks == 0 ? "." : " and \(decks) deck\(decks == 1 ? "" : "s").")
                 if !result.refused.isEmpty {
                     message += " \(result.refused.count) changed in Lamp while you were choosing and \(result.refused.count == 1 ? "was" : "were") left as \(result.refused.count == 1 ? "it was" : "they were"); import again to see them."
+                }
+                if !result.failed.isEmpty {
+                    message += " Not imported: " + result.failed
+                        .map { "\($0.item.title) (\($0.reason))" }.joined(separator: "; ") + "."
                 }
                 studyImportMessage = message
             } catch {
@@ -742,6 +749,9 @@ final class LibraryModel: ObservableObject {
                     entry.undo, in: LampMacWritingImportStore(library: library)
                 )
                 LampWritingImportUndoHistory.forget(id: entry.id, inApplicationSupport: applicationSupportURL)
+                try? LampWritingImportUndoHistory.carry(
+                    restored: result.restored, inApplicationSupport: applicationSupportURL
+                )
                 refreshWritingImportUndo(applicationSupportURL: applicationSupportURL)
                 await refreshLibrary()
                 var message = "Undid the import from \(entry.sourceName): \(result.undone.count) put back as \(result.undone.count == 1 ? "it was" : "they were")."
