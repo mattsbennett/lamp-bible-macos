@@ -2013,9 +2013,16 @@ struct StrongsAnalysisPane: View {
             readersTranslationID: analysis?.translationID
         ) {
             DisclosureGroup(isExpanded: $isShowingEnglishAbout) {
-                Text(readsSeptuagintInEnglish
-                    ? LampSeptuagintSection.directEnglishNote
-                    : LampSeptuagintSection.indirectEnglishWarning)
+                // Both texts named, as the picker above names them: with
+                // both installed both are the reader's Bibles, so "your own
+                // Bible" and "your translators" said nothing that told them
+                // apart (core 198260e).
+                Text(LampSeptuagintSection.EnglishChoice.note(
+                    readsSeptuagintInEnglish: readsSeptuagintInEnglish,
+                    septuagintInEnglish: name(of: septuagint.septuagintInEnglish),
+                    readersBible: name(of: analysis?.translationID),
+                    greek: entry?.lemma
+                ))
                     .font(.system(size: Self.chartFinePrintSize))
                     .foregroundStyle(Color.lampSecondaryText)
                     .fixedSize(horizontal: false, vertical: true)
