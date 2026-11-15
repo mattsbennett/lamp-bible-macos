@@ -1,5 +1,4 @@
 import Foundation
-import os
 
 /// Where a writing's agent workspace lives, and what is in it.
 ///
@@ -41,19 +40,23 @@ public enum LampWritingWorkspace {
         return root
     }
 
-    /// The libraries whose earlier folder this process has moved, or found
-    /// none in, so later asks cost nothing.
-    private static let settled = OSAllocatedUnfairLock(initialState: Set<String>())
+    /// One move at a time in this process, held for the whole of it, so no
+    /// caller is handed the new folder while the old is still being moved
+    /// into it.
+    private static let moving = NSLock()
 
     /// Moves `AgentWorkspaces/Devotionals` to `AgentWorkspaces/Writing` by
     /// renaming it, which keeps every file and the context files' hard links
     /// as they are. Where both are there, each workspace the new folder lacks
     /// is moved in, and one in both is left where it was rather than merged:
-    /// nothing is deleted. A symbolic link is never followed. Once a process,
-    /// so a launch cut short finishes on the next. Never throws.
+    /// nothing is deleted. The old folder goes only once it is empty, by a
+    /// removal that refuses a folder anything was written into meanwhile. A
+    /// symbolic link is never followed.
+    ///
+    /// Asked on every call, at the cost of one look for the old folder, so a
+    /// move that failed is tried again, and a folder that appears later, from
+    /// an older Lamp or a restore, is moved too. Never throws.
     static func moveEarlierFolder(from old: URL, to new: URL, fileManager: FileManager) {
-        let key = old.standardizedFileURL.path
-        guard settled.withLock({ $0.insert(key).inserted }) else { return }
         func isFolder(_ url: URL) -> Bool {
             guard let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else {
                 return false
@@ -61,9 +64,12 @@ public enum LampWritingWorkspace {
             return values.isDirectory == true && values.isSymbolicLink != true
         }
         guard isFolder(old) else { return }
-        guard fileManager.fileExists(atPath: new.path) else {
-            try? fileManager.moveItem(at: old, to: new)
-            return
+        moving.lock()
+        defer { moving.unlock() }
+        guard isFolder(old) else { return }
+        if !fileManager.fileExists(atPath: new.path) {
+            try? fileManager.createDirectory(at: new.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if (try? fileManager.moveItem(at: old, to: new)) != nil { return }
         }
         guard isFolder(new),
               let workspaces = try? fileManager.contentsOfDirectory(at: old, includingPropertiesForKeys: nil)
@@ -73,8 +79,11 @@ public enum LampWritingWorkspace {
             guard !fileManager.fileExists(atPath: destination.path) else { continue }
             try? fileManager.moveItem(at: workspace, to: destination)
         }
-        let left = (try? fileManager.contentsOfDirectory(atPath: old.path)) ?? []
-        if left.allSatisfy({ $0 == ".DS_Store" }) { try? fileManager.removeItem(at: old) }
+        guard let left = try? fileManager.contentsOfDirectory(atPath: old.path),
+              left.allSatisfy({ $0 == ".DS_Store" }) else { return }
+        try? fileManager.removeItem(at: old.appendingPathComponent(".DS_Store"))
+        // `rmdir` removes only an empty folder.
+        _ = old.withUnsafeFileSystemRepresentation { $0.map { rmdir($0) } }
     }
 
     /// A folder name from an identifier: as much of it as reads as a name,

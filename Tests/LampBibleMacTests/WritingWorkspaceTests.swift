@@ -66,6 +66,23 @@ struct WritingWorkspaceTests {
         #expect(FileManager.default.fileExists(atPath: objects.path))
     }
 
+    /// An old folder that appears after the first move, from an older Lamp
+    /// or a restore, is moved on the next ask: nothing is remembered as done.
+    @Test func anOldFolderThatAppearsLaterIsMovedToo() throws {
+        let library = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-workspace-later-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: library) }
+        let root = LampWritingWorkspace.root(libraryRootURL: library)
+        let late = library.appendingPathComponent("AgentWorkspaces/Devotionals/late/outline.md")
+        try FileManager.default.createDirectory(at: late.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("late".utf8).write(to: late)
+
+        _ = LampWritingWorkspace.root(libraryRootURL: library)
+
+        #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("late/outline.md").path))
+        #expect(!FileManager.default.fileExists(atPath: library.appendingPathComponent("AgentWorkspaces/Devotionals").path))
+    }
+
     /// Where both folders are there, each workspace the new one lacks is moved
     /// in; one in both stays where it was, nothing merged and nothing deleted.
     @Test func aWorkspaceInBothFoldersIsLeftWhereItWas() throws {
