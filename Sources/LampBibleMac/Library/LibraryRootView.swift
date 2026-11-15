@@ -1823,7 +1823,12 @@ private struct OutOfSightUpdates<Content: View>: View, Equatable {
 /// bar rather than against the titlebar, so rounded corners would read as a
 /// floating panel rather than a column of the window.
 enum StudyInspectorMetrics {
-    static let defaultWidth = 410.0
+    /// Wide enough that the Strong's analysis shows its tabs as tabs rather
+    /// than a pop-up menu, at their most: Overview to Verses, the Septuagint
+    /// for a Greek key it uses, and the chart button beside them, which
+    /// measured 483pt (Nov 2026). It was 410, where the analysis's row gave
+    /// up its tabs once the chart button joined it.
+    static let defaultWidth = 484.0
     /// Narrow enough to leave the reader its page, wide enough for the study
     /// panes' own controls. The tab bar shows its five tabs from about 390pt,
     /// and below that the same choice as a pop-up menu.
