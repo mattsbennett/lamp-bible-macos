@@ -2682,7 +2682,7 @@ struct DictionaryResultView: View {
             // first sense's short definition, which is the same text the detail
             // opens with. Showing it while the entry is expanded prints it twice.
             if !isDetailShown, let summary = result.summary {
-                Text(summary)
+                Text(LampBidiNumbers.holdingLeftToRight(summary))
                     .font(.system(size: max(fontSize - 1, 9), design: typeface.design))
                     .lineLimit(2)
             }
@@ -3139,6 +3139,8 @@ private struct ScriptureLinkedText: View {
             result.append(AttributedString(")"))
         }
 
+        // Last, since a mark moves the offsets everything above used.
+        LampBidiNumbers.holdLeftToRight(in: &result)
         if holdsLeftToRight { LampDictionaryStyling.holdLeftToRight(&result) }
         return result
     }
@@ -3811,6 +3813,7 @@ private struct DictionaryPopoverEntryView: View {
         for range in LampDictionaryStyling.apply(styles, after: label.unicodeScalars.count, to: &value) {
             value[range].foregroundColor = .lampOriginalLanguage
         }
+        LampBidiNumbers.holdLeftToRight(in: &value)
         LampDictionaryStyling.holdLeftToRight(&value)
         return value
     }

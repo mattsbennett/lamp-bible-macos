@@ -1025,7 +1025,7 @@ private struct BookSectionReaderView: View {
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 40)
                         } else {
-                            Text(section.content)
+                            Text(LampBidiNumbers.holdingLeftToRight(section.content))
                                 .font(.system(size: fontSize, design: typeface.design))
                                 .lineSpacing(lineSpacing)
                                 .id(0)
@@ -1752,6 +1752,9 @@ private enum BookReaderTextStyling {
                 value[role.range].underlineStyle = .single
             }
         }
+        // Last, as it moves the ranges the roles were read at: Hebrew
+        // followed by "1 Kgs" would otherwise draw the 1 before the Hebrew.
+        LampBidiNumbers.holdLeftToRight(in: &value)
         return value
     }
 

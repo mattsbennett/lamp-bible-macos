@@ -393,7 +393,7 @@ private struct CommentaryTextWriter {
                 separator[.foregroundColor] = NSColor.tertiaryLabelColor
                 path.append(NSAttributedString(string: "  ›  ", attributes: separator))
             }
-            path.append(NSAttributedString(string: title, attributes: base))
+            path.append(NSAttributedString(string: LampBidiNumbers.holdingLeftToRight(title), attributes: base))
         }
         base.removeAll()
         return path
@@ -410,7 +410,7 @@ private struct CommentaryTextWriter {
                 ? proseFont(size: fontSize + (unit.level <= 1 ? 3 : 1), weight: unit.level <= 1 ? .bold : .semibold)
                 : NSFont.systemFont(ofSize: max(fontSize - 2, 11), weight: .medium)
             add(NSAttributedString(
-                string: title,
+                string: LampBidiNumbers.holdingLeftToRight(title),
                 attributes: attributes(font: font, color: unit.hasBody ? .labelColor : .lampSecondaryText)
             ))
         }
@@ -439,6 +439,9 @@ private struct CommentaryTextWriter {
 
     /// `text` with each reference linked where its words first appear and
     /// are not already a link: as written, then in any case.
+    ///
+    /// Once the links are placed, a number after a Hebrew word is held to
+    /// the English after it ("1 Kgs"), where the word would take it.
     func linked(_ text: String, links: [LampScriptureLink], font: NSFont, color: NSColor) -> NSAttributedString {
         let result = NSMutableAttributedString(string: text, attributes: attributes(font: font, color: color))
         let string = text as NSString
@@ -449,6 +452,7 @@ private struct CommentaryTextWriter {
             result.addAttributes([.link: url, .foregroundColor: NSColor.lampLink], range: range)
             occupied.append(range)
         }
+        LampBidiNumbers.holdLeftToRight(in: result)
         return result
     }
 

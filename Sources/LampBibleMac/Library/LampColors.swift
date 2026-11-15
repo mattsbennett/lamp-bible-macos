@@ -382,7 +382,13 @@ extension Text {
     /// wherever a match is shown: a listed result, the ⌘K palette and
     /// Search's detail passage alike. Rows once marked theirs in semibold
     /// alone, which the owner found too easy to miss as a hit (Nov 2026).
+    ///
+    /// A number after Hebrew is held to the English after it first, reading
+    /// the text as drawn, without its tags.
     static func lampMarked(_ source: String) -> Text {
+        let source = LampBidiNumbers.holdingLeftToRight(
+            source, ignoring: [LampSearchSnippet.openingMark, LampSearchSnippet.closingMark]
+        )
         var remaining = source[...]
         var rendered = Text("")
         while let opening = remaining.range(of: LampSearchSnippet.openingMark),
