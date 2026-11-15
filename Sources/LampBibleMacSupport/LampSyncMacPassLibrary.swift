@@ -9,10 +9,6 @@ import LampModuleKit
 /// that kind of file — the difference under B is only that a file arrives on
 /// its own rather than inside a library-sized archive.
 public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
-    /// The IDs the phone publishes the editable collections under, which are
-    /// therefore the IDs they are published under. The Mac's own are
-    /// `personal-notes` and `personal-devotionals`;
-    /// `LampWebDAVPersonalArchiveAdapter` rewrites them on the way out.
     /// The kinds `install` merges *into* the library rather than keeping as
     /// a file of their own.
     ///
@@ -29,8 +25,14 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
         .module(.notes), .module(.devotionals), .module(.highlights),
     ]
 
-    public static let remoteNotesModuleID = "notes"
-    public static let remoteWritingModuleID = "devotionals"
+    /// The IDs the editable collections are published under, which are
+    /// core's: `Notes/notes.lamp` and, since bundle format 4,
+    /// `Writing/writing.lamp`. The Mac's own are `personal-notes` and
+    /// `personal-devotionals`; its export writes the published ID into the
+    /// module (`personalArchive(_:moduleID:)`), and its import merges by item,
+    /// whatever ID the module carries.
+    public static let remoteNotesModuleID = LampSyncLocalDeletion.notesCollectionID
+    public static let remoteWritingModuleID = LampSyncLocalDeletion.writingCollectionID
 
     public enum PassError: LocalizedError, Equatable {
         case unsupported(String)
@@ -147,7 +149,7 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             try await installWritings(from: try named(url, as: path), remotePath: path)
             return try await digestOfOwnExport(
                 .writing,
-                remoteModuleID: Self.remoteWritingModuleID, filename: "devotionals.lamp"
+                remoteModuleID: Self.remoteWritingModuleID, filename: "\(Self.remoteWritingModuleID).lamp"
             )
         case .module:
             _ = try await library.install(from: try named(url, as: path))
@@ -400,7 +402,7 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             case .module(.devotionals):
                 republish[path] = try await exportPersonal(
                     .writing,
-                    remoteModuleID: Self.remoteWritingModuleID, filename: "devotionals.lamp"
+                    remoteModuleID: Self.remoteWritingModuleID, filename: "\(Self.remoteWritingModuleID).lamp"
                 )
             case .module(.highlights):
                 guard let setID = highlightSets[path],
@@ -447,7 +449,7 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             kind: .devotionals,
             at: try await exportPersonal(
                 .writing,
-                remoteModuleID: Self.remoteWritingModuleID, filename: "devotionals.lamp"
+                remoteModuleID: Self.remoteWritingModuleID, filename: "\(Self.remoteWritingModuleID).lamp"
             )
         ))
 

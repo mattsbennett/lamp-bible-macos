@@ -41,10 +41,9 @@ extension LampSyncLocalFiles {
     /// The three editable collections, which this Mac exports fresh each pass
     /// and publishes under the IDs the phone uses.
     ///
-    /// Notes and writings are rewritten by
-    /// `LampWebDAVPersonalArchiveAdapter` on the way out, so the bytes
-    /// published are the adapter's and the digest is taken over those — the
-    /// phone's format is the canonical one. Highlights are compiled per set,
+    /// Notes and writings are exported under the published ID
+    /// (`LampSyncMacPassLibrary.remoteNotesModuleID`, `remoteWritingModuleID`),
+    /// and the digest is taken over those bytes. Highlights are compiled per set,
     /// each under the module ID this source has recorded for that set.
     public static func personalModuleCandidate(
         remoteModuleID: String,

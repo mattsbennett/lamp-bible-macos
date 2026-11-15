@@ -41,7 +41,20 @@ public struct LampSyncRemovedModules: Codable, Equatable, Sendable {
               let data = try? Data(contentsOf: url),
               let records = try? JSONDecoder().decode(Self.self, from: data)
         else { return LampSyncRemovedModules() }
-        return records
+        return records.atFormatFourPaths()
+    }
+
+    /// These removals with any recorded at bundle format 3's writing paths,
+    /// `Devotionals/<id>.lamp`, carried to format 4's, `Writing/<id>.lamp`:
+    /// the server's move takes the module there, and a removal still to be
+    /// told must follow it, or the moved copy comes back.
+    func atFormatFourPaths() -> Self {
+        var moved = Self()
+        for (path, time) in removedAt {
+            let renamed = LampSyncFolderLayout.formatFourPath(ofFormatThree: path)
+            moved.record(renamed.flatMap { $0 == path ? nil : $0 } ?? path, at: time)
+        }
+        return moved
     }
 
     public func save(

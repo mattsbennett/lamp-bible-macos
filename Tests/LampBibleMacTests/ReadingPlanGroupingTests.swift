@@ -116,7 +116,7 @@ struct ReadingPlanGroupingTests {
     /// the folder as well as the ID, so a plan called `notes` is still a
     /// plan. Checked because the plans are the first thing Lamp lets people
     /// make and delete themselves.
-    @Test(arguments: ["plan-14772CA1-4CAC-48B5-BB19-A61F51A1390A", "notes", "devotionals"])
+    @Test(arguments: ["plan-14772CA1-4CAC-48B5-BB19-A61F51A1390A", "notes", "writing"])
     func aplanRemovalIsADeletionEveryClientCarriesOut(id: String) throws {
         let path = try LampSyncFolderLayout.modulePath(
             kind: LampSyncContentKind(.plan), moduleID: id

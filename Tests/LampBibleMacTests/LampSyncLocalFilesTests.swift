@@ -137,7 +137,7 @@ struct LampSyncLocalFilesTests {
         )
 
         #expect(found.missing.isEmpty)
-        #expect(found.candidates.map(\.path) == ["DevotionalMedia/devotionals/writing-1/sunrise.jpg"])
+        #expect(found.candidates.map(\.path) == ["WritingMedia/writing/writing-1/sunrise.jpg"])
         #expect(found.candidates.first?.kind.isMedia == true, "never merged, written only where absent")
         #expect(try Data(contentsOf: #require(found.candidates.first).url) == Data("a photograph".utf8))
     }
@@ -156,15 +156,15 @@ struct LampSyncLocalFilesTests {
                 writing(id: "writing-1", attachment: "gone.jpg"),
                 writing(id: "writing-2", attachment: "kept.jpg"),
             ],
-            remoteModuleID: "devotionals",
+            remoteModuleID: "writing",
             inLibraryAt: library
         )
 
         #expect(
-            found.candidates.map(\.path) == ["DevotionalMedia/devotionals/writing-2/kept.jpg"],
+            found.candidates.map(\.path) == ["WritingMedia/writing/writing-2/kept.jpg"],
             "the bad writing must not hide the good one's attachments"
         )
-        #expect(found.missing.map(\.path) == ["DevotionalMedia/devotionals/writing-1/gone.jpg"])
+        #expect(found.missing.map(\.path) == ["WritingMedia/writing/writing-1/gone.jpg"])
     }
 
     /// A gap the server already covers needs nothing from this device and
@@ -172,8 +172,8 @@ struct LampSyncLocalFilesTests {
     /// is a reference nothing will supply, and worth knowing about. Read from
     /// the manifest, never probed.
     @Test func onlyAGapTheServerDoesNotCoverIsWorthReporting() throws {
-        let onServer = "DevotionalMedia/devotionals/writing-1/elsewhere.jpg"
-        let nowhere = "DevotionalMedia/devotionals/writing-2/nowhere.jpg"
+        let onServer = "WritingMedia/writing/writing-1/elsewhere.jpg"
+        let nowhere = "WritingMedia/writing/writing-2/nowhere.jpg"
         var manifest = LampSyncLibraryManifest()
         manifest = try manifest.recordingWrite(onServer, revision: "\"m1\"", replacing: nil, at: 10)
 
@@ -387,7 +387,7 @@ struct LampSyncLocalFilesTests {
             LampSyncLocalFiles.installedModules(modules).candidates
             + LampSyncLocalFiles.devotionalMedia(
                 for: [writing(id: "w1", attachment: "sunrise.jpg")],
-                remoteModuleID: "devotionals",
+                remoteModuleID: "writing",
                 inLibraryAt: library
             ).candidates
             + LampSyncLocalFiles.bookMedia(

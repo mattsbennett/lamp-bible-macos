@@ -33,6 +33,19 @@ struct LampSyncRemovedModulesTests {
         #expect(records.removedAt["Commentaries/NIC.lamp"] == 1_800_000_000_000)
     }
 
+    /// A removal recorded before bundle format 4, at format 3's writing path,
+    /// follows the module to format 4's, where the server's move put it.
+    @Test func aRemovalAtFormatThreesWritingPathFollowsTheModule() throws {
+        let library = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: library) }
+        let old = Data(#"{"removedAt":{"Devotionals/sermons.lamp":5,"Translations/kjv.lamp":6,"Writing/advent.lamp":7}}"#.utf8)
+        try old.write(to: LampSyncRemovedModules.url(inLibraryAt: library))
+
+        let records = LampSyncRemovedModules.load(fromLibraryAt: library)
+
+        #expect(records.removedAt == ["Writing/sermons.lamp": 5, "Translations/kjv.lamp": 6, "Writing/advent.lamp": 7])
+    }
+
     /// Local, like the per-path records: it must never reach the server.
     @Test func theRecordCannotTravelInAnArchive() throws {
         let library = try makeLibrary()
@@ -172,7 +185,7 @@ struct LampSyncRemovedModulesTests {
 struct RemovedModulesNeverTombstoneACollectionTests {
     @Test(arguments: [
         (LampModuleKind.notes, "notes", "Notes/notes.lamp"),
-        (LampModuleKind.devotional, "devotionals", "Devotionals/devotionals.lamp"),
+        (LampModuleKind.devotional, "writing", "Writing/writing.lamp"),
     ])
     func removingAModuleThatCollidesWithACollectionRecordsNothing(
         kind: LampModuleKind, moduleID: String, path: String

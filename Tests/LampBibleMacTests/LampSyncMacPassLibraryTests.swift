@@ -33,7 +33,7 @@ struct LampSyncMacPassLibraryTests {
     /// mistake somewhere else, not an instruction, and obeying it would
     /// delete everything the person has written. An item's own deletion
     /// travels in the personal ledger instead.
-    @Test(arguments: ["Notes/notes.lamp", "Devotionals/devotionals.lamp"])
+    @Test(arguments: ["Notes/notes.lamp", "Writing/writing.lamp"])
     func syncRefusesToDeleteACollectionThatHoldsEverything(path: String) async throws {
         let (library, root, workspace) = try makeLibrary()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -218,7 +218,7 @@ struct LampSyncMacPassLibraryTests {
     /// no help at all — this Mac has no copy to publish.
     @Test(arguments: [
         ("NoteMedia/notes/43011035/tomb.png", "Media/Notes/43011035/tomb.png"),
-        ("DevotionalMedia/devotionals/writing-1/photo.jpg",
+        ("WritingMedia/writing/writing-1/photo.jpg",
          "Media/Devotionals/writing-1/photo.jpg"),
     ])
     func anAttachmentArrivingOnItsOwnIsPutAway(
@@ -269,7 +269,7 @@ struct LampSyncMacPassLibraryTests {
         "Translations/KJVs.lamp",
         "Notes/notes.lamp",
         "Highlights/esvs-highlights.lamp",
-        "Devotionals/devotionals.lamp",
+        "Writing/writing.lamp",
     ])
     func adownloadIsNamedSoTheLibraryWillAcceptIt(path: String) async throws {
         let (library, root, workspace) = try makeLibrary()
@@ -311,7 +311,7 @@ struct LampSyncMacPassLibraryTests {
         // The Mac's own are `personal-notes` and `personal-devotionals`; the
         // adapter rewrites them, and these are what the stem must be.
         #expect(LampSyncMacPassLibrary.remoteNotesModuleID == "notes")
-        #expect(LampSyncMacPassLibrary.remoteWritingModuleID == "devotionals")
+        #expect(LampSyncMacPassLibrary.remoteWritingModuleID == "writing")
     }
 }
 

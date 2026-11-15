@@ -21,7 +21,7 @@ struct LampSyncSavedAtTests {
         )
 
         #expect(savedAt["Notes/notes.lamp"] == 1_700_000_000_000)
-        #expect(savedAt["Devotionals/devotionals.lamp"] == 1_800_000_000_000)
+        #expect(savedAt["Writing/writing.lamp"] == 1_800_000_000_000)
         #expect(savedAt["Highlights/esvs-highlights.lamp"] == 1_800_000_000_000)
         #expect(savedAt["Workspaces/Presentations/sunday.lampdeck"] == 1_800_000_000_000)
         // A set with no module ID has no path to be timed at, and is not
