@@ -68,7 +68,7 @@ Front matter is optional. Without it, a file that opens with `# Heading` takes t
 | `series` | A series and its place in it. | `name` and a whole-number `order`. |
 | `keyScriptures` | The passages it is about. | A list of `ref:` references as people write them: `Matthew 24:36-44`, `Psalm 23` (a whole chapter), `John 3:16`. A reference Lamp cannot read is left out, with a warning. |
 | `summary` | The writer's own summary. | Optional; a `## Summary` section at the very top of the text is read as one too. |
-| `created`, `lastModified` | When the writing was made and last changed. | ISO 8601 (`2026-01-18T09:00:00Z`) or a date. Without `lastModified`, the file's own saved time is used, which is what lets an import tell a file saved since from a copy edited in Lamp since. |
+| `created`, `lastModified` | When the writing was made and last changed. | ISO 8601 (`2026-01-18T09:00:00Z`) or a date. Without `lastModified`, the file's own saved time is used, which is what lets an import tell a file saved since from a copy edited in Lamp since. A document passed in `documents` has no saved time: give `lastModified`, or any change to a writing already in Lamp arrives as a conflict for the person to choose. |
 | `source` | Where you converted it from. | Accepted and ignored; useful for your own bookkeeping. |
 
 Any other key is left out, with a warning.

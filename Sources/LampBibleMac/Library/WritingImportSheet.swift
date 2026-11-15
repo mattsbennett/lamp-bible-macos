@@ -209,7 +209,7 @@ private struct WritingImportRow: View {
             let when = item.libraryModified.map {
                 " on \($0.formatted(date: .abbreviated, time: .shortened))"
             } ?? ""
-            lines.append(("Edited in Lamp\(when), after this file was saved. Tick it to replace Lamp’s copy with the file.", false))
+            lines.append(("Lamp’s copy, last changed\(when), may hold edits made in Lamp. Tick it to replace Lamp’s copy with the file.", false))
         }
         if item.action == .update || item.action == .conflict, !item.changes.isEmpty {
             lines.append(("Differs in: \(item.changes.joined(separator: ", ")).", false))

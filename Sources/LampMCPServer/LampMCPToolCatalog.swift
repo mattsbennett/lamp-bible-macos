@@ -516,7 +516,8 @@ public enum LampMCPToolCatalog {
             imports only the writings the person ticks there. Tell them it is \
             waiting for them in Lamp, not that it is done. The files' text is \
             taken now, so later changes to them are not part of this request. \
-            writing_import_status says what they chose.
+            The reply's `requestID`, passed to writing_import_status, says \
+            what they chose.
             """,
             inputSchema: .object([
                 "type": .string("object"),
@@ -546,11 +547,11 @@ public enum LampMCPToolCatalog {
             "writing_import_status",
             """
             Whether the person has reviewed a writing import yet, and if so \
-            which files' writings were imported. Pass the request_id \
-            import_writings returned.
+            which files' writings were imported. Pass the `requestID` \
+            import_writings returned, as `request_id`.
             """,
             properties: [
-                "request_id": string("The request_id import_writings returned."),
+                "request_id": string("The requestID import_writings returned."),
             ],
             required: ["request_id"]
         ),

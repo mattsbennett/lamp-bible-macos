@@ -20,16 +20,23 @@ public enum LampWritingImportRequests {
         public let markdown: String
         public let modified: Date?
         public let created: Date?
+        /// The folders above the one chosen, so Lamp's plan finds writings
+        /// imported before from a folder further up, as the helper's did.
+        public let ancestry: [String]?
 
         public init(_ file: LampWritingImportFile) {
             path = file.path
             markdown = file.markdown
             modified = file.modified
             created = file.created
+            ancestry = file.ancestry
         }
 
         public var importFile: LampWritingImportFile {
-            LampWritingImportFile(path: path, markdown: markdown, modified: modified, created: created)
+            LampWritingImportFile(
+                path: path, markdown: markdown, modified: modified, created: created,
+                ancestry: ancestry ?? []
+            )
         }
     }
 

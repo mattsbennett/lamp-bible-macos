@@ -380,6 +380,8 @@ final class LibraryModel: ObservableObject {
     private var aiFeaturesObserver: NSObjectProtocol?
     private var readerTurnObserver: NSObjectProtocol?
     private var activationObserver: NSObjectProtocol?
+    /// An agent's writing import is being planned for review.
+    private var isTakingInWritingImport = false
     /// When this run of Lamp began, which says whether a reply that asked
     /// for a writing can still finish: one from an earlier run cannot.
     private let launchedAt = Date()
@@ -645,7 +647,9 @@ final class LibraryModel: ObservableObject {
     /// Reads the chosen Markdown files or folders and plans their import,
     /// for the review sheet. Nothing is written here.
     func planWritingImport(_ urls: [URL]) {
-        guard !urls.isEmpty, !isImportingStudyData else { return }
+        // Not over an import already waiting to be chosen, an agent's
+        // included: it would replace that one's sheet.
+        guard !urls.isEmpty, !isImportingStudyData, pendingWritingImport == nil else { return }
         isImportingStudyData = true
         errorMessage = nil
         studyImportMessage = nil
@@ -698,6 +702,7 @@ final class LibraryModel: ObservableObject {
                 errorMessage = error.localizedDescription
             }
             isImportingStudyData = false
+            await showNextWritingImport()
         }
     }
 
@@ -705,10 +710,18 @@ final class LibraryModel: ObservableObject {
         decideWritingImportRequest(pending, outcome: .init(
             requestID: pending.requestID ?? "", imported: [], refused: [], cancelled: true
         ))
+        Task { await showNextWritingImport() }
     }
 
-    /// Leaves what the person chose for the agent that asked, and shows the
-    /// next import waiting, if any.
+    /// Once an import is decided and written, the next one waiting, if any.
+    /// A moment after, so the sheet just closed has gone before the next
+    /// one is presented.
+    private func showNextWritingImport() async {
+        try? await Task.sleep(for: .milliseconds(400))
+        await takeInRequestedWritingImport()
+    }
+
+    /// Leaves what the person chose for the agent that asked.
     private func decideWritingImportRequest(
         _ pending: PendingWritingImport,
         outcome: LampWritingImportRequests.Outcome,
@@ -720,11 +733,6 @@ final class LibraryModel: ObservableObject {
         } catch {
             errorMessage = "Could not record the writing import\u{2019}s review: \(error.localizedDescription)"
         }
-        Task {
-            // After the sheet has gone, so the next one is a new presentation.
-            try? await Task.sleep(for: .milliseconds(400))
-            await takeInRequestedWritingImport()
-        }
     }
 
     /// Shows the oldest writing import an agent has asked for, for review.
@@ -735,13 +743,23 @@ final class LibraryModel: ObservableObject {
         applicationSupportURL: URL? = LampAgentDescriptorStore.defaultApplicationSupportURL()
     ) async {
         guard settleAIFeatures(), let applicationSupportURL,
-              pendingWritingImport == nil, !isImportingStudyData,
+              pendingWritingImport == nil, !isImportingStudyData, !isTakingInWritingImport,
               let request = LampWritingImportRequests.pending(
                 inApplicationSupport: applicationSupportURL
               ).first else { return }
+        // Claimed before the plan suspends, so a second take-in — Lamp coming
+        // to the front as it launches — cannot plan the same request too.
+        isTakingInWritingImport = true
+        defer { isTakingInWritingImport = false }
         do {
             let plan = try await library.planWritingImport(request.files.map(\.importFile))
-            guard pendingWritingImport == nil else { return }
+            // Asked again after the wait: the switch may have been turned
+            // off, the person may have started an import of their own, and
+            // the request may have been decided elsewhere.
+            guard settleAIFeatures(), pendingWritingImport == nil, !isImportingStudyData,
+                  LampWritingImportRequests.status(
+                    id: request.id, inApplicationSupport: applicationSupportURL
+                  ) == .waiting else { return }
             pendingWritingImport = PendingWritingImport(
                 sourceName: request.sourceName,
                 plan: plan,

@@ -558,7 +558,8 @@ public actor LampMCPToolHandler {
             these files in its review sheet the next time it comes to the \
             front or is opened, and imports only the writings the person \
             ticks there. Tell them it is waiting for their review in Lamp. \
-            writing_import_status with this request_id says what they chose.
+            writing_import_status, given this requestID as request_id, says \
+            what they chose.
             """
         ))
     }
