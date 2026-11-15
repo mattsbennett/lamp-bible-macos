@@ -35,13 +35,18 @@ final class StrongsAnalysisLoader {
     private var task: Task<Void, Never>?
     private var requested: Request?
 
-    /// True only once every translation has been asked and none answered. Kept
-    /// apart from `analyses.isEmpty` because the translation being read may
+    /// True only once every translation has been asked and none held the key.
+    /// Guarded on the loading flags because the translation being read may
     /// tag nothing for this key while another one does — reporting "not here"
     /// at that point would be wrong a tenth of a second before it was right.
+    ///
+    /// Not `analyses.isEmpty`: a translation answers for every key asked of
+    /// it, so a key that is no key came back as a card of noughts rather than
+    /// as nothing. Core judges the absence, so the phone judges it the same
+    /// way.
     var foundNothing: Bool {
-        analyses.isEmpty && !isLoadingFirst && !isFillingRest && errorMessage == nil
-            && requested != nil
+        LampStrongsPresence.absent(from: analyses) && !isLoadingFirst && !isFillingRest
+            && errorMessage == nil && requested != nil
     }
 
     func load(_ request: Request, library: LampLibrary) {
@@ -1217,16 +1222,20 @@ struct StrongsAnalysisPane: View {
                 ProgressView("Analysing \(key)…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let message = loader.errorMessage {
-                ContentUnavailableView {
-                    Label("Could Not Analyse \(key)", systemImage: "exclamationmark.triangle")
-                } description: {
-                    Text(message)
+                withBackRow {
+                    ContentUnavailableView {
+                        Label("Could Not Analyse \(key)", systemImage: "exclamationmark.triangle")
+                    } description: {
+                        Text(message)
+                    }
                 }
             } else if loader.foundNothing {
-                ContentUnavailableView {
-                    Label("No Tags for \(key)", systemImage: "tag.slash")
-                } description: {
-                    Text("No installed translation tags this key in the chosen books.")
+                withBackRow {
+                    ContentUnavailableView {
+                        Label(LampStrongsPresence.title(key: key), systemImage: "tag.slash")
+                    } description: {
+                        Text(LampStrongsPresence.reason(narrowed: bookRange != nil))
+                    }
                 }
             } else if let analysis {
                 // The card scrolls away with the content, and the section tabs
@@ -1412,18 +1421,42 @@ struct StrongsAnalysisPane: View {
     /// The meaning beside the word is only ever a lexicon's own gloss. A
     /// short definition cut to fit was what this header used to show, and it
     /// read as a sentence broken off.
+    /// An empty state under the way back, filling what is left. Without the
+    /// fill the pair centres itself and the back row floats mid-pane.
+    @ViewBuilder private func withBackRow(
+        @ViewBuilder _ content: () -> some View
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            backRow
+                .padding(.horizontal, 14)
+                .padding(.top, 12)
+            content()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    /// The way out, drawn above whatever the pane is showing.
+    ///
+    /// Above the empty states as well as the card, because those are where
+    /// someone is most likely to want it: a key that found nothing leaves
+    /// nothing else on screen to leave by.
+    ///
+    /// "Back to", as every back row in the app says: a bare key above another
+    /// key's card read as that card's own name.
+    @ViewBuilder private var backRow: some View {
+        if let back {
+            Button(action: back.go) {
+                Label("Back to \(back.title)", systemImage: "chevron.left")
+            }
+            .buttonStyle(.borderless)
+        }
+    }
+
     private func card(_ analysis: LampStrongsAnalysis) -> some View {
         // A little shorter than it was: in the study column the card took
         // most of the first screen, and the figures under it began below it.
         VStack(alignment: .leading, spacing: 12) {
-            if let back {
-                // "Back to", as every back row in the app says: a bare key
-                // above another key's card read as that card's own name.
-                Button(action: back.go) {
-                    Label("Back to \(back.title)", systemImage: "chevron.left")
-                }
-                .buttonStyle(.borderless)
-            }
+            backRow
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     Text(entry?.lemma.flatMap { $0.isEmpty ? nil : $0 } ?? analysis.key)

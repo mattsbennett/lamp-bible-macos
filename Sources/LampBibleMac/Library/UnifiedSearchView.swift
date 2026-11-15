@@ -345,11 +345,17 @@ struct UnifiedSearchView: View {
                 // The offer belongs here too: a key searched as words may find
                 // nothing at all, which is exactly when being told the
                 // analysis exists is most use.
+                // The offers sit at the top, where the hits they stand in
+                // for would have been. Left to centre themselves with the
+                // empty state they floated halfway down an empty pane, far
+                // from the field just typed in and reading as part of the
+                // nothing found rather than as the way on from it.
                 VStack(spacing: 0) {
                     referenceOffer
                     strongsAnalysisOffer
                     ContentUnavailableView.search(text: query.isEmpty
                         ? (hasActiveStrongsFilter ? strongsKey : highlightColor) : query)
+                        .frame(maxHeight: .infinity)
                 }
             } else {
                 HSplitView {
@@ -656,6 +662,22 @@ struct UnifiedSearchView: View {
         strongsKey = key
     }
 
+    /// The way out of an analysis.
+    ///
+    /// A key followed from another key goes back to that one. The first key
+    /// has no earlier key, but it does have the search it was opened from,
+    /// and before this that left the analysis with no way out at all: the
+    /// only one was the key field's clear button, which reads as emptying a
+    /// field rather than as leaving. Clearing the key is still what it does
+    /// — the words searched are untouched, so the hits come back as they
+    /// were.
+    private var backFromStrongsAnalysis: StrongsAnalysisPane.Back {
+        if let previous = strongsTrail.last {
+            return StrongsAnalysisPane.Back(title: previous, go: goBackAlongStrongsTrail)
+        }
+        return StrongsAnalysisPane.Back(title: "Search", go: { strongsKey = "" })
+    }
+
     private func goBackAlongStrongsTrail() {
         guard let previous = strongsTrail.popLast() else { return }
         isWalkingStrongsTrail = true
@@ -682,9 +704,7 @@ struct UnifiedSearchView: View {
                 openIn: { selectedModuleID = $0 },
                 bookRange: bookScope.range,
                 fontSize: hitFontSize,
-                back: strongsTrail.last.map { previous in
-                    StrongsAnalysisPane.Back(title: previous, go: goBackAlongStrongsTrail)
-                }
+                back: backFromStrongsAnalysis
             )
             strongsOccurrences
         }
