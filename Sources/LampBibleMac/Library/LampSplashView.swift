@@ -79,17 +79,19 @@ struct LampSplashView: View {
         }
     }
 
-    /// The icon's flame on its own (the phone's `lampflame.fill`), in the
-    /// app's accent. The whole icon stands in where the asset catalog isn't
-    /// built in, as in a SwiftPM build.
+    /// The icon's flame on its own, in the app's accent: the phone's launch
+    /// image (`lampsplash`) as the accent's mask. That image is cropped to
+    /// the flame, so centring it centres the flame; the `lampflame.fill`
+    /// symbol drawn here before carried its template's uneven margins and
+    /// sat 38 points right of the words under it. The whole icon stands in
+    /// where the asset catalog isn't built in, as in a SwiftPM build.
     @ViewBuilder
     private var flame: some View {
-        if NSImage(named: "lampflame.fill") != nil {
-            Image("lampflame.fill")
-                .resizable()
-                .scaledToFit()
+        if NSImage(named: "lampsplash") != nil {
+            Color.accentColor
+                .mask(Image("lampsplash").resizable().scaledToFit())
+                .aspectRatio(0.5, contentMode: .fit)
                 .frame(height: 120)
-                .foregroundStyle(Color.accentColor)
                 .accessibilityHidden(true)
         } else {
             Image(nsImage: NSApp.applicationIconImage)
