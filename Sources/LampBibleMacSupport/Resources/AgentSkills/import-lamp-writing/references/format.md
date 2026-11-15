@@ -4,6 +4,11 @@
 
 A folder of Markdown files (`.md` or `.markdown`), one writing per file, in any layout of subfolders. Lamp reads every Markdown file in it except hidden folders and tools' folders (`node_modules`, `venv`). A single `.md` file can be imported on its own.
 
+Beside the Markdown:
+
+- **Pictures and recordings** the text links to by a path inside the folder — a Markdown image whose path is `images/map.png`, say, or a link to `audio/reading.m4a`. They are copied into the writing, and the image's text becomes the picture's description. Pictures: PNG, JPEG, GIF, HEIC, WebP, TIFF, BMP. Recordings: M4A, MP3, WAV, AAC, AIFF, CAF, FLAC. A link to one that is not there, or that lies outside the folder chosen, rejects the file.
+- **A deck**: `talk.lampdeck` beside `talk.md` becomes that writing's presentation, with the pictures its slides name in an `Assets` folder beside the deck (`"assetPath": "Assets/cover.jpg"`). Build it with the build-lamp-deck skill's format; Lamp sets which writing it belongs to. It is a row of its own in the report.
+
 To import only some files, put `lamp-import.json` at the top of the folder:
 
 ```json
@@ -11,12 +16,12 @@ To import only some files, put `lamp-import.json` at the top of the folder:
   "formatVersion": 1,
   "writings": [
     { "file": "exhortations/2026-01-18-days-of-noah.md" },
-    { "file": "studies/man-of-sin/handout.md" }
+    { "file": "studies/man-of-sin/handout.md", "deck": "decks/man-of-sin.lampdeck" }
   ]
 }
 ```
 
-With it, only the files it names are read, and each must be inside the folder.
+With it, only the files it names are read, and each must be inside the folder. `deck` names a deck for a file when it is not named after it.
 
 ## A file
 
@@ -81,13 +86,13 @@ Write it as Markdown, as Lamp's editors do:
 - Footnotes: a marker `[^label]` in the text, and its definition `[^label]: …` at the end, under a `---` line. A label is any word without spaces; Lamp numbers them 1, 2, 3 in reading order. Every marker needs a definition.
 - Scripture links: `[Matthew 24:36](lampbible://verse/40024036)`, and for a range `lampbible://verse/40024036/40024044`. The number is book, chapter and verse: book as in the 66-book order (Genesis 01, Matthew 40), then three digits of chapter and three of verse. Plain references in the prose are fine left as they are; add links only where they help, and only to the verses the prose names.
 - Ordinary web links: `[text](https://example.org/page)`.
+- A link to another file of the same import, such as one to `handout.md`, opens that writing in Lamp.
 
 What does not come through:
 
 - **HTML** (`<details>`, `<summary>`, `<a>`, `<div>`): Lamp's writing is Markdown. Turn a collapsible section into a heading with its content beneath, a link into a Markdown link, and so on. Lamp warns about any left in.
-- **Links to other files**, such as one to `../audits/2PE.md`, will not open in Lamp. Keep the link text, or say in words where it pointed. Lamp warns about each.
-- **Pictures and audio** (`media/…`) cannot be imported yet, and a file that has them is rejected. Leave them out for now, and tell the person which writings had them.
-- Presentation decks are not part of a writing import. Build one with the build-lamp-deck skill once the writing is in Lamp.
+- **Links to files not in the import**, such as one to `../audits/2PE.md` when the audits are left out, will not open in Lamp. Keep the link text, or say in words where it pointed. Lamp warns about each.
+- **Pictures in `documents`**: a document passed in, rather than a folder, carries text only, so its pictures, recordings and deck need the folder's path instead.
 
 ## What Lamp checks
 
@@ -95,6 +100,8 @@ A file is **rejected** (not imported) when:
 - its `id` uses characters outside the rule, or another file in the bundle has the same `id`;
 - it has no text;
 - a `lampbible://` link names a verse that is not in the Bible, or is not a link Lamp can open;
-- it has pictures or audio.
+- a picture or recording it links to is not in the folder.
 
-A file is imported with a **warning** when it has HTML, links to other files, a footnote marker without a definition, a front matter key Lamp does not know, a date not in `YYYY-MM-DD`, a key scripture Lamp cannot read, or no title.
+A deck is rejected when it is not a valid Lamp deck, when a picture it names is not in the `Assets` beside it, or when its writing is rejected.
+
+A file is imported with a **warning** when it has HTML, links to files not in the import, a footnote marker without a definition, a front matter key Lamp does not know, a date not in `YYYY-MM-DD`, a key scripture Lamp cannot read, or no title.

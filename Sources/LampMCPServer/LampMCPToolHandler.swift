@@ -543,12 +543,12 @@ public actor LampMCPToolHandler {
             )
         }
         let note = arguments["note"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let request = LampWritingImportRequests.Request(
+        let request = try LampWritingImportRequests.write(
             sourceName: sourceName,
-            files: files.map(LampWritingImportRequests.File.init),
-            note: note?.isEmpty == false ? note : nil
+            files: files,
+            note: note?.isEmpty == false ? note : nil,
+            inApplicationSupport: applicationSupportURL
         )
-        try LampWritingImportRequests.write(request, inApplicationSupport: applicationSupportURL)
         return try result(WritingImportQueued(
             requestID: request.id,
             queued: true,

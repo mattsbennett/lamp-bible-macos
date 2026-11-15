@@ -894,6 +894,73 @@ extension LampMCPClientCompatibilityTests {
         #expect(status["imported"]?.arrayValue?.compactMap(\.stringValue) == ["bundle/watch.md"])
     }
 
+    /// The request carries the files a writing brings, copied, so the
+    /// agent's folder can change before the person reviews it.
+    @Test func awritingImportRequestCarriesItsPicturesAndDeck() async throws {
+        let fixture = try await writingFixture(allowsWriting: false, allowsWritingStarts: true)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let bundle = fixture.root.appendingPathComponent("bundle", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: bundle.appendingPathComponent("Assets"), withIntermediateDirectories: true
+        )
+        try "# Map\n\n![The journeys](map.png)".write(
+            to: bundle.appendingPathComponent("talk.md"), atomically: true, encoding: .utf8
+        )
+        try Data("picture".utf8).write(to: bundle.appendingPathComponent("map.png"))
+        try Data("cover".utf8).write(to: bundle.appendingPathComponent("Assets/cover.png"))
+        let deck = LampPresentationDeck(id: "deck-talk", title: "Talk", slides: [
+            LampPresentationSlide(layout: .image, blocks: [
+                .init(kind: .image, assetPath: "Assets/cover.png", altText: "Cover"),
+            ]),
+        ])
+        try JSONEncoder().encode(deck).write(to: bundle.appendingPathComponent("talk.lampdeck"))
+
+        let response = try await handler(fixture).call(
+            name: "import_writings", arguments: ["path": .string(bundle.path)]
+        )
+        let requestID = try #require(response.structuredContent?.objectValue?["requestID"]?.stringValue)
+        let request = try #require(
+            LampWritingImportRequests.pending(inApplicationSupport: fixture.support).first
+        )
+        // The agent's folder goes; the request still has what it needs.
+        try FileManager.default.removeItem(at: bundle)
+        let files = LampWritingImportRequests.importFiles(of: request, inApplicationSupport: fixture.support)
+        let file = try #require(files.first)
+        #expect(try Data(contentsOf: try #require(file.attachments["map.png"])) == Data("picture".utf8))
+        let delivered = try #require(file.deck)
+        #expect(try Data(contentsOf: try #require(delivered.assetsDirectory)
+            .appendingPathComponent("Assets/cover.png")) == Data("cover".utf8))
+        let plan = try await fixture.library.planWritingImport(files)
+        #expect(plan.items.map(\.kind) == [.writing, .deck])
+        #expect(plan.items.map(\.action) == [.create, .create])
+
+        try LampWritingImportRequests.decide(
+            .init(requestID: requestID, imported: [], refused: [], cancelled: true),
+            inApplicationSupport: fixture.support
+        )
+        #expect(!FileManager.default.fileExists(atPath: LampWritingImportRequests.folderURL(
+            inApplicationSupport: fixture.support, id: requestID
+        ).path), "a decided request's files go with it")
+    }
+
+    @Test func theUndoHistoryKeepsTheNewestTen() throws {
+        let support = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-undo-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: support) }
+        for index in 0..<12 {
+            let undo = LampWritingImportUndo(
+                id: "import-\(index)", importedAt: Date(timeIntervalSince1970: TimeInterval(index)),
+                writings: [.init(id: "w\(index)", title: "W", written: 0, previous: nil, addedMedia: [])],
+                decks: []
+            )
+            try LampWritingImportUndoHistory.record(undo, sourceName: "talks", inApplicationSupport: support)
+        }
+        let entries = LampWritingImportUndoHistory.entries(inApplicationSupport: support)
+        #expect(entries.count == 10)
+        #expect(entries.first?.id == "import-11")
+        #expect(entries.last?.id == "import-2")
+    }
+
     @Test func awritingImportIsRefusedWithoutTheSwitchInAReaderChatAndWhenNothingImports() async throws {
         let off = try await writingFixture(allowsWriting: true, allowsWritingStarts: false)
         defer { try? FileManager.default.removeItem(at: off.root) }

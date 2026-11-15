@@ -684,16 +684,27 @@ final class LibraryModel: ObservableObject {
         isImportingStudyData = true
         Task {
             do {
-                let result = try await library.applyWritingImport(pending.plan, selecting: itemIDs)
+                let result = try await LampWritingImport.apply(
+                    pending.plan, selecting: itemIDs, to: LampMacWritingImportStore(library: library)
+                )
                 decideWritingImportRequest(pending, outcome: .init(
                     requestID: pending.requestID ?? "",
                     imported: result.imported.map(\.path),
                     refused: result.refused.map(\.path),
                     cancelled: false
                 ))
+                if let applicationSupportURL = LampAgentDescriptorStore.defaultApplicationSupportURL() {
+                    try? LampWritingImportUndoHistory.record(
+                        result.undo, sourceName: pending.sourceName,
+                        inApplicationSupport: applicationSupportURL
+                    )
+                    refreshWritingImportUndo(applicationSupportURL: applicationSupportURL)
+                }
                 await refreshLibrary()
-                let count = result.imported.count
-                var message = "Imported \(count) writing\(count == 1 ? "" : "s")."
+                let count = result.imported.filter { $0.kind == .writing }.count
+                let decks = result.imported.count - count
+                var message = "Imported \(count) writing\(count == 1 ? "" : "s")"
+                    + (decks == 0 ? "." : " and \(decks) deck\(decks == 1 ? "" : "s").")
                 if !result.refused.isEmpty {
                     message += " \(result.refused.count) changed in Lamp while you were choosing and \(result.refused.count == 1 ? "was" : "were") left as \(result.refused.count == 1 ? "it was" : "they were"); import again to see them."
                 }
@@ -703,6 +714,45 @@ final class LibraryModel: ObservableObject {
             }
             isImportingStudyData = false
             await showNextWritingImport()
+        }
+    }
+
+    /// The import Undo Last Import would undo, if any.
+    @Published private(set) var lastWritingImport: LampWritingImportUndoHistory.Entry?
+
+    func refreshWritingImportUndo(
+        applicationSupportURL: URL? = LampAgentDescriptorStore.defaultApplicationSupportURL()
+    ) {
+        lastWritingImport = applicationSupportURL.flatMap {
+            LampWritingImportUndoHistory.entries(inApplicationSupport: $0).first
+        }
+    }
+
+    /// Undoes the most recent writing import: what it made goes, what it
+    /// changed is put back, and anything changed since is left and named.
+    func undoLastWritingImport(
+        applicationSupportURL: URL? = LampAgentDescriptorStore.defaultApplicationSupportURL()
+    ) {
+        guard let applicationSupportURL, let entry = lastWritingImport, !isImportingStudyData else { return }
+        isImportingStudyData = true
+        studyImportMessage = nil
+        Task {
+            do {
+                let result = try await LampWritingImport.undo(
+                    entry.undo, in: LampMacWritingImportStore(library: library)
+                )
+                LampWritingImportUndoHistory.forget(id: entry.id, inApplicationSupport: applicationSupportURL)
+                refreshWritingImportUndo(applicationSupportURL: applicationSupportURL)
+                await refreshLibrary()
+                var message = "Undid the import from \(entry.sourceName): \(result.undone.count) put back as \(result.undone.count == 1 ? "it was" : "they were")."
+                if !result.kept.isEmpty {
+                    message += " Left as \(result.kept.count == 1 ? "it is" : "they are"), changed since: \(result.kept.joined(separator: ", "))."
+                }
+                studyImportMessage = message
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isImportingStudyData = false
         }
     }
 
@@ -752,7 +802,9 @@ final class LibraryModel: ObservableObject {
         isTakingInWritingImport = true
         defer { isTakingInWritingImport = false }
         do {
-            let plan = try await library.planWritingImport(request.files.map(\.importFile))
+            let plan = try await library.planWritingImport(LampWritingImportRequests.importFiles(
+                of: request, inApplicationSupport: applicationSupportURL
+            ))
             // Asked again after the wait: the switch may have been turned
             // off, the person may have started an import of their own, and
             // the request may have been decided elsewhere.

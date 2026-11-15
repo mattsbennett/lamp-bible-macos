@@ -22,6 +22,7 @@
 }
 ```
 
+- `kind` is `writing`, or `deck` for a deck delivered beside a writing, which has a row of its own after it. A deck in Lamp that differs from the file is a `conflict`, since it may hold changes made in Slide Studio.
 - `path` is the file as `<folder>/<path inside it>`. Without an `id`, the writing's id is made from this, so the same path imports to the same writing.
 - `action`:
   - `create`: not in the library yet.

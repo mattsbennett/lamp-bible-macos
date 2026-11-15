@@ -42,6 +42,19 @@ struct LampMCPCommand {
                     ?? resolved?.bundledModulesArchiveURL,
                 policy: policy
             )
+            if let importURL = options.planWritingImportURL {
+                // The same check as plan_writing_import, from a shell: the
+                // report on standard output, and a non-zero status when a
+                // file would be refused.
+                let plan = try await library.planWritingImport(LampWritingImport.files(at: importURL))
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+                encoder.dateEncodingStrategy = .iso8601
+                FileHandle.standardOutput.write(try encoder.encode(plan.report))
+                FileHandle.standardOutput.write(Data("\n".utf8))
+                if plan.count(.rejected) > 0 { exit(1) }
+                return
+            }
             if options.healthCheck {
                 let modules = try await library.listModules()
                 let result = HealthCheckResult(
@@ -159,6 +172,8 @@ private struct Options {
     let healthCheck: Bool
     let renderDeckURL: URL?
     let buildDeckURL: URL?
+    /// A folder or file to check as a writing import, printing the report.
+    let planWritingImportURL: URL?
     let manuscriptURL: URL?
     let outputURL: URL?
     let overviewURL: URL?
@@ -186,6 +201,7 @@ private struct Options {
         var healthCheck = false
         var renderDeckURL: URL?
         var buildDeckURL: URL?
+        var planWritingImportURL: URL?
         var manuscriptURL: URL?
         var outputURL: URL?
         var overviewURL: URL?
@@ -224,6 +240,12 @@ private struct Options {
                 index += 1
                 guard arguments.indices.contains(index) else { throw OptionError.missingValue(argument) }
                 buildDeckURL = URL(fileURLWithPath: arguments[index])
+            case "--plan-writing-import":
+                index += 1
+                guard arguments.indices.contains(index) else { throw OptionError.missingValue(argument) }
+                planWritingImportURL = URL(fileURLWithPath: (arguments[index] as NSString).expandingTildeInPath)
+                // Compared with the library Lamp describes, unless one is named.
+                if libraryRootURL == nil { usesDescriptor = true }
             case "--manuscript":
                 index += 1
                 guard arguments.indices.contains(index) else { throw OptionError.missingValue(argument) }
@@ -291,6 +313,7 @@ private struct Options {
         self.healthCheck = healthCheck
         self.renderDeckURL = renderDeckURL
         self.buildDeckURL = buildDeckURL
+        self.planWritingImportURL = planWritingImportURL
         self.manuscriptURL = manuscriptURL
         self.outputURL = outputURL
         self.overviewURL = overviewURL
@@ -318,6 +341,7 @@ private enum OptionError: Error, LocalizedError {
                lamp-mcp --library-root PATH [--bundled-modules-archive PATH] [--policy PATH] [--workspace DIR] [--skills DIR] [--reader-chat ID [--reader-chat-provider NAME]] [--health-check]
                lamp-mcp --render-deck PATH [--output DIR] [--overview FILE] [--slides 1,3,5] [--width 1600] [--library-root PATH] [--manuscript PATH]
                lamp-mcp --build-deck PATH --manuscript PATH
+               lamp-mcp --plan-writing-import PATH [--library-root PATH] [--policy PATH]
         """
         switch self {
         case .help: return usage

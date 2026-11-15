@@ -979,6 +979,7 @@ public enum LampDeepLink: Equatable, Sendable {
     case reading(reference: Int, endReference: Int?, openExternal: Bool)
     case strongs(String)
     case book(moduleID: String?, sectionID: String?)
+    case writing(id: String)
     case section(LampDeepLinkSection)
     case moduleFile(URL)
     case dataFile(URL)
@@ -1001,6 +1002,8 @@ public enum LampDeepLink: Equatable, Sendable {
             self = .section(.reader)
         case .book(let moduleID, let sectionID):
             self = .book(moduleID: moduleID, sectionID: sectionID)
+        case .writing(let id):
+            self = .writing(id: id)
         case .section(let section):
             self = .section(section)
         case .moduleFile(let url):

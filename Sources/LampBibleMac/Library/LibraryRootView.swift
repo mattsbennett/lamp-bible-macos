@@ -549,8 +549,9 @@ struct LibraryRootView: View {
             }
             return
         }
-        // Links core's parser does not name: a writing, a plan, a quiz, a
-        // deck, an analysis. The same routes the palette uses.
+        // Links the palette makes: a writing, a plan, a quiz, a deck, an
+        // analysis. Core reads a writing link too, which an import writes
+        // between writings; it is the same link and lands here first.
         if let link = LampMacLink(url: url) {
             switch link {
             case .writing(let id): go(to: .writing(id))
@@ -593,6 +594,10 @@ struct LibraryRootView: View {
             requestedBookID = moduleID
             requestedBookSectionID = sectionID
             selection = .section(.books)
+        case .writing(let id):
+            // A link from one imported writing to another.
+            requestedDevotionalID = id
+            selection = .section(.devotionals)
         case .section(let section):
             selection = .section(LibrarySection(rawValue: section.displayName) ?? .reader)
         case .moduleFile(let url):

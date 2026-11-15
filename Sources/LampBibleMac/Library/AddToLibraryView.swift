@@ -284,7 +284,7 @@ struct AddToLibraryView: View {
             description: "Bring editable Markdown into My Notes or My Writing, or restore notes and highlights from a structured Lamp Bible export.",
             distinction: "Markdown (.md) imports editable notes or writing. Lamp exports (.json or .lamp) restore structured notes or highlights. None of these install reference-library content.",
             steps: [
-                ("Import writing.", "Choose .md files or a whole folder of them. Lamp shows what each file becomes before anything is written, and importing the same files again updates their writings rather than adding copies."),
+                ("Import writing.", "Choose .md files or a whole folder of them. Pictures and recordings they link to, and a deck named after a file, come too. Lamp shows what each file becomes before anything is written, importing the same files again updates their writings rather than adding copies, and the last few imports can be undone."),
                 ("Import verse-linked notes.", "A notes .md file is read by its verse headings, such as ## John 3 and ### 3:16."),
                 ("Or restore a Lamp export.", "A personal-study .json or .lamp file preserves structured notes or highlights."),
             ]
@@ -304,9 +304,23 @@ struct AddToLibraryView: View {
                 Button("Restore Notes or Highlights from .json/.lamp…", systemImage: "archivebox") {
                     showingStudyDataImporter = true
                 }
+
+                if let last = model.lastWritingImport {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Button("Undo Last Writing Import", systemImage: "arrow.uturn.backward") {
+                            model.undoLastWritingImport()
+                        }
+                        Text("From \(last.sourceName), \(last.undo.importedAt.formatted(date: .abbreviated, time: .shortened)): \(last.undo.writings.count) writing\(last.undo.writings.count == 1 ? "" : "s")\(last.undo.decks.isEmpty ? "" : " and \(last.undo.decks.count) deck\(last.undo.decks.count == 1 ? "" : "s")"). Anything changed since is left as it is.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.top, 6)
+                }
             }
             .controlSize(.large)
             .disabled(model.isImportingStudyData)
+            .onAppear { model.refreshWritingImportUndo() }
 
             if model.isImportingStudyData {
                 ProgressView("Importing study data…")

@@ -130,7 +130,7 @@ struct WritingImportSheet: View {
                     dismiss()
                 }
                     .keyboardShortcut(.cancelAction)
-                Button(selection.count == 1 ? "Import 1 Writing" : "Import \(selection.count) Writings") {
+                Button(importLabel) {
                     onImport(selection)
                     dismiss()
                 }
@@ -142,6 +142,14 @@ struct WritingImportSheet: View {
         .frame(width: 640, height: 560)
     }
 
+    private var importLabel: String {
+        let decks = items.filter { $0.kind == .deck && selection.contains($0.id) }.count
+        let writings = selection.count - decks
+        let writing = writings == 1 ? "1 Writing" : "\(writings) Writings"
+        guard decks > 0 else { return "Import \(writing)" }
+        return "Import \(writing) and \(decks == 1 ? "1 Deck" : "\(decks) Decks")"
+    }
+
     static func hasNotes(_ item: LampWritingImportItem) -> Bool {
         !item.errors.isEmpty || !item.warnings.isEmpty || item.action == .conflict
     }
@@ -151,9 +159,7 @@ private struct WritingImportRow: View {
     let item: LampWritingImportItem
     @Binding var isSelected: Bool
 
-    private var canImport: Bool {
-        [.create, .update, .conflict].contains(item.action)
-    }
+    private var canImport: Bool { item.canImport }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -163,8 +169,13 @@ private struct WritingImportRow: View {
                     .labelsHidden()
                     .disabled(!canImport)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(item.title)
-                        .lineLimit(1)
+                    if item.kind == .deck {
+                        Label(item.title, systemImage: "rectangle.on.rectangle")
+                            .lineLimit(1)
+                    } else {
+                        Text(item.title)
+                            .lineLimit(1)
+                    }
                     Text(item.path)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -195,9 +206,9 @@ private struct WritingImportRow: View {
 
     private var actionLabel: String {
         switch item.action {
-        case .create: "New"
+        case .create: item.kind == .deck ? "New Deck" : "New"
         case .update: "Update"
-        case .conflict: "Changed in Lamp"
+        case .conflict: item.kind == .deck ? "Changed in Slide Studio" : "Changed in Lamp"
         case .unchanged: "Unchanged"
         case .rejected: "Can’t import"
         }
@@ -205,7 +216,9 @@ private struct WritingImportRow: View {
 
     private var noteLines: [(text: String, isError: Bool)] {
         var lines = item.errors.map { ($0, true) }
-        if item.action == .conflict {
+        if item.action == .conflict, item.kind == .deck {
+            lines.append(("The deck in Lamp differs from this file, and may hold changes made in Slide Studio. Tick it to replace it with the file.", false))
+        } else if item.action == .conflict {
             let when = item.libraryModified.map {
                 " on \($0.formatted(date: .abbreviated, time: .shortened))"
             } ?? ""

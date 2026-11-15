@@ -497,7 +497,8 @@ public enum LampMCPToolCatalog {
             Check Markdown files as Lamp would import them as writing, and \
             return what each would become — create, update, unchanged, \
             conflict or rejected — with errors (which stop that file), \
-            warnings and what Lamp tidied. Writes nothing. Run it until no \
+            warnings and what Lamp tidied. A deck beside a file is its own \
+            row. Writes nothing. Run it until no \
             file you mean to import is rejected, then import_writings. Read \
             the import-lamp-writing skill first for the format. Compared with \
             the person's writing only when Lamp shares personal writing with \
@@ -509,7 +510,8 @@ public enum LampMCPToolCatalog {
         Tool(
             name: "import_writings",
             description: """
-            Ask Lamp to import Markdown files as writing. Needs "Allow agents \
+            Ask Lamp to import Markdown files as writing, with the pictures, \
+            recordings and decks beside them. Needs "Allow agents \
             to start a writing" in Lamp's Settings, under AI & Agents. Nothing \
             is imported when this returns: Lamp shows the files in its review \
             sheet, the next time it comes to the front or is opened, and \
@@ -561,14 +563,16 @@ public enum LampMCPToolCatalog {
         "path": string(
             "Absolute path of a folder of Markdown files, or of one .md file. A "
                 + "folder's lamp-import.json, if present, names the files that "
-                + "are writing."
+                + "are writing. Pictures and recordings the files link to, and a "
+                + "deck named after a file, come with it."
         ),
         "documents": .object([
             "type": .string("array"),
             "description": .string(
-                "Instead of path, the files themselves. A document with no id "
-                    + "in its front matter takes one from its path, so give the "
-                    + "same path each time for the same writing."
+                "Instead of path, the files themselves, text only: pictures, "
+                    + "recordings and decks need a path. A document with no id in "
+                    + "its front matter takes one from its path, so give the same "
+                    + "path each time for the same writing."
             ),
             "items": .object([
                 "type": .string("object"),

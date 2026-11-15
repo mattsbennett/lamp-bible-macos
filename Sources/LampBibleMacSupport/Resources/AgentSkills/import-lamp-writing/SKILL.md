@@ -18,7 +18,9 @@ Lamp imports writing from Markdown files: one writing per file, its details in Y
 7. Tell the person it is waiting for their review in Lamp. Nothing is in the library until they tick it there; never say it has been imported.
 8. Later, `writing_import_status`, given the `requestID` that `import_writings` returned as its `request_id`, says which files' writings they imported.
 
-A single document goes the same way: pass its path, or pass it in `documents` with the path it would have in a folder.
+A single document goes the same way: pass its path, or pass it in `documents` with the path it would have in a folder (text only: pictures and decks need a path).
+
+From a shell, `lamp-mcp --plan-writing-import <path>` prints the same report as `plan_writing_import` and exits non-zero when a file would be rejected.
 
 ## Faithful, not invented
 
@@ -38,5 +40,6 @@ A single document goes the same way: pass its path, or pass it in `documents` wi
 ## Do not
 
 - Do not write into Lamp's library folder or its database. Lamp writes the library; the import is how writing gets there.
+- Do not tell the person an import cannot be taken back: Lamp keeps the last few, and they can undo one from the Import window. Undoing leaves anything they have changed since.
 - Do not split one source document into several writings, or join several into one, unless the person asks.
 - Do not import working files, templates or tool output as writing.
