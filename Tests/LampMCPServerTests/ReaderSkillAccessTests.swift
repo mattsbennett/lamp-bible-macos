@@ -237,7 +237,7 @@ struct ReaderSkillAccessTests {
         let listing = try await handler.call(name: "read_skill", arguments: nil)
         let names = listing.structuredContent?.objectValue?["available"]?.arrayValue?
             .compactMap(\.stringValue)
-        #expect(Set(names ?? []) == LampBundledSkills.studySkillNames)
+        #expect(Set(names ?? []) == LampBundledSkills.externalSkillNames)
     }
 
     @Test func aConfiguredEmptySessionDoesNotFallBackToOtherSkills() async throws {

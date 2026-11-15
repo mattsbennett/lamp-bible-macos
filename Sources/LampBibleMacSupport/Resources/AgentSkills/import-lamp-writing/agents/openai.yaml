@@ -1,0 +1,4 @@
+interface:
+  display_name: "Import Lamp Writing"
+  short_description: "Bring existing writing into Lamp, checked and reviewed"
+  default_prompt: "Use $import-lamp-writing to bring my writing into Lamp."

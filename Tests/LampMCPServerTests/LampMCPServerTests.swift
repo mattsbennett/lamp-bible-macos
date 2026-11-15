@@ -20,11 +20,14 @@ struct LampMCPServerTests {
         #expect(LampMCPToolCatalog.deckTools.count == 3)
         #expect(LampMCPToolCatalog.writingTools.count == 2)
         #expect(LampMCPToolCatalog.writeTools.count == 3)
-        #expect(all.count == 27)
+        #expect(LampMCPToolCatalog.writingImportTools.count == 3)
+        #expect(all.count == 30)
         #expect(Set(all.map(\.name)).count == all.count)
 
-        let writing = Set(LampMCPToolCatalog.writeTools.map(\.name))
-        #expect(writing == ["write_writing_draft", "add_reading_plan", "start_writing"])
+        // import_writings asks Lamp to show files for review, and what the
+        // person accepts can replace a writing's text, so it says it writes.
+        let writing = Set(LampMCPToolCatalog.writeTools.map(\.name)).union(["import_writings"])
+        #expect(writing == ["write_writing_draft", "add_reading_plan", "start_writing", "import_writings"])
         for tool in all {
             if writing.contains(tool.name) {
                 #expect(
@@ -833,6 +836,91 @@ extension LampMCPClientCompatibilityTests {
 
         await #expect(throws: LampMCPToolError.missingArgument("title")) {
             try await handler(fixture).call(name: "start_writing", arguments: ["title": .string(" ")])
+        }
+    }
+
+    /// A writing import is checked here and handed to Lamp for review; the
+    /// helper never writes the library, and nothing is imported until the
+    /// person ticks it.
+    @Test func awritingImportIsPlannedQueuedForReviewAndReportedBack() async throws {
+        let fixture = try await writingFixture(allowsWriting: false, allowsWritingStarts: true)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let bundle = fixture.root.appendingPathComponent("bundle", isDirectory: true)
+        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+        try "# Watch\n\nBe ready.".write(
+            to: bundle.appendingPathComponent("watch.md"), atomically: true, encoding: .utf8
+        )
+        try "# Map\n\n![A map](media/map.png)".write(
+            to: bundle.appendingPathComponent("map.md"), atomically: true, encoding: .utf8
+        )
+
+        let planned = try await handler(fixture).call(
+            name: "plan_writing_import", arguments: ["path": .string(bundle.path)]
+        )
+        let plan = try #require(planned.structuredContent?.objectValue)
+        #expect(plan["create"]?.intValue == 1)
+        #expect(plan["rejected"]?.intValue == 1)
+        #expect(LampWritingImportRequests.pending(inApplicationSupport: fixture.support).isEmpty)
+
+        let response = try await handler(fixture).call(name: "import_writings", arguments: [
+            "path": .string(bundle.path), "note": .string("Two talks."),
+        ])
+        let answer = try #require(response.structuredContent?.objectValue)
+        #expect(answer["queued"]?.boolValue == true)
+        #expect(answer["message"]?.stringValue?.contains("Nothing is in the library yet") == true)
+        let requestID = try #require(answer["requestID"]?.stringValue)
+        let request = try #require(
+            LampWritingImportRequests.pending(inApplicationSupport: fixture.support).first
+        )
+        #expect(request.id == requestID)
+        #expect(request.note == "Two talks.")
+        #expect(Set(request.files.map(\.path)) == ["bundle/watch.md", "bundle/map.md"])
+        #expect(try await fixture.library.devotionals().map(\.id) == ["living-hope"])
+
+        let waiting = try await handler(fixture).call(
+            name: "writing_import_status", arguments: ["request_id": .string(requestID)]
+        )
+        #expect(waiting.structuredContent?.objectValue?["state"]?.stringValue == "waiting")
+        try LampWritingImportRequests.decide(
+            .init(requestID: requestID, imported: ["bundle/watch.md"], refused: [], cancelled: false),
+            inApplicationSupport: fixture.support
+        )
+        #expect(LampWritingImportRequests.pending(inApplicationSupport: fixture.support).isEmpty)
+        let reviewed = try await handler(fixture).call(
+            name: "writing_import_status", arguments: ["request_id": .string(requestID)]
+        )
+        let status = try #require(reviewed.structuredContent?.objectValue)
+        #expect(status["state"]?.stringValue == "reviewed")
+        #expect(status["imported"]?.arrayValue?.compactMap(\.stringValue) == ["bundle/watch.md"])
+    }
+
+    @Test func awritingImportIsRefusedWithoutTheSwitchInAReaderChatAndWhenNothingImports() async throws {
+        let off = try await writingFixture(allowsWriting: true, allowsWritingStarts: false)
+        defer { try? FileManager.default.removeItem(at: off.root) }
+        let document: [String: Value] = ["documents": .array([.object([
+            "path": .string("talks/watch.md"), "markdown": .string("# Watch\n\nBe ready."),
+        ])])]
+        await #expect(throws: LampMCPToolError.writingImportsNotAllowed) {
+            try await handler(off).call(name: "import_writings", arguments: document)
+        }
+        // Checking needs no switch: it writes nothing.
+        let planned = try await handler(off).call(name: "plan_writing_import", arguments: document)
+        #expect(planned.structuredContent?.objectValue?["create"]?.intValue == 1)
+
+        let on = try await writingFixture(allowsWriting: false, allowsWritingStarts: true)
+        defer { try? FileManager.default.removeItem(at: on.root) }
+        await #expect(throws: LampMCPToolError.writingImportNotHere) {
+            try await handler(on, readerChatID: UUID()).call(name: "plan_writing_import", arguments: document)
+        }
+        let empty: [String: Value] = ["documents": .array([.object([
+            "path": .string("talks/empty.md"), "markdown": .string("# Empty\n"),
+        ])])]
+        await #expect(throws: LampMCPToolError.self) {
+            try await handler(on).call(name: "import_writings", arguments: empty)
+        }
+        #expect(LampWritingImportRequests.pending(inApplicationSupport: on.support).isEmpty)
+        await #expect(throws: LampMCPToolError.invalidArgument("path", "Give the folder or file as an absolute path.")) {
+            try await handler(on).call(name: "plan_writing_import", arguments: ["path": .string("bundle")])
         }
     }
 

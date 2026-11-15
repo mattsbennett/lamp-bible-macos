@@ -7,6 +7,25 @@ struct PendingWritingImport: Identifiable {
     let id = UUID()
     let sourceName: String
     let plan: LampWritingImportPlan
+    /// Set when an agent asked for this import (`import_writings`), so what
+    /// the person decides can be left for it to read.
+    var requestID: String?
+    /// What the agent wanted the person to know.
+    var note: String?
+}
+
+/// Brings the Import window forward when an agent's import is waiting for
+/// review, since its sheet is shown there. Put on each reader window.
+struct WritingImportReviewOpener: ViewModifier {
+    @EnvironmentObject private var model: LibraryModel
+    @Environment(\.openWindow) private var openWindow
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: model.pendingWritingImport?.requestID, initial: true) { _, requestID in
+                if requestID != nil { openWindow(id: "add-to-library") }
+            }
+    }
 }
 
 /// What importing a folder or files of writing would do, file by file, with
@@ -16,14 +35,20 @@ struct PendingWritingImport: Identifiable {
 struct WritingImportSheet: View {
     let pending: PendingWritingImport
     let onImport: (Set<String>) -> Void
+    let onCancel: () -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var selection: Set<String>
     @State private var onlyWithNotes = false
 
-    init(pending: PendingWritingImport, onImport: @escaping (Set<String>) -> Void) {
+    init(
+        pending: PendingWritingImport,
+        onImport: @escaping (Set<String>) -> Void,
+        onCancel: @escaping () -> Void = {}
+    ) {
         self.pending = pending
         self.onImport = onImport
+        self.onCancel = onCancel
         _selection = State(initialValue: Set(
             pending.plan.items.filter(\.importsByDefault).map(\.id)
         ))
@@ -54,6 +79,16 @@ struct WritingImportSheet: View {
                     .lineLimit(2)
                 Text(summary)
                     .foregroundStyle(.secondary)
+                if pending.requestID != nil {
+                    Label(
+                        pending.note.map { "Asked for by an agent: \($0)" }
+                            ?? "Asked for by an agent.",
+                        systemImage: "sparkles"
+                    )
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 4)
+                }
             }
 
             List {
@@ -90,7 +125,10 @@ struct WritingImportSheet: View {
 
             HStack {
                 Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }
+                Button("Cancel", role: .cancel) {
+                    onCancel()
+                    dismiss()
+                }
                     .keyboardShortcut(.cancelAction)
                 Button(selection.count == 1 ? "Import 1 Writing" : "Import \(selection.count) Writings") {
                     onImport(selection)

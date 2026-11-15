@@ -82,6 +82,7 @@ struct LampBibleMacApp: App {
     var body: some Scene {
         WindowGroup("Lamp Bible", id: "reader") {
             LibraryRootView()
+                .modifier(WritingImportReviewOpener())
                 .environmentObject(libraryModel)
                 .environmentObject(syncController)
                 .environmentObject(scrollLink)

@@ -373,7 +373,7 @@ public enum LampMCPToolCatalog {
     public static func tools(workspace: Bool) -> [Tool] {
         // `workspaceTools` is offered either way now: with a workspace it
         // serves that writing, and without one it takes a named writing.
-        tools + deckTools + writingTools + writeTools + workspaceTools
+        tools + deckTools + writingTools + writeTools + writingImportTools + workspaceTools
     }
 
     /// The tools that change something of the user's.
@@ -485,6 +485,100 @@ public enum LampMCPToolCatalog {
                 openWorldHint: false
             )
         ),
+    ]
+
+    /// Bringing writing in from files: check, then ask Lamp to show it for
+    /// review. Nothing an agent sends is imported until the person ticks it in
+    /// Lamp's review sheet, so these never write the library themselves.
+    public static let writingImportTools: [Tool] = [
+        tool(
+            "plan_writing_import",
+            """
+            Check Markdown files as Lamp would import them as writing, and \
+            return what each would become — create, update, unchanged, \
+            conflict or rejected — with errors (which stop that file), \
+            warnings and what Lamp tidied. Writes nothing. Run it until no \
+            file you mean to import is rejected, then import_writings. Read \
+            the import-lamp-writing skill first for the format. Compared with \
+            the person's writing only when Lamp shares personal writing with \
+            agents; otherwise every file reads as new, and says so.
+            """,
+            properties: writingImportProperties,
+            requiredAnyOf: ["path", "documents"]
+        ),
+        Tool(
+            name: "import_writings",
+            description: """
+            Ask Lamp to import Markdown files as writing. Needs "Allow agents \
+            to start a writing" in Lamp's Settings, under AI & Agents. Nothing \
+            is imported when this returns: Lamp shows the files in its review \
+            sheet, the next time it comes to the front or is opened, and \
+            imports only the writings the person ticks there. Tell them it is \
+            waiting for them in Lamp, not that it is done. The files' text is \
+            taken now, so later changes to them are not part of this request. \
+            writing_import_status says what they chose.
+            """,
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object(writingImportProperties.merging([
+                    "note": string(
+                        "Optional sentence for the person, shown above the files "
+                            + "in Lamp's review sheet: what these are and anything "
+                            + "you were unsure of."
+                    ),
+                ]) { first, _ in first }),
+                "additionalProperties": .bool(false),
+                "anyOf": .array([
+                    .object(["required": .array([.string("path")])]),
+                    .object(["required": .array([.string("documents")])]),
+                ]),
+            ]),
+            annotations: .init(
+                readOnlyHint: false,
+                // The person reviews it, but what they accept can replace a
+                // writing's text.
+                destructiveHint: true,
+                idempotentHint: false,
+                openWorldHint: false
+            )
+        ),
+        tool(
+            "writing_import_status",
+            """
+            Whether the person has reviewed a writing import yet, and if so \
+            which files' writings were imported. Pass the request_id \
+            import_writings returned.
+            """,
+            properties: [
+                "request_id": string("The request_id import_writings returned."),
+            ],
+            required: ["request_id"]
+        ),
+    ]
+
+    static let writingImportProperties: [String: Value] = [
+        "path": string(
+            "Absolute path of a folder of Markdown files, or of one .md file. A "
+                + "folder's lamp-import.json, if present, names the files that "
+                + "are writing."
+        ),
+        "documents": .object([
+            "type": .string("array"),
+            "description": .string(
+                "Instead of path, the files themselves. A document with no id "
+                    + "in its front matter takes one from its path, so give the "
+                    + "same path each time for the same writing."
+            ),
+            "items": .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "path": string("Where the file sits, as folder/name.md."),
+                    "markdown": string("The file's complete text."),
+                ]),
+                "required": .array([.string("path"), .string("markdown")]),
+                "additionalProperties": .bool(false),
+            ]),
+        ]),
     ]
 
     /// What both reading-plan tools take: the same things Lamp's own New

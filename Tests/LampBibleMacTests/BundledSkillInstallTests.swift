@@ -210,7 +210,8 @@ struct BundledSkillInstallTests {
         #expect(WorkspaceSkillStore.readOnlyBundledSkillNames.contains("sola-scriptura"))
         #expect(WorkspaceSkillStore.readOnlyBundledSkillNames.contains("original-languages"))
         #expect(WorkspaceSkillStore.bundledSkills.filter(\.writesFiles).map(\.name)
-            == ["build-lamp-deck"])
+            == ["build-lamp-deck", "import-lamp-writing"])
+        #expect(!WorkspaceSkillStore.readOnlyBundledSkillNames.contains("import-lamp-writing"))
     }
 
     /// A built-in stays out of the custom catalog however it got there, so a

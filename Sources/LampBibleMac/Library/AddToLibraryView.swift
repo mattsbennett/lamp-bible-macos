@@ -108,7 +108,10 @@ struct AddToLibraryView: View {
         .frame(minWidth: 980, minHeight: 600)
         // A confirmation belongs to the pane that was showing when its import
         // ran. Switching panes, or opening the window again, starts clean.
-        .onAppear { clearConfirmation() }
+        .onAppear {
+            clearConfirmation()
+            if model.pendingWritingImport != nil { selection = .importStudyData }
+        }
         .onChange(of: selection) { _, _ in clearConfirmation() }
         .fileImporter(
             isPresented: $showingModuleImporter,
@@ -166,9 +169,11 @@ struct AddToLibraryView: View {
             }
         }
         .sheet(item: $model.pendingWritingImport) { pending in
-            WritingImportSheet(pending: pending) { selection in
-                model.applyWritingImport(pending, selecting: selection)
-            }
+            WritingImportSheet(
+                pending: pending,
+                onImport: { model.applyWritingImport(pending, selecting: $0) },
+                onCancel: { model.cancelWritingImport(pending) }
+            )
         }
         .alert(
             "Lamp Bible",

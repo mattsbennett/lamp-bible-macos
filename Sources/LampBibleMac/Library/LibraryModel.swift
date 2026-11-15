@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import LampCore
 #if canImport(LampBibleMacSupport)
@@ -309,6 +310,16 @@ final class LibraryModel: ObservableObject {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.aiPreferencesChanged() }
         }
+        // An agent outside Lamp asks for an import while the person is in
+        // that app; coming back to Lamp is when they can review it.
+        activationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                Task { await self.takeInRequestedWritingImport() }
+            }
+        }
         readerTurnObserver = NotificationCenter.default.addObserver(
             forName: .lampReaderChatTurnFinished, object: nil, queue: .main
         ) { [weak self] _ in
@@ -325,6 +336,7 @@ final class LibraryModel: ObservableObject {
         aiSettleTask?.cancel()
         if let aiFeaturesObserver { NotificationCenter.default.removeObserver(aiFeaturesObserver) }
         if let readerTurnObserver { NotificationCenter.default.removeObserver(readerTurnObserver) }
+        if let activationObserver { NotificationCenter.default.removeObserver(activationObserver) }
     }
 
     /// Reads the library for the first time. No reader is open yet to read
@@ -367,6 +379,7 @@ final class LibraryModel: ObservableObject {
     private var lastAIFeaturesEnabled: Bool?
     private var aiFeaturesObserver: NSObjectProtocol?
     private var readerTurnObserver: NSObjectProtocol?
+    private var activationObserver: NSObjectProtocol?
     /// When this run of Lamp began, which says whether a reply that asked
     /// for a writing can still finish: one from an earlier run cannot.
     private let launchedAt = Date()
@@ -668,6 +681,12 @@ final class LibraryModel: ObservableObject {
         Task {
             do {
                 let result = try await library.applyWritingImport(pending.plan, selecting: itemIDs)
+                decideWritingImportRequest(pending, outcome: .init(
+                    requestID: pending.requestID ?? "",
+                    imported: result.imported.map(\.path),
+                    refused: result.refused.map(\.path),
+                    cancelled: false
+                ))
                 await refreshLibrary()
                 let count = result.imported.count
                 var message = "Imported \(count) writing\(count == 1 ? "" : "s")."
@@ -679,6 +698,58 @@ final class LibraryModel: ObservableObject {
                 errorMessage = error.localizedDescription
             }
             isImportingStudyData = false
+        }
+    }
+
+    func cancelWritingImport(_ pending: PendingWritingImport) {
+        decideWritingImportRequest(pending, outcome: .init(
+            requestID: pending.requestID ?? "", imported: [], refused: [], cancelled: true
+        ))
+    }
+
+    /// Leaves what the person chose for the agent that asked, and shows the
+    /// next import waiting, if any.
+    private func decideWritingImportRequest(
+        _ pending: PendingWritingImport,
+        outcome: LampWritingImportRequests.Outcome,
+        applicationSupportURL: URL? = LampAgentDescriptorStore.defaultApplicationSupportURL()
+    ) {
+        guard pending.requestID != nil, let applicationSupportURL else { return }
+        do {
+            try LampWritingImportRequests.decide(outcome, inApplicationSupport: applicationSupportURL)
+        } catch {
+            errorMessage = "Could not record the writing import\u{2019}s review: \(error.localizedDescription)"
+        }
+        Task {
+            // After the sheet has gone, so the next one is a new presentation.
+            try? await Task.sleep(for: .milliseconds(400))
+            await takeInRequestedWritingImport()
+        }
+    }
+
+    /// Shows the oldest writing import an agent has asked for, for review.
+    /// One at a time, and never over an import the person is choosing.
+    /// Behind the AI switch: an agent's import is an AI feature; the Import
+    /// window's own files are not.
+    func takeInRequestedWritingImport(
+        applicationSupportURL: URL? = LampAgentDescriptorStore.defaultApplicationSupportURL()
+    ) async {
+        guard settleAIFeatures(), let applicationSupportURL,
+              pendingWritingImport == nil, !isImportingStudyData,
+              let request = LampWritingImportRequests.pending(
+                inApplicationSupport: applicationSupportURL
+              ).first else { return }
+        do {
+            let plan = try await library.planWritingImport(request.files.map(\.importFile))
+            guard pendingWritingImport == nil else { return }
+            pendingWritingImport = PendingWritingImport(
+                sourceName: request.sourceName,
+                plan: plan,
+                requestID: request.id,
+                note: request.note
+            )
+        } catch {
+            errorMessage = "Could not read the writing import an agent asked for: \(error.localizedDescription)"
         }
     }
 
@@ -1307,6 +1378,7 @@ final class LibraryModel: ObservableObject {
 
     private func takeInRequestedWritingsOnce(applicationSupportURL: URL?) async {
         guard settleAIFeatures(), let applicationSupportURL else { return }
+        await takeInRequestedWritingImport(applicationSupportURL: applicationSupportURL)
         let waiting = LampWritingStarts.pending(inApplicationSupport: applicationSupportURL)
         guard !waiting.isEmpty else { return }
         var started: [String] = []

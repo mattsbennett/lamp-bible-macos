@@ -186,6 +186,16 @@ public actor LampMCPToolHandler {
         case "start_writing":
             return try startWriting(arguments)
 
+        case "plan_writing_import":
+            let files = try writingImportFiles(arguments)
+            return try result(try await library.planWritingImport(files.files).report)
+
+        case "import_writings":
+            return try await importWritings(arguments)
+
+        case "writing_import_status":
+            return try writingImportStatus(arguments)
+
         case "list_books":
             return try result(try await library.listBooks())
 
@@ -488,6 +498,95 @@ public actor LampMCPToolHandler {
         ))
     }
 
+    /// The files a writing import names: a folder or file on this Mac, or
+    /// documents passed in. A reader chat has no files, and is the read-only
+    /// surface, so it is refused.
+    private func writingImportFiles(
+        _ arguments: [String: Value]
+    ) throws -> (files: [LampWritingImportFile], sourceName: String) {
+        guard readerChatID == nil else { throw LampMCPToolError.writingImportNotHere }
+        if let path = arguments["path"]?.stringValue {
+            let expanded = (path as NSString).expandingTildeInPath
+            guard expanded.hasPrefix("/") else {
+                throw LampMCPToolError.invalidArgument("path", "Give the folder or file as an absolute path.")
+            }
+            let url = URL(fileURLWithPath: expanded)
+            return (try LampWritingImport.files(at: url), url.lastPathComponent)
+        }
+        guard case .array(let documents)? = arguments["documents"], !documents.isEmpty else {
+            throw LampMCPToolError.missingArgument("path")
+        }
+        let files = try documents.map { document -> LampWritingImportFile in
+            guard case .object(let fields) = document,
+                  let path = fields["path"]?.stringValue,
+                  let markdown = fields["markdown"]?.stringValue else {
+                throw LampMCPToolError.invalidArgument(
+                    "documents", "Each document needs a path and its markdown."
+                )
+            }
+            return LampWritingImportFile(path: path, markdown: markdown)
+        }
+        return (files, files.count == 1 ? (files[0].path as NSString).lastPathComponent : "\(files.count) documents")
+    }
+
+    /// Writes an import down for Lamp to show for review, and says that this
+    /// is what happened. Planned here first, so a request with nothing Lamp
+    /// could import is refused while the agent is there to fix it.
+    private func importWritings(_ arguments: [String: Value]) async throws -> CallTool.Result {
+        guard allowsWritingStarts else { throw LampMCPToolError.writingImportsNotAllowed }
+        guard let applicationSupportURL else { throw LampMCPToolError.nowhereToLeaveAPlan }
+        let (files, sourceName) = try writingImportFiles(arguments)
+        let plan = try await library.planWritingImport(files)
+        guard plan.items.contains(where: { $0.action != .rejected }) else {
+            throw LampMCPToolError.invalidArgument(
+                "path", "No file here can be imported; plan_writing_import says why for each."
+            )
+        }
+        let note = arguments["note"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let request = LampWritingImportRequests.Request(
+            sourceName: sourceName,
+            files: files.map(LampWritingImportRequests.File.init),
+            note: note?.isEmpty == false ? note : nil
+        )
+        try LampWritingImportRequests.write(request, inApplicationSupport: applicationSupportURL)
+        return try result(WritingImportQueued(
+            requestID: request.id,
+            queued: true,
+            report: plan.report,
+            message: """
+            Written down for Lamp. Nothing is in the library yet: Lamp shows \
+            these files in its review sheet the next time it comes to the \
+            front or is opened, and imports only the writings the person \
+            ticks there. Tell them it is waiting for their review in Lamp. \
+            writing_import_status with this request_id says what they chose.
+            """
+        ))
+    }
+
+    private func writingImportStatus(_ arguments: [String: Value]) throws -> CallTool.Result {
+        guard let applicationSupportURL else { throw LampMCPToolError.nowhereToLeaveAPlan }
+        let id = try requiredString("request_id", in: arguments)
+        switch LampWritingImportRequests.status(id: id, inApplicationSupport: applicationSupportURL) {
+        case .waiting:
+            return try result(WritingImportStatus(
+                requestID: id, state: "waiting", imported: [], refused: [],
+                message: "Waiting for the person to review it in Lamp."
+            ))
+        case .decided(let outcome):
+            return try result(WritingImportStatus(
+                requestID: id,
+                state: outcome.cancelled ? "cancelled" : "reviewed",
+                imported: outcome.imported,
+                refused: outcome.refused,
+                message: outcome.cancelled
+                    ? "The person cancelled the review; nothing was imported."
+                    : "Reviewed. The writings from the files in `imported` are in the library; any file not listed was left out by the person or could not be imported."
+            ))
+        case .unknown:
+            throw LampMCPToolError.invalidArgument("request_id", "Lamp has no writing import with that id.")
+        }
+    }
+
     private func startWriting(_ arguments: [String: Value]) throws -> CallTool.Result {
         guard allowsWritingStarts else { throw LampMCPToolError.writingStartsNotAllowed }
         guard let applicationSupportURL else { throw LampMCPToolError.nowhereToLeaveAPlan }
@@ -578,7 +677,7 @@ public actor LampMCPToolHandler {
             .flatMap { (try? fileManager.contentsOfDirectory(atPath: $0.path)) ?? [] }
             .filter { !$0.hasPrefix(".") }
         let names = Set(available).filter {
-            !bundled || LampBundledSkills.studySkillNames.contains($0)
+            !bundled || LampBundledSkills.externalSkillNames.contains($0)
         }.sorted()
         guard let name else {
             return SkillReading(available: names, skill: nil, file: nil, text: nil)
@@ -788,6 +887,21 @@ struct ReadingPlanAddition: Codable, Sendable {
 
 /// What `start_writing` did, as the agent is told it. As with a plan, there
 /// is no field saying the writing exists: Lamp makes it, later.
+struct WritingImportQueued: Codable, Sendable {
+    var requestID: String
+    var queued: Bool
+    var report: LampWritingImportReport
+    var message: String
+}
+
+struct WritingImportStatus: Codable, Sendable {
+    var requestID: String
+    var state: String
+    var imported: [String]
+    var refused: [String]
+    var message: String
+}
+
 struct WritingStart: Codable, Sendable {
     var writingID: String
     var title: String
@@ -849,6 +963,8 @@ public enum LampMCPToolError: Error, LocalizedError, Equatable, Sendable {
     case writingNotAllowed
     case readingPlansNotAllowed
     case writingStartsNotAllowed
+    case writingImportsNotAllowed
+    case writingImportNotHere
     case nowhereToLeaveAPlan
 
     public var errorDescription: String? {
@@ -905,6 +1021,20 @@ public enum LampMCPToolError: Error, LocalizedError, Equatable, Sendable {
             to start a writing" in Lamp's Settings, under AI & Agents. It is \
             off until the reader turns it on. Nothing was started, so tell \
             the user that rather than that a writing exists.
+            """
+        case .writingImportsNotAllowed:
+            """
+            Lamp is not letting agents bring in writing. Turn on "Allow agents \
+            to start a writing" in Lamp's Settings, under AI & Agents; even \
+            then, nothing is imported until the person reviews it in Lamp. \
+            plan_writing_import works either way. Nothing was sent to Lamp, so \
+            tell the user that rather than that it is waiting.
+            """
+        case .writingImportNotHere:
+            """
+            A reader chat cannot import writing: it has no files, and only \
+            reads. Import from a writing's agent chat in Lamp, or from an app \
+            outside Lamp connected to it.
             """
         case .nowhereToLeaveAPlan:
             """

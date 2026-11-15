@@ -50,6 +50,7 @@ public enum WorkspaceSkillStore {
     /// spent the reader's time.
     public static let bundledSkills: [(name: String, writesFiles: Bool)] = [
         ("build-lamp-deck", true),
+        ("import-lamp-writing", true),
         ("original-languages", false),
         ("sola-scriptura", false),
     ]

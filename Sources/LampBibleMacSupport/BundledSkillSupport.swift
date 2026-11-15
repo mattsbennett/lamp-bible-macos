@@ -5,6 +5,13 @@ import Foundation
 public enum LampBundledSkills {
     public static let studySkillNames: Set<String> = ["original-languages", "sola-scriptura"]
 
+    /// What an app outside Lamp can read with `read_skill`: the study skills,
+    /// and the writing import's format, which such an app needs to build an
+    /// import and has no workspace to find it in.
+    public static var externalSkillNames: Set<String> {
+        studySkillNames.union(["import-lamp-writing"])
+    }
+
     public static var catalogURL: URL? {
         #if SWIFT_PACKAGE
         let resources = Bundle.module.resourceURL
@@ -33,7 +40,7 @@ public enum LampBundledSkills {
     public static func read(
         name: String, file: String = "SKILL.md", catalogURL: URL? = LampBundledSkills.catalogURL
     ) throws -> String {
-        guard studySkillNames.contains(name), let catalogURL else {
+        guard externalSkillNames.contains(name), let catalogURL else {
             throw SkillError.unavailable(name)
         }
         return try read(file: file, inside: catalogURL.appendingPathComponent(name))
