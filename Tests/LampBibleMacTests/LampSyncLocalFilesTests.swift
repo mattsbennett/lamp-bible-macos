@@ -105,13 +105,32 @@ struct LampSyncLocalFilesTests {
         #expect(placed.unplaceable.map(\.path) == ["translation/../escape"])
     }
 
+    /// An installed writing module called `writing` would be published at
+    /// `Writing/writing.lamp`, where every writing is, and hide them. It is
+    /// kept here and said so, and an installed one called `notes` too.
+    @Test func anInstalledModuleNamedForACollectionIsKeptHere() throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let onDisk = directory.appendingPathComponent("stored.lamp")
+        try Data("x".utf8).write(to: onDisk)
+
+        let placed = LampSyncLocalFiles.installedModules([
+            module(id: "writing", kind: .devotional, at: onDisk),
+            module(id: "notes", kind: .notes, at: onDisk),
+            module(id: "sermons", kind: .devotional, at: onDisk),
+        ])
+
+        #expect(placed.candidates.map(\.path) == ["Writing/sermons.lamp"])
+        #expect(placed.unplaceable.map(\.path) == ["Writing/writing.lamp", "Notes/notes.lamp"])
+    }
+
     @Test func aPersonalModuleIsPlacedUnderTheIdentityThePhoneUses() throws {
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appendingPathComponent("notes.lamp")
 
-        // The adapter rewrites the Mac's `personal-notes` to the phone's
-        // `notes` on the way out, so the published stem is the phone's.
+        // The Mac's `personal-notes` is published under the phone's
+        // `notes`, so the published stem is the phone's.
         let notes = try LampSyncLocalFiles.personalModuleCandidate(
             remoteModuleID: "notes", kind: .notes, at: url
         )
@@ -360,7 +379,9 @@ struct LampSyncLocalFilesTests {
         for kind in LampModuleKind.allCases {
             let url = library.appendingPathComponent("Modules/\(kind.rawValue).lamp")
             try write("a \(kind.rawValue)", at: "Modules/\(kind.rawValue).lamp", in: library)
-            modules.append(module(id: kind.rawValue, kind: kind, at: url))
+            // Not named for its kind: `notes` is the notes collection's ID,
+            // which an installed module never publishes under.
+            modules.append(module(id: "installed-\(kind.rawValue)", kind: kind, at: url))
         }
         try write("a picture", at: "Media/Books/atonement/plates/one.jpg", in: library)
         try write("an attachment", as: "sunrise.jpg", for: "w1", in: library)

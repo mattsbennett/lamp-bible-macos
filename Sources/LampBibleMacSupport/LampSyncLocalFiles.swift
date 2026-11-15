@@ -20,8 +20,20 @@ extension LampSyncLocalFiles {
         var unplaceable: [Unreadable] = []
         for module in modules {
             do {
+                let path = try module.syncPath()
+                // An installed module whose ID is a collection's, `notes` or
+                // `writing`, would be published at the path every note or
+                // every writing is published at, in their place. It stays on
+                // this Mac, and is said so, rather than hide the collection.
+                guard LampSyncLocalDeletion.target(of: path) != .collection else {
+                    unplaceable.append(Unreadable(
+                        path: path,
+                        reason: "Its ID, “\(module.module.id)”, is the one Lamp Bible publishes every note or writing under, so it is kept on this Mac rather than published."
+                    ))
+                    continue
+                }
                 candidates.append(Candidate(
-                    path: try module.syncPath(),
+                    path: path,
                     kind: .module(LampSyncContentKind(module.module.kind)),
                     url: module.fileURL
                 ))
