@@ -27,7 +27,7 @@
   - `create`: not in the library yet.
   - `update`: in the library, and the file is newer. `changes` names the fields that differ (`title`, `text`, `tags`, …).
   - `unchanged`: in the library exactly as the file has it. Nothing will be written.
-  - `conflict`: Lamp's copy may hold edits the person made there: it changed after this file was saved, or the file gives no time to tell (see `lastModified`). Lamp keeps their copy unless they choose the file's. Tell them; do not try to get around it.
+  - `conflict`: Lamp's copy may hold edits the person made there: it changed after this file was saved, or the file gives no time to tell (see `lastModified`), or Lamp found the writing only by a path from an earlier import. Lamp keeps their copy unless they choose the file's. Tell them; do not try to get around it.
   - `rejected`: cannot be imported as it is. `errors` says why. Fix the file, or leave it out on purpose and say so.
 - `warnings`: imported, but something will not come through as written. Fix what you can (HTML, links to other files, missing footnote definitions) and tell the person about the rest.
 - `normalized`: what Lamp tidied on the way in, such as a category filed under its usual name or an opening heading used as the title. Check these are what the writer meant.
