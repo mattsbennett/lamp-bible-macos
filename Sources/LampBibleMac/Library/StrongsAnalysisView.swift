@@ -2106,8 +2106,9 @@ struct StrongsAnalysisPane: View {
                 // Was under the Testaments' bars. The bars are two labelled
                 // rows and read as themselves; this is for the reader who
                 // asks why the two are not added together.
-                Text("The Testaments’ bars are counted apart and never added, "
-                    + "each against the larger.")
+                Text("The New Testament and the Septuagint are different texts, "
+                    + "so their verse counts are not added together. The bars only "
+                    + "compare one count with the other.")
                 if let contrast = LampSeptuagintSection.contrast(
                     newTestament: greekNewTestamentAnalysis, septuagint: own
                 ) {
@@ -2162,8 +2163,32 @@ struct StrongsAnalysisPane: View {
                 newTestament: greekNewTestamentAnalysis, septuagint: own
             ) {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("Verses in each Testament")
-                        .lampSectionHeading()
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("Verses in each Testament")
+                            .lampSectionHeading()
+                        Spacer(minLength: 8)
+                        if let newTestament = greekNewTestamentAnalysis {
+                            addToDeck(
+                                own,
+                                offersFilter: own.translationID == reader.translationID,
+                                [deckChart(
+                                own,
+                                name: "Testaments",
+                                by: .translation,
+                                translations: [newTestament.translationID, own.translationID],
+                                title: "\(headword(own)) in each Testament",
+                                // Occurrences, because that is what a chart
+                                // can count: `Measure` offers occurrences and
+                                // a per-thousand rate, and the bars above are
+                                // verses. The two differ wherever the word
+                                // stands twice in one verse, so the slide
+                                // says which it is rather than being read as
+                                // a picture of these bars.
+                                caption: "Occurrences, counted separately in each text"
+                            )]
+                            )
+                        }
+                    }
                     contrastBars(contrast)
                 }
             }
@@ -2174,17 +2199,29 @@ struct StrongsAnalysisPane: View {
                     // broken chart".
                     // The heading carries the chart's button, as the
                     // pane's other figures do, so it costs no row of its
-                    // own. The chart is of the *Septuagint's* analysis —
-                    // its own module and this Greek key — so Slide Studio
-                    // and the agent rebuild these very bars from the source
-                    // they already understand, with no new chart kind.
+                    // own. The chart is of the *Septuagint's* analysis — its
+                    // own module and this Greek key — so Slide Studio and
+                    // the agent rebuild it from a source they already
+                    // understand, with no new chart kind.
+                    //
+                    // Rebuilt, it keeps a book the word never stands in
+                    // where that absence is more than chance would give;
+                    // one whose absence is unremarkable is dropped, as are
+                    // all of them here. A slide is read without the pane
+                    // beside it, where a telling absence is a figure rather
+                    // than a gap, so the difference is deliberate — but it
+                    // is a difference, and this is not a picture of these
+                    // bars.
                     HStack(alignment: .firstTextBaseline) {
                         Text(chartMeasure == .perThousandWords
                             ? "Per 1,000 words in each book"
                             : "Occurrences in each book")
                             .lampSectionHeading()
                         Spacer(minLength: 8)
-                        addToDeck(own, [deckChart(
+                        addToDeck(
+                            own,
+                            offersFilter: own.translationID == reader.translationID,
+                            [deckChart(
                             own,
                             name: "In the Septuagint",
                             by: .book,
@@ -3312,6 +3349,7 @@ struct StrongsAnalysisPane: View {
         _ analysis: LampStrongsAnalysis,
         name: String,
         by grouping: LampPresentationChart.Grouping,
+        translations: [String]? = nil,
         feature: LampGrammarFeature? = nil,
         measure: LampPresentationChart.Measure = .occurrences,
         style: LampPresentationChart.Style? = nil,
@@ -3328,7 +3366,8 @@ struct StrongsAnalysisPane: View {
                     // reads `translations` instead: an empty ID would follow
                     // the chart into another grouping in Slide Studio.
                     translationID: analysis.translationID,
-                    range: deckRange
+                    range: deckRange,
+                    translations: translations
                 ),
                 by: grouping,
                 feature: feature,
@@ -3360,10 +3399,18 @@ struct StrongsAnalysisPane: View {
         measure == .perThousandWords ? .perThousandWords : .occurrences
     }
 
-    private func addToDeck(_ analysis: LampStrongsAnalysis, _ charts: [AnalysisDeckChart]) -> AddToDeckMenu {
+    /// `offersFilter` is false for a chart of another module. The pane's
+    /// filter is a rendering of the translation being read — "love" — and
+    /// the Septuagint's analysis is of the Greek text, where that rendering
+    /// matches nothing: the chart came out empty beside bars that were not.
+    private func addToDeck(
+        _ analysis: LampStrongsAnalysis,
+        offersFilter: Bool = true,
+        _ charts: [AnalysisDeckChart]
+    ) -> AddToDeckMenu {
         AddToDeckMenu(
             charts: charts,
-            filter: filter,
+            filter: offersFilter ? filter : nil,
             deckTitle: headword(analysis),
             deckSubtitle: entry?.shortGloss.flatMap { $0.isEmpty ? nil : $0 }
         )
