@@ -1174,6 +1174,7 @@ struct StrongsAnalysisPane: View {
     /// Whether every one of a Hebrew word's verses is listed, or only the
     /// ones the Septuagint renders with this Greek word.
     @State private var isShowingSeptuagintMethod = false
+    @State private var isShowingSeptuagintNarrowing = false
     /// Which English the verse rows read. Remembered, because it is a way of
     /// working rather than a thing done once.
     @AppStorage("studyInspector.septuagintEnglishIsDirect") private var readsSeptuagintInEnglish = true
@@ -1320,11 +1321,11 @@ struct StrongsAnalysisPane: View {
     /// tab that was always there and usually empty would promise a subject
     /// most keys do not have.
     ///
-    /// Before Verses, which is the occurrence list and belongs last.
+    /// Last, after Verses: the word's own text first, and the Greek Old
+    /// Testament it also stands in after (owner, Nov 2026).
     private var offeredSections: [Section] {
         guard hasSeptuagint, !sections.contains(.septuagint) else { return sections }
-        guard let index = sections.firstIndex(of: .verses) else { return sections + [.septuagint] }
-        return Array(sections[..<index]) + [.septuagint] + Array(sections[index...])
+        return sections + [.septuagint]
     }
 
     /// The section chosen, or the first offered: a pane that offers no
@@ -1831,7 +1832,6 @@ struct StrongsAnalysisPane: View {
             } else if !analysis.renderings.isEmpty {
                 group(
                     "Translated As",
-                    note: "What translators reached for, not what the word means.",
                     asRing: renderingsRing,
                     deck: addToDeck(analysis, [deckChart(
                         analysis, name: "Translated As", by: .rendering,
@@ -2037,11 +2037,6 @@ struct StrongsAnalysisPane: View {
         DisclosureGroup(isExpanded: $isShowingSeptuagintMethod) {
             VStack(alignment: .leading, spacing: 8) {
                 Text(LampSeptuagintSection.ownUseAbout)
-                // Only where the list has in fact been narrowed. Said of a
-                // list showing every verse it would be untrue.
-                if septuagintCrossing(own) != nil {
-                    Text(LampSeptuagintSection.renderedCaveat(greek: entry?.lemma))
-                }
                 // Only a text that declares its Strong's numbers were matched
                 // rather than printed carries this: a published tagged text
                 // makes no such claim about itself. The sentences are the
@@ -2180,11 +2175,14 @@ struct StrongsAnalysisPane: View {
                 }
                 .help("\(side.verseCount) verses of \(side.source)")
             }
-            Text(LampSeptuagintSection.contrastCaption(contrast))
-                .font(.system(size: Self.chartFinePrintSize))
-                .foregroundStyle(Color.lampSecondaryText)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 2)
+            let caption = LampSeptuagintSection.contrastCaption(contrast)
+            if !caption.isEmpty {
+                Text(caption)
+                    .font(.system(size: Self.chartFinePrintSize))
+                    .foregroundStyle(Color.lampSecondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 2)
+            }
         }
     }
 
@@ -2227,15 +2225,22 @@ struct StrongsAnalysisPane: View {
     /// Two sentences at most, and neither repeats the heading above them.
     /// Before the crossing lands there is only the first; the list is every
     /// verse then, and saying it was narrowed would be untrue.
+    ///
+    /// Now only what core says of a Septuagint that isn't tagged or isn't
+    /// looked up yet. A tagged one says nothing here: how far each list was
+    /// narrowed is in its heading ("130 of 158 verses using ὀργή") and, one
+    /// press away, in `septuagintNarrowing`; the paragraph that said it was
+    /// read as hedging (owner, Nov 2026).
     private var hebrewIntroduction: String {
-        let note = LampSeptuagintSection.note(
-            greek: entry?.lemma, septuagint: septuagint.tagging
-        )
-        guard let crossing = septuagintCrossing(septuagintOwnAnalysis) else { return note }
-        let narrowed = LampSeptuagintSection.renderedHeading(
-            greek: entry?.lemma, shown: crossing.shown, of: crossing.total
-        )
-        return narrowed.isEmpty ? note : note + " " + narrowed
+        LampSeptuagintSection.note(greek: entry?.lemma, septuagint: septuagint.tagging)
+    }
+
+    /// Every verse a Hebrew word stands in, within the chosen Septuagint
+    /// book: what a narrowed list was narrowed from.
+    private func hebrewVerseTotal(of word: SeptuagintLoader.Word) -> Int? {
+        guard let all = word.references else { return nil }
+        guard let book = septuagintBook else { return all.count }
+        return all.filter { $0 / 1_000_000 == book }.count
     }
 
     /// A Hebrew word's verses as listed: the ones the Septuagint renders
@@ -2265,6 +2270,33 @@ struct StrongsAnalysisPane: View {
         let total = septuagint.words.reduce(0) { $0 + inBook($1.references) }
         let shown = septuagint.words.reduce(0) { $0 + inBook(septuagint.renderedVerses[$1.id]) }
         return total > 0 ? (shown, total) : nil
+    }
+
+    /// How far the lists below are narrowed, one press away: the lists hold
+    /// the verses where the Septuagint uses this Greek word, not all the
+    /// Hebrew word's, and each heading says "of" how many. Only once the
+    /// crossing is done; said of an unnarrowed list it would be untrue.
+    @ViewBuilder
+    private var septuagintNarrowing: some View {
+        if let crossing = septuagintCrossing(septuagintOwnAnalysis) {
+            let narrowed = LampSeptuagintSection.renderedHeading(
+                greek: entry?.lemma, shown: crossing.shown, of: crossing.total
+            )
+            if !narrowed.isEmpty {
+                DisclosureGroup(isExpanded: $isShowingSeptuagintNarrowing) {
+                    Text(narrowed)
+                        .font(.system(size: Self.sectionProseSize))
+                        .foregroundStyle(Color.lampSecondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 6)
+                } label: {
+                    Text(LampSeptuagintSection.narrowingTitle)
+                        .font(.system(size: Self.sectionProseSize, weight: .medium))
+                        .foregroundStyle(Color.lampSecondaryText)
+                }
+                .disclosureGroupStyle(LampDisclosureStyle())
+            }
+        }
     }
 
     /// The Septuagint's own analysis among those the pane has read, when it
@@ -2326,10 +2358,13 @@ struct StrongsAnalysisPane: View {
                         greekChoice
                     }
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(hebrewIntroduction)
-                            .font(.system(size: Self.sectionProseSize))
-                            .foregroundStyle(Color.lampSecondaryText)
-                            .fixedSize(horizontal: false, vertical: true)
+                        if !hebrewIntroduction.isEmpty {
+                            Text(hebrewIntroduction)
+                                .font(.system(size: Self.sectionProseSize))
+                                .foregroundStyle(Color.lampSecondaryText)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        septuagintNarrowing
                         // Under the sentence it acts on, where a reader is
                         // looking by the time they want it, rather than
                         // floated up beside the first line of it.
@@ -2355,6 +2390,7 @@ struct StrongsAnalysisPane: View {
                                 usingGreek: septuagint.renderedVerses[word.id] == nil
                                     ? nil : entry?.lemma,
                                 references: references,
+                                total: hebrewVerseTotal(of: word),
                                 loader: septuagint,
                                 englishID: analysis.translationID,
                                 showsGreek: showsGreek,
@@ -3175,6 +3211,8 @@ struct StrongsAnalysisPane: View {
             let originalName = original.translationAbbreviation ?? original.translationName
             Button("Open in \(originalName)") { openIn(original.translationID) }
                 .controlSize(.small)
+                // Apart from the disclosure above it, which it is not part of.
+                .padding(.top, 8)
                 .help("Analyse \(analysis.key) in \(originalName), whose tags give each spelling and its grammar")
                 .padding(.bottom, 6)
         }
@@ -3455,6 +3493,9 @@ private struct SeptuagintWordGroup: View {
     /// Every verse the word stands in, which is the count in the heading even
     /// when only the first few are listed.
     let references: [Int]
+    /// How many verses the word stands in all told, for a narrowed list's
+    /// heading to say "of" how many.
+    var total: Int?
     let loader: SeptuagintLoader
     /// The translation whose English the verses are shown in: the one the
     /// analysis is of.
@@ -3543,6 +3584,7 @@ private struct SeptuagintWordGroup: View {
                 },
                 rendering: loader.renderings[word.id],
                 verses: references.count,
+                of: total,
                 usingGreek: usingGreek
             ))
                 // At reading size and in the text's own colour: in caption

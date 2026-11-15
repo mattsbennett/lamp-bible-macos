@@ -1714,7 +1714,8 @@ struct DevotionalEditorView: View {
             LampSegmentedPicker(
                 "Writing Surface",
                 selection: editorSurfaceSelection,
-                items: DevotionalEditorMode.allCases.map { .init(id: $0, title: $0.title) }
+                items: DevotionalEditorMode.allCases.map { .init(id: $0, title: $0.title) },
+                isCapsule: true
             )
             .disabled(!activeDocumentSupportsVisual)
             .help(activeDocumentSupportsVisual

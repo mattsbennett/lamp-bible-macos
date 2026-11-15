@@ -416,13 +416,26 @@ struct LampSegmentedPicker<ID: Hashable>: View {
     let label: String
     let items: [Item]
     @Binding var selection: ID
+    /// Rounded fully, track and chosen segment alike, for a toolbar: the
+    /// toolbar sets its items on capsules of glass, and a rounded-square
+    /// segment inside one reads as a corner that doesn't belong.
+    let isCapsule: Bool
     @Environment(\.controlSize) private var controlSize
     @Environment(\.isEnabled) private var isEnabled
 
-    init(_ label: String, selection: Binding<ID>, items: [Item]) {
+    init(_ label: String, selection: Binding<ID>, items: [Item], isCapsule: Bool = false) {
         self.label = label
         self._selection = selection
         self.items = items
+        self.isCapsule = isCapsule
+    }
+
+    /// The track's corners, or the chosen segment's two points inside them,
+    /// so the two curves keep the same centre.
+    private func shape(inset: CGFloat) -> AnyShape {
+        isCapsule
+            ? AnyShape(Capsule(style: .continuous))
+            : AnyShape(RoundedRectangle(cornerRadius: LampMetrics.tileRadius - inset, style: .continuous))
     }
 
     /// The chosen segment, raised off the track: white on light; on dark a
@@ -446,10 +459,7 @@ struct LampSegmentedPicker<ID: Hashable>: View {
             }
         }
         .padding(2)
-        .background(
-            Color.primary.opacity(0.07),
-            in: RoundedRectangle(cornerRadius: LampMetrics.tileRadius, style: .continuous)
-        )
+        .background(Color.primary.opacity(0.07), in: shape(inset: 0))
         .opacity(isEnabled ? 1 : 0.5)
         .fixedSize()
         .accessibilityElement(children: .contain)
@@ -476,12 +486,13 @@ struct LampSegmentedPicker<ID: Hashable>: View {
             .foregroundStyle(isChosen ? AnyShapeStyle(.primary) : AnyShapeStyle(Color.lampSecondaryText))
             .background {
                 if isChosen {
-                    RoundedRectangle(cornerRadius: LampMetrics.tileRadius - 2, style: .continuous)
+                    shape(inset: 2)
                         .fill(Self.chosenFill)
                         .shadow(color: .black.opacity(0.12), radius: 1, y: 0.5)
                         .overlay {
-                            RoundedRectangle(cornerRadius: LampMetrics.tileRadius - 2, style: .continuous)
-                                .strokeBorder(Color.lampCardStroke)
+                            shape(inset: 2)
+                                .stroke(Color.lampCardStroke, lineWidth: 1)
+                                .padding(0.5)
                         }
                 }
             }
