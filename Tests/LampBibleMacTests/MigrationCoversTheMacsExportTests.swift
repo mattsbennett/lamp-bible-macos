@@ -120,17 +120,17 @@ struct MigrationCoversTheMacsExportTests {
     private func makeWorkspace(in libraryRoot: URL) throws {
         try write(
             "# Notes toward Sunday",
-            at: "AgentWorkspaces/Devotionals/talk-123/outline.md",
+            at: "AgentWorkspaces/Writing/talk-123/outline.md",
             in: libraryRoot
         )
         try write(
             "a gathered fact",
-            at: "AgentWorkspaces/Devotionals/talk-123/context/fact.md",
+            at: "AgentWorkspaces/Writing/talk-123/context/fact.md",
             in: libraryRoot
         )
         try write(
             #"["lesson-builder"]"#,
-            at: "AgentWorkspaces/Devotionals/talk-123/.lamp/enabled-skills.json",
+            at: "AgentWorkspaces/Writing/talk-123/.lamp/enabled-skills.json",
             in: libraryRoot
         )
         try write(

@@ -178,9 +178,9 @@ struct WorkspaceContextFileStoreTests {
             libraryRoot = root.appendingPathComponent("Library", isDirectory: true)
             sourceDirectory = root.appendingPathComponent("Sources", isDirectory: true)
             firstWorkspace = libraryRoot
-                .appendingPathComponent("AgentWorkspaces/Devotionals/first", isDirectory: true)
+                .appendingPathComponent("AgentWorkspaces/Writing/first", isDirectory: true)
             secondWorkspace = libraryRoot
-                .appendingPathComponent("AgentWorkspaces/Devotionals/second", isDirectory: true)
+                .appendingPathComponent("AgentWorkspaces/Writing/second", isDirectory: true)
             try FileManager.default.createDirectory(
                 at: sourceDirectory,
                 withIntermediateDirectories: true

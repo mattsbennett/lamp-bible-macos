@@ -21,7 +21,7 @@ struct WorkspaceFileDeletionSyncTests {
             b = root.appendingPathComponent("Mac B", isDirectory: true)
             for library in [a, b] {
                 try FileManager.default.createDirectory(
-                    at: library.appendingPathComponent("AgentWorkspaces/Devotionals/\(devotional)"),
+                    at: library.appendingPathComponent("AgentWorkspaces/Writing/\(devotional)"),
                     withIntermediateDirectories: true
                 )
             }
@@ -42,7 +42,7 @@ struct WorkspaceFileDeletionSyncTests {
     }
 
     private func workspace(_ library: URL) -> URL {
-        library.appendingPathComponent("AgentWorkspaces/Devotionals/\(devotional)", isDirectory: true)
+        library.appendingPathComponent("AgentWorkspaces/Writing/\(devotional)", isDirectory: true)
     }
 
     private func write(_ text: String, to url: URL, at offset: TimeInterval) throws {

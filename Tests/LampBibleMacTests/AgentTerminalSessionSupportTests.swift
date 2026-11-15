@@ -292,7 +292,7 @@ struct AgentTerminalIngestTests {
 }
 
 struct AgentTerminalLaunchPlannerTests {
-    private let workspace = URL(fileURLWithPath: "/Users/someone/Library/Application Support/Lamp Bible/Library/AgentWorkspaces/Devotionals/talk-123")
+    private let workspace = URL(fileURLWithPath: "/Users/someone/Library/Application Support/Lamp Bible/Library/AgentWorkspaces/Writing/talk-123")
 
     private func request(
         _ provider: AgentChatWireProvider,

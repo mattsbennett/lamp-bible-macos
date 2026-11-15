@@ -219,12 +219,12 @@ struct LampSyncLocalFilesTests {
 
         try write(
             "# Notes toward Sunday",
-            at: "AgentWorkspaces/Devotionals/talk-123/outline.md",
+            at: "AgentWorkspaces/Writing/talk-123/outline.md",
             in: library
         )
         try write(
             "a gathered fact",
-            at: "AgentWorkspaces/Devotionals/talk-123/context/fact.md",
+            at: "AgentWorkspaces/Writing/talk-123/context/fact.md",
             in: library
         )
         // A deck, which the same exporter also writes.
@@ -398,7 +398,7 @@ struct LampSyncLocalFilesTests {
         )
         try write(
             "Notes on Isaiah.",
-            at: "AgentWorkspaces/Devotionals/advent/context/isaiah.md",
+            at: "AgentWorkspaces/Writing/advent/context/isaiah.md",
             in: library
         )
 

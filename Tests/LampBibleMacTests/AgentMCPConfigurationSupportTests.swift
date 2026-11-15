@@ -37,7 +37,7 @@ struct AgentMCPConfigurationSupportTests {
     /// history to read — so an agent is back to keeping its own copies of the
     /// draft to compare.
     @Test func namesTheWorkspaceSoTheWritingHistoryCanBeRead() {
-        let workspace = URL(fileURLWithPath: "/Users/Reader/Lamp Library/AgentWorkspaces/Devotionals/talk", isDirectory: true)
+        let workspace = URL(fileURLWithPath: "/Users/Reader/Lamp Library/AgentWorkspaces/Writing/talk", isDirectory: true)
         let withWorkspace = LampAgentMCPConfiguration(
             helperExecutableURL: URL(fileURLWithPath: "/tmp/lamp-mcp"),
             libraryRootURL: URL(fileURLWithPath: "/tmp/library"),

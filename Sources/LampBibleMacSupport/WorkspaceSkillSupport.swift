@@ -764,10 +764,7 @@ public enum WorkspaceSkillStore {
     }
 
     private static func devotionalWorkspacesDirectory(in libraryRootURL: URL) -> URL {
-        libraryRootURL.standardizedFileURL
-            .appendingPathComponent("AgentWorkspaces", isDirectory: true)
-            .appendingPathComponent("Devotionals", isDirectory: true)
-            .standardizedFileURL
+        LampWritingWorkspace.root(libraryRootURL: libraryRootURL.standardizedFileURL).standardizedFileURL
     }
 
     /// Where each provider looks for a workspace's skills. The copy Codex

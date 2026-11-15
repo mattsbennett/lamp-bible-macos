@@ -237,7 +237,7 @@ extension LampSyncLocalFiles {
     /// The files in the Mac's agent workspaces.
     ///
     /// Not enumerated from the library directly, because the published shape
-    /// is not the stored one: `AgentWorkspaces/Devotionals/<ws>/outline.md`
+    /// is not the stored one: `AgentWorkspaces/Writing/<ws>/outline.md`
     /// becomes `Workspaces/Writing/<ws>/Documents/outline.md`, with
     /// context, enabled skills, revisions and conversations each moved and
     /// some of them transformed. That mapping has one home — the exporter —

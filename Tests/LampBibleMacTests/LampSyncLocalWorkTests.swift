@@ -31,9 +31,9 @@ struct LampSyncLocalWorkTests {
             "Presentations/sunday.lampdeck",
             "Presentations/Assets/picture.png",
             "AgentSkills/write-a-devotional/SKILL.md",
-            "AgentWorkspaces/Devotionals/Advent/notes.md",
-            "AgentWorkspaces/Devotionals/Advent/context/isaiah.md",
-            "AgentWorkspaces/Devotionals/Advent/.lamp/DeletedFiles.json",
+            "AgentWorkspaces/Writing/Advent/notes.md",
+            "AgentWorkspaces/Writing/Advent/context/isaiah.md",
+            "AgentWorkspaces/Writing/Advent/.lamp/DeletedFiles.json",
             "Indexes/StrongsIndex.sqlite",
             "Bundled/bundled_modules.db.zlib",
         ] {
@@ -202,7 +202,7 @@ struct LampSyncLocalWorkTests {
         let before = marks(library)
 
         let document = library
-            .appendingPathComponent("AgentWorkspaces/Devotionals/Advent/notes.md")
+            .appendingPathComponent("AgentWorkspaces/Writing/Advent/notes.md")
         try write("What Advent is for.", to: document)
         try fileManager.setAttributes([.modificationDate: newer], ofItemAtPath: document.path)
 
@@ -217,7 +217,7 @@ struct LampSyncLocalWorkTests {
         try write(
             "Isaiah 40",
             to: library.appendingPathComponent(
-                "AgentWorkspaces/Devotionals/Advent/context/isaiah-40.md"
+                "AgentWorkspaces/Writing/Advent/context/isaiah-40.md"
             )
         )
 
@@ -244,7 +244,7 @@ struct LampSyncLocalWorkTests {
     @Test func whatAPassWritesBesideAWorkspaceIsNotWork() throws {
         let library = try makeLibrary()
         defer { try? fileManager.removeItem(at: library) }
-        let workspace = library.appendingPathComponent("AgentWorkspaces/Devotionals/Advent")
+        let workspace = library.appendingPathComponent("AgentWorkspaces/Writing/Advent")
         let before = marks(library)
 
         var ledger = WorkspaceFileLedger.load(in: workspace)
@@ -261,7 +261,7 @@ struct LampSyncLocalWorkTests {
     @Test func generatedWorkspaceDocumentsAreNotWork() throws {
         let library = try makeLibrary()
         defer { try? fileManager.removeItem(at: library) }
-        let workspace = library.appendingPathComponent("AgentWorkspaces/Devotionals/Advent")
+        let workspace = library.appendingPathComponent("AgentWorkspaces/Writing/Advent")
         let before = marks(library)
 
         for generated in ["agents.md", "claude.md", "devotional_context.md", "draft.md"] {

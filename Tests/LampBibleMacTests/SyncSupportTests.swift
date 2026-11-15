@@ -98,13 +98,41 @@ import Testing
     }
 
 
+    /// The per-file sync publishes writing workspaces under
+    /// `Workspaces/Writing`, and takes them in from there; a backup keeps
+    /// `Workspaces/Devotionals`, which every backup already made holds.
+    @Test func aWorkspaceTravelsUnderEachLayoutsOwnFolder() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-workspace-folders-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("Source", isDirectory: true)
+        let workspace = source.appendingPathComponent("AgentWorkspaces/Writing/talk", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        try Data("Outline".utf8).write(to: workspace.appendingPathComponent("outline.md"))
+
+        let perFile = root.appendingPathComponent("PerFile", isDirectory: true)
+        try LampWorkspaceSync.exportPortableWorkspaces(from: source, to: perFile, writingFolder: .perFile)
+        #expect(FileManager.default.fileExists(atPath: perFile.appendingPathComponent("Workspaces/Writing/talk/Documents/outline.md").path))
+        #expect(!FileManager.default.fileExists(atPath: perFile.appendingPathComponent("Workspaces/Devotionals").path))
+
+        let backup = root.appendingPathComponent("Backup", isDirectory: true)
+        try LampWorkspaceSync.exportPortableWorkspaces(from: source, to: backup)
+        #expect(FileManager.default.fileExists(atPath: backup.appendingPathComponent("Workspaces/Devotionals/talk/Documents/outline.md").path))
+
+        let destination = root.appendingPathComponent("Destination", isDirectory: true)
+        try LampWorkspaceSync.importPortableWorkspaces(from: perFile, into: destination, writingFolder: .perFile)
+        #expect(try String(
+            contentsOf: destination.appendingPathComponent("AgentWorkspaces/Writing/talk/outline.md"), encoding: .utf8
+        ) == "Outline")
+    }
+
     @Test func exportsAndImportsPortableWorkspaceContent() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("lamp-workspace-sync-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let sourceLibrary = root.appendingPathComponent("Source Library", isDirectory: true)
         let workspace = sourceLibrary
-            .appendingPathComponent("AgentWorkspaces/Devotionals/talk-123", isDirectory: true)
+            .appendingPathComponent("AgentWorkspaces/Writing/talk-123", isDirectory: true)
         let context = workspace.appendingPathComponent("context/Research", isDirectory: true)
         let customSkill = workspace.appendingPathComponent(
             ".agents/skills/series-planner/references",
@@ -190,7 +218,7 @@ import Testing
         try FileManager.default.createDirectory(at: destinationLibrary, withIntermediateDirectories: true)
         try LampWorkspaceSync.importPortableWorkspaces(from: backup, into: destinationLibrary)
         let importedWorkspace = destinationLibrary.appendingPathComponent(
-            "AgentWorkspaces/Devotionals/talk-123",
+            "AgentWorkspaces/Writing/talk-123",
             isDirectory: true
         )
         #expect(try String(
@@ -237,7 +265,7 @@ import Testing
             isDirectory: true
         )
         let localWorkspace = root.appendingPathComponent(
-            "Library/AgentWorkspaces/Devotionals/talk-123",
+            "Library/AgentWorkspaces/Writing/talk-123",
             isDirectory: true
         )
         try FileManager.default.createDirectory(at: backupDocuments, withIntermediateDirectories: true)
@@ -303,7 +331,7 @@ import Testing
         )
 
         let workspace = library.appendingPathComponent(
-            "AgentWorkspaces/Devotionals/talk-123",
+            "AgentWorkspaces/Writing/talk-123",
             isDirectory: true
         )
         #expect(FileManager.default.fileExists(
@@ -455,7 +483,7 @@ struct WorkspaceConversationAndHistorySyncTests {
 
     private func workspace(in library: URL) throws -> URL {
         let workspace = library.appendingPathComponent(
-            "AgentWorkspaces/Devotionals/talk-123",
+            "AgentWorkspaces/Writing/talk-123",
             isDirectory: true
         )
         try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)

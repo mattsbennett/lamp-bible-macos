@@ -162,11 +162,11 @@ struct WorkspaceSkillStoreTests {
                 .appendingPathComponent("lamp-skills-\(UUID().uuidString)", isDirectory: true)
             libraryRoot = root.appendingPathComponent("Library", isDirectory: true)
             firstWorkspace = libraryRoot.appendingPathComponent(
-                "AgentWorkspaces/Devotionals/first",
+                "AgentWorkspaces/Writing/first",
                 isDirectory: true
             )
             secondWorkspace = libraryRoot.appendingPathComponent(
-                "AgentWorkspaces/Devotionals/second",
+                "AgentWorkspaces/Writing/second",
                 isDirectory: true
             )
         }

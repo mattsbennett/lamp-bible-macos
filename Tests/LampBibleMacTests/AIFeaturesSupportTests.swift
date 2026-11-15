@@ -33,7 +33,7 @@ struct AIFeaturesSupportTests {
     @Test func aWritingWorkspaceWithoutAnAgentIsNotUse() throws {
         let (root, defaults, suite) = try scratch()
         defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: root) }
-        let folder = root.appendingPathComponent("AgentWorkspaces/Devotionals/gideon", isDirectory: true)
+        let folder = root.appendingPathComponent("AgentWorkspaces/Writing/gideon", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try Data().write(to: folder.appendingPathComponent("presentation.lampdeck"))
         #expect(!AIFeatures.libraryUsesAI(libraryRootURL: root, defaults: defaults))

@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Where a writing's agent workspace lives, and what is in it.
 ///
@@ -16,12 +17,64 @@ public enum LampWritingWorkspace {
     public static let contextFilename = "DEVOTIONAL_CONTEXT.md"
     public static let identifierFilename = "DEVOTIONAL_ID"
 
-    /// `<library>/AgentWorkspaces/Devotionals/<folder>`.
+    /// `<library>/AgentWorkspaces/Writing/<folder>`.
     public static func url(libraryRootURL: URL, writingID: String) -> URL {
-        libraryRootURL
-            .appendingPathComponent("AgentWorkspaces", isDirectory: true)
-            .appendingPathComponent("Devotionals", isDirectory: true)
+        root(libraryRootURL: libraryRootURL)
             .appendingPathComponent(directoryName(for: writingID), isDirectory: true)
+    }
+
+    /// `<library>/AgentWorkspaces/Writing`, where every writing's workspace
+    /// is, and the one place that says so: the app, its sync and the helper
+    /// all ask here.
+    ///
+    /// It was `AgentWorkspaces/Devotionals` until writing was renamed with
+    /// sync's bundle format 4, and the first ask in each process moves an
+    /// earlier library's folder (`moveEarlierFolder`), so nothing that finds
+    /// a workspace can look before the move.
+    public static func root(libraryRootURL: URL, fileManager: FileManager = .default) -> URL {
+        let workspaces = libraryRootURL.appendingPathComponent("AgentWorkspaces", isDirectory: true)
+        let root = workspaces.appendingPathComponent("Writing", isDirectory: true)
+        moveEarlierFolder(
+            from: workspaces.appendingPathComponent("Devotionals", isDirectory: true), to: root,
+            fileManager: fileManager
+        )
+        return root
+    }
+
+    /// The libraries whose earlier folder this process has moved, or found
+    /// none in, so later asks cost nothing.
+    private static let settled = OSAllocatedUnfairLock(initialState: Set<String>())
+
+    /// Moves `AgentWorkspaces/Devotionals` to `AgentWorkspaces/Writing` by
+    /// renaming it, which keeps every file and the context files' hard links
+    /// as they are. Where both are there, each workspace the new folder lacks
+    /// is moved in, and one in both is left where it was rather than merged:
+    /// nothing is deleted. A symbolic link is never followed. Once a process,
+    /// so a launch cut short finishes on the next. Never throws.
+    static func moveEarlierFolder(from old: URL, to new: URL, fileManager: FileManager) {
+        let key = old.standardizedFileURL.path
+        guard settled.withLock({ $0.insert(key).inserted }) else { return }
+        func isFolder(_ url: URL) -> Bool {
+            guard let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else {
+                return false
+            }
+            return values.isDirectory == true && values.isSymbolicLink != true
+        }
+        guard isFolder(old) else { return }
+        guard fileManager.fileExists(atPath: new.path) else {
+            try? fileManager.moveItem(at: old, to: new)
+            return
+        }
+        guard isFolder(new),
+              let workspaces = try? fileManager.contentsOfDirectory(at: old, includingPropertiesForKeys: nil)
+        else { return }
+        for workspace in workspaces where workspace.lastPathComponent != ".DS_Store" {
+            let destination = new.appendingPathComponent(workspace.lastPathComponent, isDirectory: true)
+            guard !fileManager.fileExists(atPath: destination.path) else { continue }
+            try? fileManager.moveItem(at: workspace, to: destination)
+        }
+        let left = (try? fileManager.contentsOfDirectory(atPath: old.path)) ?? []
+        if left.allSatisfy({ $0 == ".DS_Store" }) { try? fileManager.removeItem(at: old) }
     }
 
     /// A folder name from an identifier: as much of it as reads as a name,
@@ -83,9 +136,7 @@ public enum LampWritingWorkspace {
         libraryRootURL: URL,
         fileManager: FileManager = .default
     ) -> [Listed] {
-        let root = libraryRootURL
-            .appendingPathComponent("AgentWorkspaces", isDirectory: true)
-            .appendingPathComponent("Devotionals", isDirectory: true)
+        let root = root(libraryRootURL: libraryRootURL, fileManager: fileManager)
         guard let folders = try? fileManager.contentsOfDirectory(
             at: root,
             includingPropertiesForKeys: [.contentModificationDateKey],

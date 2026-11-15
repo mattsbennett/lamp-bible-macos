@@ -49,7 +49,7 @@ public enum AIFeatures {
         }
         // A writing's workspace can hold a linked deck without any agent; one
         // an agent was set up in has its instructions file.
-        let writings = workspaces.appendingPathComponent("Devotionals", isDirectory: true)
+        let writings = LampWritingWorkspace.root(libraryRootURL: libraryRootURL, fileManager: fileManager)
         let folders = (try? fileManager.contentsOfDirectory(atPath: writings.path)) ?? []
         return folders.contains { folder in
             let url = writings.appendingPathComponent(folder, isDirectory: true)

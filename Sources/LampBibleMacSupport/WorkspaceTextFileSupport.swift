@@ -256,7 +256,6 @@ public enum WorkspaceDocumentTitle {
 /// to that shared object so filenames and directory layout remain user-facing.
 public enum WorkspaceContextFileStore {
     private static let agentWorkspacesDirectory = "AgentWorkspaces"
-    private static let devotionalWorkspacesDirectory = "Devotionals"
     private static let contextDirectoryName = "context"
     private static let objectDirectoryName = ".ContextObjects"
 
@@ -422,10 +421,9 @@ public enum WorkspaceContextFileStore {
         libraryRootURL: URL,
         fileManager: FileManager
     ) throws -> URL {
-        let devotionalRoot = libraryRootURL.standardizedFileURL
-            .appendingPathComponent(agentWorkspacesDirectory, isDirectory: true)
-            .appendingPathComponent(devotionalWorkspacesDirectory, isDirectory: true)
-            .standardizedFileURL
+        let devotionalRoot = LampWritingWorkspace.root(
+            libraryRootURL: libraryRootURL.standardizedFileURL, fileManager: fileManager
+        ).standardizedFileURL
         let workspace = workspaceURL.standardizedFileURL
         guard workspace.deletingLastPathComponent() == devotionalRoot,
               !workspace.lastPathComponent.isEmpty,

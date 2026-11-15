@@ -33,8 +33,60 @@ struct WritingWorkspaceTests {
         let url = LampWritingWorkspace.url(libraryRootURL: libraryRoot, writingID: "abc")
 
         #expect(url.deletingLastPathComponent().path
-            == "/Users/someone/Lamp/Library/AgentWorkspaces/Devotionals")
+            == "/Users/someone/Lamp/Library/AgentWorkspaces/Writing")
         #expect(url.lastPathComponent == LampWritingWorkspace.directoryName(for: "abc"))
+    }
+
+    /// A library from before writing was renamed keeps its workspaces in
+    /// `AgentWorkspaces/Devotionals`. The first ask for the folder moves them,
+    /// hard links and all, before anything looks.
+    @Test func anEarlierLibrarysWorkspacesAreMovedOnTheFirstAsk() throws {
+        let library = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-workspace-move-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: library) }
+        let old = library.appendingPathComponent("AgentWorkspaces/Devotionals/talk", isDirectory: true)
+        try FileManager.default.createDirectory(at: old, withIntermediateDirectories: true)
+        try Data("outline".utf8).write(to: old.appendingPathComponent("outline.md"))
+        let objects = library.appendingPathComponent("AgentWorkspaces/.ContextObjects", isDirectory: true)
+        try FileManager.default.createDirectory(at: objects, withIntermediateDirectories: true)
+        try Data("source".utf8).write(to: objects.appendingPathComponent("object"))
+        try FileManager.default.linkItem(
+            at: objects.appendingPathComponent("object"), to: old.appendingPathComponent("source.md")
+        )
+
+        let root = LampWritingWorkspace.root(libraryRootURL: library)
+
+        #expect(root.lastPathComponent == "Writing")
+        #expect(try String(contentsOf: root.appendingPathComponent("talk/outline.md"), encoding: .utf8) == "outline")
+        #expect(!FileManager.default.fileExists(atPath: library.appendingPathComponent("AgentWorkspaces/Devotionals").path))
+        // The context file is still the same file as its object.
+        let linked = try FileManager.default.attributesOfItem(atPath: root.appendingPathComponent("talk/source.md").path)
+        #expect((linked[.referenceCount] as? Int) == 2)
+        // Reader chats beside it are not touched.
+        #expect(FileManager.default.fileExists(atPath: objects.path))
+    }
+
+    /// Where both folders are there, each workspace the new one lacks is moved
+    /// in; one in both stays where it was, nothing merged and nothing deleted.
+    @Test func aWorkspaceInBothFoldersIsLeftWhereItWas() throws {
+        let library = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-workspace-both-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: library) }
+        for path in ["AgentWorkspaces/Devotionals/a/x.md", "AgentWorkspaces/Devotionals/b/old.md",
+                     "AgentWorkspaces/Writing/b/new.md"] {
+            let url = library.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(path.utf8).write(to: url)
+        }
+
+        let root = LampWritingWorkspace.root(libraryRootURL: library)
+
+        #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("a/x.md").path))
+        #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("b/new.md").path))
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("b/old.md").path))
+        #expect(FileManager.default.fileExists(
+            atPath: library.appendingPathComponent("AgentWorkspaces/Devotionals/b/old.md").path
+        ))
     }
 
     /// An identifier is not a path, and nothing in it can become one: every
@@ -55,7 +107,7 @@ struct WritingWorkspaceTests {
             let url = LampWritingWorkspace.url(libraryRootURL: libraryRoot, writingID: hostile)
             #expect(
                 url.standardizedFileURL.path.hasPrefix(
-                    "/Users/someone/Lamp/Library/AgentWorkspaces/Devotionals/"
+                    "/Users/someone/Lamp/Library/AgentWorkspaces/Writing/"
                 ),
                 "\(hostile) escaped the workspaces folder"
             )

@@ -13,8 +13,6 @@ public typealias LampSyncArchive = LampModuleKit.LampSyncArchive
 public enum LampWorkspaceSync {
     public static let portableDirectoryName = LampPortableBackupLayout.workspacesDirectory
 
-    private static let agentWorkspacesPath = ["AgentWorkspaces", "Devotionals"]
-
     /// The writing workspaces' folder under `Workspaces/`. A portable backup
     /// and the archive sync keep `Devotionals`, which every backup already
     /// made holds; the per-file sync layout calls it `Writing` since bundle
@@ -40,7 +38,7 @@ public enum LampWorkspaceSync {
         fileManager: FileManager = .default
     ) throws -> [URL] {
         try childDirectoriesIfPresent(
-            of: appending(agentWorkspacesPath, to: libraryRoot), fileManager: fileManager
+            of: LampWritingWorkspace.root(libraryRootURL: libraryRoot, fileManager: fileManager), fileManager: fileManager
         )
     }
 
@@ -57,7 +55,7 @@ public enum LampWorkspaceSync {
         // Compacted here, inside the staged transaction, so what gets published
         // is the merged history rather than every autosave since the last sync.
         for workspace in try childDirectoriesIfPresent(
-            of: appending(agentWorkspacesPath, to: libraryRoot),
+            of: LampWritingWorkspace.root(libraryRootURL: libraryRoot, fileManager: fileManager),
             fileManager: fileManager
         ) {
             try DevotionalAgentRevisionStore.compact(in: workspace)
@@ -88,7 +86,7 @@ public enum LampWorkspaceSync {
 
         try LampPresentationDeckSync.exportDecks(from: libraryRoot, to: backupRoot, fileManager: fileManager)
 
-        let sourceRoot = appending(agentWorkspacesPath, to: libraryRoot)
+        let sourceRoot = LampWritingWorkspace.root(libraryRootURL: libraryRoot, fileManager: fileManager)
         guard fileManager.fileExists(atPath: sourceRoot.path) else { return }
 
         let destinationRoot = appending([portableDirectoryName, writingFolder.rawValue], to: backupRoot)
@@ -184,7 +182,7 @@ public enum LampWorkspaceSync {
         let sourceRoot = appending([portableDirectoryName, writingFolder.rawValue], to: backupRoot)
         guard fileManager.fileExists(atPath: sourceRoot.path) else { return }
 
-        let destinationRoot = appending(agentWorkspacesPath, to: libraryRoot)
+        let destinationRoot = LampWritingWorkspace.root(libraryRootURL: libraryRoot, fileManager: fileManager)
         for portableWorkspace in try childDirectories(of: sourceRoot, fileManager: fileManager) {
             let workspace = destinationRoot
                 .appendingPathComponent(portableWorkspace.lastPathComponent, isDirectory: true)
