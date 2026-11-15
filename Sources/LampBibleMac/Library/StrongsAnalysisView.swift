@@ -1182,6 +1182,11 @@ struct StrongsAnalysisPane: View {
     /// begin with: it is the row's evidence, and it doubles every row's
     /// height for a reader who may not read Greek at all.
     @AppStorage("studyInspector.septuagintShowsGreek") private var showsGreek = false
+    /// Whether every book the word stands in is drawn, or only the strongest
+    /// few. Not remembered: it belongs to the key being read, not to a way
+    /// of working, and λόγος opening on thirty-five bars because ἀγάπη was
+    /// expanded would be a surprise.
+    @State private var isShowingEverySeptuagintBook = false
     /// Open when the reader has chosen the longer way round, so what that
     /// means is said where they chose it.
     @State private var isShowingEnglishChoiceNote = false
@@ -1990,13 +1995,6 @@ struct StrongsAnalysisPane: View {
                     .controlSize(.small)
                     .fixedSize()
                 }
-                Text(readsSeptuagintInEnglish
-                    ? LampSeptuagintSection.directEnglishNote
-                    : LampSeptuagintSection.indirectEnglishWarning)
-                    .font(.system(size: Self.chartFinePrintSize))
-                    .foregroundStyle(Color.lampSecondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .transition(.opacity)
             }
             .padding(.bottom, 2)
         }
@@ -2009,13 +2007,14 @@ struct StrongsAnalysisPane: View {
     /// has. Off to begin with, so the note says what turning it on gives.
     private var greekChoice: some View {
         HStack(spacing: 8) {
+            // The label says what the switch does, so the sentence that used
+            // to sit beside it is a tooltip rather than a line of prose in
+            // front of the figures.
             Toggle(LampSeptuagintSection.OriginalLanguage.title, isOn: $showsGreek)
                 .toggleStyle(.checkbox)
                 .font(.system(size: Self.chartFinePrintSize))
-            Text(LampSeptuagintSection.OriginalLanguage.note)
-                .font(.system(size: Self.chartFinePrintSize))
-                .foregroundStyle(Color.lampSecondaryText)
-                .fixedSize(horizontal: false, vertical: true)
+                .help(LampSeptuagintSection.OriginalLanguage.note)
+            Spacer(minLength: 0)
         }
         .padding(.bottom, 2)
     }
@@ -2037,6 +2036,32 @@ struct StrongsAnalysisPane: View {
         DisclosureGroup(isExpanded: $isShowingSeptuagintMethod) {
             VStack(alignment: .leading, spacing: 8) {
                 Text(LampSeptuagintSection.ownUseAbout)
+                // Was under the Testaments' bars. The bars are two labelled
+                // rows and read as themselves; this is for the reader who
+                // asks why the two are not added together.
+                Text("The Testaments’ bars are counted apart and never added, "
+                    + "each against the larger.")
+                if let contrast = LampSeptuagintSection.contrast(
+                    newTestament: greekNewTestamentAnalysis, septuagint: own
+                ) {
+                    let caption = LampSeptuagintSection.contrastCaption(contrast)
+                    if !caption.isEmpty { Text(caption) }
+                }
+                // Was a sentence under the book bars. The bars themselves
+                // say which books; this says what pressing one does.
+                if !own.books.filter({ $0.occurrenceCount > 0 }).isEmpty {
+                    Text("Click a book to narrow the Hebrew words’ verses to it.")
+                }
+                // The reading the rows are actually in, explained where the
+                // explanation is asked for rather than under the control.
+                if LampSeptuagintSection.EnglishChoice.isOffered(
+                    septuagintInEnglish: septuagint.septuagintInEnglish,
+                    readersTranslationID: analysis?.translationID
+                ) {
+                    Text(readsSeptuagintInEnglish
+                        ? LampSeptuagintSection.directEnglishNote
+                        : LampSeptuagintSection.indirectEnglishWarning)
+                }
                 // Only a text that declares its Strong's numbers were matched
                 // rather than printed carries this: a published tagged text
                 // makes no such claim about itself. The sentences are the
@@ -2095,13 +2120,34 @@ struct StrongsAnalysisPane: View {
                     // empty tracks reads as missing figures, which a panel
                     // said of the zero rows in the sections.
                     let books = own.books.filter { $0.occurrenceCount > 0 }
-                    ForEach(LampStrongsSpread.bars(books, measure: chartMeasure)) { bar in
+                    let every = LampStrongsSpread.bars(books, measure: chartMeasure)
+                    // The eight it stands in most, drawn in canon order: a
+                    // common word reaches thirty-five books, and that many
+                    // bars is a list to scroll past rather than a figure to
+                    // read. A book narrowed to is always among them, so the
+                    // row a reader is acting on cannot vanish under them.
+                    let strongest = Set(
+                        books.sorted { $0.occurrenceCount > $1.occurrenceCount }
+                            .prefix(Self.septuagintBooksShown).map(\.id)
+                    )
+                    let bars = isShowingEverySeptuagintBook
+                        ? every
+                        : every.filter { strongest.contains($0.id) || septuagintBook == $0.id }
+                    ForEach(bars) { bar in
                         spreadBar(
                             bar,
                             choosing: nil,
                             isChosen: septuagintBook == bar.id,
                             select: { septuagintBook = septuagintBook == bar.id ? nil : bar.id }
                         )
+                    }
+                    if !isShowingEverySeptuagintBook, bars.count < every.count {
+                        Button("Show All \(every.count) Books") {
+                            isShowingEverySeptuagintBook = true
+                        }
+                        .buttonStyle(.link)
+                        .font(.system(size: Self.chartFinePrintSize))
+                        .padding(.top, 2)
                     }
                     if let book = septuagintBook {
                         Button("Showing \(LampBibleReferenceFormatter.bookName(book)) only · show every book") {
@@ -2174,14 +2220,6 @@ struct StrongsAnalysisPane: View {
                     Spacer().frame(width: Self.barStandingWidth)
                 }
                 .help("\(side.verseCount) verses of \(side.source)")
-            }
-            let caption = LampSeptuagintSection.contrastCaption(contrast)
-            if !caption.isEmpty {
-                Text(caption)
-                    .font(.system(size: Self.chartFinePrintSize))
-                    .foregroundStyle(Color.lampSecondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 2)
             }
         }
     }
@@ -2325,25 +2363,13 @@ struct StrongsAnalysisPane: View {
         return Group {
             if hasSeptuagint {
                 VStack(alignment: .leading, spacing: 24) {
-                    // The sentence that used to sit under the chevron as a
-                    // subtitle. The tab names the subject, so the heading it
-                    // had would only say "Septuagint" twice; this says what
-                    // the key does there, which is the thing worth reading
-                    // first.
+                    // No sentence over the bars: they are two labelled rows
+                    // with their counts beside them, and saying the same two
+                    // numbers in prose above them was the "wall of hedging
+                    // text" the owner found. What the figures are counted
+                    // from is in "How this is counted", a press away.
                     if let own {
-                        // The sentence belongs to the bars under it, so it
-                        // keeps their spacing rather than a subject's.
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text(LampSeptuagintSection.ownUseHeadline(
-                                greek: entry?.lemma,
-                                septuagint: own,
-                                newTestament: greekNewTestamentAnalysis
-                            ))
-                                .font(.system(size: Self.sectionProseSize))
-                                .foregroundStyle(Color.lampSecondaryText)
-                                .fixedSize(horizontal: false, vertical: true)
-                            ownUseBody(own, reader: analysis)
-                        }
+                        ownUseBody(own, reader: analysis)
                     }
                     if !septuagint.words.isEmpty {
                     // One Septuagint section, so what the Hebrew words need
@@ -2547,6 +2573,8 @@ struct StrongsAnalysisPane: View {
     /// same two lines: the contrast bars drew only the first and their
     /// tracks ran 52pt past the spread's.
     private static let barMeasureWidth: Double = 40
+    /// How many books the Septuagint spread draws before asking.
+    private static let septuagintBooksShown = 8
     private static let barPercentWidth: Double = 34
     private static let barStandingWidth: Double = 18
     /// One row of the chapter grid: the cell plus room for its book's name.
@@ -3481,6 +3509,44 @@ struct StrongsAnalysisPane: View {
 /// each — the heart of the Septuagint section, and its own view for one
 /// reason: it must load when *it* is opened, not when the section is, and a
 /// DisclosureGroup can only tell its own expansion to a view that holds it.
+/// "Uncertain match", and the reason under it when asked for.
+///
+/// Its own view because the open state belongs to the row: a page holds
+/// twenty-five of these and one `@State` in the list would open them all.
+private struct SeptuagintDoubt: View {
+    let note: String
+    let fontSize: Double
+    @State private var isOpen = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Button {
+                isOpen.toggle()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "questionmark.circle")
+                    Text("Uncertain match")
+                    Image(systemName: isOpen ? "chevron.up" : "chevron.down")
+                        .imageScale(.small)
+                }
+                .font(.system(size: max(10, fontSize - 2)))
+                .foregroundStyle(Color.lampSecondaryText)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(note)
+            .accessibilityLabel("Uncertain match")
+            .accessibilityHint(note)
+            if isOpen {
+                Text(note)
+                    .font(.system(size: max(10, fontSize - 2)))
+                    .foregroundStyle(Color.lampSecondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
 private struct SeptuagintWordGroup: View {
     let word: SeptuagintLoader.Word
     /// Which English the rows read. Part of what a load is, so a change to
@@ -3764,15 +3830,13 @@ private struct SeptuagintWordGroup: View {
             // Said only where it is so: a row with nothing under it is the
             // strong case, and should read as one.
             if let doubt = loader.pairingDoubts[word.id]?[verse.reference] {
-                // Was caption2 in the tertiary grey, which a panel called
-                // "a sub-10px footnote" and "nearly invisible against
-                // charcoal" in four reports. It is the one line that says
-                // this row may not be what it looks like, so it is read at
-                // the size of the other explanations.
-                Text(doubt)
-                    .font(.system(size: max(10, fontSize - 2)))
-                    .foregroundStyle(Color.lampSecondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
+                // The sentence used to be printed under every doubted row,
+                // which on a page of them is the wall of text the owner
+                // objected to. What a reader needs at a glance is that this
+                // row is not certain; *why* is a press away. A row with no
+                // doubt still shows nothing at all, which is what makes the
+                // mark worth reading.
+                SeptuagintDoubt(note: doubt, fontSize: fontSize)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
