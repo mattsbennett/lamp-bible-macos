@@ -1182,11 +1182,6 @@ struct StrongsAnalysisPane: View {
     /// begin with: it is the row's evidence, and it doubles every row's
     /// height for a reader who may not read Greek at all.
     @AppStorage("studyInspector.septuagintShowsGreek") private var showsGreek = false
-    /// Whether every book the word stands in is drawn, or only the strongest
-    /// few. Not remembered: it belongs to the key being read, not to a way
-    /// of working, and λόγος opening on thirty-five bars because ἀγάπη was
-    /// expanded would be a surprise.
-    @State private var isShowingEverySeptuagintBook = false
     /// Open when the reader has chosen the longer way round, so what that
     /// means is said where they chose it.
     @State private var isShowingEnglishChoiceNote = false
@@ -2104,14 +2099,18 @@ struct StrongsAnalysisPane: View {
             if let contrast = LampSeptuagintSection.contrast(
                 newTestament: greekNewTestamentAnalysis, septuagint: own
             ) {
-                contrastBars(contrast)
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Verses in each Testament")
+                        .lampSectionHeading()
+                    contrastBars(contrast)
+                }
             }
             if !own.books.isEmpty {
                 VStack(alignment: .leading, spacing: 16) {
                     // Told apart from the Testament bars above: with none, a
                     // panel read the two groups stacked together as "one
                     // broken chart".
-                    Text("Where it stands in the Septuagint")
+                    Text("Verses in each book")
                         .lampSectionHeading()
                     // Books rather than canon sections, because the click a
                     // reader wants is "show me the ones in Psalms", and a
@@ -2120,34 +2119,16 @@ struct StrongsAnalysisPane: View {
                     // empty tracks reads as missing figures, which a panel
                     // said of the zero rows in the sections.
                     let books = own.books.filter { $0.occurrenceCount > 0 }
-                    let every = LampStrongsSpread.bars(books, measure: chartMeasure)
-                    // The eight it stands in most, drawn in canon order: a
-                    // common word reaches thirty-five books, and that many
-                    // bars is a list to scroll past rather than a figure to
-                    // read. A book narrowed to is always among them, so the
-                    // row a reader is acting on cannot vanish under them.
-                    let strongest = Set(
-                        books.sorted { $0.occurrenceCount > $1.occurrenceCount }
-                            .prefix(Self.septuagintBooksShown).map(\.id)
-                    )
-                    let bars = isShowingEverySeptuagintBook
-                        ? every
-                        : every.filter { strongest.contains($0.id) || septuagintBook == $0.id }
-                    ForEach(bars) { bar in
+                    // Every book it stands in, at the owner's word: a
+                    // list that says it is hiding some of itself reads worse
+                    // than a longer list, and these are one line each.
+                    ForEach(LampStrongsSpread.bars(books, measure: chartMeasure)) { bar in
                         spreadBar(
                             bar,
                             choosing: nil,
                             isChosen: septuagintBook == bar.id,
                             select: { septuagintBook = septuagintBook == bar.id ? nil : bar.id }
                         )
-                    }
-                    if !isShowingEverySeptuagintBook, bars.count < every.count {
-                        Button("Show All \(every.count) Books") {
-                            isShowingEverySeptuagintBook = true
-                        }
-                        .buttonStyle(.link)
-                        .font(.system(size: Self.chartFinePrintSize))
-                        .padding(.top, 2)
                     }
                     if let book = septuagintBook {
                         Button("Showing \(LampBibleReferenceFormatter.bookName(book)) only · show every book") {
@@ -2476,46 +2457,6 @@ struct StrongsAnalysisPane: View {
         }
     }
 
-    /// The word as someone with no Hebrew reads it — its transliteration and
-    /// the English it is most often rendered by — with the Hebrew beside.
-    /// Where the translation doesn't render it, the lexicons' meaning goes
-    /// under it, unquoted: quoted, a definition would pass for a rendering.
-    private func hebrewWord(_ word: SeptuagintLoader.Word, number: String?) -> some View {
-        let transliteration = number.flatMap {
-            septuagint.headwords[LampStrongsKey.normalized($0)]?.transliteration
-        }
-        let rendering = septuagint.renderings[word.id]
-        let meaning = rendering == nil
-            ? number.flatMap { septuagint.meanings[LampStrongsKey.normalized($0)] }
-            : nil
-        return VStack(alignment: .leading, spacing: 2) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                if let transliteration, !transliteration.isEmpty {
-                    Text(transliteration)
-                        .font(.system(size: fontSize + 1).italic())
-                }
-                if let rendering {
-                    Text("“\(rendering)”")
-                        .font(.system(size: fontSize + 1))
-                }
-                Text(LampSeptuagintSection.word(word.hebrew))
-                    .font(.system(size: fontSize + 1))
-                    .foregroundStyle(transliteration == nil && rendering == nil ? .primary : .secondary)
-                if let number {
-                    Text(number)
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-            }
-            if let meaning {
-                Text(meaning)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-        }
-    }
-
     private func renderingRow(_ rendering: LampStrongsAnalysis.Rendering, most: Int) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             chooseRow(
@@ -2573,8 +2514,6 @@ struct StrongsAnalysisPane: View {
     /// same two lines: the contrast bars drew only the first and their
     /// tracks ran 52pt past the spread's.
     private static let barMeasureWidth: Double = 40
-    /// How many books the Septuagint spread draws before asking.
-    private static let septuagintBooksShown = 8
     private static let barPercentWidth: Double = 34
     private static let barStandingWidth: Double = 18
     /// One row of the chapter grid: the cell plus room for its book's name.
@@ -3596,7 +3535,7 @@ private struct SeptuagintWordGroup: View {
             get: { isExpanded },
             set: { chosenExpansion = $0 }
         )) {
-            VStack(alignment: .leading, spacing: 10) {
+            LazyVStack(alignment: .leading, spacing: 10) {
                 if let listed {
                     switch listed {
                     case .rows(let rows):
@@ -3869,6 +3808,14 @@ private struct SeptuagintWordGroup: View {
         marking spans: [LampSeptuagintSection.Span],
         interlinear showsMarkers: Bool
     ) -> Text {
+        // Nothing marked and no markers to raise: the verse is one run, and
+        // neither the scalar array below nor a walk of the text is needed.
+        // A row with no marks is common — the English of a verse the
+        // translation does not tag, and every Greek line before its marks
+        // arrive — and this is on the scroll path for all of them.
+        if spans.isEmpty, !showsMarkers || !text.contains(where: \.isNumber) {
+            return Text(text)
+        }
         let scalars = Array(text.unicodeScalars)
         func slice(_ range: Range<Int>) -> String {
             String(String.UnicodeScalarView(scalars[range]))
@@ -4805,6 +4752,11 @@ extension Text {
     /// two. One renderer, so a verse reads the same in every list that
     /// shows it.
     static func lampInterlinear(_ text: String, followedBy next: String?, size: Double) -> Text {
+        // No digits, no markers — and nothing to allocate. A translation
+        // that is not an interlinear never has them, so this is the usual
+        // answer, and it is reached without building a runs array or
+        // copying the text into one.
+        guard text.contains(where: \.isNumber) else { return Text(text) }
         let runs = LampSeptuagintSection.interlinearRuns(in: text, followedBy: next)
         guard runs.contains(where: \.isMarker) else { return Text(text) }
         return runs.reduce(Text("")) { line, run in
