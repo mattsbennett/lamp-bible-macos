@@ -402,6 +402,43 @@ extension Text {
     }
 }
 
+/// A control that is words alone, such as "More in Scripture" or "Ask Me
+/// Later": drawn in the accent, as the app's controls are.
+///
+/// Not SwiftUI's `.link` style, which on the Mac draws the system's blue
+/// whatever the tint, so every control styled with it came out the colour
+/// ColorRules.md keeps for what text takes you to. A link that sits in
+/// text and is a button only to open a popover passes its role's colour:
+/// `.lampText(.lampLink)` for a reference, `.lampOriginalLanguage` for a
+/// Strong's number.
+struct LampTextButtonStyle: ButtonStyle {
+    var color: Color?
+
+    func makeBody(configuration: Configuration) -> some View {
+        Drawn(configuration: configuration, color: color)
+    }
+
+    private struct Drawn: View {
+        let configuration: ButtonStyleConfiguration
+        let color: Color?
+        @Environment(\.isEnabled) private var isEnabled
+
+        var body: some View {
+            configuration.label
+                .foregroundStyle(isEnabled ? color.map(AnyShapeStyle.init) ?? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
+                .opacity(configuration.isPressed ? 0.55 : 1)
+                .contentShape(Rectangle())
+        }
+    }
+}
+
+extension ButtonStyle where Self == LampTextButtonStyle {
+    /// Words alone, in the accent.
+    static var lampText: LampTextButtonStyle { LampTextButtonStyle() }
+    /// Words alone, in `color`: a link's role, for a link in text.
+    static func lampText(_ color: Color) -> LampTextButtonStyle { LampTextButtonStyle(color: color) }
+}
+
 /// A choice of one among a few — List or Ring, Visual or Markdown — drawn
 /// in the text's own colours: the chosen one raised on a quiet track, as
 /// Slide Studio's choice tiles mark theirs.

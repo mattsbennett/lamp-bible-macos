@@ -129,7 +129,9 @@ struct UnifiedSearchView: View {
     /// would name a list that no launch has yet built.
     private struct TabViewState {
         var selectedResultID: String?
-        var previewedResult: LampModuleSearchResult?
+        /// The kind a "More in …" opened, so its header offers the way back
+        /// to every kind, where the reader clicked to leave.
+        var kindOpenedFromAll: LampModuleKind?
         var previewedOccurrence: Int?
         var strongsTrail: [String] = []
         var strongsFilter: LampStrongsFilter?
@@ -168,10 +170,9 @@ struct UnifiedSearchView: View {
     /// Set while a change of key comes from following or going back, which
     /// keeps the trail; read and cleared by the key's change handler.
     @State private var isWalkingStrongsTrail = false
-    /// The hit being previewed, if any.
-    private var previewedResult: LampModuleSearchResult? {
-        get { tabViewState[tabs.selectedID]?.previewedResult }
-        nonmutating set { tabViewState[tabs.selectedID, default: TabViewState()].previewedResult = newValue }
+    private var kindOpenedFromAll: LampModuleKind? {
+        get { tabViewState[tabs.selectedID]?.kindOpenedFromAll }
+        nonmutating set { tabViewState[tabs.selectedID, default: TabViewState()].kindOpenedFromAll = newValue }
     }
 
     let showImporter: () -> Void
@@ -881,6 +882,11 @@ struct UnifiedSearchView: View {
             }
         }
         .frame(minWidth: 340, idealWidth: 440)
+        // A kind chosen any other way was not opened from every kind, so it
+        // offers no way back there; the Content menu is the way out.
+        .onChange(of: selectedKind) { _, kind in
+            if kind != kindOpenedFromAll { kindOpenedFromAll = nil }
+        }
     }
 
     private func moveSelection(by offset: Int, proxy: ScrollViewProxy) {
@@ -900,6 +906,15 @@ struct UnifiedSearchView: View {
     private func offersMore(_ group: SearchResultGroup) -> Bool {
         model.moduleSearchKindsWithMore.contains(group.kind)
             && resultGroups.first { $0.kind == group.kind }?.id == group.id
+    }
+
+    /// Whether a group's header offers the way back to every kind: the kind
+    /// shown was opened from its "More in …", and this is its first shelf.
+    /// Chosen from the Content menu instead, it was not come to from
+    /// anywhere, and the menu is the way out.
+    private func offersWayBack(_ group: SearchResultGroup) -> Bool {
+        selectedKind != nil && kindOpenedFromAll == selectedKind
+            && resultGroups.first?.id == group.id
     }
 
     /// Whether a group is its kind's only shelf. Scripture has one per
@@ -933,18 +948,35 @@ struct UnifiedSearchView: View {
             if offersMore {
                 // The kind filter is the deeper page: it searches that kind
                 // alone, the whole page of it, rather than cutting from here.
+                // A control, so the accent: the link blue is for what text
+                // takes you to (ColorRules.md).
                 Button {
                     selectedKind = group.kind
+                    kindOpenedFromAll = group.kind
                 } label: {
                     HStack(spacing: 2) {
                         Text("More in \(group.kind.displayName)")
                         Image(systemName: "chevron.right").imageScale(.small)
                     }
                     .font(.subheadline)
-                    .foregroundStyle(Color.lampLink)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.lampText)
                 .help("Show only \(group.kind.displayName), searched in full")
+            } else if offersWayBack(group) {
+                // Where "More in …" was, and drawn as it was, so the way
+                // back is under the pointer that came.
+                Button {
+                    selectedKind = nil
+                    kindOpenedFromAll = nil
+                } label: {
+                    HStack(spacing: 2) {
+                        Image(systemName: "chevron.left").imageScale(.small)
+                        Text("All Results")
+                    }
+                    .font(.subheadline)
+                }
+                .buttonStyle(.lampText)
+                .help("Back to the results from every kind")
             }
             if let moduleName = group.moduleName {
                 Text(moduleName)
@@ -1040,23 +1072,13 @@ struct UnifiedSearchView: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
-        // A click selects the result, so the detail pane follows, and shows
-        // a verse in its context, which is what the preview is for. The
-        // first result is selected by itself when results arrive; that
-        // opens nothing, because it is not a click.
+        // A click selects the result, and the detail pane beside the list
+        // shows it, a verse among its neighbours. It opened a popover over
+        // that pane as well, saying the same thing twice.
         .onTapGesture {
             selectedResultID = result.id
-            if previewTranslation(of: result) != nil {
-                previewedResult = result
-            }
-        }
-        .popover(isPresented: previewBinding(for: result), arrowEdge: .trailing) {
-            preview(for: result)
         }
         .contextMenu {
-            if previewTranslation(of: result) != nil {
-                Button("Preview in Context") { previewedResult = result }
-            }
             if let reference = result.startReference {
                 Button("Open \(result.referenceDescription ?? "Reference")") {
                     saveSearch()
@@ -1077,38 +1099,6 @@ struct UnifiedSearchView: View {
             }
             Button("Copy Result") { copy(result) }
         }
-    }
-
-    /// The preview, anchored on the row it is about.
-    ///
-    /// Attached per row rather than to the list: a popover presented from the
-    /// whole list has no particular place to point at, and presenting one as
-    /// a context menu dismisses is unreliable. Bound by id so the detail
-    /// pane's button opens the same popover, on that result's own row.
-    @ViewBuilder
-    private func preview(for result: LampModuleSearchResult) -> some View {
-        if let translationID = previewTranslation(of: result) {
-            SearchHitPreview(
-                reference: result.startReference ?? 0,
-                heading: result.referenceDescription,
-                moduleName: result.moduleName,
-                translationID: translationID,
-                query: query,
-                context: $previewContext,
-                open: {
-                    previewedResult = nil
-                    saveSearch()
-                    openReference(result.startReference ?? 0, translationID)
-                }
-            )
-        }
-    }
-
-    private func previewBinding(for result: LampModuleSearchResult) -> Binding<Bool> {
-        Binding(
-            get: { previewedResult?.id == result.id },
-            set: { if !$0 { previewedResult = nil } }
-        )
     }
 
     /// The selected result, read properly.
@@ -1214,14 +1204,23 @@ struct UnifiedSearchView: View {
                 }
                 .buttonStyle(.borderedProminent)
             }
-            if previewTranslation(of: result) != nil {
-                Button("Preview in Context", systemImage: "text.magnifyingglass") {
-                    previewedResult = result
-                }
-                .buttonStyle(.bordered)
-            }
             Button("Copy", systemImage: "doc.on.doc") { copy(result) }
                 .buttonStyle(.bordered)
+            // How much of the chapter the passage above shows, set here
+            // where it is read; it was a button opening the same passage
+            // again in a popover, which had the setting.
+            if previewTranslation(of: result) != nil {
+                Spacer(minLength: 12)
+                Stepper(
+                    "Context: \(previewContext) verse\(previewContext == 1 ? "" : "s")",
+                    value: $previewContext,
+                    in: 0...10
+                )
+                .controlSize(.regular)
+                .font(.callout)
+                .foregroundStyle(Color.lampSecondaryText)
+                .fixedSize()
+            }
         }
         .controlSize(.large)
     }

@@ -23,7 +23,7 @@ struct SyncConflictRow: View {
                 Button(isExpanded ? "Hide Versions" : "Compare Versions") {
                     isExpanded.toggle()
                 }
-                .buttonStyle(.link)
+                .buttonStyle(.lampText)
                 .font(.callout)
             }
 
@@ -43,7 +43,7 @@ struct SyncConflictRow: View {
                 Button("Keep the Other Device’s") { keep(.otherDevice) }
                 Spacer()
                 Button("Ask Me Later", action: dismiss)
-                    .buttonStyle(.link)
+                    .buttonStyle(.lampText)
                     .help("Leave this Mac’s copy as it is and stop showing this")
             }
         }

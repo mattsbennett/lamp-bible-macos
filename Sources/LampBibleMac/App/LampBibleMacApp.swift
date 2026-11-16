@@ -1608,7 +1608,7 @@ private struct ReadAloudVoicePicker: View {
 
     private func helpButton(_ title: String, name: String, hasVoice: Bool) -> some View {
         Button(title) { isShowingHelp = true }
-            .buttonStyle(.link)
+            .buttonStyle(.lampText)
             .popover(isPresented: $isShowingHelp, arrowEdge: .bottom) {
                 BetterVoiceHelp(
                     languageName: name,

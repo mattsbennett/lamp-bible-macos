@@ -2293,11 +2293,10 @@ private struct VerseInspectorView: View {
                 Button(strongs) {
                     openDictionary(strongs, annotation.text ?? annotation.lemma)
                 }
-                .buttonStyle(.link)
                 .font(.body.monospacedDigit())
                 // A Strong's number is a link, but of one kind, kept apart
                 // from the verse references it sits among.
-                .tint(.lampOriginalLanguage)
+                .buttonStyle(.lampText(.lampOriginalLanguage))
                 .help("Open \(strongs) in the dictionary")
                 .gridColumnAlignment(.trailing)
             } else {
@@ -3248,10 +3247,9 @@ struct ScriptureReferenceButton: View {
         Button(link.displayDescription) {
             isShowingPreview = true
         }
-        .buttonStyle(.link)
         // A reference sits in the text and opens the passage, so it is a link
         // rather than one of the app's own controls.
-        .tint(.lampLink)
+        .buttonStyle(.lampText(.lampLink))
         .popover(isPresented: $isShowingPreview) {
             ScriptureReferencePopover(
                 link: link,

@@ -71,7 +71,7 @@ struct SlideRemotePairingView: View {
                     .font(.caption.weight(.semibold))
                 Spacer()
                 Button("Forget All", action: forgetAll)
-                    .buttonStyle(.link)
+                    .buttonStyle(.lampText)
                     .font(.caption)
             }
 

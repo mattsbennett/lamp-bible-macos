@@ -595,7 +595,7 @@ struct ReaderChatSidebarView: View {
                             .help("A writing started from this chat. It has its own copy of the conversation.")
                         Spacer(minLength: 4)
                         Button("Open") { open(writingID: started.writingID) }
-                            .buttonStyle(.link)
+                            .buttonStyle(.lampText)
                     }
                 }
             }
