@@ -47,7 +47,7 @@ struct LampSplashView: View {
                     .foregroundStyle(.tertiary)
             }
             .padding(.top, 28)
-                .accessibilityElement(children: .combine)
+            .accessibilityElement(children: .combine)
 
             Text(isShowingSlowStartMessage
                 ? "Preparing your library. This happens once after an update."
