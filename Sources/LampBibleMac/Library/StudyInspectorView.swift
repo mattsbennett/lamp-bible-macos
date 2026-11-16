@@ -3096,7 +3096,7 @@ private struct ScriptureLinkedText: View {
                   let attributedRange = attributedRange(for: stringRange, in: result),
                   let url = link.inlineURL else { continue }
             result[attributedRange].link = url
-            markLink(&result[attributedRange])
+            markLink(&result[attributedRange], toWord: true)
             occupiedRanges.append(stringRange)
         }
 
@@ -3123,7 +3123,7 @@ private struct ScriptureLinkedText: View {
                 var label = AttributedString(link.inlineLabel)
                 if let url = link.inlineURL {
                     label.link = url
-                    label.foregroundColor = .lampLink
+                    label.foregroundColor = .lampOriginalLanguage
                 }
                 result.append(label)
             }
@@ -3137,9 +3137,11 @@ private struct ScriptureLinkedText: View {
     }
 
     /// One link style wherever references sit in prose, a lexicon sense as
-    /// much as a commentary paragraph, as on iPhone.
-    private func markLink(_ run: inout AttributedSubstring) {
-        run.foregroundColor = .lampLink
+    /// much as a commentary paragraph, as on iPhone: blue for a passage, and
+    /// the original-language purple for a word in a lexicon — a Strong's
+    /// number such as the one a derivation comes from — as the phone draws it.
+    private func markLink(_ run: inout AttributedSubstring, toWord: Bool = false) {
+        run.foregroundColor = toWord ? .lampOriginalLanguage : .lampLink
     }
 
     private func firstAvailableRange(
