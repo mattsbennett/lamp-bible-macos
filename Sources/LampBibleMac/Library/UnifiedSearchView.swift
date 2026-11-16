@@ -203,6 +203,9 @@ struct UnifiedSearchView: View {
     }
 
     @State private var tabViewState: [UUID: TabViewState] = [:]
+    /// The toolbar's search field, put in focus when the page is waiting for
+    /// a search, so typing starts one without a click.
+    @FocusState private var isSearchFieldFocused: Bool
 
     private var selectedResultID: String? {
         get { tabViewState[tabs.selectedID]?.selectedResultID }
@@ -415,9 +418,7 @@ struct UnifiedSearchView: View {
                 VStack(spacing: 0) {
                     referenceOffer
                     strongsAnalysisOffer
-                    ContentUnavailableView.search(text: query.isEmpty
-                        ? (hasActiveStrongsFilter ? strongsKey : highlightColor) : query)
-                        .frame(maxHeight: .infinity)
+                    nothingFound
                 }
             } else {
                 HSplitView {
@@ -439,6 +440,7 @@ struct UnifiedSearchView: View {
         // toolbar: the longer "Search Bibles and modules" was cut to
         // "Search Bibles and n…" at the default window size.
         .searchable(text: queryField, placement: .toolbar, prompt: "Search Library")
+        .searchFocused($isSearchFieldFocused)
         .onSubmit(of: .search) {
             // On submit rather than as it is typed: "H7" is a plausible key
             // while someone is still typing "H7225", and moving the text out
@@ -580,53 +582,66 @@ struct UnifiedSearchView: View {
         }
     }
 
+    /// A search that found nothing, and the ways on from it: the filters
+    /// that narrowed it, each a button that lifts it, and the words a
+    /// misspelling was probably meant to be.
+    private var nothingFound: some View {
+        var widenings: [SearchNothingFound.Widening] = []
+        if let kind = selectedKind {
+            widenings.append(.init(title: "Search All Content", detail: kind.displayName) { selectedKind = nil })
+        }
+        if selectedModuleID != nil {
+            widenings.append(.init(title: "Search All Modules", detail: nil) { selectedModuleID = nil })
+        }
+        if bookScope != .all {
+            widenings.append(.init(title: "Search All Books", detail: nil) { bookScope = .all })
+        }
+        let shown = query.isEmpty ? (hasActiveStrongsFilter ? strongsKey : highlightColor) : query
+        return SearchNothingFound(
+            query: shown,
+            widenings: widenings,
+            suggestions: query.isEmpty ? [] : SearchNothingFound.spellingSuggestions(for: query),
+            search: { setQuery($0) }
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    /// Where a search starts: what can be searched, a few searches to try,
+    /// and the ones made before. A blank page with one sentence on it gave
+    /// nothing to start from, and a returning reader's history sat alone in
+    /// a plain list.
     private var searchLanding: some View {
-        Group {
-            if history.entries.isEmpty {
-                ContentUnavailableView {
-                    Label("Search Your Library", systemImage: "text.magnifyingglass")
-                } description: {
-                    Text("Search scripture, dictionaries, commentaries, books, notes, writing, plans, quizzes, and highlighted verses.")
-                } actions: {
-                    if model.modules.isEmpty {
-                        Button("Install Module…", action: showImporter)
-                            .buttonStyle(.borderedProminent)
-                    }
-                }
-            } else {
-                List {
-                    Section("Recent Searches") {
-                        ForEach(history.entries) { entry in
-                            Button {
-                                restore(entry)
-                            } label: {
-                                HStack(spacing: 12) {
-                                    Image(systemName: "clock.arrow.circlepath")
-                                        .foregroundStyle(.secondary)
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(entry.query)
-                                        Text(historyDescription(entry))
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                }
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-                .safeAreaInset(edge: .bottom) {
-                    HStack {
-                        Spacer()
-                        Button("Clear Search History", role: .destructive) {
-                            historyData = Data()
-                        }
-                    }
-                    .padding()
-                    .background(.bar)
-                }
+        SearchLanding(
+            chosenKind: selectedKind,
+            kinds: landingKinds,
+            recents: Array(history.entries.prefix(6)),
+            describe: historyDescription,
+            icon: icon(for:),
+            choose: { selectedKind = selectedKind == $0 ? nil : $0 },
+            search: { setQuery($0) },
+            restore: restore,
+            clearHistory: { historyData = Data() },
+            installModule: model.modules.isEmpty ? showImporter : nil
+        )
+        .onAppear {
+            // Only where nothing is being typed. The landing comes back
+            // whenever a filter stops narrowing — a date half typed — and
+            // taking focus then sent the rest of the date into the search
+            // field. AppKit's responder, not a focus flag, says what has it.
+            guard !(NSApp.keyWindow?.firstResponder is NSText) else { return }
+            isSearchFieldFocused = true
+        }
+    }
+
+    /// The kinds the library holds something of, in the Content menu's order.
+    /// Writing, notes, plans, highlights and quizzes are the reader's own and
+    /// always offered; a kind of module only once one is installed.
+    private var landingKinds: [LampModuleKind] {
+        let installed = Set(model.modules.map(\.kind))
+        return LampModuleKind.allCases.filter { kind in
+            switch kind {
+            case .translation, .dictionary, .commentary, .book: installed.contains(kind)
+            default: true
             }
         }
     }
@@ -929,6 +944,7 @@ struct UnifiedSearchView: View {
             referenceOffer
             strongsAnalysisOffer
             ScrollViewReader { proxy in
+                kindJumpBar(proxy)
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
                         ForEach(resultGroups) { group in
@@ -949,6 +965,7 @@ struct UnifiedSearchView: View {
                                 }
                             } header: {
                                 resultGroupHeader(group, offersMore: offersMore(group))
+                                    .id("group:\(group.id)")
                             }
                         }
                     }
@@ -972,6 +989,76 @@ struct UnifiedSearchView: View {
         // offers no way back there; the Content menu is the way out.
         .onChange(of: selectedKind) { _, kind in
             if kind != kindOpenedFromAll { kindOpenedFromAll = nil }
+        }
+    }
+
+    static func isOriginalLanguage(_ text: String) -> Bool {
+        text.unicodeScalars.contains {
+            (0x0370...0x03FF).contains($0.value) || (0x1F00...0x1FFF).contains($0.value)
+                || (0x0590...0x05FF).contains($0.value)
+        }
+    }
+
+    /// Every kind the search found, with how much of it, each a jump to its
+    /// shelf. Across all content the first shelf, usually Scripture, filled
+    /// the list, and nothing on screen said a dictionary or a commentary had
+    /// matched at all until it was scrolled to.
+    @ViewBuilder
+    private func kindJumpBar(_ proxy: ScrollViewProxy) -> some View {
+        let shelves = resultGroups.reduce(into: [SearchResultGroup]()) { kept, group in
+            if !kept.contains(where: { $0.kind == group.kind }) { kept.append(group) }
+        }
+        if selectedKind == nil, shelves.count > 1 {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    // Named for what they do: they go to a shelf of these
+                    // results, and choose nothing. Unnamed they read as a
+                    // third way of setting the scope.
+                    Text("Found in")
+                        .font(.callout)
+                        .foregroundStyle(Color.lampSecondaryText)
+                        .padding(.trailing, 2)
+                    ForEach(shelves) { group in
+                        let count = resultGroups.filter { $0.kind == group.kind }.reduce(0) { $0 + $1.results.count }
+                        let isCut = model.moduleSearchCutKinds.contains(group.kind)
+                        Button {
+                            // The shelf's first hit comes with it, so the
+                            // detail beside the list is about what is shown.
+                            selectedResultID = group.results.first?.id
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                proxy.scrollTo("group:\(group.id)", anchor: .top)
+                            }
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: icon(for: group.kind)).imageScale(.small)
+                                Text(group.kind.displayName)
+                                // A count only where it is the count: a kind
+                                // cut short has more than it shows, and "15+"
+                                // said less than nothing.
+                                if !isCut {
+                                    Text("\(count)")
+                                        .foregroundStyle(Color.lampSecondaryText)
+                                        .monospacedDigit()
+                                }
+                            }
+                            .font(.callout)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(Capsule().fill(Color.lampTileFill))
+                            .overlay(Capsule().strokeBorder(Color.lampCardStroke))
+                            .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .help("Jump to \(group.kind.displayName)")
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+            }
+            .background(Color(nsColor: .controlBackgroundColor))
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Color.lampCardStroke).frame(height: 1)
+            }
         }
     }
 
@@ -1011,65 +1098,37 @@ struct UnifiedSearchView: View {
     }
 
     private func resultGroupHeader(_ group: SearchResultGroup, offersMore: Bool) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Image(systemName: icon(for: group.kind))
-                .foregroundStyle(.tint)
-                .imageScale(.small)
-            // The shared heading style a size up: at caption size, over a
-            // list this long, it was the one thing on the page judged too
-            // small to find.
-            Text(group.kind.displayName)
-                .lampSectionHeading()
-                .font(.subheadline.weight(.semibold))
-            // The count in words and in the readable grey, not tracked into
-            // the heading's capitals where "SCRIPTURE 19" read as one label.
-            Text(resultCountDescription(
-                group, isCut: model.moduleSearchCutKinds.contains(group.kind) && isOnlyShelf(of: group)
-            ) + scriptureNote(group))
-                .font(.subheadline)
-                .foregroundStyle(Color.lampSecondaryText)
-                .monospacedDigit()
-                .lineLimit(1)
-            Spacer(minLength: 8)
-            if offersMore {
-                // The kind filter is the deeper page: it searches that kind
-                // alone, the whole page of it, rather than cutting from here.
-                // A control, so the accent: the link blue is for what text
-                // takes you to (ColorRules.md).
-                Button {
-                    selectedKind = group.kind
-                    kindOpenedFromAll = group.kind
-                } label: {
-                    HStack(spacing: 2) {
-                        Text("More in \(group.kind.displayName)")
-                        Image(systemName: "chevron.right").imageScale(.small)
-                    }
+        // Two lines: what the shelf is and how much, with the way deeper or
+        // back; then where it came from. On one line the count, the
+        // translation note, More and the module ran together.
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: icon(for: group.kind))
+                    .foregroundStyle(.tint)
+                    .imageScale(.small)
+                Text(group.kind.displayName)
+                    .lampSectionHeading()
+                    .font(.subheadline.weight(.semibold))
+                Text(resultCountDescription(
+                    group, isCut: model.moduleSearchCutKinds.contains(group.kind) && isOnlyShelf(of: group)
+                ))
                     .font(.subheadline)
-                }
-                .buttonStyle(.lampText)
-                .help("Show only \(group.kind.displayName), searched in full")
-            } else if offersWayBack(group) {
-                // Where "More in …" was, and drawn as it was, so the way
-                // back is under the pointer that came.
-                Button {
-                    selectedKind = nil
-                    kindOpenedFromAll = nil
-                } label: {
-                    HStack(spacing: 2) {
-                        Image(systemName: "chevron.left").imageScale(.small)
-                        Text("All Results")
-                    }
-                    .font(.subheadline)
-                }
-                .buttonStyle(.lampText)
-                .help("Back to the results from every kind")
+                    .foregroundStyle(Color.lampSecondaryText)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                groupHeaderAction(group, offersMore: offersMore)
             }
-            if let moduleName = group.moduleName {
-                Text(moduleName)
-                    .font(.subheadline)
+            let source = [group.moduleName, scriptureNote(group).isEmpty ? nil : String(scriptureNote(group).dropFirst(3))]
+                .compactMap { $0 }
+                .joined(separator: " · ")
+            if !source.isEmpty {
+                Text(source)
+                    .font(.caption)
                     .foregroundStyle(Color.lampSecondaryText)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                    .padding(.leading, 20)
             }
         }
         .padding(.horizontal, 16)
@@ -1078,6 +1137,41 @@ struct UnifiedSearchView: View {
         .background(Color(nsColor: .controlBackgroundColor))
         .overlay(alignment: .bottom) {
             Rectangle().fill(Color.lampCardStroke).frame(height: 1)
+        }
+    }
+
+    @ViewBuilder
+    private func groupHeaderAction(_ group: SearchResultGroup, offersMore: Bool) -> some View {
+        if offersMore {
+            // The kind filter is the deeper page: it searches that kind
+            // alone, the whole page of it, rather than cutting from here.
+            // A control, so the accent: the link blue is for what text
+            // takes you to (ColorRules.md).
+            Button {
+                selectedKind = group.kind
+                kindOpenedFromAll = group.kind
+            } label: {
+                HStack(spacing: 2) {
+                    Text("More in \(group.kind.displayName)")
+                    Image(systemName: "chevron.right").imageScale(.small)
+                }
+                .font(.subheadline.weight(.medium))
+            }
+            .buttonStyle(.lampText)
+            .help("Show only \(group.kind.displayName), searched in full")
+        } else if offersWayBack(group) {
+            // Where "More in …" was, so the way back is under the pointer
+            // that came.
+            Button {
+                selectedKind = nil
+                kindOpenedFromAll = nil
+            } label: {
+                Label("All Results", systemImage: "chevron.left")
+                    .font(.subheadline.weight(.medium))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("Back to the results from every kind")
         }
     }
 
@@ -1127,22 +1221,27 @@ struct UnifiedSearchView: View {
                 if let highlightColor = color(for: result.highlightColor) {
                     Circle().fill(highlightColor).frame(width: 9, height: 9)
                 }
+                // A Greek or Hebrew headword in a face and size its points
+                // read at: at 13.5pt a vav with its sheva read as "!".
                 Text(result.title)
-                    .font(.system(size: isScripture ? 14 : 13.5, weight: .semibold))
+                    .font(Self.isOriginalLanguage(result.title)
+                        ? .system(size: 17, weight: .regular, design: .serif)
+                        : .system(size: isScripture ? 14 : 13.5, weight: .semibold))
                     .lineLimit(2)
                 Spacer(minLength: 6)
                 if showsModule {
-                    Text(result.moduleName)
+                    Text(shortName(of: result.moduleID) == result.moduleID ? result.moduleName : shortName(of: result.moduleID))
+                        .help(result.moduleName)
                         .font(.subheadline)
                         .foregroundStyle(Color.lampSecondaryText)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                        .frame(maxWidth: 160, alignment: .trailing)
+                        .frame(maxWidth: 240, alignment: .trailing)
                 }
             }
             snippetText(result.snippet)
                 .font(.system(size: isScripture ? hitFontSize : max(13, hitFontSize - 3)))
-                .lineSpacing(isScripture ? 2 : 3)
+                .lineSpacing(isScripture ? 2 : 5)
                 .lineLimit(3)
                 .foregroundStyle(isScripture ? Color.primary : Color.lampSecondaryText)
         }
@@ -1201,9 +1300,14 @@ struct UnifiedSearchView: View {
                     Label(result.kind.displayName, systemImage: icon(for: result.kind))
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.tint)
-                    Text(result.title)
-                        .font(.system(size: 28, weight: .bold))
-                        .fixedSize(horizontal: false, vertical: true)
+                    if result.kind == .dictionary, let key = lexiconKey(of: result) {
+                        SearchDictionaryTitle(key: key, moduleID: result.moduleID, title: result.title)
+                            .id(result.id)
+                    } else {
+                        Text(result.title)
+                            .font(.system(size: 28, weight: .bold))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     detailByline(result)
                 }
 
@@ -1224,9 +1328,37 @@ struct UnifiedSearchView: View {
                     )
                     .id("\(result.id)|\(previewContext)")
                 } else if result.kind == .dictionary, let key = lexiconKey(of: result) {
+                    // Where the words stand in the entry, before the entry:
+                    // a long article can hold them pages down, and without
+                    // this the hit looked unrelated to what was searched.
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Where \u{201C}\(query)\u{201D} appears")
+                            .lampSectionHeading()
+                            .font(.caption.weight(.semibold))
+                        snippetText(result.snippet)
+                            .font(.system(size: detailFontSize - 3, design: .serif))
+                            .lineSpacing(3)
+                            .lineLimit(3)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(Color.lampCardFill))
+                    .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.lampCardStroke))
                     SearchDictionaryEntry(key: key, moduleID: result.moduleID) {
                         snippetText(result.snippet)
                             .font(.system(size: detailFontSize - 1, design: detailDesign(for: result.kind)))
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .environment(\.lampSearchHighlight, query)
+                    .id(result.id)
+                } else if result.kind == .commentary {
+                    SearchCommentaryHit(result: result, query: query, fontSize: detailFontSize) {
+                        snippetText(result.snippet)
+                            .font(.system(size: detailFontSize - 1, design: .serif))
+                            .lineSpacing(detailFontSize * 0.4)
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -1302,8 +1434,8 @@ struct UnifiedSearchView: View {
                     value: $previewContext,
                     in: 0...10
                 )
-                .controlSize(.regular)
-                .font(.callout)
+                .controlSize(.large)
+                .font(.body)
                 .foregroundStyle(Color.lampSecondaryText)
                 .fixedSize()
             }
@@ -1325,6 +1457,11 @@ struct UnifiedSearchView: View {
             }
             HStack(spacing: 6) {
                 Text(result.moduleName)
+                // A lexicon entry's key, named beside the lexicon it is in.
+                if result.kind == .dictionary, let key = lexiconKey(of: result) {
+                    Text("·")
+                    Text(key).monospacedDigit()
+                }
                 if let description = result.referenceDescription, description != result.title {
                     Text("·")
                     Label(description, systemImage: "book")
@@ -1418,14 +1555,17 @@ struct UnifiedSearchView: View {
                     HStack(spacing: 6) {
                         Image(systemName: "number")
                             .foregroundStyle(Color.lampSecondaryText)
+                        Text("Strong’s")
+                            .foregroundStyle(Color.lampSecondaryText)
+                        // A field drawn as one, inside the chip: as a bare
+                        // placeholder it read as a label, not a place to type.
                         TextField(
                             "Strong's key",
                             text: field(\.strongsKey),
-                            prompt: Text("Strong’s number, e.g. G26")
-                                .foregroundStyle(Color.lampSecondaryText)
+                            prompt: Text("G26 or H430")
                         )
-                        .textFieldStyle(.plain)
-                        .frame(width: 168)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 120)
                         if !strongsKey.isEmpty {
                             Button("Clear Strong's Key", systemImage: "xmark.circle.fill") {
                                 strongsKey = ""
@@ -1998,8 +2138,9 @@ private extension View {
     /// One search filter: a soft capsule on the card ground, the same height
     /// for a menu as for a field, so a row of them reads as one family.
     func filterChip() -> some View {
-        padding(.horizontal, 10)
-            .frame(height: 26)
+        font(.callout)
+            .padding(.horizontal, 11)
+            .frame(height: 30)
             .background(Capsule().fill(Color.lampTileFill))
             .overlay(Capsule().strokeBorder(Color.lampCardStroke))
     }
@@ -2067,3 +2208,461 @@ extension UnifiedSearchView {
     }
 }
 
+
+
+// MARK: - Landing, nothing found, and hits shown in full
+
+/// The search page before anything is typed.
+private struct SearchLanding: View {
+    let chosenKind: LampModuleKind?
+    let kinds: [LampModuleKind]
+    let recents: [LampSearchHistory.Entry]
+    let describe: (LampSearchHistory.Entry) -> String
+    let icon: (LampModuleKind) -> String
+    let choose: (LampModuleKind) -> Void
+    let search: (String) -> Void
+    let restore: (LampSearchHistory.Entry) -> Void
+    let clearHistory: () -> Void
+    let installModule: (() -> Void)?
+
+    /// Searches that show what the field takes: a word, a passage, a
+    /// Strong's number and a phrase. Each finds something in any library
+    /// with a Bible in it.
+    private static let examples: [(text: String, icon: String)] = [
+        ("grace", "textformat"),
+        ("John 3:16", "book"),
+        ("G26", "number"),
+        ("love one another", "text.quote"),
+    ]
+
+    var body: some View {
+        GeometryReader { geometry in
+        ScrollView {
+            VStack(alignment: .leading, spacing: 34) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(chosenKind.map { "Search \($0.displayName)" } ?? "Search Your Library")
+                        .font(.system(size: 26, weight: .bold))
+                    Text("Start typing to search: a word, a phrase, a passage or a Strong’s number.")
+                        .font(.title3)
+                        .foregroundStyle(Color.lampSecondaryText)
+                }
+
+                if let installModule {
+                    Button("Install a Module…", action: installModule)
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                }
+
+                if !recents.isEmpty {
+                    section("Recent Searches", trailing: AnyView(
+                        Button("Clear", action: clearHistory)
+                            .buttonStyle(.lampText)
+                            .font(.subheadline)
+                            .help("Clear search history")
+                    )) {
+                        VStack(spacing: 0) {
+                            ForEach(Array(recents.enumerated()), id: \.element.id) { index, entry in
+                                if index > 0 { Divider().padding(.leading, 44) }
+                                LandingRow(
+                                    icon: "clock.arrow.circlepath",
+                                    title: entry.query.isEmpty ? describe(entry) : entry.query,
+                                    detail: describe(entry)
+                                ) { restore(entry) }
+                            }
+                        }
+                        .background(RoundedRectangle(cornerRadius: 10).fill(Color.lampRaisedTile))
+                        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.13)))
+                    }
+                }
+
+                section("Try") {
+                    HStack(spacing: 8) {
+                        ForEach(Self.examples, id: \.text) { example in
+                            Button { search(example.text) } label: {
+                                Label(example.text, systemImage: example.icon)
+                                    .font(.callout)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 6)
+                                    .background(Capsule().fill(Color.lampTileFill))
+                                    .overlay(Capsule().strokeBorder(Color.lampCardStroke))
+                                    .contentShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .help("Search for \(example.text)")
+                        }
+                    }
+                }
+
+                section("Search In") {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4), spacing: 10) {
+                        ForEach(kinds, id: \.self) { kind in
+                            KindTile(
+                                kind: kind,
+                                icon: icon(kind),
+                                blurb: Self.blurb(for: kind),
+                                isChosen: chosenKind == kind
+                            ) { choose(kind) }
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: 780, alignment: .leading)
+            .padding(.horizontal, 48)
+            .padding(.vertical, 40)
+            // Centred in the pane where it fits, a little above the middle,
+            // rather than hung from the top over an empty lower half.
+            .frame(maxWidth: .infinity, minHeight: geometry.size.height * 0.88)
+        }
+        }
+    }
+
+    private func section<Content: View>(
+        _ title: String,
+        trailing: AnyView? = nil,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(title)
+                    .lampSectionHeading()
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                if let trailing { trailing }
+            }
+            content()
+        }
+    }
+
+    static func blurb(for kind: LampModuleKind) -> String {
+        switch kind {
+        case .translation: "Verses in every translation"
+        case .dictionary: "Lexicons and Strong’s entries"
+        case .commentary: "Notes on the passage"
+        case .book: "The books in your library"
+        case .devotional: "Studies you have written"
+        case .notes: "Your notes on verses"
+        case .plan: "Plans and their readings"
+        case .highlights: "Verses you have marked"
+        case .quiz: "Questions and answers"
+        }
+    }
+
+    private struct LandingRow: View {
+        let icon: String
+        let title: String
+        let detail: String
+        let action: () -> Void
+        @State private var isHovered = false
+
+        var body: some View {
+            Button(action: action) {
+                HStack(spacing: 12) {
+                    Image(systemName: icon)
+                        .foregroundStyle(Color.lampSecondaryText)
+                        .frame(width: 20)
+                    Text(title)
+                        .font(.body.weight(.medium))
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    Text(detail)
+                        .font(.callout)
+                        .foregroundStyle(Color.lampSecondaryText)
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .background(isHovered ? Color.lampRowHover : Color.clear)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { isHovered = $0 }
+        }
+    }
+
+    private struct KindTile: View {
+        let kind: LampModuleKind
+        let icon: String
+        let blurb: String
+        let isChosen: Bool
+        let action: () -> Void
+        @State private var isHovered = false
+
+        var body: some View {
+            Button(action: action) {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: icon)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.tint)
+                        .frame(width: 34, height: 34)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.lampTileFill))
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(kind.displayName)
+                            .font(.body.weight(.semibold))
+                        Text(blurb)
+                            .font(.subheadline)
+                            .foregroundStyle(Color.lampSecondaryText)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(isHovered ? Color.lampRowHover : Color.lampRaisedTile)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .strokeBorder(isChosen ? Color.accentColor : Color.primary.opacity(0.13), lineWidth: isChosen ? 1.5 : 1)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 10))
+            }
+            .buttonStyle(.plain)
+            .onHover { isHovered = $0 }
+            .help(isChosen ? "Search everything again" : "Search only \(kind.displayName)")
+            .accessibilityAddTraits(isChosen ? .isSelected : [])
+        }
+    }
+}
+
+/// A search that found nothing.
+private struct SearchNothingFound: View {
+    struct Widening: Identifiable {
+        let title: String
+        let detail: String?
+        let action: () -> Void
+        var id: String { title }
+    }
+
+    let query: String
+    let widenings: [Widening]
+    let suggestions: [String]
+    let search: (String) -> Void
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 38, weight: .light))
+                .foregroundStyle(Color.lampSecondaryText)
+            Text("No Results for \u{201C}\(query)\u{201D}")
+                .font(.title2.weight(.semibold))
+                .multilineTextAlignment(.center)
+            Text(hint)
+                .font(.title3)
+                .foregroundStyle(Color.lampSecondaryText)
+                .multilineTextAlignment(.center)
+            if !suggestions.isEmpty {
+                HStack(spacing: 8) {
+                    Text("Did you mean")
+                        .foregroundStyle(Color.lampSecondaryText)
+                    ForEach(suggestions, id: \.self) { word in
+                        Button(word) { search(word) }
+                            .buttonStyle(.lampText)
+                            .fontWeight(.semibold)
+                    }
+                }
+                .font(.title3)
+            }
+            if !widenings.isEmpty {
+                HStack(spacing: 10) {
+                    ForEach(widenings) { widening in
+                        Button(widening.title, action: widening.action)
+                            .buttonStyle(.bordered)
+                            .controlSize(.large)
+                    }
+                }
+                .padding(.top, 6)
+            }
+        }
+        .frame(maxWidth: 520)
+        .padding(.top, 110)
+        .padding(.horizontal, 32)
+    }
+
+    private var hint: String {
+        if let kind = widenings.first?.detail {
+            return "Nothing in \(kind) matched. Searching everything may find it."
+        }
+        if !widenings.isEmpty { return "Nothing matched with these filters." }
+        return "Check the spelling, or try fewer or different words."
+    }
+
+    /// The system speller's guesses for a single misspelt word. A phrase,
+    /// a reference or a number is not guessed at.
+    static func spellingSuggestions(for query: String) -> [String] {
+        let word = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard word.count >= 3, !word.contains(" "), word.allSatisfy(\.isLetter) else { return [] }
+        let checker = NSSpellChecker.shared
+        let range = NSRange(location: 0, length: (word as NSString).length)
+        let guesses = checker.guesses(forWordRange: range, in: word, language: nil, inSpellDocumentWithTag: 0) ?? []
+        return Array(guesses.filter { $0.caseInsensitiveCompare(word) != .orderedSame }.prefix(3))
+    }
+}
+
+/// A dictionary hit's heading: the headword at a size its script reads at,
+/// with how it is said and what it means. A Hebrew word of one letter and
+/// its points, set as the title alone, read as a lone "!".
+private struct SearchDictionaryTitle: View {
+    let key: String
+    let moduleID: String
+    let title: String
+
+    @EnvironmentObject private var model: LibraryModel
+    @State private var entry: LampDictionaryResult?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: isShortHeadword ? .center : .firstTextBaseline, spacing: 14) {
+                // A word of a letter or two set on a tile of its own, so it
+                // has the weight of a heading rather than floating alone.
+                if isShortHeadword {
+                    Text(entry?.lemma ?? title)
+                        .font(.system(size: 38, design: .serif))
+                        .frame(width: 60, height: 60)
+                        .background(RoundedRectangle(cornerRadius: 12).fill(Color.lampTileFill))
+                        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.lampCardStroke))
+                } else {
+                    Text(entry?.lemma ?? title)
+                        .font(.system(size: isOriginalLanguage ? 44 : 28, weight: isOriginalLanguage ? .regular : .bold, design: isOriginalLanguage ? .serif : .default))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let transliteration = entry?.transliteration, !transliteration.isEmpty {
+                    Text(transliteration)
+                        .font(.system(size: 20, design: .serif).italic())
+                        .foregroundStyle(Color.lampSecondaryText)
+                }
+
+            }
+            if let gloss {
+                Text(gloss)
+                    .font(.title2.weight(.semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .task(id: "\(moduleID)|\(key)") {
+            entry = (try? await model.library.dictionaryEntries(keys: [key], moduleIDs: [moduleID]))?.first
+        }
+    }
+
+    private var isShortHeadword: Bool {
+        isOriginalLanguage && (entry?.lemma ?? title).count <= 3
+    }
+
+    private var isOriginalLanguage: Bool {
+        (entry?.lemma ?? title).unicodeScalars.contains { (0x0370...0x03FF).contains($0.value) || (0x1F00...0x1FFF).contains($0.value) || (0x0590...0x05FF).contains($0.value) }
+    }
+
+    private var gloss: String? {
+        guard let sense = entry?.senses.first else { return nil }
+        let text = sense.gloss ?? sense.shortDefinition
+        return text.flatMap { $0.isEmpty ? nil : $0 }
+    }
+}
+
+/// A commentary hit in its whole comment: the passage it is on, then the
+/// comment with the searched words marked. It showed the row's excerpt
+/// again, larger, over an empty pane.
+private struct SearchCommentaryHit<Fallback: View>: View {
+    let result: LampModuleSearchResult
+    let query: String
+    let fontSize: Double
+    @ViewBuilder let fallback: () -> Fallback
+
+    @EnvironmentObject private var model: LibraryModel
+    @State private var unit: LampCommentaryUnit?
+    @State private var verse: String?
+    @State private var hasLoaded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            if let verse, let reference = result.startReference {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(LampBibleReferenceFormatter.describeRange(from: reference, to: result.endReference ?? reference))
+                        .lampSectionHeading()
+                        .font(.caption.weight(.semibold))
+                    Text(verse)
+                        .font(.system(size: fontSize, design: .serif))
+                        .lineSpacing(fontSize * 0.35)
+                        .foregroundStyle(Color.lampSecondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.leading, 14)
+                .overlay(alignment: .leading) {
+                    Rectangle().fill(Color.lampCardStroke).frame(width: 3)
+                }
+            }
+            if let text = unitText {
+                Text.lampMarked(LampSearchQuery(query).markedSnippet(text, limit: .max))
+                    .font(.system(size: fontSize, design: .serif))
+                    .lineSpacing(fontSize * 0.4)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if hasLoaded {
+                fallback()
+            }
+        }
+        .task(id: result.id) { await load() }
+    }
+
+    private var unitText: String? {
+        guard let unit else { return nil }
+        let parts = [unit.introduction, unit.translation, unit.commentary, unit.footnotes]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
+    }
+
+    private func load() async {
+        defer { hasLoaded = true }
+        let prefix = "commentary:\(result.moduleID):"
+        guard result.id.hasPrefix(prefix), let reference = result.startReference else { return }
+        let unitID = String(result.id.dropFirst(prefix.count))
+        let place = LampBibleReferenceFormatter.components(of: reference)
+        let units = (try? await model.library.commentary(
+            bookNumber: place.book, chapterNumber: place.chapter, moduleIDs: [result.moduleID]
+        )) ?? []
+        unit = units.first { $0.unitID == unitID }
+        let parts = LampBibleReferenceFormatter.components(of: reference)
+        let last = LampBibleReferenceFormatter.components(of: result.endReference ?? reference)
+        if let translationID = model.selectedTranslationID,
+           let chapterRead = try? await model.library.chapter(
+            moduleID: translationID,
+            bookNumber: parts.book,
+            chapterNumber: parts.chapter
+        ) {
+            // The passage commented on, up to three verses of it.
+            let upTo = last.chapter == parts.chapter ? min(last.verse, parts.verse + 2) : parts.verse + 2
+            let shown = chapterRead.verses.filter { $0.number >= parts.verse && $0.number <= upTo }
+            if !shown.isEmpty { verse = shown.map(\.text).joined(separator: " ") }
+        }
+    }
+}
+
+
+extension EnvironmentValues {
+    /// The words a search detail is showing a hit for, which a dictionary
+    /// entry marks where they stand in it. Nil everywhere else.
+    @Entry var lampSearchHighlight: String? = nil
+}
+
+extension AttributedString {
+    /// Marks each place `query` matches, as a find match, by core's rule
+    /// for what a search's words match (`LampSearchQuery.matchRanges`): the
+    /// words the hit's snippet marked, quoted, starred or typed.
+    mutating func lampMarkMatches(of query: String) {
+        let ranges = LampSearchQuery(query).matchRanges(in: String(characters))
+        let count = characters.count
+        for range in ranges where range.lowerBound >= 0 && range.upperBound <= count && !range.isEmpty {
+            let lower = characters.index(startIndex, offsetBy: range.lowerBound)
+            let upper = characters.index(lower, offsetBy: range.count)
+            self[lower..<upper].backgroundColor = .lampFindMatch
+            // A link keeps its own colour, the role it is followed by;
+            // only plain words take the match's ink.
+            for run in self[lower..<upper].runs where run.link == nil {
+                self[run.range].foregroundColor = .lampOnFindMatch
+            }
+        }
+    }
+}

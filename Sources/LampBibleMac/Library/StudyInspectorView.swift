@@ -2989,6 +2989,7 @@ private struct CommentaryInspectorView: View {
 /// Shared annotated prose renderer for commentary and dictionary content. Tapping
 /// an inline scripture or dictionary-key annotation opens its matching preview.
 private struct ScriptureLinkedText: View {
+    @Environment(\.lampSearchHighlight) private var searchHighlight
     let text: String
     let links: [LampScriptureLink]
     var dictionaryLinks: [LampDictionaryLink] = []
@@ -3130,6 +3131,8 @@ private struct ScriptureLinkedText: View {
             result.append(AttributedString(")"))
         }
 
+        // A search's words, where the entry was opened from a search hit.
+        if let searchHighlight { result.lampMarkMatches(of: searchHighlight) }
         // Last, since a mark moves the offsets everything above used.
         LampBidiNumbers.holdLeftToRight(in: &result)
         if holdsLeftToRight { LampDictionaryStyling.holdLeftToRight(&result) }
