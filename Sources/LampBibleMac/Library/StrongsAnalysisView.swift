@@ -1106,6 +1106,11 @@ struct StrongsAnalysisPane: View {
     /// The books being searched, so the shape can put back the ones the key
     /// never reaches.
     let bookRange: ClosedRange<Int>?
+    /// Whether the analysis was narrowed to a chosen translation rather than
+    /// asking every installed one. It changes nothing that is drawn — only
+    /// what an absence is allowed to claim, since a search of one translation
+    /// cannot speak for the rest of the library.
+    var narrowedToTranslations: Bool = false
     /// The reader's text size, carried in so the pane's words move with it
     /// rather than sitting at a fixed caption size.
     let fontSize: Double
@@ -1234,7 +1239,10 @@ struct StrongsAnalysisPane: View {
                     ContentUnavailableView {
                         Label(LampStrongsPresence.title(key: key), systemImage: "tag.slash")
                     } description: {
-                        Text(LampStrongsPresence.reason(narrowed: bookRange != nil))
+                        Text(LampStrongsPresence.reason(
+                            narrowed: bookRange != nil,
+                            toTranslations: narrowedToTranslations
+                        ))
                     }
                 }
             } else if let analysis {
@@ -2290,7 +2298,7 @@ struct StrongsAnalysisPane: View {
                         Button("Showing \(LampBibleReferenceFormatter.bookName(book)) only · show every book") {
                             septuagintBook = nil
                         }
-                        .buttonStyle(.link)
+                        .buttonStyle(.lampText)
                         .font(.system(size: Self.chartFinePrintSize))
                         .padding(.top, 2)
                     }
@@ -3788,7 +3796,7 @@ private struct SeptuagintWordGroup: View {
                 Button("Show \(min(SeptuagintLoader.shownVerses, references.count - shown)) More") {
                     shownVerses = shown + SeptuagintLoader.shownVerses
                 }
-                .buttonStyle(.link)
+                .buttonStyle(.lampText)
                 .font(.caption)
                 Text("\(shown) of \(references.count)")
                     .font(.caption)
@@ -3796,7 +3804,7 @@ private struct SeptuagintWordGroup: View {
                 Button("Analyse \(strongs)") {
                     analyse(strongs)
                 }
-                .buttonStyle(.link)
+                .buttonStyle(.lampText)
                 .font(.caption)
             }
             .chartClickable()

@@ -28,9 +28,70 @@ struct UnifiedSearchView: View {
     @Binding var tabs: SearchTabCollection
 
 
+    /// What is being typed, until it settles.
+    ///
+    /// Every character used to go straight into `tabs`, which is state owned
+    /// by `LibraryRootView`. One keystroke therefore invalidated the whole
+    /// library interface, and the reader's chapters were rebuilt with it —
+    /// off screen, behind the Search pane, for a search they have nothing to
+    /// do with. Sampled on a release build while 29 characters were typed,
+    /// the main thread was busy for 99% of the five seconds, and seven
+    /// tenths of that was SwiftUI and the Swift runtime instantiating view
+    /// values again: almost none of it was this app's own code.
+    ///
+    /// The tab still owns the query. This is only the gap between a
+    /// keystroke and the tab hearing about it, so nothing downstream has to
+    /// know: the pane reads the typed text, and the tab is told once the
+    /// typing stops. Nil means nothing is in that gap and the tab's own
+    /// value is the truth, which is what another tab shows.
+    private struct Typing: Equatable {
+        let tab: UUID
+        let text: String
+    }
+
+    @State private var typing: Typing?
+
+    /// Settled deliberately at the same 250ms the search itself waits, and
+    /// for the same reason. It costs no delay: the search is driven by the
+    /// typed text rather than by the tab, so results arrive exactly when
+    /// they did before — what waits is the tab's name and what is saved for
+    /// the next launch, neither of which anybody watches mid-word.
+    private static let querySettles = Duration.milliseconds(250)
+
     private var query: String {
-        get { tabs.selected.query }
-        nonmutating set { tabs.updateSelected { $0.query = newValue } }
+        get {
+            if let typing, typing.tab == tabs.selectedID { return typing.text }
+            return tabs.selected.query
+        }
+        nonmutating set { typing = Typing(tab: tabs.selectedID, text: newValue) }
+    }
+
+    private var queryField: Binding<String> {
+        Binding(get: { query }, set: { query = $0 })
+    }
+
+    /// Hands the typed text to the tab that was being typed in.
+    ///
+    /// Takes the tab by argument rather than reading the selected one: this
+    /// also runs when the reader switches tabs, and by then the selected tab
+    /// is not the one the words belong to.
+    private func settleTyping() {
+        guard let typing else { return }
+        tabs.update(typing.tab) { $0.query = typing.text }
+        self.typing = nil
+    }
+
+    /// Sets the query outright, for the changes that are not typing: the
+    /// clear button, a history entry put back, a key taken up for analysis.
+    ///
+    /// These wait for nothing. There is no burst of them to coalesce, and
+    /// waiting would put them at risk: the pane is mounted only while Search
+    /// is the section on show, so leaving it within the settling time takes
+    /// the pending text with it. A cleared field that came back filled would
+    /// be the worst of them.
+    private func setQuery(_ text: String) {
+        typing = nil
+        tabs.updateSelected { $0.query = text }
     }
     private var selectedKind: LampModuleKind? {
         get { tabs.selected.kind }
@@ -324,7 +385,7 @@ struct UnifiedSearchView: View {
                 // window ever had.
                 tabViewState[id] = nil
             },
-            duplicate: { tabs.duplicate($0) },
+            duplicate: { settleTyping(); tabs.duplicate($0) },
             rename: { tabs.rename($0, to: $1) },
             move: { tabs.move($0, to: $1) },
             clearNameTitle: "Use the Search's Words",
@@ -377,7 +438,7 @@ struct UnifiedSearchView: View {
         // Short enough to stay whole once the Strong's key field joins the
         // toolbar: the longer "Search Bibles and modules" was cut to
         // "Search Bibles and n…" at the default window size.
-        .searchable(text: field(\.query), placement: .toolbar, prompt: "Search Library")
+        .searchable(text: queryField, placement: .toolbar, prompt: "Search Library")
         .onSubmit(of: .search) {
             // On submit rather than as it is typed: "H7" is a plausible key
             // while someone is still typing "H7225", and moving the text out
@@ -396,6 +457,27 @@ struct UnifiedSearchView: View {
             guard old.tab == new.tab else { return }
             runSearch()
         }
+        // The tab hears about the typing once it stops. `.task(id:)` cancels
+        // the waiting one for us on the next character, so the tab is written
+        // once a word, not once a letter.
+        .task(id: typing) {
+            guard typing != nil else { return }
+            try? await Task.sleep(for: Self.querySettles)
+            guard !Task.isCancelled else { return }
+            settleTyping()
+        }
+        // Switching tabs within the settling time would otherwise leave the
+        // last few letters in a tab nobody is looking at, to be dropped when
+        // the next keystroke replaced them.
+        .onChange(of: tabs.selectedID) { _, _ in settleTyping() }
+        // The pane is mounted only while Search is the section being shown,
+        // so stepping to the Reader within the settling time would otherwise
+        // destroy the pending text along with the view. Quitting is the same
+        // loss by another route, and nothing else is listening for it.
+        .onDisappear { settleTyping() }
+        .onReceive(NotificationCenter.default.publisher(
+            for: NSApplication.willTerminateNotification
+        )) { _ in settleTyping() }
         .onChange(of: tabbed(selectedKind)) { old, new in
             guard old.tab == new.tab else { return }
             // Only when it no longer belongs. Clearing unconditionally threw
@@ -669,9 +751,12 @@ struct UnifiedSearchView: View {
     /// has no earlier key, but it does have the search it was opened from,
     /// and before this that left the analysis with no way out at all: the
     /// only one was the key field's clear button, which reads as emptying a
-    /// field rather than as leaving. Clearing the key is still what it does
-    /// — the words searched are untouched, so the hits come back as they
-    /// were.
+    /// field rather than as leaving. Clearing the key is still all it does,
+    /// so where it lands depends on how the analysis was reached: from the
+    /// key field, the words searched are untouched and their hits come back;
+    /// from the "Analyse G26" offer, which clears the words as it takes up
+    /// the key, it is the search landing. Both are the search as it was
+    /// left.
     private var backFromStrongsAnalysis: StrongsAnalysisPane.Back {
         if let previous = strongsTrail.last {
             return StrongsAnalysisPane.Back(title: previous, go: goBackAlongStrongsTrail)
@@ -704,6 +789,7 @@ struct UnifiedSearchView: View {
                 // so opening another one sets it, where it can be undone.
                 openIn: { selectedModuleID = $0 },
                 bookRange: bookScope.range,
+                narrowedToTranslations: selectedModuleID != nil,
                 fontSize: hitFontSize,
                 back: backFromStrongsAnalysis
             )
@@ -810,7 +896,7 @@ struct UnifiedSearchView: View {
     private func analyse(_ key: String) {
         selectedKind = .translation
         strongsKey = key
-        query = ""
+        setQuery("")
     }
 
     /// The results, shelved by what they are: scripture first, then the
@@ -1467,7 +1553,7 @@ struct UnifiedSearchView: View {
         devotionalTag = entry.devotionalCriteria?.tags?.first ?? ""
         devotionalCategory = entry.devotionalCriteria?.categories?.first ?? ""
         // Last, because every assignment above runs a search of its own.
-        query = entry.query
+        setQuery(entry.query)
     }
 
     private func historyDescription(_ entry: LampSearchHistory.Entry) -> String {
