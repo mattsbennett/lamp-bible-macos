@@ -1355,7 +1355,7 @@ struct StrongsAnalysisPane: View {
                 addToDeck(analysis, [deckChart(
                     analysis, name: "Compare", by: .translation,
                     title: "\(headword(analysis)) across translations",
-                    caption: "Counts depend on how each translation was tagged"
+                    caption: LampStrongsCompareNote.caption
                 )])
             default: EmptyView()
             }
@@ -1939,7 +1939,12 @@ struct StrongsAnalysisPane: View {
                 let readings = formReadings(of: analysis)
                 group(
                     "Forms",
-                    note: LampStrongsFormReading.note(for: analysis, readings: Array(readings.values)),
+                    // Why a word has several spellings, only where they are
+                    // listed: without forms the section is only the way to
+                    // the text that lists them (owner, Nov 2026).
+                    note: analysis.forms.isEmpty
+                        ? nil
+                        : LampStrongsFormReading.note(for: analysis, readings: Array(readings.values)),
                     asRing: analysis.forms.isEmpty ? nil : formsRing,
                     // Nothing to chart without forms: a slide of none would be
                     // an empty placeholder.
@@ -3127,10 +3132,7 @@ struct StrongsAnalysisPane: View {
                 // ordered by how strongly the association shows, which is not
                 // the multiple beside them: σπλάγχνα at 25× chance rests on
                 // three shared verses, and πίστις at 9× on twenty-two.
-                Text("The bar is each word's strength of association with this one, "
-                    + "against the strongest here, and the list follows it. The multiple "
-                    + "says how much more often than chance the two share a verse: a high "
-                    + "multiple over few verses says less than a smaller one over many.")
+                Text(LampStrongsCompanionStrength.explanation)
                     .font(.subheadline)
                     .foregroundStyle(Color.lampSecondaryText)
                     .padding(.top, 2)
@@ -3174,7 +3176,7 @@ struct StrongsAnalysisPane: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            Text("Counts depend on how each translation was tagged, so they are not all measuring the same thing.")
+            Text(LampStrongsCompareNote.text)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .padding(.top, 2)
@@ -3296,7 +3298,18 @@ struct StrongsAnalysisPane: View {
         let showsGaps = !gaps.isEmpty
             && (formReadings?.source == formsSource(of: analysis) || analysis.forms.isEmpty)
         let name = analysis.translationAbbreviation ?? analysis.translationName
-        if !matched.isEmpty || showsGaps {
+        if analysis.forms.isEmpty, showsGaps {
+            // With no forms to list, what the tags leave out is all the
+            // section says, so it is said outright rather than folded under
+            // a label (owner, Nov 2026).
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(gaps, id: \.self) { Text($0) }
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 4)
+        } else if !matched.isEmpty || showsGaps {
             // Where the spellings come from and what the tags leave out,
             // behind a disclosure as the Septuagint is: set out in full
             // above the figures they were several paragraphs of fine print
