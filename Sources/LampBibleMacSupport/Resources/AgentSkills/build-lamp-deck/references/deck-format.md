@@ -379,6 +379,20 @@ and overwrites anything it finds there.
 - `translations` is the list a chart `by` translation compares. Leave it out to
   compare every tagged translation in the library — but naming them keeps the
   slide the same on another device, whose library may hold different ones.
+- `includesOriginalLanguages` applies only when `translations` is left out, so
+  that the chart compares every tagged translation. Naming a translation is
+  asking for it: a named list is drawn as given, original languages included.
+  Left to itself, the option lets such a chart count the texts in
+  the biblical languages themselves: the Hebrew Bible, the Greek New
+  Testament, the Septuagint. **Leave it out unless the reader asks for those
+  texts.** Such
+  a text does not render the word — it is the word — so its count is the
+  tagging restated rather than a translator's choice, and it is usually the
+  largest, which sets the scale every real translation is then measured
+  against. Set it to `true` only when the point being made is about the
+  original text itself, and say so in the caption. It means nothing anywhere
+  but a chart `by` translation, which is why naming it elsewhere is a
+  warning.
 
 ### What to group by: `by`
 
@@ -394,6 +408,9 @@ and overwrites anything it finds there.
 - `translation` puts the word's count in each translation side by side, with
   its commonest renderings under each name. The counts differ because the
   taggings differ, not because the texts do; say so if it matters to the point.
+  The Hebrew and Greek texts are left out unless `includesOriginalLanguages`
+  asks for them, so a chart of a Greek key shows what the English Bibles made
+  of it rather than being led by the Greek text's own count.
 - `companion` ranks the keys that share the word's verses more often than
   chance predicts, named by their lexicon headword and gloss, and measured in
   how many times chance (`9.1×`). Strongest association first, which is not the

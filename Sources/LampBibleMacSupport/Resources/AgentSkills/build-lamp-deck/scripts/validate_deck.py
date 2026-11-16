@@ -623,6 +623,20 @@ def chart_issues(block: dict) -> tuple[list[str], list[str]]:
                     "translations; this one counts translationID."
                 )
 
+        # A chart by translation leaves the Hebrew and Greek texts out unless
+        # this says otherwise; anywhere else it means nothing.
+        included = source.get("includesOriginalLanguages")
+        if included is not None and not isinstance(included, bool):
+            # Lamp's decoder refuses a deck over this, so reporting it as a
+            # warning would send an agent away with a deck that will not open.
+            errors.append("chart.source.includesOriginalLanguages: expected true or false")
+        if included is True:
+            if grouping in CHART_GROUPINGS and grouping != "translation":
+                warnings.append(
+                    "chart.source.includesOriginalLanguages: Only a chart by translation "
+                    "can hold the Hebrew and Greek texts back, or let them in."
+                )
+
         filter_ = source.get("filter")
         if filter_ is not None:
             filter_errors, filter_warnings = chart_filter_issues(filter_, grouping, feature)

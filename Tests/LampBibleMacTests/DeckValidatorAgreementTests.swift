@@ -318,6 +318,21 @@ struct DeckValidatorAgreementTests {
                     ),
                     by: .grammar, feature: .grammaticalCase
                 )),
+                // The Hebrew and Greek texts let into a chart that is not a
+                // comparison, which cannot hold them back or let them in.
+                slide(.init(
+                    source: .init(
+                        strongs: "G26", translationID: "T", includesOriginalLanguages: true
+                    ),
+                    by: .book, values: one
+                )),
+                // And asked for where it is read, which says nothing.
+                slide(.init(
+                    source: .init(
+                        strongs: "G26", translationID: "", includesOriginalLanguages: true
+                    ),
+                    by: .translation, values: one
+                )),
                 // A feature and a list of translations that a chart by book reads neither of.
                 slide(.init(
                     source: .init(strongs: "G26", translationID: "T", translations: ["U"]),

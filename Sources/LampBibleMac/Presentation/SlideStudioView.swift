@@ -2016,6 +2016,15 @@ private struct LampSlideChartEditor: View {
         return Menu(chosen.map { $0.count == 1 ? "1 translation" : "\($0.count) translations" }
             ?? "Every tagged translation") {
             Button("Every Tagged Translation") { chart.wrappedValue.source.translations = nil }
+            // Only where the chart compares them all. A named list is drawn
+            // as named — ticking the Greek text below is how it is asked for
+            // there — so the option would be a toggle that did nothing.
+            if chart.wrappedValue.source.translations == nil {
+                Toggle("Include the Hebrew and Greek Texts", isOn: Binding(
+                    get: { chart.wrappedValue.source.includesOriginalLanguages },
+                    set: { chart.wrappedValue.source.includesOriginalLanguages = $0 }
+                ))
+            }
             Divider()
             // Only those tagged with Strong's: no other can be compared.
             let tagged = model.translations.filter(\.tagsStrongs)

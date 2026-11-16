@@ -1154,6 +1154,13 @@ struct StrongsAnalysisPane: View {
     @State private var spreadGrouping: LampStrongsSpreadGrouping = .books
     @State private var measure: LampStrongsSpreadMeasure = .occurrences
     @State private var openBook: Int?
+    /// Whether Compare's original-language texts are unfolded.
+    ///
+    /// Reset when the key changes, and not otherwise: opening the fold is a
+    /// decision about this word, so following a companion into another word
+    /// should not inherit it, while stepping to another tab of the same word
+    /// and back should.
+    @State private var showsOriginalLanguages = false
     /// The slice the pointer is over, named in the ring's hole. Every slice
     /// is a shade of one colour, so matching one to its row by eye is hard.
     /// Set once rather than per search, so it is remembered.
@@ -1311,6 +1318,7 @@ struct StrongsAnalysisPane: View {
             // show them: otherwise the click narrows a list out of sight.
             if chosen != nil, sections.contains(.verses) { section = .verses }
         }
+        .onChange(of: key) { showsOriginalLanguages = false }
     }
 
     /// The pane's own tabs, wherever it sits, as the study column's are.
@@ -1352,11 +1360,17 @@ struct StrongsAnalysisPane: View {
             case .spread:
                 addToDeck(analysis, [spreadDeckChart(analysis)])
             case .compare:
-                addToDeck(analysis, [deckChart(
-                    analysis, name: "Compare", by: .translation,
-                    title: "\(headword(analysis)) across translations",
-                    caption: LampStrongsCompareNote.caption
-                )])
+                // Offered only where such a text is among the answers: a
+                // toggle that changes nothing is worse than none.
+                addToDeck(
+                    analysis,
+                    offersOriginalLanguages: !comparison.originalLanguages.isEmpty,
+                    [deckChart(
+                        analysis, name: "Compare", by: .translation,
+                        title: "\(headword(analysis)) across translations",
+                        caption: LampStrongsCompareNote.caption
+                    )]
+                )
             default: EmptyView()
             }
         }
@@ -3144,29 +3158,54 @@ struct StrongsAnalysisPane: View {
 
     // MARK: - Compare
 
+    /// The installed texts that are in a biblical language rather than
+    /// translating one. Taken from the modules rather than the analyses,
+    /// which do not carry a language.
+    ///
+    /// Core's test, deliberately, and not this app's
+    /// `biblicalOriginalLanguage`: that one also reads a module's *name*,
+    /// which was written for lexicons and would fold away a tagged English
+    /// Bible with "Greek" in its title. The chart this tab exports is
+    /// filtered by core, so a second opinion here would mean the fold and
+    /// the slide disagreed about what a translation is.
+    private var originalLanguageIDs: Set<String> {
+        Set(model.translations
+            .filter { LampTranslationLanguages.strongsSide(of: $0.language) != nil }
+            .map(\.id))
+    }
+
+    private var comparison: LampStrongsComparison.Split {
+        LampStrongsComparison.split(loader.analyses, originalLanguageIDs: originalLanguageIDs)
+    }
+
     private var compare: some View {
         VStack(alignment: .leading, spacing: 12) {
-            ForEach(loader.analyses, id: \.translationID) { other in
-                // Each row opens the word in that translation, its own
-                // Translated As, Forms and Spread with it: the way between
-                // translations from any of them, not only from TAGNT.
-                let isShown = other.translationID == analysis?.translationID
-                let name = other.translationAbbreviation ?? other.translationName
-                Group {
-                    if !isShown, let openIn {
-                        Button {
-                            openIn(other.translationID)
-                        } label: {
-                            compareRow(other, isShown: false)
+            ForEach(comparison.translations, id: \.translationID) { other in
+                compareEntry(other)
+                Divider()
+            }
+            // Below the translations and folded away, because a Hebrew or
+            // Greek text does not render the word: listed among the English
+            // Bibles it read as one more rendering, and being the largest
+            // count it set the scale for all of them.
+            if !comparison.originalLanguages.isEmpty {
+                DisclosureGroup(
+                    LampStrongsComparison.foldTitle(count: comparison.originalLanguages.count),
+                    isExpanded: $showsOriginalLanguages
+                ) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(LampStrongsComparison.foldNote)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, 6)
+                        ForEach(comparison.originalLanguages, id: \.translationID) { other in
+                            compareEntry(other)
+                            Divider()
                         }
-                        .buttonStyle(.plain)
-                        .chartClickable()
-                        .help("Analyse this word in \(name)")
-                    } else {
-                        compareRow(other, isShown: isShown)
                     }
                 }
-                Divider()
+                .font(.system(size: fontSize, weight: .medium))
             }
             if loader.isFillingRest {
                 HStack(spacing: 6) {
@@ -3183,6 +3222,29 @@ struct StrongsAnalysisPane: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
+    }
+
+    /// One translation's row: a button where it leads somewhere, plain
+    /// where it is the analysis already on screen.
+    @ViewBuilder
+    private func compareEntry(_ other: LampStrongsAnalysis) -> some View {
+        // Each row opens the word in that translation, its own Translated
+        // As, Forms and Spread with it: the way between translations from
+        // any of them, not only from TAGNT.
+        let isShown = other.translationID == analysis?.translationID
+        let name = other.translationAbbreviation ?? other.translationName
+        if !isShown, let openIn {
+            Button {
+                openIn(other.translationID)
+            } label: {
+                compareRow(other, isShown: false)
+            }
+            .buttonStyle(.plain)
+            .chartClickable()
+            .help("Analyse this word in \(name)")
+        } else {
+            compareRow(other, isShown: isShown)
+        }
     }
 
     private func compareRow(_ other: LampStrongsAnalysis, isShown: Bool) -> some View {
@@ -3219,7 +3281,10 @@ struct StrongsAnalysisPane: View {
         // number. For an Old Testament word in the Septuagint, the English
         // Bibles tag the Hebrew instead, so there may be none, and then the
         // note says so rather than sending the reader to an empty tab.
-        let othersTagIt = loader.isFillingRest || loader.analyses.contains {
+        // Translations only: another original-language text is not what
+        // "how each translation renders it" promises, and with the fold it
+        // would send the reader to a tab showing nothing open.
+        let othersTagIt = loader.isFillingRest || comparison.translations.contains {
             $0.translationID != analysis.translationID && $0.occurrenceCount > 0
         }
         return VStack(alignment: .leading, spacing: 8) {
@@ -3461,13 +3526,15 @@ struct StrongsAnalysisPane: View {
     private func addToDeck(
         _ analysis: LampStrongsAnalysis,
         offersFilter: Bool = true,
+        offersOriginalLanguages: Bool = false,
         _ charts: [AnalysisDeckChart]
     ) -> AddToDeckMenu {
         AddToDeckMenu(
             charts: charts,
             filter: offersFilter ? filter : nil,
             deckTitle: headword(analysis),
-            deckSubtitle: entry?.shortGloss.flatMap { $0.isEmpty ? nil : $0 }
+            deckSubtitle: entry?.shortGloss.flatMap { $0.isEmpty ? nil : $0 },
+            offersOriginalLanguages: offersOriginalLanguages
         )
     }
 
@@ -5130,16 +5197,27 @@ struct AddToDeckMenu: View {
     /// The new deck's title and subtitle.
     let deckTitle: String
     let deckSubtitle: String?
+    /// Whether this chart could hold the Hebrew and Greek texts, which is
+    /// true only of a comparison, and only where such a text tags the key.
+    /// Nothing is offered where nothing would change.
+    var offersOriginalLanguages: Bool = false
 
     @EnvironmentObject private var model: LibraryModel
     @Environment(\.openWindow) private var openWindow
     @ObservedObject private var inbox = SlideStudioInbox.shared
     @State private var onlyFiltered = false
+    /// Off, as the chart itself is. The menu says what it would add rather
+    /// than what it is leaving out, so the default reads as the plain case.
+    @State private var includesOriginalLanguages = false
 
     var body: some View {
         Menu {
             if let narrowing {
                 Toggle("Only Occurrences \(narrowing.label)", isOn: $onlyFiltered)
+                Divider()
+            }
+            if offersOriginalLanguages {
+                Toggle("Include the Hebrew and Greek Texts", isOn: $includesOriginalLanguages)
                 Divider()
             }
             if charts.count == 1, let chart = charts.first {
@@ -5204,6 +5282,15 @@ struct AddToDeckMenu: View {
             if let filter = narrowing.filter { chart.source.filter = filter }
             if let range = narrowing.range { chart.source.range = range }
             caption += " · only occurrences \(narrowing.label.prefix(1).lowercased() + narrowing.label.dropFirst())"
+        }
+        // Said in the caption because the chart cannot show what is not
+        // there: a reader meeting the slide later has no way to tell a
+        // comparison that left the Hebrew out from one with none to leave.
+        if offersOriginalLanguages {
+            chart.source.includesOriginalLanguages = includesOriginalLanguages
+            caption += includesOriginalLanguages
+                ? " · the Hebrew and Greek texts included"
+                : " · translations only"
         }
         // Worked out now, so the slide draws in the deck's thumbnails and a
         // presentation at once. If the library cannot, the slide still goes
