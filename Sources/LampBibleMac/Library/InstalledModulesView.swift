@@ -12,6 +12,7 @@ import SwiftUI
 /// card keeps a module's name, its details and its actions together.
 struct InstalledModulesView: View {
     @EnvironmentObject private var model: LibraryModel
+    @Environment(\.openWindow) private var openWindow
     @State private var moduleToRemove: LampInstalledModule?
     @State private var exportRequest: ModuleExportRequest?
     @State private var filterText = ""
@@ -368,7 +369,11 @@ struct InstalledModulesView: View {
             isBuiltIn: module.isBundled,
             tagsStrongs: module.tagsStrongs
         ) {
+            Button("Get Info", systemImage: "info.circle") {
+                openWindow(id: "module-info", value: ModuleInfoRequest(moduleID: module.id))
+            }
             if !module.isBundled {
+                Divider()
                 Button("Export Module…", systemImage: "square.and.arrow.up") {
                     exportRequest = ModuleExportRequest(
                         initialChoiceID: ModuleExportChoice.installed(module).id
@@ -382,7 +387,11 @@ struct InstalledModulesView: View {
         }
         .help(module.name)
         .contextMenu {
+            Button("Get Info", systemImage: "info.circle") {
+                openWindow(id: "module-info", value: ModuleInfoRequest(moduleID: module.id))
+            }
             if !module.isBundled {
+                Divider()
                 Button("Export Module…", systemImage: "square.and.arrow.up") {
                     exportRequest = ModuleExportRequest(
                         initialChoiceID: ModuleExportChoice.installed(module).id
@@ -495,25 +504,28 @@ private struct ModuleShelfCard<Actions: View>: View {
                         .foregroundStyle(Color.lampSecondaryText)
                         .lineLimit(1)
                     Spacer(minLength: 0)
-                    // Quiet at rest and full strength under the pointer. A
-                    // built-in module has nothing to export or remove, so it
-                    // has no button; its detail line says "Built In".
-                    if !isBuiltIn {
-                        Menu {
-                            actions()
-                        } label: {
-                            Image(systemName: "ellipsis.circle")
-                                .font(.system(size: 14))
-                                .frame(width: 22, height: 16)
-                                .contentShape(Rectangle())
-                        }
-                        .menuStyle(.borderlessButton)
-                        .menuIndicator(.hidden)
-                        .fixedSize()
-                        .foregroundStyle(isHovering ? Color.primary : Color.lampSecondaryText)
-                        .help("Export or remove \(name)")
-                        .accessibilityLabel("Actions for \(name)")
+                    // Quiet at rest and full strength under the pointer.
+                    //
+                    // Every card carries it, built-in ones included. They had
+                    // no button while export and remove were all it held and
+                    // neither applies to a bundled module — but Get Info does,
+                    // and most of a library is bundled, so without the button
+                    // its details would be reachable only by right-clicking a
+                    // cover that gives no sign there is a menu there.
+                    Menu {
+                        actions()
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .font(.system(size: 14))
+                            .frame(width: 22, height: 16)
+                            .contentShape(Rectangle())
                     }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .foregroundStyle(isHovering ? Color.primary : Color.lampSecondaryText)
+                    .help(isBuiltIn ? "Details of \(name)" : "Details, export or remove \(name)")
+                    .accessibilityLabel("Actions for \(name)")
                 }
             }
             .frame(width: cover.width, alignment: .leading)
@@ -526,14 +538,22 @@ private struct ModuleShelfCard<Actions: View>: View {
 
 /// The mark of a translation whose words carry Strong's numbers, which is
 /// what the word studies, the analysis and the interlinear read.
+///
+/// Neutral, not accented. In the accent colour it pulled the eye across a
+/// shelf of covers to a fact about a translation's data (owner, Nov 2026) —
+/// and on the Scripture shelf most translations carry it, so the shelf lit
+/// up in a row without distinguishing anything. It wears the unchosen
+/// filter chip's fill and stroke, so it reads as a label rather than a
+/// state worth acting on.
 struct StrongsBadge: View {
     var body: some View {
         Text("Strong’s")
             .font(.system(size: 10.5, weight: .semibold))
-            .foregroundStyle(.tint)
+            .foregroundStyle(Color.lampSecondaryText)
             .padding(.horizontal, 6)
             .padding(.vertical, 1.5)
-            .background(.tint.opacity(0.12), in: Capsule())
+            .background(Capsule().fill(Color.lampTileFill))
+            .overlay(Capsule().strokeBorder(Color.lampCardStroke))
             .help("Its words are tagged with Strong’s numbers")
             .accessibilityLabel("Tagged with Strong’s numbers")
     }
@@ -646,5 +666,264 @@ private extension View {
             .background(Capsule().fill(isChosen ? Color.accentColor.opacity(0.14) : Color.lampTileFill))
             .overlay(Capsule().strokeBorder(isChosen ? Color.accentColor.opacity(0.55) : Color.lampCardStroke))
             .contentShape(Capsule())
+    }
+}
+
+
+/// Which module an info window is about.
+///
+/// The ID rather than the module: a window's value is encoded for it, and the
+/// module is looked up again each time the window draws, so details that
+/// change under it — a size after a sync, a name after an import — are not
+/// shown stale from whenever the window was opened.
+struct ModuleInfoRequest: Hashable, Codable {
+    var moduleID: String = ""
+}
+
+/// Everything the library knows about one module.
+///
+/// The owner asked for this because two modules can wear the same name: with
+/// `ESV` and `ESVs` both installed, the shelf shows "ESV" twice and nothing
+/// on screen tells them apart. The identifier does, and it was not shown
+/// anywhere before this.
+///
+/// A window rather than a sheet, as Finder's Get Info is (owner, Nov 2026):
+/// a modal could not be opened twice, and comparing two modules that share a
+/// name is the whole reason for it. One window per module, since the window
+/// group is keyed by the request.
+///
+/// Nothing is left out and the technical fields sit behind a disclosure, as
+/// the owner asked — a reader meeting a hash and a file name in a list of
+/// publishers and languages learns less, not more. The same reveal the
+/// analysis's Compare tab uses for the biblical-language texts.
+struct ModuleInfoWindow: View {
+    let request: ModuleInfoRequest
+
+    @EnvironmentObject private var model: LibraryModel
+    @State private var showsTechnicalDetails = false
+
+    /// Every installed module, not only the ones `modules` holds: a reading
+    /// plan, a writing, a quiz, notes and highlights are each their own
+    /// module and each has a shelf of its own.
+    private var everyModule: [LampInstalledModule] {
+        model.modules + model.planModules + model.devotionalModules
+            + model.quizModuleInstallations + model.noteModules + model.highlightModules
+    }
+
+    private var module: LampInstalledModule? {
+        everyModule.first { $0.id == request.moduleID }
+    }
+
+    /// "English Standard Version (ESVs) Info" rather than a second window
+    /// titled exactly like the first.
+    ///
+    /// Two modules wearing one name is the case this window exists for, and
+    /// titling both of them "English Standard Version Info" would leave the
+    /// reader comparing two windows they cannot tell apart — including in the
+    /// Window menu, which is where you go to find the one behind the other.
+    /// The identifier appears only when it is doing work.
+    private func windowTitle(_ module: LampInstalledModule) -> String {
+        let sharesName = everyModule.contains {
+            $0.id != module.id && $0.name == module.name
+        }
+        return sharesName ? "\(module.name) (\(module.id)) Info" : "\(module.name) Info"
+    }
+
+    var body: some View {
+        Group {
+            if let module {
+                content(module)
+                    .navigationTitle(windowTitle(module))
+            } else {
+                noLongerInstalled
+                    .navigationTitle("Module Info")
+            }
+        }
+        .frame(minWidth: 380, idealWidth: 420, minHeight: 320, idealHeight: 460)
+    }
+
+    /// A window can outlive what it was opened for — a module removed here or
+    /// on another device while its details were open. Saying so is better than
+    /// an empty window or the last values it happened to hold.
+    private var noLongerInstalled: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "questionmark.square.dashed")
+                .font(.system(size: 28))
+                .foregroundStyle(Color.lampSecondaryText)
+            Text("No Longer Installed")
+                .font(.system(size: 14, weight: .semibold))
+            Text("This module is not in your library any more.")
+                .font(.system(size: 12))
+                .foregroundStyle(Color.lampSecondaryText)
+                .multilineTextAlignment(.center)
+        }
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func content(_ module: LampInstalledModule) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header(module)
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    group("About", rows: aboutRows(module))
+                    if module.kind == .translation {
+                        group("Scripture", rows: scriptureRows(module))
+                    }
+                    technicalDetails(module)
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 18)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private func header(_ module: LampInstalledModule) -> some View {
+        HStack(spacing: 14) {
+            LibraryCover(
+                monogram: module.abbreviation,
+                title: module.name,
+                systemImage: nil,
+                seed: module.id,
+                width: 44
+            )
+            VStack(alignment: .leading, spacing: 2) {
+                Text(module.name)
+                    .font(.system(size: 15, weight: .semibold))
+                    .textSelection(.enabled)
+                Text(kindName(module.kind))
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.lampSecondaryText)
+            }
+            Spacer(minLength: 8)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 16)
+    }
+
+    // MARK: Rows
+
+    private func aboutRows(_ module: LampInstalledModule) -> [(String, String)] {
+        var rows: [(String, String)] = []
+        if let abbreviation = module.abbreviation, !abbreviation.isEmpty {
+            rows.append(("Abbreviation", abbreviation))
+        }
+        if let language = module.language, !language.isEmpty {
+            // "en" is not a language a reader recognises. The library holds a
+            // `language_name` beside the code and does not expose it yet, so
+            // the system names the code until core's record read lands; the
+            // code itself stays, under Technical Details.
+            let named = Locale.current.localizedString(forIdentifier: language)
+                ?? Locale.current.localizedString(forLanguageCode: language)
+            rows.append(("Language", named ?? language))
+        }
+        rows.append(("Source", module.isBundled ? "Built in to Lamp Bible" : "Installed"))
+        if !module.isBundled {
+            rows.append(("Size", ByteCountFormatter.string(
+                fromByteCount: Int64(module.compressedByteCount), countStyle: .file
+            )))
+        }
+        return rows
+    }
+
+    private func scriptureRows(_ module: LampInstalledModule) -> [(String, String)] {
+        var rows: [(String, String)] = [
+            ("Strong’s numbers", module.tagsStrongs ? "Tagged" : "Not tagged")
+        ]
+        if !module.coveredBooks.isEmpty {
+            let chapters = module.coveredBooks.values.reduce(0, +)
+            let books = module.coveredBooks.count
+            rows.append((
+                "Coverage",
+                module.holdsWholeBible
+                    ? "The whole Bible · \(chapters) chapters"
+                    : "\(books) \(books == 1 ? "book" : "books") · \(chapters) chapters"
+            ))
+        }
+        return rows
+    }
+
+    /// The fields that answer "which copy is this", kept behind a reveal.
+    ///
+    /// Thin for now: the library holds a version, a hash, a publisher, a
+    /// licence, a versification and its timestamps, and `LampInstalledModule`
+    /// carries none of them. Core is adding a read that returns the whole
+    /// record, for this window and the phone's; this grows then.
+    private func technicalRows(_ module: LampInstalledModule) -> [(String, String)] {
+        var rows: [(String, String)] = [("Identifier", module.id)]
+        if let language = module.language, !language.isEmpty {
+            rows.append(("Language code", language))
+        }
+        let earlier = LampTranslationID.equivalents(of: module.id)
+            .filter { $0 != module.id }
+        if !earlier.isEmpty {
+            rows.append((
+                earlier.count == 1 ? "Earlier identifier" : "Earlier identifiers",
+                earlier.joined(separator: ", ")
+            ))
+        }
+        return rows
+    }
+
+    // MARK: Pieces
+
+    private func technicalDetails(_ module: LampInstalledModule) -> some View {
+        DisclosureGroup(isExpanded: $showsTechnicalDetails) {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(technicalRows(module), id: \.0) { row in
+                    detailRow(row.0, row.1, monospaced: true)
+                }
+            }
+            .padding(.top, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } label: {
+            Text("Technical Details")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.lampSecondaryText)
+        }
+    }
+
+    private func group(_ title: String, rows: [(String, String)]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.lampSecondaryText)
+            ForEach(rows, id: \.0) { row in
+                detailRow(row.0, row.1, monospaced: false)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func detailRow(_ name: String, _ value: String, monospaced: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(name)
+                .font(.system(size: 12))
+                .foregroundStyle(Color.lampSecondaryText)
+                .frame(width: 128, alignment: .leading)
+            Text(value)
+                .font(.system(size: 12, design: monospaced ? .monospaced : .default))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// Singular, for a field rather than a heading: the shelf headings say
+    /// "Scripture" and "Books" over a list, which reads wrongly beside a name.
+    private func kindName(_ kind: LampModuleKind) -> String {
+        switch kind {
+        case .translation: "Translation"
+        case .dictionary: "Dictionary"
+        case .commentary: "Commentary"
+        case .book: "Book"
+        case .devotional: "Writing"
+        case .notes: "Notes"
+        case .plan: "Reading plan"
+        case .highlights: "Highlights"
+        case .quiz: "Quiz"
+        }
     }
 }

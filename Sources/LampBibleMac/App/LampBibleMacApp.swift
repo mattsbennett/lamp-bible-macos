@@ -111,6 +111,18 @@ struct LampBibleMacApp: App {
         .restorationBehavior(.disabled)
         .defaultSize(width: 1_180, height: 820)
 
+        // Finder's Get Info, for a module: a window rather than a sheet, so two
+        // modules that share a name can be held up against each other. One
+        // window per module, since the group is keyed by the request.
+        WindowGroup("Module Info", id: "module-info", for: ModuleInfoRequest.self) { $request in
+            if let request {
+                ModuleInfoWindow(request: request)
+                    .environmentObject(libraryModel)
+            }
+        }
+        .restorationBehavior(.disabled)
+        .defaultSize(width: 420, height: 460)
+
         Window("Import or Create Content", id: "add-to-library") {
             AddToLibraryView()
                 .environmentObject(libraryModel)
