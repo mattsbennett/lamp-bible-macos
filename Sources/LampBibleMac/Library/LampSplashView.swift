@@ -22,13 +22,16 @@ struct LampSplashView: View {
     @State private var isShowingSlowStartMessage = false
 
     var body: some View {
+        // Centred as one group on what is drawn: no room left above the
+        // flame or below the last line that the eye would not see, so the
+        // flame, the words and the status sit in the middle of the window
+        // together (owner, Nov 2026).
         VStack(spacing: 0) {
             flame
-                .frame(width: 320, height: 200)
 
             Text("Lamp Bible")
                 .font(.system(size: 30, weight: .semibold, design: .serif))
-                .padding(.top, 4)
+                .padding(.top, 44)
 
             LampSplashShimmer(isAnimated: !reduceMotion)
                 .frame(width: 180, height: 2)
@@ -56,13 +59,13 @@ struct LampSplashView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 380)
-                // Room for two lines from the start, so the page doesn't
-                // shift up when the longer message replaces the short one.
-                .frame(height: 40, alignment: .top)
+                // No room held for a second line: room left empty at the
+                // bottom put the group off centre. Both messages fit one line,
+                // and if one wraps the change is animated, so the group
+                // re-centres smoothly.
                 .padding(.top, 30)
                 .contentTransition(.opacity)
         }
-        .padding(.bottom, 40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.background)
         // The bundled modules are unpacked and verified on a first run or after an
