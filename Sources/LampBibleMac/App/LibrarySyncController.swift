@@ -43,6 +43,25 @@ final class LibrarySyncController: ObservableObject {
     /// republishes its whole library into whatever it joined.
     @Published private(set) var moveOffer: LampSyncMoveOffer?
 
+    /// Modules this Mac holds that the server's listing did not find, by
+    /// module ID, with why (`LampSyncFilePlan.missing`).
+    ///
+    /// A report, never an action. Absence is not a deletion: a server can
+    /// answer a listing from a stale view, and iCloud refills a folder file
+    /// by file while its manifest already names everything. So these are
+    /// marked and the reader decides, and a module leaves the set as soon as
+    /// a pass finds its file again.
+    @Published private(set) var missingModules: [String: LampSyncFilePlan.Missing] = [:]
+
+    /// Whether the last pass reached the library at all.
+    ///
+    /// The third state, and the one that keeps the mark honest: a pass that
+    /// threw has no outcome, so nothing can be said about what is on the
+    /// server. The set from the last pass that did reach it stays, because a
+    /// module missing an hour ago is still worth showing — but it is
+    /// described as unchecked rather than as gone.
+    @Published private(set) var reachedLibrary = true
+
     /// Where each book was left and what is bookmarked in it: this Mac's own
     /// record rather than the library's, and the one part of a pass that a
     /// reader writes to while the pass is running.
@@ -444,6 +463,7 @@ final class LibrarySyncController: ObservableObject {
             }
         } catch {
             Self.log.error("Sync pass failed: \(String(describing: error), privacy: .public)")
+            reachedLibrary = false
             errorMessage = LampSyncErrorText.sentence(for: error)
             statusMessage = nil
             isSyncing = false
@@ -914,6 +934,16 @@ extension LibrarySyncController {
             NotificationCenter.default.post(name: .lampBookReadingStateChanged, object: nil)
         }
         defaults.set(Date(), forKey: "sync.lastCompleted")
+        // Keyed by module rather than by path, so a card can ask about itself.
+        // The paths come from this client's own records, so each names a
+        // module installed here under exactly that ID; nothing to resolve.
+        missingModules = Dictionary(
+            outcome.missing.compactMap { path, why in
+                LampSyncFolderLayout.remoteModuleID(of: path).map { ($0, why) }
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
+        reachedLibrary = true
         report(outcome, gaps: gaps, skippedHighlightSets: skippedHighlightSets, manifest: manifest)
     }
 

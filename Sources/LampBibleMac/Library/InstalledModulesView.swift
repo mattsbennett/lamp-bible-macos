@@ -12,6 +12,7 @@ import SwiftUI
 /// card keeps a module's name, its details and its actions together.
 struct InstalledModulesView: View {
     @EnvironmentObject private var model: LibraryModel
+    @EnvironmentObject private var syncController: LibrarySyncController
     @Environment(\.openWindow) private var openWindow
     @State private var moduleToRemove: LampInstalledModule?
     @State private var exportRequest: ModuleExportRequest?
@@ -367,7 +368,14 @@ struct InstalledModulesView: View {
                 shelfPosition: shelfPosition
             ),
             isBuiltIn: module.isBundled,
-            tagsStrongs: module.tagsStrongs
+            tagsStrongs: module.tagsStrongs,
+            missing: syncController.missingModules[module.id],
+            reachedLibrary: syncController.reachedLibrary,
+            // The popover's Delete is the ordinary removal, confirmation and
+            // all: a module gone from the server is still deleted by the
+            // recorded deletion every other device follows, never by this
+            // Mac quietly dropping its copy.
+            deleteMissing: { moduleToRemove = module }
         ) {
             Button("Get Info", systemImage: "info.circle") {
                 openWindow(id: "module-info", value: ModuleInfoRequest(moduleID: module.id))
@@ -483,9 +491,23 @@ private struct ModuleShelfCard<Actions: View>: View {
     /// A translation whose words carry Strong's numbers, marked so: its name
     /// no longer says so.
     var tagsStrongs = false
+    /// What the last sync pass made of this module's file, if it did not find
+    /// it. Nil is the ordinary case, and says nothing was wrong.
+    var missing: LampSyncFilePlan.Missing?
+    /// Whether that pass reached the library at all. A mark from an older
+    /// pass is still worth showing, but it must not be described as fact
+    /// when nothing could be checked just now.
+    var reachedLibrary = true
+    var deleteMissing: () -> Void = {}
     @ViewBuilder let actions: () -> Actions
 
     @State private var isHovering = false
+    @State private var showsMissingNote = false
+
+    /// Whether the file is known to be absent, rather than unchecked.
+    private var isGone: Bool {
+        reachedLibrary && missing == .notOnServer
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -504,6 +526,47 @@ private struct ModuleShelfCard<Actions: View>: View {
                         .foregroundStyle(Color.lampSecondaryText)
                         .lineLimit(1)
                     Spacer(minLength: 0)
+                    if let missing {
+                        Button {
+                            showsMissingNote = true
+                        } label: {
+                            // The mark weighs what is actually known. Red
+                            // says a thing is wrong, and only one of these
+                            // states is: a folder that could not be listed,
+                            // or a pass that never reached the library, says
+                            // nothing about the file. Those get the quiet
+                            // mark, so a flaky connection does not paint the
+                            // shelf red.
+                            Image(systemName: isGone
+                                ? "exclamationmark.triangle.fill"
+                                : "exclamationmark.triangle")
+                                .font(.system(size: 12))
+                                .frame(width: 20, height: 16)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(isGone ? AnyShapeStyle(.red) : AnyShapeStyle(Color.lampSecondaryText))
+                        .help(isGone
+                            ? "This module is not in your library on the server"
+                            : "Lamp could not check whether this module is still in your library")
+                        .accessibilityLabel(isGone
+                            ? "\(name) is not in your library on the server"
+                            : "\(name) could not be checked")
+                        .popover(isPresented: $showsMissingNote, arrowEdge: .bottom) {
+                            // Handed in as values. A popover's content closure
+                            // can read a detached copy of the view's state, so
+                            // what it draws must not be fetched from here.
+                            ModuleMissingNote(
+                                name: name,
+                                missing: missing,
+                                reachedLibrary: reachedLibrary,
+                                delete: {
+                                    showsMissingNote = false
+                                    deleteMissing()
+                                }
+                            )
+                        }
+                    }
                     // Quiet at rest and full strength under the pointer.
                     //
                     // Every card carries it, built-in ones included. They had
@@ -669,6 +732,79 @@ private extension View {
     }
 }
 
+
+/// Why a module is marked, and what can be done about it.
+///
+/// Three states, and keeping them apart is the whole point of the mark. A
+/// module that is genuinely gone from the server and one that could not be
+/// checked look identical from the shelf, and saying "removed" about the
+/// second would be a lie a reader might act on by deleting their only copy.
+///
+/// Everything it draws is handed in: a popover's content closure can read a
+/// detached copy of the presenting view's state, and this one must describe
+/// the module it was opened for. It is given a definite width for the same
+/// reason a sheet is — a popover has no size of its own to offer.
+private struct ModuleMissingNote: View {
+    let name: String
+    let missing: LampSyncFilePlan.Missing
+    let reachedLibrary: Bool
+    let delete: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+            Text(explanation)
+                .font(.system(size: 12))
+                .foregroundStyle(Color.lampSecondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            if canDelete {
+                Divider()
+                HStack {
+                    Text("Remove it from every device?")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.lampSecondaryText)
+                    Spacer(minLength: 8)
+                    Button("Delete…", role: .destructive, action: delete)
+                }
+            }
+        }
+        .padding(14)
+        .frame(width: 300)
+    }
+
+    private var title: String {
+        guard reachedLibrary else { return "Not Checked Just Now" }
+        switch missing {
+        case .notOnServer: return "Not in Your Library"
+        case .folderNotListed: return "Could Not Be Checked"
+        }
+    }
+
+    private var explanation: String {
+        guard reachedLibrary else {
+            return "Lamp could not reach your library the last time it tried, so it cannot "
+                + "say whether \(name) is still there. It was not found when Lamp last "
+                + "managed to look."
+        }
+        switch missing {
+        case .notOnServer:
+            return "Lamp looked in your library and \(name) was not there. Either it was "
+                + "removed from another device, or — if your library is on iCloud — it may "
+                + "not have arrived yet. Your copy on this Mac is untouched."
+        case .folderNotListed:
+            return "Lamp reached your library but could not list the folder \(name) is kept "
+                + "in, so whether it is still there is unknown. This usually clears itself "
+                + "on the next sync."
+        }
+    }
+
+    /// Offered only where the answer is known. Deleting is irreversible
+    /// across every device, and "I could not look" is not a reason to.
+    private var canDelete: Bool {
+        reachedLibrary && missing == .notOnServer
+    }
+}
 
 /// Which module an info window is about.
 ///
