@@ -39,6 +39,10 @@ struct BookModulesView: View {
     @AppStorage("books.showsTableOfContents") private var showsTableOfContents = true
     /// How the book list is grouped: by genre unless the reader chose none.
     @AppStorage("books.groupBy") private var groupByRawValue = BookGrouping.genre.rawValue
+    /// A shelf of covers to choose from, or a list beside the page.
+    @AppStorage("books.viewMode") private var viewModeRawValue = BookViewMode.list.rawValue
+    /// In the shelf view: the shelf, rather than the book chosen from it.
+    @State private var isShowingShelf = true
     @State private var books: [LampBook] = []
     /// Whether `books` has been read yet: until it has, an empty list is
     /// not news, and "No Books Installed" flashed on every visit before the
@@ -66,8 +70,12 @@ struct BookModulesView: View {
         books.first { $0.id == selectedBookID }
     }
 
+    /// Only a section of the book chosen. Between choosing another book and
+    /// its sections arriving, the old book's section was drawn as the new
+    /// book's, and the reader saved it as where the new book was left —
+    /// which named no section of it, so Continue Reading could not say where.
     private var selectedSection: LampBookSection? {
-        sections.first { $0.id == selectedSectionID }
+        sections.first { $0.id == selectedSectionID && $0.moduleID == selectedBookID }
     }
 
     private var orderedSections: [LampBookSection] {
@@ -112,6 +120,19 @@ struct BookModulesView: View {
         orderedSections.filter { bookmarkIDs.contains($0.id) }
     }
 
+    /// The view the reader chose. A book reader window shows one book, so it
+    /// has no shelf.
+    private var viewMode: BookViewMode {
+        allowsStandaloneWindow ? BookViewMode(rawValue: viewModeRawValue) ?? .list : .list
+    }
+
+    private var showsShelf: Bool { viewMode == .shelf && isShowingShelf }
+
+    private func openFromShelf(_ bookID: String) {
+        selectedBookID = bookID
+        isShowingShelf = false
+    }
+
     private var reloadID: String {
         model.modules
             .filter { $0.kind == .book }
@@ -139,9 +160,18 @@ struct BookModulesView: View {
                     Button("Install Module…", action: showImporter)
                         .buttonStyle(.borderedProminent)
                 }
+            } else if showsShelf {
+                BookShelfView(
+                    books: books,
+                    genres: genres,
+                    grouping: groupBy,
+                    continueReading: continueReading,
+                    hasPosition: { readingState.position(for: $0) != nil },
+                    open: openFromShelf
+                )
             } else {
                 BookReaderResizableLayout(
-                    showsBookList: showsBookList,
+                    showsBookList: viewMode == .list && showsBookList,
                     // A search's results are listed in the contents column,
                     // so it shows while there is one, hidden or not.
                     showsTableOfContents: showsTableOfContents || !sectionSearchText.isEmpty
@@ -174,11 +204,31 @@ struct BookModulesView: View {
                 .searchable(text: $sectionSearchText, prompt: "Search this book")
             }
         }
-        .navigationTitle(selectedBook?.title ?? "Books")
-        .navigationSubtitle(selectedSection?.title ?? "")
+        .navigationTitle(showsShelf ? "Books" : selectedBook?.title ?? "Books")
+        .navigationSubtitle(showsShelf ? "" : selectedSection?.title ?? "")
         .toolbar {
+            if viewMode == .shelf, !isShowingShelf {
+                ToolbarItem(placement: .navigation) {
+                    Button("All Books", systemImage: "chevron.backward") {
+                        isShowingShelf = true
+                    }
+                    .help("Back to the shelf of books")
+                }
+            }
             ToolbarItemGroup(placement: .primaryAction) {
-                if showsBookList {
+
+                if allowsStandaloneWindow {
+                    Picker("View", selection: $viewModeRawValue) {
+                        ForEach(BookViewMode.allCases) { mode in
+                            Label(mode.title, systemImage: mode.systemImage).tag(mode.rawValue)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelStyle(.iconOnly)
+                    .help("Show books as a shelf of covers or a list beside the page")
+                }
+
+                if (viewMode == .list && showsBookList) || showsShelf {
                     Menu("Group Books", systemImage: "rectangle.3.group") {
                         Picker("Group By", selection: $groupByRawValue) {
                             ForEach(BookGrouping.allCases) { grouping in
@@ -191,16 +241,19 @@ struct BookModulesView: View {
                     .help("Group books")
                 }
 
-                Button(
-                    showsBookList ? "Hide Book List" : "Show Book List",
-                    systemImage: "books.vertical"
-                ) {
-                    showsBookList.toggle()
+                if viewMode == .list {
+                    Button(
+                        showsBookList ? "Hide Book List" : "Show Book List",
+                        systemImage: "books.vertical"
+                    ) {
+                        showsBookList.toggle()
+                    }
+                    .labelStyle(.iconOnly)
+                    .help(showsBookList ? "Hide Book List" : "Show Book List")
+                    .accessibilityValue(showsBookList ? "Shown" : "Hidden")
                 }
-                .labelStyle(.iconOnly)
-                .help(showsBookList ? "Hide Book List" : "Show Book List")
-                .accessibilityValue(showsBookList ? "Shown" : "Hidden")
 
+                if !showsShelf {
                 Button(
                     showsTableOfContents ? "Hide Table of Contents" : "Show Table of Contents",
                     systemImage: "list.bullet.indent"
@@ -229,6 +282,14 @@ struct BookModulesView: View {
                     .help("Open the current book in a separate reader window")
                     .disabled(selectedBookID == nil)
                 }
+                }
+
+                // The list has its own beside its heading.
+                if showsShelf {
+                    Button("Add Book…", systemImage: "plus", action: showImporter)
+                        .labelStyle(.iconOnly)
+                        .help("Add a book: install a .lamp book module")
+                }
             }
         }
         .task(id: reloadID) { await loadBooks() }
@@ -252,7 +313,24 @@ struct BookModulesView: View {
         .onChange(of: initialBookID) { _, newBookID in
             guard let newBookID, books.contains(where: { $0.id == newBookID }) else { return }
             selectedBookID = newBookID
+            isShowingShelf = false
         }
+        // Choosing the shelf shows it; a book asked for by a link opens.
+        .onChange(of: viewModeRawValue) { _, _ in isShowingShelf = initialBookID == nil }
+        // The reader saves where it is as it goes, which nothing announces,
+        // so what Continue Reading says is read again when it is shown and
+        // as the reader moves through a book.
+        .onChange(of: isShowingShelf) { _, showing in
+            if showing { Task { await loadContinueReading() } }
+        }
+        .onChange(of: selectedSectionID) { _, _ in
+            // After the reader has written the section it opened on.
+            Task {
+                try? await Task.sleep(for: .milliseconds(500))
+                await loadContinueReading()
+            }
+        }
+        .onAppear { if initialBookID != nil { isShowingShelf = false } }
         .onChange(of: initialSectionID) { _, newSectionID in
             guard let newSectionID,
                   let section = sections.first(where: {
@@ -281,15 +359,22 @@ struct BookModulesView: View {
             Color.clear.frame(height: 1)
             // A fixed heading rather than a pinned section header: rows
             // scrolled under a pinned header showed through its glass.
-            if continueReading.count <= 1 {
+            HStack(alignment: .firstTextBaseline) {
                 Text("Books")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Color.lampSecondaryText)
-                    .padding(.horizontal, 20)
-                    .padding(.top, 10)
-                    .padding(.bottom, 6)
-                Divider().padding(.horizontal, 12)
+                Spacer()
+                Button("Add Book…", systemImage: "plus", action: showImporter)
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(Color.lampSecondaryText)
+                    .help("Add a book: install a .lamp book module")
             }
+            .padding(.leading, 20)
+            .padding(.trailing, 14)
+            .padding(.top, 10)
+            .padding(.bottom, 6)
+            Divider().padding(.horizontal, 12)
             booksListContent
         }
     }
@@ -300,7 +385,7 @@ struct BookModulesView: View {
             // mean to open and no help at all in finding the one you were in
             // the middle of. These name the section as well, which the rows
             // below can only do for the book whose sections are loaded.
-            if continueReading.count > 1 {
+            if !continueReading.isEmpty {
                 Section("Continue Reading") {
                     ForEach(continueReading) { entry in
                         Button {
@@ -351,7 +436,7 @@ struct BookModulesView: View {
                         }
                     }
                 }
-            } else if continueReading.count <= 1 {
+            } else if continueReading.isEmpty {
                 bookRows(books)
             }
         }
@@ -445,19 +530,33 @@ struct BookModulesView: View {
     /// back matter, appendices, parts — where it is what says what they are.
     /// On every numbered chapter it was the same faint page, row after row.
     private func sectionRow(_ section: LampBookSection, showsDepth: Bool) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+        // A number short enough for the column ("12", "IV") stands in it; a
+        // longer one ("Part 1, Chapter 1") was folded a letter or two to the
+        // line there, so it goes above the title instead, small.
+        let number = section.number.flatMap { $0.isEmpty ? nil : $0 }
+        let numberFitsColumn = (number?.count ?? 0) <= 4
+        return HStack(alignment: .firstTextBaseline, spacing: 8) {
             Group {
-                if let number = section.number, !number.isEmpty {
+                if let number, numberFitsColumn {
                     Text(number)
                         .monospacedDigit()
-                } else {
+                } else if number == nil {
                     Image(systemName: sectionIcon(section.type))
                         .imageScale(.small)
+                } else {
+                    // The column kept, so the title lines up with the rest.
+                    Color.clear.frame(height: 1)
                 }
             }
             .foregroundStyle(Color.lampSecondaryText)
             .frame(width: 22, alignment: .trailing)
             VStack(alignment: .leading, spacing: 3) {
+                if let number, !numberFitsColumn {
+                    Text(number)
+                        .font(.system(size: LampMetrics.listCaptionSize))
+                        .foregroundStyle(Color.lampSecondaryText)
+                        .lineLimit(1)
+                }
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Text(section.title)
                         .font(.system(size: LampMetrics.listTitleSize))
@@ -520,15 +619,29 @@ struct BookModulesView: View {
             .sorted { $0.position.updatedAt > $1.position.updatedAt }
             .prefix(3)
 
+        // The open book's sections are loaded already, so its title is read
+        // from them; asking its database while the reader was opening it
+        // could fail, and a failed read said "Resume reading" for a section
+        // with a perfectly good name. Another book keeps the title it had if
+        // its read fails.
+        let known = Dictionary(
+            continueReading.map { ($0.book.id, $0.sectionTitle) }, uniquingKeysWith: { first, _ in first }
+        )
         var entries: [BookContinueReadingEntry] = []
         for item in recent {
-            let title = try? await model.library.bookSectionTitle(
+            let title: String?
+            if item.book.id == selectedBookID,
+               let section = sections.first(where: { $0.id == item.position.sectionID }) {
+                title = section.title
+            } else if let read = try? await model.library.bookSectionTitle(
                 moduleID: item.book.id,
                 sectionID: item.position.sectionID
-            )
-            entries.append(
-                BookContinueReadingEntry(book: item.book, sectionTitle: title ?? nil)
-            )
+            ) {
+                title = read
+            } else {
+                title = known[item.book.id] ?? nil
+            }
+            entries.append(BookContinueReadingEntry(book: item.book, sectionTitle: title))
         }
         continueReading = entries
     }
@@ -669,6 +782,11 @@ private struct BookReaderResizableLayout<
 /// resize the list. Shared by Books and Writing, so their columns behave
 /// alike: a stored width the layout keeps, where `HSplitView` re-sized the
 /// list whenever the page beside it changed.
+///
+/// The grip is an AppKit view of its own. A SwiftUI hover pushing the resize
+/// cursor lost to the list beside it, whose scroll view sets the arrow as the
+/// pointer moves, so the column could be dragged with no sign it could be:
+/// a cursor rect and a cursor update in a view on top hold.
 struct LampColumnResizeHandle: View {
     @Binding var preferredWidth: Double
     let displayedWidth: Double
@@ -677,29 +795,21 @@ struct LampColumnResizeHandle: View {
     let label: String
 
     @State private var widthAtDragStart: Double?
-    @State private var isShowingResizeCursor = false
 
     var body: some View {
         Divider()
             .frame(width: 1)
             .frame(maxHeight: .infinity)
             .overlay {
-                Color.clear
-                    .frame(width: 9)
-                    .contentShape(Rectangle())
-                    .onHover(perform: setResizeCursor)
-                    .gesture(
-                        DragGesture(coordinateSpace: .global)
-                            .onChanged { value in
-                                let start = widthAtDragStart ?? displayedWidth
-                                widthAtDragStart = start
-                                preferredWidth = clamped(
-                                    start + value.translation.width
-                                )
-                            }
-                            .onEnded { _ in widthAtDragStart = nil }
-                    )
-                    .onDisappear { setResizeCursor(false) }
+                LampColumnResizeGrip(
+                    onDrag: { translation in
+                        let start = widthAtDragStart ?? displayedWidth
+                        widthAtDragStart = start
+                        preferredWidth = clamped(start + translation)
+                    },
+                    onEnd: { widthAtDragStart = nil }
+                )
+                .frame(width: 9)
             }
             .help(label)
             .accessibilityElement()
@@ -721,15 +831,220 @@ struct LampColumnResizeHandle: View {
     private func clamped(_ width: Double) -> Double {
         min(max(width, minimumWidth), maximumWidth)
     }
+}
 
-    private func setResizeCursor(_ isShowing: Bool) {
-        guard isShowing != isShowingResizeCursor else { return }
-        isShowingResizeCursor = isShowing
-        if isShowing {
-            NSCursor.resizeLeftRight.push()
-        } else {
-            NSCursor.pop()
+/// The handle's hit area: shows the resize cursor wherever the pointer is
+/// over it, and reports a drag as the distance moved since it began.
+private struct LampColumnResizeGrip: NSViewRepresentable {
+    let onDrag: (Double) -> Void
+    let onEnd: () -> Void
+
+    func makeNSView(context: Context) -> GripView { GripView() }
+
+    func updateNSView(_ view: GripView, context: Context) {
+        view.onDrag = onDrag
+        view.onEnd = onEnd
+    }
+
+    final class GripView: NSView {
+        var onDrag: ((Double) -> Void)?
+        var onEnd: (() -> Void)?
+        private var dragStartX: CGFloat?
+        private var tracking: NSTrackingArea?
+
+        override func resetCursorRects() {
+            addCursorRect(bounds, cursor: .resizeLeftRight)
         }
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            if let tracking { removeTrackingArea(tracking) }
+            let area = NSTrackingArea(
+                rect: .zero,
+                options: [.cursorUpdate, .activeInKeyWindow, .inVisibleRect],
+                owner: self
+            )
+            addTrackingArea(area)
+            tracking = area
+        }
+
+        override func cursorUpdate(with event: NSEvent) {
+            NSCursor.resizeLeftRight.set()
+        }
+
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+        override func mouseDown(with event: NSEvent) {
+            dragStartX = event.locationInWindow.x
+        }
+
+        override func mouseDragged(with event: NSEvent) {
+            guard let dragStartX else { return }
+            NSCursor.resizeLeftRight.set()
+            onDrag?(Double(event.locationInWindow.x - dragStartX))
+        }
+
+        override func mouseUp(with event: NSEvent) {
+            dragStartX = nil
+            onEnd?()
+        }
+    }
+}
+
+/// How Books shows the library: a shelf of covers, or a list beside the page.
+enum BookViewMode: String, CaseIterable, Identifiable {
+    case shelf
+    case list
+
+    var id: String { rawValue }
+    var title: String { self == .shelf ? "Shelf" : "List" }
+    var systemImage: String { self == .shelf ? "square.grid.2x2" : "sidebar.left" }
+}
+
+/// The books as a shelf of covers, as Modules shows the library: the books
+/// being read first, with the section each was left in, then every book,
+/// grouped as the list is. Choosing one opens it.
+private struct BookShelfView: View {
+    let books: [LampBook]
+    let genres: [LampBookGenre]
+    let grouping: BookGrouping
+    let continueReading: [BookContinueReadingEntry]
+    let hasPosition: (String) -> Bool
+    let open: (String) -> Void
+
+    private static let coverWidth: CGFloat = 148
+
+    private let columns = [
+        GridItem(.adaptive(minimum: coverWidth, maximum: 172), spacing: 28, alignment: .top)
+    ]
+
+    /// Three across, as Modules sets the reader's own collections.
+    private let continueColumns = [
+        GridItem(.flexible(), spacing: 16, alignment: .top),
+        GridItem(.flexible(), spacing: 16, alignment: .top),
+        GridItem(.flexible(), spacing: 16, alignment: .top),
+    ]
+
+    private var shelves: [(title: String, books: [LampBook])] {
+        guard grouping == .genre else { return [("All Books", books)] }
+        let sections = LampBookGenre.grouped(books, genre: \.genre, catalog: genres)
+        guard sections.count > 1 || sections.first?.group != nil else { return [("All Books", books)] }
+        return sections.map { ($0.title, $0.books) }
+    }
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 36) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Books")
+                        .font(.system(size: 32, weight: .bold, design: .serif))
+                        .accessibilityAddTraits(.isHeader)
+                    Text(books.count == 1 ? "1 book" : "\(books.count) books")
+                        .font(.title3)
+                        .foregroundStyle(Color.lampSecondaryText)
+                }
+                if !continueReading.isEmpty {
+                    VStack(alignment: .leading, spacing: 16) {
+                        heading("Continue Reading", count: nil)
+                        LazyVGrid(columns: continueColumns, alignment: .leading, spacing: 16) {
+                            ForEach(continueReading) { entry in
+                                continueCard(entry)
+                            }
+                        }
+                    }
+                }
+                ForEach(Array(shelves.enumerated()), id: \.element.title) { shelfIndex, shelf in
+                    VStack(alignment: .leading, spacing: 16) {
+                        heading(shelf.title, count: shelf.books.count)
+                        LazyVGrid(columns: columns, alignment: .leading, spacing: 30) {
+                            ForEach(Array(shelf.books.enumerated()), id: \.element.id) { index, book in
+                                bookCard(book, shelfPosition: index + shelfIndex * 5)
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 40)
+            .padding(.top, 26)
+            .padding(.bottom, 40)
+            .frame(maxWidth: 1_180, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func heading(_ title: String, count: Int?) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(title)
+                .font(.title2.weight(.semibold))
+            if let count {
+                Text("\(count)")
+                    .font(.title3)
+                    .foregroundStyle(Color.lampSecondaryText)
+                    .monospacedDigit()
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
+    }
+
+    private func bookCard(_ book: LampBook, shelfPosition: Int) -> some View {
+        Button {
+            open(book.id)
+        } label: {
+            VStack(alignment: .leading, spacing: 10) {
+                LibraryCover(
+                    monogram: nil, title: book.title, seed: book.id,
+                    width: Self.coverWidth, shelfPosition: shelfPosition
+                )
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(book.title)
+                        .font(.system(size: 13.5, weight: .medium))
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let author = book.author, !author.isEmpty {
+                        Text(author)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.lampSecondaryText)
+                            .lineLimit(1)
+                    }
+                    if hasPosition(book.id) {
+                        Label("Reading", systemImage: "bookmark")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.lampSecondaryText)
+                    }
+                }
+                .frame(width: Self.coverWidth, alignment: .leading)
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .help(book.title)
+        .accessibilityLabel(book.title)
+    }
+
+    private func continueCard(_ entry: BookContinueReadingEntry) -> some View {
+        Button {
+            open(entry.book.id)
+        } label: {
+            HStack(spacing: 14) {
+                LibraryCover(monogram: nil, title: entry.book.title, seed: entry.book.id, width: 40)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(entry.book.title)
+                        .font(.system(size: 14, weight: .semibold))
+                        .lineLimit(2)
+                    Label(entry.sectionTitle ?? "Resume reading", systemImage: "bookmark")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.lampSecondaryText)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .lampCard(padding: 14)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .help("Continue reading \(entry.book.title)")
     }
 }
 
