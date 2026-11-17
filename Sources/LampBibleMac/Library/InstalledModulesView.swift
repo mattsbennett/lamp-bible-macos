@@ -1085,6 +1085,12 @@ struct ModuleInfoWindow: View {
             rows += Self.fileRows("Database", database)
         case .bundled(let database):
             rows += Self.fileRows("Database", database)
+        case .shared(let database):
+            // A module kept in the database the app holds every module in, as
+            // the phone does, with no `.lamp` file of its own. Drawn like a
+            // bundled one, and with no hash for the same reason: core never
+            // hashes a database, which changes as it is read.
+            rows += Self.fileRows("Database", database)
         case nil:
             break
         }
