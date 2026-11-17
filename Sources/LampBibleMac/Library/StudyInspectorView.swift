@@ -345,6 +345,9 @@ private struct NotesInspectorView: View {
     @State private var editorIsDirty = false
     @State private var reloadToken = UUID()
     @State private var highlightVerse: LampVerse?
+    /// The notes to read rather than to write: each drawn as it reads, with
+    /// none of the editor, the highlight palette or the range around it.
+    @AppStorage("notes.readingMode") private var isReadingNotes = false
 
     /// Every verse in the chapter worth a card: one that already carries a note of
     /// either kind, plus whichever verse is selected — so the panel is a chapter to
@@ -403,7 +406,9 @@ private struct NotesInspectorView: View {
                                 noteCard(group)
                                     .id(group.id)
                             }
-                            chapterHighlights
+                            if !isReadingNotes {
+                                chapterHighlights
+                            }
                         }
                     }
 
@@ -425,7 +430,12 @@ private struct NotesInspectorView: View {
 
     @ViewBuilder
     private func noteCard(_ group: NoteGroup) -> some View {
-        if group.id == reader.selectedVerseReference {
+        if isReadingNotes {
+            NoteReadingCard(group: group, reloadToken: reloadToken) {
+                reader.focusVerse(group.id)
+                isReadingNotes = false
+            }
+        } else if group.id == reader.selectedVerseReference {
             PersonalNoteEditor(
                 reference: group.id,
                 verse: group.verse,
@@ -542,6 +552,18 @@ private struct NotesInspectorView: View {
     @ViewBuilder
     private var footer: some View {
         HStack {
+            Picker("Notes", selection: $isReadingNotes) {
+                Label("Read", systemImage: "book").tag(true)
+                Label("Edit", systemImage: "square.and.pencil").tag(false)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            // Reading would put away an editor holding unsaved words.
+            .disabled(editorIsDirty && !isReadingNotes)
+            .help(editorIsDirty && !isReadingNotes
+                ? "Save or revert this note before reading"
+                : "Read the chapter’s notes, or edit them")
             if isExporting {
                 ProgressView()
                     .controlSize(.small)
@@ -747,6 +769,83 @@ private struct InstalledNoteContent: View {
                     typeface: .sansSerif
                 )
             }
+        }
+    }
+}
+
+/// A verse's notes to read: the personal note as it reads, then any
+/// installed ones, with none of the editor's controls. A selected verse with
+/// no note says so, so a click in the reader always lands somewhere.
+private struct NoteReadingCard: View {
+    @EnvironmentObject private var model: LibraryModel
+    @EnvironmentObject private var reader: ReaderWorkspace
+    let group: NoteGroup
+    let reloadToken: UUID
+    let edit: () -> Void
+    @State private var personalNote: LampVerseNote?
+    @State private var hasLoaded = false
+
+    private var isSelected: Bool { reader.selectedVerseReference == group.id }
+
+    private var lastReference: Int {
+        max(personalNote?.verseReferences.max() ?? group.id, group.endReference ?? group.id)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(LampBibleReferenceFormatter.describeRange(from: group.id, to: lastReference))
+                    .font(.headline)
+                Spacer()
+                Button("Edit", systemImage: "square.and.pencil", action: edit)
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.lampText)
+                    .help(personalNote == nil ? "Write a note on this verse" : "Edit the note on this verse")
+            }
+
+            if let personalNote {
+                VStack(alignment: .leading, spacing: 6) {
+                    if let title = personalNote.title {
+                        Text(title)
+                            .font(.title3.weight(.semibold))
+                    }
+                    InstalledNoteContent(note: personalNote, libraryRootURL: model.library.rootURL)
+                }
+            }
+
+            ForEach(Array(group.installedNotes.enumerated()), id: \.element.id) { index, note in
+                if personalNote != nil || index > 0 { Divider() }
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(model.noteModules.first { $0.id == note.moduleID }?.name ?? note.moduleID)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    if let title = note.title {
+                        Text(title)
+                            .font(.headline)
+                    }
+                    InstalledNoteContent(note: note, libraryRootURL: model.library.rootURL)
+                }
+            }
+
+            if hasLoaded, personalNote == nil, group.installedNotes.isEmpty {
+                Text("No note on this verse.")
+                    .font(.callout)
+                    .foregroundStyle(Color.lampSecondaryText)
+            }
+        }
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .lampCard(padding: 16)
+        // The verse chosen in the reader, among the chapter's notes.
+        .overlay {
+            if isSelected {
+                RoundedRectangle(cornerRadius: LampMetrics.cardRadius)
+                    .strokeBorder(Color.accentColor.opacity(0.55), lineWidth: 1.5)
+            }
+        }
+        .task(id: "\(group.id):\(group.hasPersonalNote):\(reloadToken)") {
+            personalNote = group.hasPersonalNote ? try? await model.personalNote(for: group.id) : nil
+            hasLoaded = true
         }
     }
 }

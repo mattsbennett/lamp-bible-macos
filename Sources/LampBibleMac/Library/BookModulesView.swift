@@ -40,6 +40,10 @@ struct BookModulesView: View {
     /// How the book list is grouped: by genre unless the reader chose none.
     @AppStorage("books.groupBy") private var groupByRawValue = BookGrouping.genre.rawValue
     @State private var books: [LampBook] = []
+    /// Whether `books` has been read yet: until it has, an empty list is
+    /// not news, and "No Books Installed" flashed on every visit before the
+    /// library's books arrived.
+    @State private var hasLoadedBooks = false
     /// The genres books are grouped by, from the bundle.
     @State private var genres: [LampBookGenre] = []
     @State private var sections: [LampBookSection] = []
@@ -124,6 +128,8 @@ struct BookModulesView: View {
                     systemImage: "exclamationmark.triangle",
                     description: Text(errorMessage)
                 )
+            } else if !hasLoadedBooks {
+                Color.clear
             } else if books.isEmpty {
                 ContentUnavailableView {
                     Label("No Books Installed", systemImage: "book.closed")
@@ -136,7 +142,9 @@ struct BookModulesView: View {
             } else {
                 BookReaderResizableLayout(
                     showsBookList: showsBookList,
-                    showsTableOfContents: showsTableOfContents
+                    // A search's results are listed in the contents column,
+                    // so it shows while there is one, hidden or not.
+                    showsTableOfContents: showsTableOfContents || !sectionSearchText.isEmpty
                 ) {
                     booksList
                 } tableOfContents: {
@@ -161,6 +169,9 @@ struct BookModulesView: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }
+                // On the layout, not on the contents list: there, hiding the
+                // contents took the search field out of the toolbar with it.
+                .searchable(text: $sectionSearchText, prompt: "Search this book")
             }
         }
         .navigationTitle(selectedBook?.title ?? "Books")
@@ -419,7 +430,6 @@ struct BookModulesView: View {
                 }
             }
         }
-        .searchable(text: $sectionSearchText, prompt: "Search this book")
         .overlay {
             if !sectionSearchText.isEmpty, filteredSections.isEmpty {
                 ContentUnavailableView.search(text: sectionSearchText)
@@ -526,6 +536,7 @@ struct BookModulesView: View {
     private func loadBooks() async {
         do {
             books = try await model.library.bookModules()
+            hasLoadedBooks = true
             genres = (try? await model.library.bookGenres()) ?? []
             await loadContinueReading()
             errorMessage = nil

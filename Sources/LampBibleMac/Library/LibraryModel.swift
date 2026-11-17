@@ -157,6 +157,8 @@ final class LibraryModel: ObservableObject {
     @Published private(set) var highlightsByReference: [Int: [LampVerseHighlight]] = [:]
     @Published private(set) var installedHighlightsByReference: [Int: [LampVerseHighlight]] = [:]
     @Published private(set) var noteReferences: Set<Int> = []
+    /// The chapter read last taken into the sets here: see `adoptActiveReader`.
+    private var lastAbsorbedContents = ReaderChapterContents.empty
     @Published private(set) var installedNotesByReference: [Int: [LampVerseNote]] = [:]
     @Published private(set) var plans: [LampReadingPlan] = []
     @Published private(set) var devotionals: [LampDevotional] = []
@@ -1894,7 +1896,12 @@ final class LibraryModel: ObservableObject {
         if selectedVerseReference != verse { selectedVerseReference = verse }
         if self.books != books { self.books = books }
         if self.chapter != contents.chapter { self.chapter = contents.chapter }
-        absorbChapterContents(contents)
+        // A reader hands over the chapter as it read it, and goes on handing
+        // over that same read at every verse clicked. Taken again, it put
+        // back what a note or highlight saved since had changed here, and
+        // the note fell out of the Notes pane and its mark out of the
+        // verse. Only a read not yet taken is.
+        if contents != lastAbsorbedContents { absorbChapterContents(contents) }
         if moved { persistLocation() }
     }
 
@@ -1911,6 +1918,7 @@ final class LibraryModel: ObservableObject {
     /// highlight deleted on another device and synced away actually goes.
     func absorbChapterContents(_ contents: ReaderChapterContents) {
         guard let loaded = contents.chapter else { return }
+        lastAbsorbedContents = contents
         let first = loaded.book.id * 1_000_000 + loaded.number * 1_000
         let references = first..<(first + 1_000)
 
