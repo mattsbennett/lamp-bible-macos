@@ -97,8 +97,14 @@ struct UnifiedSearchView: View {
         get { tabs.selected.kind }
         nonmutating set { tabs.updateSelected { $0.kind = newValue } }
     }
+    /// The module this tab searches in, as this library holds it.
+    ///
+    /// Resolved on the way out rather than rewritten in the tab: a session
+    /// saved while a translation was called "ESVs" otherwise restored a
+    /// picker with no matching tag, and changing the content kind then
+    /// cleared the restriction as though the module were gone.
     private var selectedModuleID: String? {
-        get { tabs.selected.moduleID }
+        get { heldModuleID(tabs.selected.moduleID) }
         nonmutating set { tabs.updateSelected { $0.moduleID = newValue } }
     }
     private var devotionalDate: String {
@@ -1678,10 +1684,27 @@ struct UnifiedSearchView: View {
         if kept { historyData = history.encoded() }
     }
 
+    /// A stored module ID as this library holds it.
+    ///
+    /// Unresolvable ids are kept, not dropped. `held` answers nil for
+    /// anything it cannot place, and a search's filter names more than
+    /// installed modules — a highlight set's UUID, "personal-notes",
+    /// "personal-devotionals" — so returning its answer directly threw those
+    /// away and a restored search widened to everything.
+    private func heldModuleID(_ stored: String?) -> String? {
+        guard let stored else { return nil }
+        return LampTranslationID.held(stored, among: model.installedTranslationIDs) ?? stored
+    }
+
     /// Puts back every filter the search ran with, not only its words.
+    ///
+    /// A saved search holds the module IDs as they were when it ran, so an
+    /// entry older than the translation rename names "ESVs". Resolved here,
+    /// at the one place a saved entry enters the pane, rather than wherever
+    /// the id is later compared.
     private func restore(_ entry: LampSearchHistory.Entry) {
         selectedKind = entry.kinds?.first
-        selectedModuleID = entry.moduleIDs?.first
+        selectedModuleID = heldModuleID(entry.moduleIDs?.first)
         strongsKey = entry.strongsKey ?? ""
         highlightColor = entry.highlightColors?.first ?? ""
         if let range = entry.bookRange,
@@ -1697,7 +1720,7 @@ struct UnifiedSearchView: View {
     }
 
     private func historyDescription(_ entry: LampSearchHistory.Entry) -> String {
-        if let moduleID = entry.moduleIDs?.first,
+        if let moduleID = heldModuleID(entry.moduleIDs?.first),
            let module = availableModules.first(where: { $0.id == moduleID }) {
             return module.name
         }

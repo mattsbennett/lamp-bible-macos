@@ -656,12 +656,20 @@ public enum ReaderParallelRows {
     /// Filtered rather than trusted: a highlight's offsets count the
     /// characters of the translation it was made in, and drawn on another's
     /// text they colour the wrong words without any error to show it.
+    ///
+    /// Matched by translation and not by exact ID. A highlight carries the ID
+    /// its translation had first — "BSBs" — because that identity is synced
+    /// and must read the same on every device, while the translation in hand
+    /// may be the renamed "BSB". Compared exactly, every highlight in a
+    /// renamed translation would quietly stop being drawn.
     public static func highlights(
         _ highlights: [LampVerseHighlight],
         of translationID: String
     ) -> [Int: [LampVerseHighlight]] {
         Dictionary(
-            grouping: highlights.filter { $0.translationID == translationID },
+            grouping: highlights.filter {
+                LampTranslationID.sameTranslation($0.translationID, translationID)
+            },
             by: \.reference
         )
     }
@@ -1715,6 +1723,22 @@ public struct ReaderTabCollection: Codable, Equatable, Sendable {
         translationIDs: Set<String>,
         fallbackLocation: ReaderLocation?
     ) {
+        // A renamed translation is resolved before a tab is judged by it.
+        // Judged exactly, a window of tabs saved in "ESVs" was deleted on the
+        // first launch after the rename — the tabs, their places, and what
+        // was attached to them — because the id they named was no longer
+        // installed under that spelling.
+        for index in tabs.indices {
+            guard let location = tabs[index].location,
+                  let held = LampTranslationID.held(location.translationID, among: translationIDs),
+                  held != location.translationID else { continue }
+            tabs[index].location = ReaderLocation(
+                translationID: held,
+                bookNumber: location.bookNumber,
+                chapterNumber: location.chapterNumber,
+                verseReference: location.verseReference
+            )
+        }
         tabs.removeAll { tab in
             // A new tab has no place and is kept: it reopens as it was left.
             guard let location = tab.location else { return !tab.isBlank }

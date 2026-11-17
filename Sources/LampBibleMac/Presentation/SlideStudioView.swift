@@ -2,6 +2,7 @@ import AppKit
 import CoreText
 import ImageIO
 import LampCore
+import LampModuleKit
 import LampPresentationUI
 #if canImport(LampBibleMacSupport)
 import LampBibleMacSupport
@@ -1855,7 +1856,20 @@ private struct LampSlideChartEditor: View {
                     if current.by == .translation {
                         comparedTranslations(chart)
                     } else {
-                        Picker("Translation", selection: chart.source.translationID) {
+                        // Through the map, so a chart written when the
+                        // translation was called "ESVs" shows ESV selected
+                        // rather than an empty picker. Only the reading is
+                        // resolved; picking writes the id of the module
+                        // picked, as everywhere else.
+                        Picker("Translation", selection: Binding(
+                            get: {
+                                LampTranslationID.held(
+                                    chart.wrappedValue.source.translationID,
+                                    among: model.installedTranslationIDs
+                                ) ?? chart.wrappedValue.source.translationID
+                            },
+                            set: { chart.wrappedValue.source.translationID = $0 }
+                        )) {
                             // Every translation, not only the tagged ones: Lamp
                             // says below when one has no tags for this key, which
                             // is a more useful answer than a shorter menu.
@@ -2046,12 +2060,29 @@ private struct LampSlideChartEditor: View {
         chart: Binding<LampPresentationChart>,
         chosen: [String]?
     ) -> some View {
-        ForEach(translations, id: \.id) { translation in
+        let installedIDs = model.installedTranslationIDs
+        return ForEach(translations, id: \.id) { translation in
                 Toggle(translation.abbreviation ?? translation.name, isOn: Binding(
-                    get: { chosen?.contains(translation.id) == true },
+                    // The deck's list is as it was written, so a chart
+                    // naming "ESVs" ticks the installed ESV — but by
+                    // resolving each stored id to the module it names, not by
+                    // calling the two the same translation. With both
+                    // spellings installed they are two modules: matching by
+                    // translation ticked both and unticking one removed the
+                    // other's entry.
+                    get: {
+                        chosen?.contains {
+                            LampTranslationID.held($0, among: installedIDs) == translation.id
+                        } == true
+                    },
                     set: { isOn in
                         var list = chart.wrappedValue.source.translations ?? []
-                        list.removeAll { $0 == translation.id }
+                        // Whatever spelling names THIS module, so unticking
+                        // a deck's older "ESVs" really removes it, while an
+                        // independently installed "ESV" keeps its own entry.
+                        list.removeAll {
+                            LampTranslationID.held($0, among: installedIDs) == translation.id
+                        }
                         if isOn { list.append(translation.id) }
                         chart.wrappedValue.source.translations = list.isEmpty ? nil : list
                     }
@@ -2118,8 +2149,17 @@ private struct LampSlideChartEditor: View {
     }
 
     /// A translation as a reader knows it, not by its id ("BSB", not "BSBs").
+    ///
+    /// A deck carries the ID as it was written, and a deck written before
+    /// the rename names "ESVs". Resolved, so that an older deck still shows
+    /// the name of the translation it meant; falling through to the raw ID
+    /// is what this helper exists to avoid.
     private func translationName(_ id: String) -> String {
-        model.translations.first { $0.id == id }.map { $0.abbreviation ?? $0.name } ?? id
+        // Every installed translation, hidden ones included: hiding one does
+        // not stop a deck naming it, and resolving against the visible list
+        // would hand the name of a different module.
+        let held = LampTranslationID.held(id, among: model.installedTranslationIDs) ?? id
+        return model.modules.first { $0.id == held }.map { $0.abbreviation ?? $0.name } ?? id
     }
 
     private func fill() async {
@@ -2323,8 +2363,16 @@ private struct LampSlideScripturePicker: View {
     }
 
     private func chooseDefaultTranslationIfNeeded() {
-        guard translationID.isEmpty
-                || !model.translations.contains(where: { $0.id == translationID }) else { return }
+        // A slide names its translation as it was written, so resolve before
+        // judging it missing. Judged exactly, a block saved in "ESVs" was
+        // replaced by whatever the reader happened to be in, and the
+        // translation-changed handler then reset the book, chapter and verses
+        // — so applying the picker could overwrite the quotation.
+        if !translationID.isEmpty,
+           let held = LampTranslationID.held(translationID, among: model.installedTranslationIDs) {
+            if held != translationID { translationID = held }
+            return
+        }
         translationID = model.selectedTranslationID ?? model.translations.first?.id ?? ""
     }
 
@@ -2396,7 +2444,11 @@ private struct LampSlideScripturePicker: View {
             startVerse: startVerse,
             endVerse: endVerse
         )
-        let translation = model.translations.first { $0.id == translationID }
+        // A slide's scripture reference names its translation as it was
+        // written, so an older deck's "ESVs" is resolved to what is held.
+        let heldID = LampTranslationID.held(translationID, among: model.installedTranslationIDs)
+            ?? translationID
+        let translation = model.translations.first { $0.id == heldID }
         let translationName = translation?.abbreviation ?? translation?.name ?? translationID
         let verseRange = startVerse == endVerse
             ? startVerse.formatted()

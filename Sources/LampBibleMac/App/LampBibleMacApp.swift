@@ -1208,8 +1208,12 @@ private struct ReaderSettingsView: View {
         !model.hiddenModuleIDs.contains(module.id)
     }
 
+    /// The stored default as this library holds it, or "" — First Enabled —
+    /// for one it does not. Resolved, so that a default saved under a
+    /// translation's older id still shows as that translation rather than
+    /// reading as though nothing had been chosen.
     private func validDefault(_ moduleID: String, in modules: [LampInstalledModule]) -> String {
-        modules.contains(where: { $0.id == moduleID }) ? moduleID : ""
+        LampTranslationID.held(moduleID, among: modules.map(\.id)) ?? ""
     }
 
     private func defaultModuleBinding(

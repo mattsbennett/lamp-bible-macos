@@ -190,13 +190,38 @@ final class LibraryModel: ObservableObject {
     /// since a write there wakes every view that reads a setting, and the
     /// place changes with every chapter turned and every tab chosen.
     private let locationDefaults: UserDefaults
+    /// The hidden modules, as the question is asked of what is installed.
+    ///
+    /// Distinct from what is stored. A hidden ID is never rewritten — it
+    /// stays "ESVs" in settings, which sync shares with devices that still
+    /// call it that — but the question asked of it resolves: hide the module
+    /// whose own ID is hidden, and the module a hidden ID resolves to once
+    /// that ID is gone. Resolved here, once, because five places test this
+    /// set with an exact `contains`, and the alternative was fixing each of
+    /// them and forgetting one, leaving a module the reader had hidden to
+    /// reappear after the rename.
     @Published private(set) var hiddenModuleIDs: Set<String>
+    /// The hidden list exactly as settings hold it, which is what is written
+    /// back and what sync carries.
+    private var storedHiddenModuleIDs: Set<String>
     /// The background index build, cancelled when the library is read again
     /// so two refreshes do not index at once.
     private var strongsIndexTask: Task<Void, Never>?
 
     var translations: [LampInstalledModule] {
         visibleModules(kind: .translation)
+    }
+
+    /// Every installed translation, hidden ones included.
+    ///
+    /// This, not `translations`, is what a stored ID is resolved against. A
+    /// rename asks "which installed module did this name?", and hiding one
+    /// does not uninstall it: resolving against the visible ones made a
+    /// hidden "ESVs" look gone, so a link or a tab naming it opened the
+    /// separately installed "ESV" — another module's text, silently.
+    /// Visibility is a question to ask afterwards, of the module found.
+    var installedTranslationIDs: [String] {
+        modules.filter { $0.kind == .translation }.map(\.id)
     }
 
     /// `book` as the translation names it, for a place named away from its
@@ -296,7 +321,11 @@ final class LibraryModel: ObservableObject {
             ? Self.locationStore(adoptingFrom: defaults)
             : defaults
         self.locationDefaults = locationDefaults
-        hiddenModuleIDs = Set(defaults.stringArray(forKey: "modules.hiddenIDs") ?? [])
+        let storedHidden = Set(defaults.stringArray(forKey: "modules.hiddenIDs") ?? [])
+        storedHiddenModuleIDs = storedHidden
+        // Nothing is installed yet to resolve against; `resolveHiddenModules`
+        // runs when the modules arrive.
+        hiddenModuleIDs = storedHidden
         selectedTranslationID = locationDefaults.string(forKey: "reader.translationID")
         let storedBook = locationDefaults.integer(forKey: "reader.bookNumber")
         selectedBookNumber = storedBook > 0 ? storedBook : nil
@@ -432,13 +461,33 @@ final class LibraryModel: ObservableObject {
         )
     }
 
+    /// Asks the stored hidden list about the modules actually installed.
+    private func resolveHiddenModules() {
+        let installedIDs = modules.map(\.id)
+        let resolved = Set(storedHiddenModuleIDs.compactMap {
+            LampTranslationID.held($0, among: installedIDs)
+        })
+        if resolved != hiddenModuleIDs { hiddenModuleIDs = resolved }
+    }
+
     func setModuleHidden(_ moduleID: String, hidden: Bool) {
+        // The ID of the module the reader picked, which is an installed one,
+        // and every spelling of it that was hidden before: unhiding has to
+        // clear the old spelling too, or the module stays hidden by a name
+        // nothing shows any more.
         if hidden {
-            hiddenModuleIDs.insert(moduleID)
+            storedHiddenModuleIDs.insert(moduleID)
         } else {
-            hiddenModuleIDs.remove(moduleID)
+            // Every stored spelling that names THIS module, which is not
+            // every spelling: with both ESVs and ESV installed they are two
+            // modules, and unhiding one must leave the other hidden.
+            let installed = installedTranslationIDs
+            storedHiddenModuleIDs = storedHiddenModuleIDs.filter { stored in
+                LampTranslationID.held(stored, among: installed) != moduleID
+            }
         }
-        defaults.set(Array(hiddenModuleIDs).sorted(), forKey: "modules.hiddenIDs")
+        defaults.set(Array(storedHiddenModuleIDs).sorted(), forKey: "modules.hiddenIDs")
+        resolveHiddenModules()
         if hidden, activeReader?.selectedTranslationID == moduleID, let replacement = translations.first {
             activeReader?.selectTranslation(replacement.id)
         }
@@ -1130,7 +1179,12 @@ final class LibraryModel: ObservableObject {
     func personalHighlights(for reference: Int, in translationID: String? = nil) -> [LampVerseHighlight] {
         let highlights = highlightsByReference[reference] ?? []
         guard let translationID else { return highlights }
-        return highlights.filter { $0.translationID == translationID }
+        // By translation, not by exact id: a highlight carries the id its
+        // translation had first, so an exact test dropped every highlight
+        // made before the rename.
+        return highlights.filter {
+            LampTranslationID.sameTranslation($0.translationID, translationID)
+        }
     }
 
     /// Every verse in the chapter with a note of either kind, including any
@@ -1187,7 +1241,13 @@ final class LibraryModel: ObservableObject {
         color: String?
     ) async throws {
         guard let translationID = selectedTranslationID else { return }
-        let setID = "personal-highlights:\(translationID)"
+        // The translation's ORIGINAL id. A highlight set is a synced
+        // identity: every device, on any build, must name it the same, so it
+        // is "personal-highlights:ESVs" even where the module is now "ESV".
+        // Built from the installed id instead, reading ESV deleted from one
+        // set and saved into another, and a colour change left the old
+        // highlight on the page beneath the new one.
+        let setID = "personal-highlights:\(LampTranslationID.original(translationID))"
 
         // Removing clears every set of this reader's own, not just the
         // default one. The menu offers "Remove Highlight" whenever the verse
@@ -1689,6 +1749,7 @@ final class LibraryModel: ObservableObject {
         }
         do {
             modules = try await library.installedModules()
+            resolveHiddenModules()
             var bookNames: [String: [Int: String]] = [:]
             for translation in modules where translation.kind == .translation {
                 guard let books = try? await library.translationBooks(moduleID: translation.id) else { continue }
@@ -1704,11 +1765,21 @@ final class LibraryModel: ObservableObject {
             let completed = try await library.completedReadings(year: planProgressYear)
             completedReadingIDs = Set(completed.map(\.id))
             let availableTranslations = translations
-            if availableTranslations.contains(where: { $0.id == selectedTranslationID }) {
-                // Still installed: kept.
+            // Where the reader's remembered translation enters the app, and
+            // so where a renamed ID is resolved — once, here, rather than at
+            // the dozen places that later compare one. `held` returns the ID
+            // itself where it is installed, and its new spelling only where
+            // the old one is gone, so a library holding both keeps them
+            // apart. Without this a remembered "ESVs" failed an exact test
+            // and the reader opened whatever translation happened to be
+            // first.
+            let installedIDs = installedTranslationIDs
+            if let remembered = selectedTranslationID,
+               let held = LampTranslationID.held(remembered, among: installedIDs) {
+                if held != remembered { selectedTranslationID = held }
             } else if let preferred = defaults.string(forKey: "reader.defaultTranslationID"),
-                      availableTranslations.contains(where: { $0.id == preferred }) {
-                selectedTranslationID = preferred
+                      let held = LampTranslationID.held(preferred, among: installedIDs) {
+                selectedTranslationID = held
             } else if let first = availableTranslations.first {
                 selectedTranslationID = first.id
             } else {

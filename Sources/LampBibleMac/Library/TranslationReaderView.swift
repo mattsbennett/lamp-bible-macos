@@ -784,9 +784,19 @@ struct TranslationReaderView: View, Equatable {
     }
 
     /// The companions chosen, in column order.
+    ///
+    /// Resolved against what is installed, which for a list is more than
+    /// renaming each entry: resolution is many-to-one, so a list holding
+    /// both an old and a new spelling of one translation would name it
+    /// twice and the reader would draw the same text in two columns. Core's
+    /// list form keeps each translation once, at its first position, and
+    /// drops what is not installed at all.
     private var chosenCompanionIDs: [String] {
-        let ids = companionTranslationIDList.split(separator: ",").map(String.init)
-        return ids.isEmpty ? [singleCompanionTranslationID].filter { !$0.isEmpty } : ids
+        let stored = companionTranslationIDList.split(separator: ",").map(String.init)
+        let ids = stored.isEmpty
+            ? [singleCompanionTranslationID].filter { !$0.isEmpty }
+            : stored
+        return LampTranslationID.held(ids, among: model.installedTranslationIDs)
     }
 
     private func chooseCompanions(_ ids: [String]) {

@@ -1,5 +1,6 @@
 import Foundation
 import LampCore
+import LampModuleKit
 
 /// Everything a reader shows for one chapter of one translation.
 ///
@@ -61,7 +62,12 @@ public struct ReaderChapterContents: Equatable, Sendable {
         self.chapter = chapter
         self.highlightsByReference = Dictionary(grouping: highlights, by: \.reference)
         self.installedHighlightsByReference = Dictionary(
-            grouping: installedHighlights.filter { $0.translationID == translationID },
+            // By translation, not by exact id: a highlight keeps the id its
+            // translation had first, so an exact test hid every one of them
+            // the moment the module was renamed.
+            grouping: installedHighlights.filter {
+                LampTranslationID.sameTranslation($0.translationID, translationID)
+            },
             by: \.reference
         )
         self.noteReferences = Set(

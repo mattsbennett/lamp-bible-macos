@@ -6,6 +6,7 @@ import Foundation
 import Combine
 import SwiftUI
 import LampCore
+import LampModuleKit
 
 /// Where one reader window is in scripture, and what it has read for that
 /// place.
@@ -170,6 +171,15 @@ final class ReaderWorkspace: ObservableObject {
         verse: Int?,
         replacingMissingBook: Bool = false
     ) {
+        // The one funnel every way of opening a passage passes through, and
+        // so where a translation named by a restored tab, a saved position
+        // or a lamp:// link is resolved against what is installed. For an
+        // installed ID this is the ID itself, so the internal callers that
+        // already hand over an installed translation are unaffected.
+        let translationID = translationID.flatMap { named in
+            model.map { LampTranslationID.held(named, among: $0.installedTranslationIDs) ?? named }
+                ?? named
+        }
         let movedChapter = translationID != selectedTranslationID
             || book != selectedBookNumber
             || chapter != selectedChapterNumber

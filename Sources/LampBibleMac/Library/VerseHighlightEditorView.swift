@@ -3,6 +3,7 @@ import AppKit
 import LampBibleMacSupport
 #endif
 import LampCore
+import LampModuleKit
 import SwiftUI
 
 struct VerseHighlightEditorView: View {
@@ -32,8 +33,15 @@ struct VerseHighlightEditorView: View {
         _selection = State(initialValue: NSRange(location: 0, length: verse.text.utf16.count))
     }
 
+    /// The translation's ORIGINAL id, because a highlight set is a synced
+    /// identity and must read the same on every device whatever that device
+    /// calls the module today. Core normalises what it writes; an id passed
+    /// in explicitly is taken as given, so this has to be right here.
     private var defaultSetID: String {
-        "personal-highlights:\(model.selectedTranslationID ?? "translation")"
+        guard let translationID = model.selectedTranslationID else {
+            return "personal-highlights:translation"
+        }
+        return "personal-highlights:\(LampTranslationID.original(translationID))"
     }
 
     /// What is already highlighted here, and the way to remove one of them.
