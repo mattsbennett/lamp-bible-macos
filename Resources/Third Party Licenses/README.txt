@@ -18,7 +18,8 @@ Swift packages (in the app and its lamp-mcp helper):
 - SwiftUIEKtensions 0.4.0 — No licence published — SwiftUIEKtensions-no-licence.txt
 - SwiftyChat 4.1.1 — Apache-2.0 — SwiftyChat-Apache-2.0.txt
 
-Writing editor (identical to the iPhone and iPad app's):
+Writing editor (the iPhone and iPad app's bundle; the Mac's copy is styled for the Mac
+and adds no packages of its own):
 - Tiptap 3.18.0 packages — MIT — Copyright (c) 2025, Tiptap GmbH
 - ProseMirror and related packages — principally MIT; exact package notices are included here
 - tiptap-markdown 0.9.0 — MIT — Copyright (c) 2021, Antoine Guingand

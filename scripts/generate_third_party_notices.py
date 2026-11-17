@@ -12,7 +12,9 @@ Sources, all checked rather than assumed:
   resolved package must be listed in PACKAGES or EXCLUDED, so a new dependency can't ship
   without a notice.
 - Editor bundle: the TipTap editor is byte-identical to the iOS app's, so its JavaScript
-  notices are copied from the iOS repo. If the bundles ever differ, generation stops.
+  notices are copied from the iOS repo. If the bundles differ, generation stops unless the
+  difference is recorded in REVIEWED_EDITOR_DIVERGENCE, which pins both hashes and says why
+  the iOS notices still describe the Mac's copy.
 - Bundled content: the CrossWire KJV notice is included only when the bundled module database
   actually contains the CrossWire KJV translation, under either spelling of its id.
 
@@ -86,6 +88,28 @@ ACCEPTED_GAPS: dict[str, str] = {
         "dependency of SwiftyChat (Apache-2.0) by the same author, who distributes it through "
         "Swift Package Manager for that purpose. If the author objects or publishes restrictive "
         "terms, fork SwiftyChat and replace the few helpers it uses."
+    ),
+}
+
+# A reviewed difference between the two editor bundles, keyed by (iOS sha256, Mac sha256)
+# and read like ACCEPTED_GAPS: a dated decision, with the reason the iOS notices still
+# describe the Mac's copy. Pinning both hashes means the record is spent the moment
+# either bundle is rebuilt, so the review happens again rather than being inherited.
+#
+# Only a difference in what the bundle *contains* belongs here. A new or upgraded
+# JavaScript dependency on either side is not reviewable: it needs its own notice in
+# EDITOR_NOTICE_FILES.
+REVIEWED_EDITOR_DIVERGENCE: dict[tuple[str, str], str] = {
+    (
+        "8fd20b8e2fcbc62de96dc2ef7b2f14cc897ddff3d67e9bee70b7a138a2cdeb88",
+        "1d5fb2bd3c7db1d77a296f8e8660dacd633be3c2b27f6215018f411e82babefc",
+    ): (
+        "2026-11-17: the Mac's copy is the iOS bundle at c98d4f3; iOS has since taken the "
+        "iPhone editor redesign (7c13d54) and core's link blue (bf061dd), which the Mac "
+        "takes through its own injected stylesheet instead. Diffed in full: the whole "
+        "JavaScript difference is 43 characters, a `light` class toggle added to setTheme "
+        "for the redesign's `body.light` rules, and the rest is CSS. No package is added, "
+        "removed or upgraded on either side, so the iOS notices describe both bundles."
     ),
 }
 
@@ -259,10 +283,23 @@ def main() -> int:
             + ", ".join(sorted(unknown))
         )
 
-    if sha256(IOS_EDITOR) != sha256(MAC_EDITOR):
-        raise NoticeError(
-            "The Mac TipTap editor bundle differs from the iOS one, so the iOS editor notices may "
-            "not describe it. Review its dependencies and update EDITOR_NOTICE_FILES."
+    ios_editor, mac_editor = sha256(IOS_EDITOR), sha256(MAC_EDITOR)
+    reviewed_divergence = None
+    if ios_editor != mac_editor:
+        reviewed_divergence = REVIEWED_EDITOR_DIVERGENCE.get((ios_editor, mac_editor))
+        if reviewed_divergence is None:
+            raise NoticeError(
+                "The Mac TipTap editor bundle differs from the iOS one, so the iOS editor notices "
+                "may not describe it.\n"
+                f"  iOS {ios_editor}\n  Mac {mac_editor}\n"
+                "Diff the two bundles. If a package was added or upgraded, give it a notice in "
+                "EDITOR_NOTICE_FILES. If the difference carries no package change, record that "
+                "review in REVIEWED_EDITOR_DIVERGENCE under exactly these two hashes."
+            )
+    elif REVIEWED_EDITOR_DIVERGENCE:
+        print(
+            "note: the editor bundles are identical again; the REVIEWED_EDITOR_DIVERGENCE "
+            "records are spent and can be removed."
         )
 
     if OUTPUT.exists():
@@ -314,6 +351,13 @@ def main() -> int:
             f"credits, licence statements and Lamp Bible conversion record are in {CROSSWIRE_NOTICE}.\n"
         )
 
+    editor_heading = (
+        "Writing editor (the iPhone and iPad app's bundle; the Mac's copy is styled for the Mac\n"
+        "and adds no packages of its own):"
+        if reviewed_divergence
+        else "Writing editor (identical to the iPhone and iPad app's):"
+    )
+
     readme = f"""THIRD-PARTY SOFTWARE NOTICES — LAMP BIBLE FOR MAC
 
 Lamp Bible for Mac includes the following third-party software. The complete licence text for
@@ -322,7 +366,7 @@ each component, and any NOTICE file it publishes, is in this folder.
 Swift packages (in the app and its lamp-mcp helper):
 {chr(10).join(swift_rows)}
 
-Writing editor (identical to the iPhone and iPad app's):
+{editor_heading}
 - Tiptap 3.18.0 packages — MIT — Copyright (c) 2025, Tiptap GmbH
 - ProseMirror and related packages — principally MIT; exact package notices are included here
 - tiptap-markdown 0.9.0 — MIT — Copyright (c) 2021, Antoine Guingand

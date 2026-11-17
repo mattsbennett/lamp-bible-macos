@@ -76,7 +76,11 @@ Help → Third-Party Notices. It exits non-zero, and the release stops, when:
   dated decision to ship it anyway (currently only SwiftUIEKtensions). `--allow-gaps` skips this
   check entirely and is for development builds only;
 - a newly resolved package has no entry in the script's `PACKAGES` or `EXCLUDED` tables;
-- the TipTap editor bundle no longer matches the iOS app's, whose JavaScript notices it reuses.
+- the TipTap editor bundle no longer matches the iOS app's, whose JavaScript notices it reuses,
+  and the difference is not recorded in the script's `REVIEWED_EDITOR_DIVERGENCE`. Diff the two
+  bundles: a package added or upgraded needs its own notice, while a difference that carries no
+  package change is recorded there against both hashes, which also stops the notices claiming the
+  two bundles are identical.
 
 The notices depend on the content database, so run this *after* gate 1. The CrossWire KJV notice
 is included only when the database contains the CrossWire KJV, under either spelling of its id
