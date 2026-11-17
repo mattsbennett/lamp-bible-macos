@@ -15,11 +15,11 @@ current data for a real answer; only selected groups are shown below.
 
 ```
 G4561 σάρξ
-  KJVs  153 occurrences:  flesh (147), carnal (2), of (2), carnally (1), fleshly (1)
-  BSBs  127:              flesh (84), body (17), bodies (3), people (3), physical (2)
+  KJV  153 occurrences:  flesh (147), carnal (2), of (2), carnally (1), fleshly (1)
+  BSB  127:              flesh (84), body (17), bodies (3), people (3), physical (2)
 ```
 
-Here KJVs groups 147 of 153 occurrences under "flesh", and BSBs 84 of 127.
+Here KJV groups 147 of 153 occurrences under "flesh", and BSB 84 of 127.
 That describes the data, not the
 translator's intent, the fairness of a particular rendering, or a policy already
 proved. Check comparable occurrences before proposing a policy as an explanation.

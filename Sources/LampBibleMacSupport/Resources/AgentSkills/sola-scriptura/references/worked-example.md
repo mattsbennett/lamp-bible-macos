@@ -11,7 +11,7 @@ modules to verify a live finding rather than copying this example's conclusions.
 > "And that contrast brings into focus the dire necessity of our weekly memorial
 > around this table as taught in Hebrews, but also of reading the word daily."
 
-Hebrews 10:24–25, the cited context checked (`KJVs`):
+Hebrews 10:24–25, the cited context checked (`KJV`):
 
 > And let us consider one another to provoke unto love and to good works: Not
 > forsaking the assembling of ourselves together, as the manner of some is; but
@@ -39,7 +39,7 @@ Hebrews can still support assembly without carrying the other claims.
 
 **A lexical claim that checks out.** "the chronicler's summary … uses the same word
 we've just been looking at in 2 Samuel 12 … Despising his words." Both are H959 —
-2 Samuel 12:9 *despised* and 2 Chronicles 36:16 *and despised* in the `KJVs` Strong's
+2 Samuel 12:9 *despised* and 2 Chronicles 36:16 *and despised* in the `KJV` Strong's
 annotations, which `strongs_hebrew` gives as *bāzāh*, "to disesteem; despise, disdain".
 Verified, so say nothing. A writer who gets no credit for the claims that hold will not
 trust the audit on the one that fails.

@@ -1,6 +1,6 @@
 # A worked example
 
-Romans 8:3, comparing the bundled English `KJVs`, `BSBs`, `ASVs`, `WEBs` and `YLT`.
+Romans 8:3, comparing the bundled English `KJV`, `BSB`, `ASV`, `WEB` and `YLT`.
 The evidence below is a recorded tool result illustrating the method, not live
 evidence: retrieve the current module's data for a real answer.
 
@@ -26,22 +26,22 @@ Reading the English shows the difference at issue:
 
 | module | quoted excerpt |
 |---|---|
-| KJVs | in the likeness of sinful flesh |
-| BSBs | in the likeness of sinful man |
+| KJV | in the likeness of sinful flesh |
+| BSB | in the likeness of sinful man |
 
 ## Then the divergence, measured
 
 If rendering practice is part of the question, `analyze_strongs` on G4561 gives
-these totals and selected grouped renderings (the BSBs and TAGNT lists are not
+these totals and selected grouped renderings (the BSB and TAGNT lists are not
 exhaustive):
 
 | translation | occurrences | renderings |
 |---|---|---|
-| KJVs | 153 | flesh (147), carnal (2), of (2), carnally (1), fleshly (1) |
-| BSBs | 127 | flesh (84), body (17), bodies (3), people (3), physical (2) |
+| KJV | 153 | flesh (147), carnal (2), of (2), carnally (1), fleshly (1) |
+| BSB | 127 | flesh (84), body (17), bodies (3), people (3), physical (2) |
 | TAGNT | 147 | σάρκα (37), σαρκὸς (30), σαρκὶ (21), σαρκί (18), σὰρξ (18) |
 
-`ASVs`, `WEBs` and `YLT` are not in it: `list_modules` gives them
+`ASV`, `WEB` and `YLT` are not in it: `list_modules` gives them
 `tagsStrongs: false`, so do not request counts from them; their wording can still
 be read and compared. The KJV's "of" group is not a lexical sense of σάρξ: inspect
 the tagged phrases and the analysis's `variants` before interpreting an alignment.

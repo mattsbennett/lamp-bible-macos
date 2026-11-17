@@ -14,7 +14,7 @@ Sources, all checked rather than assumed:
 - Editor bundle: the TipTap editor is byte-identical to the iOS app's, so its JavaScript
   notices are copied from the iOS repo. If the bundles ever differ, generation stops.
 - Bundled content: the CrossWire KJV notice is included only when the bundled module database
-  actually contains the KJVs translation.
+  actually contains the CrossWire KJV translation, under either spelling of its id.
 
 Usage:
     swift package resolve
@@ -302,7 +302,12 @@ def main() -> int:
     ]
 
     content_lines = []
-    if "KJVs" in bundled_translation_ids():
+    # Either spelling: the Strong's KJV was "KJVs" until translation ids dropped
+    # their tagging suffix, and the plain KJV that now holds the bare id has never
+    # been bundled, so in this database both names mean the CrossWire module. A
+    # notice left out because a bundle was built on the other side of the rename
+    # would be a licence failure, not a cosmetic one.
+    if {"KJV", "KJVs"} & bundled_translation_ids():
         shutil.copy2(IOS_NOTICES / CROSSWIRE_NOTICE, OUTPUT / CROSSWIRE_NOTICE)
         content_lines.append(
             "The bundled library includes the CrossWire KJV v3.1 module, so its source, contributor\n"

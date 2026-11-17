@@ -79,9 +79,10 @@ Help → Third-Party Notices. It exits non-zero, and the release stops, when:
 - the TipTap editor bundle no longer matches the iOS app's, whose JavaScript notices it reuses.
 
 The notices depend on the content database, so run this *after* gate 1. The CrossWire KJV notice
-is included only when the database contains `KJVs`. Commit the regenerated folder, and update the
-Mac section of `lamp-bible-web/app/software-licences/page.tsx` if any component or version
-changed.
+is included only when the database contains the CrossWire KJV, under either spelling of its id
+(`KJV`, or `KJVs` in a bundle built before the translation rename). Commit the regenerated folder,
+and update the Mac section of `lamp-bible-web/app/software-licences/page.tsx` if any component or
+version changed.
 
 ## Building a release
 

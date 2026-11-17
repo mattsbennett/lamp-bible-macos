@@ -46,14 +46,14 @@ interpretation; translators' rendering counts are neither.
    glosses only. `strongs_hebrew` and `strongs_greek` are also bundled, but their
    glosses index renderings and must not stand in for a semantic argument.
 4. For a rendering-dependent claim, compare the relevant installed English
-   translations. Bundled candidates are `KJVs`, `BSBs`, `ASVs`, `WEBs`, `YLT`.
+   translations. Bundled candidates are `KJV`, `BSB`, `ASV`, `WEB`, `YLT`.
    Name the ones actually compared. Do not request every translation regardless of
    language, book coverage or versification. One unsupported book fails a combined
    call; remove that module and retry the compatible selection.
 5. If usage or rendering distribution matters, call `analyze_strongs` with `key`
    and explicit relevant `translation_ids`; narrow `range` when the claim is local.
    Ask only for translations `list_modules` marks `tagsStrongs: true`; of the
-   bundled English that is `KJVs` and `BSBs`. A translation without tags is left
+   bundled English that is `KJV` and `BSB`. A translation without tags is left
    out of the result without comment, so report the rows that came back, not the
    ones requested.
    Attribute every count to its translation and tagging. Unequal totals can reflect
@@ -77,8 +77,10 @@ For a substantive translation comparison read
   dependencies or discourse function. Describe word order directly, and mark an
   argument about what it does as a reading. Dictionary forms and parsing are the
   dataset's analyses, not a substitute for evidence of an alternative analysis.
-- **No Hebrew morphology in `KJVs`.** Its numeric `TH` codes are not decoded;
-  use `TAHOT`. Hebrew/Aramaic morphemes can be joined with `/`; the decoded parsing
+- **No Hebrew morphology in the bundled `KJV`.** The Strong's edition's numeric `TH`
+  codes are not decoded; use `TAHOT`. A library may hold a different, plain-text
+  module under the same id, carrying no codes at all — `list_modules` says which is
+  there. Hebrew/Aramaic morphemes can be joined with `/`; the decoded parsing
   belongs to the morpheme aligned with the key, not necessarily the content word.
 - **The Septuagint is a translation.** `LXX` and Brenton's English `Brenton` are
   untagged and differently numbered. Before comparing their passages or using a

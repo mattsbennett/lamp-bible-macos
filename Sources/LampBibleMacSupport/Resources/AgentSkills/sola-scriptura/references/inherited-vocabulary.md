@@ -15,7 +15,7 @@ must be defended from texts rather than used as one.
 
 **Does the claim survive a change of translation?** Compare the relevant installed
 English translations with compatible coverage and numbering. Bundled candidates
-are `KJVs`, `BSBs`, `ASVs`, `WEBs` and `YLT`; use the module inventory, not an assumed
+are `KJV`, `BSB`, `ASV`, `WEB` and `YLT`; use the module inventory, not an assumed
 guarantee of access. `Brenton` renders the Greek OT with its own numbering, so read
 [septuagint.md](septuagint.md) before treating its reference as a parallel.
 

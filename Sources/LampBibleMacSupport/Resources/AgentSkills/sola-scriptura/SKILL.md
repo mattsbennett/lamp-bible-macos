@@ -59,8 +59,8 @@ nearby verses and compatible translations, not an entire library by default.
 
 - `read_passage`: name `translation_ids` explicitly; omission returns up to three.
   Start with the cited or current translation. If a claim turns on its wording,
-  compare the installed relevant English translations (`KJVs`, `BSBs`, `ASVs`,
-  `WEBs`, `YLT` are bundled). Keep the appropriate original (`TAHOT` for OT,
+  compare the installed relevant English translations (`KJV`, `BSB`, `ASV`,
+  `WEB`, `YLT` are bundled). Keep the appropriate original (`TAHOT` for OT,
   `TAGNT` for NT) separate from incompatible book coverage. An unsupported book
   aborts a combined request: retry only the compatible modules, not the bad batch.
 - `LXX` and `Brenton` use different numbering and have no Strong's tagging. Before

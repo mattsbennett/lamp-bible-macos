@@ -345,7 +345,7 @@ and overwrites anything it finds there.
   "kind": "chart",
   "text": "Where ἀγάπη is found",
   "chart": {
-    "source": { "strongs": "G26", "translationID": "ESVs", "range": "NT" },
+    "source": { "strongs": "G26", "translationID": "ESV", "range": "NT" },
     "style": "columns",
     "by": "book",
     "measure": "occurrences"
@@ -509,7 +509,7 @@ afterwards wastes a render.
 
 | Asked for | Chart |
 | --- | --- |
-| "a ring of how the ESV renders ἀγάπη in John" | `source: {strongs: "G26", translationID: "ESVs", range: "John"}`, `by: "rendering"`, `style: "share"` |
+| "a ring of how the ESV renders ἀγάπη in John" | `source: {strongs: "G26", translationID: "ESV", range: "John"}`, `by: "rendering"`, `style: "share"` |
 | "where it's rendered *love*, book by book" | `source.filter: {rendering: "love"}`, `by: "book"`, `style: "columns"` |
 | "only the genitives" | `source.filter: {grammar: {feature: "grammaticalCase", value: "Genitive"}}` |
 | "its cases" / "its tenses" | `by: "grammar"`, `feature: "grammaticalCase"` / `"tense"` |
@@ -521,39 +521,39 @@ Examples of the newer kinds:
 
 ```json
 { "kind": "chart", "text": "How the ESV renders ἀγάπη in John",
-  "chart": { "source": { "strongs": "G26", "translationID": "ESVs", "range": "John" },
+  "chart": { "source": { "strongs": "G26", "translationID": "ESV", "range": "John" },
              "by": "rendering", "style": "share" } }
 ```
 
 ```json
 { "kind": "chart", "text": "ἀγάπη rendered “love”",
-  "chart": { "source": { "strongs": "G26", "translationID": "ESVs", "range": "NT",
+  "chart": { "source": { "strongs": "G26", "translationID": "ESV", "range": "NT",
                          "filter": { "rendering": "love" } },
              "by": "section" } }
 ```
 
 ```json
 { "kind": "chart", "text": "The cases of ἀγάπη",
-  "chart": { "source": { "strongs": "G26", "translationID": "BSBs" },
+  "chart": { "source": { "strongs": "G26", "translationID": "BSB" },
              "by": "grammar", "feature": "grammaticalCase" } }
 ```
 
 ```json
 { "kind": "chart", "text": "ἀγάπη in four translations",
   "chart": { "source": { "strongs": "G26", "translationID": "",
-                         "translations": ["ESVs", "BSBs", "KJVs", "WEBs"] },
+                         "translations": ["ESV", "BSB", "KJV", "WEB"] },
              "by": "translation", "measure": "perThousandWords" } }
 ```
 
 ```json
 { "kind": "chart", "text": "Words that keep ἀγάπη company",
-  "chart": { "source": { "strongs": "G26", "translationID": "ESVs", "range": "NT" },
+  "chart": { "source": { "strongs": "G26", "translationID": "ESV", "range": "NT" },
              "by": "companion" } }
 ```
 
 ```json
 { "kind": "chart", "text": "",
-  "chart": { "source": { "strongs": "G26", "translationID": "ESVs", "range": "NT" },
+  "chart": { "source": { "strongs": "G26", "translationID": "ESV", "range": "NT" },
              "by": "book", "style": "card" } }
 ```
 
