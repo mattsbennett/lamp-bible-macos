@@ -13,6 +13,44 @@ struct XcodeProjectSourcesTests {
             .deletingLastPathComponent()
     }
 
+    /// Every disclosure opens on its whole heading, not on the triangle.
+    ///
+    /// The owner asked for this as a rule rather than a fix (2026-11-17), and
+    /// `LampDisclosureStyle` has done it since the Septuagint section — but
+    /// the system style is what a plain `DisclosureGroup` gets, so forgetting
+    /// the modifier gives back a target a few points wide against a heading
+    /// that can run to three lines. Two of them had been forgotten when this
+    /// was written, both from the same day's work.
+    @Test func everyDisclosureOpensOnItsWholeHeading() throws {
+        let sources = repositoryRoot.appendingPathComponent("Sources", isDirectory: true)
+        let files = FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil)?
+            .compactMap { $0 as? URL }
+            .filter { $0.pathExtension == "swift" } ?? []
+        var unstyled: [String] = []
+        for file in files {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            // The style itself names the type it conforms to, and says so in
+            // its own documentation; neither is a use.
+            guard file.lastPathComponent != "LampColors.swift" else { continue }
+            let groups = text.components(separatedBy: "DisclosureGroup").count - 1
+            let styled = text.components(separatedBy: "disclosureGroupStyle(LampDisclosureStyle").count - 1
+            // A mention in a comment is not a group; count the ones that open
+            // a call, which is what a drawn disclosure is.
+            let drawn = text.components(separatedBy: "DisclosureGroup(").count - 1
+                + text.components(separatedBy: "DisclosureGroup {").count - 1
+            if drawn > styled {
+                unstyled.append("\(file.lastPathComponent): \(drawn) drawn, \(styled) styled (\(groups) mentions)")
+            }
+        }
+        #expect(
+            unstyled.isEmpty,
+            """
+            These draw a DisclosureGroup without .disclosureGroupStyle(LampDisclosureStyle()), \
+            so only their triangle opens them: \(unstyled.joined(separator: "; "))
+            """
+        )
+    }
+
     @Test func theXcodeProjectListsEverySourceFile() throws {
         let project = try String(
             contentsOf: repositoryRoot

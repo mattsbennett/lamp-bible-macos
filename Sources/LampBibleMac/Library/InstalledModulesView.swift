@@ -1169,6 +1169,7 @@ struct ModuleInfoWindow: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(Color.lampSecondaryText)
         }
+        .disclosureGroupStyle(LampDisclosureStyle())
     }
 
     private func group(_ title: String, rows: [(String, String)]) -> some View {

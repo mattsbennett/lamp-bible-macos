@@ -3206,6 +3206,7 @@ struct StrongsAnalysisPane: View {
                     }
                 }
                 .font(.system(size: fontSize, weight: .medium))
+                .disclosureGroupStyle(LampDisclosureStyle())
             }
             if loader.isFillingRest {
                 HStack(spacing: 6) {
