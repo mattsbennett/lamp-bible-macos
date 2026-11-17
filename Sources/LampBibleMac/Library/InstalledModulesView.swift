@@ -369,7 +369,7 @@ struct InstalledModulesView: View {
             ),
             isBuiltIn: module.isBundled,
             tagsStrongs: module.tagsStrongs,
-            missing: syncController.missingModules[module.id],
+            missing: missingReport(for: module),
             reachedLibrary: syncController.reachedLibrary,
             // The popover's Delete is the ordinary removal, confirmation and
             // all: a module gone from the server is still deleted by the
@@ -411,6 +411,21 @@ struct InstalledModulesView: View {
                 }
             }
         }
+    }
+
+    /// What the last pass made of this module's file, asked by the path this
+    /// Mac would publish the module to.
+    ///
+    /// Computed from the module rather than read back out of the path, so an
+    /// answer is always about the module that asked. A personal module whose
+    /// adapter renames it on the server simply gets no answer — it goes
+    /// unmarked, which is a gap, where a parsed ID could have marked the
+    /// wrong module, which is a lie.
+    private func missingReport(for module: LampInstalledModule) -> LampSyncFilePlan.Missing? {
+        guard let path = try? LampSyncFolderLayout.modulePath(
+            kind: LampSyncContentKind(module.kind), moduleID: module.id
+        ) else { return nil }
+        return syncController.missingFiles[path]
     }
 
     /// Abbreviation, then whether it came with Lamp or how much room it takes.
@@ -783,15 +798,20 @@ private struct ModuleMissingNote: View {
 
     private var explanation: String {
         guard reachedLibrary else {
-            return "Lamp could not reach your library the last time it tried, so it cannot "
-                + "say whether \(name) is still there. It was not found when Lamp last "
-                + "managed to look."
+            let sentence = "Lamp could not reach your library the last time it tried, so it "
+                + "cannot say whether \(name) is still there."
+            // Only a `.notOnServer` report found it absent. After one that
+            // could not list the folder, nobody has ever failed to find it,
+            // and saying so would invent a sighting.
+            guard missing == .notOnServer else { return sentence }
+            return sentence + " It was not found when Lamp last managed to look."
         }
         switch missing {
         case .notOnServer:
             return "Lamp looked in your library and \(name) was not there. Either it was "
-                + "removed from another device, or — if your library is on iCloud — it may "
-                + "not have arrived yet. Your copy on this Mac is untouched."
+                + "removed, from another device or from the server itself, or — if your "
+                + "library is on iCloud — it may not have arrived yet. Your copy on this "
+                + "Mac is untouched."
         case .folderNotListed:
             return "Lamp reached your library but could not list the folder \(name) is kept "
                 + "in, so whether it is still there is unknown. This usually clears itself "

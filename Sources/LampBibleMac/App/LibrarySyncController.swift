@@ -43,15 +43,23 @@ final class LibrarySyncController: ObservableObject {
     /// republishes its whole library into whatever it joined.
     @Published private(set) var moveOffer: LampSyncMoveOffer?
 
-    /// Modules this Mac holds that the server's listing did not find, by
-    /// module ID, with why (`LampSyncFilePlan.missing`).
+    /// Files this Mac holds that the server's listing did not find, by their
+    /// path in the library, with why (`LampSyncFilePlan.missing`).
     ///
     /// A report, never an action. Absence is not a deletion: a server can
     /// answer a listing from a stale view, and iCloud refills a folder file
     /// by file while its manifest already names everything. So these are
     /// marked and the reader decides, and a module leaves the set as soon as
     /// a pass finds its file again.
-    @Published private(set) var missingModules: [String: LampSyncFilePlan.Missing] = [:]
+    /// Kept by path rather than by module ID. `remoteModuleID(of:)` gives the
+    /// ID the *server* knows a file by, which is not the one this Mac uses:
+    /// a personal module's path holds the adapter's rewritten ID, and a
+    /// highlight module's the per-set ID this Mac mints. Keyed on those, a
+    /// mark could land on a module that happens to share an ID with another's
+    /// remote name — telling a reader their intact module is gone. A caller
+    /// asks for the path it would publish a module to, and gets an answer
+    /// about that module or none.
+    @Published private(set) var missingFiles: [String: LampSyncFilePlan.Missing] = [:]
 
     /// Whether the last pass reached the library at all.
     ///
@@ -363,17 +371,44 @@ final class LibrarySyncController: ObservableObject {
     /// taken: a file replaced or dropped in by hand on the server, or taken
     /// away, which touches no bundle and so no bundle probe sees. One
     /// Depth:1 listing a folder and no file read, every two minutes.
+    /// What a folder probe found: the listing, and whether it is worth a pass.
+    private struct FolderProbe: Sendable {
+        let listing: [String: String]
+        let hasWork: Bool
+    }
+
     private func listedFoldersHaveWork(library: LampLibrary) async -> Bool {
         guard Date().timeIntervalSince(listingProbedAt) >= 120 else { return false }
         listingProbedAt = Date()
         let root = library.rootURL
-        let found = try? await withRemoteStore { store, source -> [String: String]? in
+        let reportedMissing = missingFiles
+        // A struct rather than an optional listing, because `try?` flattens a
+        // nested optional: a probe that threw and a probe that found nothing
+        // worth a pass would both arrive as nil, and the first must say the
+        // library was not reached while the second must not.
+        let probe = try? await withRemoteStore { store, source -> FolderProbe in
             let recorded = LampSyncFileRecords.load(fromLibraryAt: root).listedRevisions(in: source)
             let listing = try await LampSyncFilePlan.listing(in: store, recorded: recorded)
-            return LampSyncFilePlan.remoteChanges(listing: listing, recorded: recorded).isEmpty ? nil : listing
+            // A marked file has to be looked at again even where nothing else
+            // moved. One that comes back can come back at exactly the
+            // revision this Mac recorded — which no comparison of revisions
+            // sees — and one whose folder could not be listed has never been
+            // answered at all. Either way the mark would stand for ever.
+            let worthAnotherPass = reportedMissing.contains { path, why in
+                why == .folderNotListed || listing[path] != nil
+            }
+            let moved = !LampSyncFilePlan.remoteChanges(listing: listing, recorded: recorded).isEmpty
+            return FolderProbe(listing: listing, hasWork: moved || worthAnotherPass)
         }
-        guard let changed = found ?? nil, changed != listingActedOn else { return false }
-        listingActedOn = changed
+        guard let probe else {
+            // A probe that throws has not reached the library. Marks from an
+            // earlier pass must stop being stated as fact: the reader is
+            // offered Delete only where Lamp has actually looked.
+            reachedLibrary = false
+            return false
+        }
+        guard probe.hasWork, probe.listing != listingActedOn else { return false }
+        listingActedOn = probe.listing
         Self.log.notice("Listed folders changed outside a pass; syncing")
         return true
     }
@@ -400,7 +435,13 @@ final class LibrarySyncController: ObservableObject {
         let revision = try? await withRemoteStore { store in
             try await store.revision(path: LampSyncFolderLayout.bundlePath)
         }
-        guard let revision else { return false }
+        guard let revision else {
+            // The cheapest check there is, and it could not be made: say so,
+            // rather than leaving a mark claiming a file is gone from a
+            // library nothing can reach.
+            reachedLibrary = false
+            return false
+        }
         guard let seen = lastSeenBundleRevision else {
             // First look since a pass. Take it as the mark to measure from
             // rather than syncing: a pass has just reconciled with this.
@@ -934,15 +975,7 @@ extension LibrarySyncController {
             NotificationCenter.default.post(name: .lampBookReadingStateChanged, object: nil)
         }
         defaults.set(Date(), forKey: "sync.lastCompleted")
-        // Keyed by module rather than by path, so a card can ask about itself.
-        // The paths come from this client's own records, so each names a
-        // module installed here under exactly that ID; nothing to resolve.
-        missingModules = Dictionary(
-            outcome.missing.compactMap { path, why in
-                LampSyncFolderLayout.remoteModuleID(of: path).map { ($0, why) }
-            },
-            uniquingKeysWith: { first, _ in first }
-        )
+        missingFiles = outcome.missing
         reachedLibrary = true
         report(outcome, gaps: gaps, skippedHighlightSets: skippedHighlightSets, manifest: manifest)
     }
