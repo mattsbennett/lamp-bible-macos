@@ -1357,7 +1357,7 @@ struct TranslationReaderView: View, Equatable {
         help: String
     ) -> some View {
         Button {
-            openVerseStudy(reference: reference)
+            openVerseNotes(reference: reference)
         } label: {
             Image(systemName: symbol)
                 .font(.system(size: size * 0.82, weight: .semibold))
@@ -1524,7 +1524,7 @@ struct TranslationReaderView: View, Equatable {
                     marks: run.marks,
                     indent: paragraphIndent(for: paragraph),
                     openLink: { _ = handleReaderLink($0) },
-                    openNote: { openVerseStudy(reference: $0) }
+                    openNote: { openVerseNotes(reference: $0) }
                 )
                 revealedFootnoteNote(among: paragraph.verses)
             }
@@ -1700,7 +1700,7 @@ struct TranslationReaderView: View, Equatable {
                     marks: marks(for: verse, drawnAs: opening, column: column),
                     showsMargin: showsMargin,
                     openLink: { _ = handleReaderLink($0) },
-                    openNote: { openVerseStudy(reference: $0) }
+                    openNote: { openVerseNotes(reference: $0) }
                 )
 
                 ReaderSelectableText(
@@ -1738,7 +1738,7 @@ struct TranslationReaderView: View, Equatable {
                 indent: poetryIndent(for: verse),
                 showsMargin: showsMargin,
                 openLink: { _ = handleReaderLink($0) },
-                openNote: { openVerseStudy(reference: $0) }
+                openNote: { openVerseNotes(reference: $0) }
             )
         }
     }
@@ -2089,12 +2089,28 @@ struct TranslationReaderView: View, Equatable {
     private func openVerseStudy(_ verse: LampVerse) {
         prepareChapterForStudy(reference: verse.id)
         selectVerseFromReader(verse.id)
-        if model.hasPersonalNote(for: verse.id) || model.hasInstalledNote(for: verse.id) {
-            studyPane.tool = "notes"
-        } else if verse.hasFootnotes || verse.annotations.contains(where: { $0.strongs != nil }) {
-            studyPane.tool = "verse"
+        if !Self.keepsVerseTool(studyPane.tool) {
+            if model.hasPersonalNote(for: verse.id) || model.hasInstalledNote(for: verse.id) {
+                studyPane.tool = "notes"
+            } else if verse.hasFootnotes || verse.annotations.contains(where: { $0.strongs != nil }) {
+                studyPane.tool = "verse"
+            }
         }
         showingStudyInspector = true
+    }
+
+    /// Notes and Verse are both about the verse clicked, so a reader on
+    /// either stays on it from verse to verse; choosing between them by what
+    /// each verse holds moved them off the one they were reading at every
+    /// click. From Commentary or Dictionary, the verse's contents choose.
+    private static func keepsVerseTool(_ tool: String) -> Bool {
+        tool == "notes" || tool == "verse"
+    }
+
+    /// A note's marker asks for the note itself, whichever tab is showing.
+    private func openVerseNotes(reference: Int) {
+        openVerseStudy(reference: reference)
+        studyPane.tool = "notes"
     }
 
     private func openVerseStudy(reference: Int) {
@@ -2106,9 +2122,11 @@ struct TranslationReaderView: View, Equatable {
             // whichever translation holds it.
             prepareChapterForStudy(reference: reference)
             workspace.focusVerse(reference)
-            studyPane.tool = model.hasPersonalNote(for: reference) || model.hasInstalledNote(for: reference)
-                ? "notes"
-                : "verse"
+            if !Self.keepsVerseTool(studyPane.tool) {
+                studyPane.tool = model.hasPersonalNote(for: reference) || model.hasInstalledNote(for: reference)
+                    ? "notes"
+                    : "verse"
+            }
             showingStudyInspector = true
             return
         }

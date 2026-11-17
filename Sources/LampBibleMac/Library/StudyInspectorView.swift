@@ -862,17 +862,23 @@ private struct PersonalNoteEditor: View {
                 // One row, the picker's own label saying what it sets: a
                 // heading over it as well cost the chapter's highlights list
                 // its room.
-                VStack(alignment: .leading, spacing: 8) {
-                    Picker("Note applies to", selection: $rangeEndVerse) {
+                //
+                // The first verse is the one the note is on, which is what
+                // keys it; only the last is chosen. A menu of numbers, not of
+                // "Verses 5–6", "Verses 5–7"… to the chapter's end, which read
+                // as one long list of ranges to hunt down.
+                HStack(spacing: 6) {
+                    Text("Note covers verse \(verseNumber) to")
+                    Picker("Last verse", selection: $rangeEndVerse) {
                         // The verse itself first, whether or not this
                         // translation has it.
                         ForEach([verseNumber] + chapter.verses.map(\.number).filter { $0 > verseNumber }, id: \.self) { number in
-                            Text(number == verseNumber
-                                ? "Verse \(number) only"
-                                : "Verses \(verseNumber)–\(number)")
-                                .tag(number)
+                            Text("\(number)").tag(number)
                         }
                     }
+                    .labelsHidden()
+                    .fixedSize()
+                    .accessibilityLabel("Last verse the note applies to")
                 }
             }
 
@@ -2290,14 +2296,11 @@ private struct VerseInspectorView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             if showStrongsHints, let strongs = annotation.strongs {
-                Button(strongs) {
-                    openDictionary(strongs, annotation.text ?? annotation.lemma)
-                }
-                .font(.body.monospacedDigit())
-                // A Strong's number is a link, but of one kind, kept apart
-                // from the verse references it sits among.
-                .buttonStyle(.lampText(.lampOriginalLanguage))
-                .help("Open \(strongs) in the dictionary")
+                StrongsTagButton(
+                    key: strongs,
+                    lemma: annotation.lemma,
+                    open: { openDictionary(strongs, annotation.text ?? annotation.lemma) }
+                )
                 .gridColumnAlignment(.trailing)
             } else {
                 Color.clear.frame(width: 1, height: 1)
@@ -3638,11 +3641,43 @@ private struct ScripturePreviewVerse: Identifiable {
     var id: Int { verse.id }
 }
 
+/// A Strong's number in the Verse pane: the entry in a popover, beside the
+/// word, with the dictionary pane a button away rather than the only place
+/// the number could go.
+///
+/// Its own view, holding whether its popover shows, so each row's number
+/// opens its own; the popover is handed everything it draws.
+private struct StrongsTagButton: View {
+    let key: String
+    let lemma: String?
+    let open: () -> Void
+    @State private var isShowingEntry = false
+
+    var body: some View {
+        Button(key) { isShowingEntry.toggle() }
+            .font(.body.monospacedDigit())
+            // A Strong's number is a link, but of one kind, kept apart
+            // from the verse references it sits among.
+            .buttonStyle(.lampText(.lampOriginalLanguage))
+            .help("Show \(key)")
+            .popover(isPresented: $isShowingEntry, arrowEdge: .leading) {
+                DictionaryReferencePopover(
+                    link: LampDictionaryLink(text: lemma, key: key),
+                    preferredModuleID: nil,
+                    openInDictionary: open
+                )
+            }
+    }
+}
+
 private struct DictionaryReferencePopover: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var model: LibraryModel
     let link: LampDictionaryLink
     let preferredModuleID: String?
+    /// What Open in Dictionary does: the library's lookup, unless the one
+    /// opening this has a pane of its own to send it to.
+    var openInDictionary: (() -> Void)?
     /// The panel's text, whatever opened this: see `StudyPanelText`.
     private var panel = StudyPanelText()
     @State private var results: [LampDictionaryResult] = []
@@ -3706,7 +3741,11 @@ private struct DictionaryReferencePopover: View {
             HStack {
                 Spacer()
                 Button("Open in Dictionary", systemImage: "character.book.closed") {
-                    model.requestDictionaryLookup(keys: [link.key])
+                    if let openInDictionary {
+                        openInDictionary()
+                    } else {
+                        model.requestDictionaryLookup(keys: [link.key])
+                    }
                     dismiss()
                 }
                 .buttonStyle(.borderedProminent)

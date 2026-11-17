@@ -180,8 +180,13 @@ struct VerseAnchoredScrollView<Content: View>: View {
                 // be the same 16pt: the study panes' loading and empty states
                 // line up with this number, and a silent change to it would
                 // reintroduce the lurch they were aligned to remove.
-                .padding(StudyPaneMetrics.contentInset)
+                .padding([.horizontal, .bottom], StudyPaneMetrics.contentInset)
             }
+            // The top inset as a margin of the scroll view, not padding on
+            // its content: `scrollTo(_:anchor: .top)` stops a verse at the
+            // margin, where it put padding above the scrolled-to verse out of
+            // sight and left its heading flush against the tabs.
+            .contentMargins(.top, StudyPaneMetrics.contentInset, for: .scrollContent)
             .onScrollTargetVisibilityChange(idType: Int.self) { visible in
                 guard isOnScreen else { return }
                 // The scroll view first lays out at its first item, even when it
