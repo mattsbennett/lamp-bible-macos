@@ -55,7 +55,10 @@ struct BookModulesView: View {
     @State private var selectedSectionID: String?
     @State private var sectionSearchText = ""
     @State private var bookmarkIDs: Set<String> = []
-    @State private var showsBookInformation = false
+    /// The book whose information sheet is open: the one being read, or
+    /// one chosen from the shelf or the list without opening it.
+    @State private var bookInformation: BookInformationRequest?
+    @State private var bookToRemove: LampInstalledModule?
     @State private var errorMessage: String?
     @State private var continueReading: [BookContinueReadingEntry] = []
 
@@ -168,7 +171,9 @@ struct BookModulesView: View {
                     continueReading: continueReading,
                     hasPosition: { readingState.position(for: $0) != nil },
                     open: openFromShelf
-                )
+                ) { book in
+                    bookActions(book)
+                }
             } else {
                 BookReaderResizableLayout(
                     showsBookList: viewMode == .list && showsBookList,
@@ -189,7 +194,9 @@ struct BookModulesView: View {
                             isBookmarked: bookmarkIDs.contains(section.id),
                             libraryRootURL: model.library.rootURL,
                             openReference: openReference,
-                            showBookInformation: { showsBookInformation = true },
+                            showBookInformation: {
+                                if let selectedBookID { bookInformation = BookInformationRequest(id: selectedBookID) }
+                            },
                             toggleBookmark: toggleCurrentBookmark,
                             selectSection: { selectedSectionID = $0.id }
                         )
@@ -338,14 +345,47 @@ struct BookModulesView: View {
                   }) else { return }
             selectedSectionID = section.id
         }
-        .sheet(isPresented: $showsBookInformation) {
-            if let selectedBook {
-                BookInformationView(
-                    book: selectedBook,
-                    sectionCount: sections.count,
-                    media: BookReaderJSON.decodeMedia(selectedBook.mediaJSON),
-                    libraryRootURL: model.library.rootURL
-                )
+        .modifier(bookManagement)
+    }
+
+    /// A book's information sheet and the question before removing one,
+    /// kept out of `body`, which is at the type checker's limit.
+    private var bookManagement: some ViewModifier {
+        BookManagementModifier(
+            bookInformation: $bookInformation,
+            bookToRemove: $bookToRemove,
+            books: books,
+            openBookID: selectedBookID,
+            openBookSectionCount: sections.isEmpty ? nil : sections.count,
+            libraryRootURL: model.library.rootURL,
+            removableModule: removableModule(for:),
+            remove: remove(_:)
+        )
+    }
+
+    /// The installed module behind a book, if it can be removed. A book that
+    /// came with Lamp cannot: the next launch would only put it back.
+    private func removableModule(for bookID: String) -> LampInstalledModule? {
+        model.modules.first { $0.id == bookID && $0.kind == .book && !$0.isBundled }
+    }
+
+    private func remove(_ module: LampInstalledModule) {
+        // Back to the shelf rather than on to whatever book is chosen next,
+        // which the reader did not ask for.
+        if module.id == selectedBookID, viewMode == .shelf { isShowingShelf = true }
+        model.remove(module)
+    }
+
+    /// What a book offers from the shelf, the list and Continue Reading.
+    @ViewBuilder
+    private func bookActions(_ book: LampBook) -> some View {
+        Button("Book Information", systemImage: "info.circle") {
+            bookInformation = BookInformationRequest(id: book.id)
+        }
+        if let module = removableModule(for: book.id) {
+            Divider()
+            Button("Remove Book…", systemImage: "trash", role: .destructive) {
+                bookToRemove = module
             }
         }
     }
@@ -408,6 +448,7 @@ struct BookModulesView: View {
                             .contentShape(.rect)
                         }
                         .buttonStyle(.plain)
+                        .contextMenu { bookActions(entry.book) }
                     }
                 }
                 if groupBy == .none { Section("All Books") { bookRows(books) } }
@@ -482,6 +523,7 @@ struct BookModulesView: View {
             .padding(.vertical, 6)
             .tag(Optional(book.id))
             .lampListRow(isSelected: selectedBookID == book.id)
+            .contextMenu { bookActions(book) }
         }
     }
 
@@ -904,15 +946,17 @@ enum BookViewMode: String, CaseIterable, Identifiable {
 /// The books as a shelf of covers, as Modules shows the library: the books
 /// being read first, with the section each was left in, then every book,
 /// grouped as the list is. Choosing one opens it.
-private struct BookShelfView: View {
+private struct BookShelfView<Actions: View>: View {
     let books: [LampBook]
     let genres: [LampBookGenre]
     let grouping: BookGrouping
     let continueReading: [BookContinueReadingEntry]
     let hasPosition: (String) -> Bool
     let open: (String) -> Void
+    /// A book's information and removal, on its context menu.
+    @ViewBuilder let actions: (LampBook) -> Actions
 
-    private static let coverWidth: CGFloat = 148
+    private static var coverWidth: CGFloat { 148 }
 
     private let columns = [
         GridItem(.adaptive(minimum: coverWidth, maximum: 172), spacing: 28, alignment: .top)
@@ -1020,6 +1064,7 @@ private struct BookShelfView: View {
         .buttonStyle(.plain)
         .help(book.title)
         .accessibilityLabel(book.title)
+        .contextMenu { actions(book) }
     }
 
     private func continueCard(_ entry: BookContinueReadingEntry) -> some View {
@@ -1045,6 +1090,7 @@ private struct BookShelfView: View {
         }
         .buttonStyle(.plain)
         .help("Continue reading \(entry.book.title)")
+        .contextMenu { actions(entry.book) }
     }
 }
 
@@ -2548,12 +2594,76 @@ private struct BookFootnoteSheet: View {
     }
 }
 
+private struct BookManagementModifier: ViewModifier {
+    @EnvironmentObject private var model: LibraryModel
+    @Binding var bookInformation: BookInformationRequest?
+    @Binding var bookToRemove: LampInstalledModule?
+    let books: [LampBook]
+    let openBookID: String?
+    let openBookSectionCount: Int?
+    let libraryRootURL: URL
+    let removableModule: (String) -> LampInstalledModule?
+    let remove: (LampInstalledModule) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .sheet(item: $bookInformation) { request in
+                if let book = books.first(where: { $0.id == request.id }) {
+                    BookInformationView(
+                        book: book,
+                        // The open book's sections are loaded; another's are
+                        // counted when its sheet opens.
+                        sectionCount: book.id == openBookID ? openBookSectionCount : nil,
+                        media: BookReaderJSON.decodeMedia(book.mediaJSON),
+                        libraryRootURL: libraryRootURL,
+                        remove: removableModule(book.id).map { module in { remove(module) } }
+                    )
+                    .environmentObject(model)
+                }
+            }
+            .confirmationDialog(
+                "Remove Book?",
+                isPresented: Binding(
+                    get: { bookToRemove != nil },
+                    set: { if !$0 { bookToRemove = nil } }
+                ),
+                presenting: bookToRemove
+            ) { module in
+                Button("Remove \(module.name)", role: .destructive) {
+                    remove(module)
+                    bookToRemove = nil
+                }
+            } message: { module in
+                Text(BookRemoval.message(for: module.name))
+            }
+    }
+}
+
+private struct BookInformationRequest: Identifiable {
+    let id: String
+}
+
+/// What removing a book says, from the Books view and its information sheet.
+private enum BookRemoval {
+    // As Modules says it: `LibraryModel.remove(_:)` records the removal for
+    // sync, which is what carries it to the other devices.
+    static func message(for name: String) -> String {
+        "This removes \(name) from your library — from this Mac, and from your other devices the next time they sync. Your original .lamp file is not affected."
+    }
+}
+
 private struct BookInformationView: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var model: LibraryModel
     let book: LampBook
-    let sectionCount: Int
+    /// Nil when the book's sections are not loaded; the sheet counts them.
+    let sectionCount: Int?
     let media: [BookReaderMedia]
     let libraryRootURL: URL
+    /// Removes the book; nil for one that came with Lamp.
+    let remove: (() -> Void)?
+    @State private var countedSections: Int?
+    @State private var confirmsRemoval = false
 
     private var cover: BookReaderMedia? {
         guard let coverMediaID = book.coverMediaID else { return nil }
@@ -2589,7 +2699,7 @@ private struct BookInformationView: View {
                     metadataRow("ISBN", book.isbn)
                     metadataRow("Language", book.language)
                     metadataRow("Version", book.version)
-                    metadataRow("Sections", String(sectionCount))
+                    metadataRow("Sections", (sectionCount ?? countedSections).map(String.init))
                     metadataRow("Media", String(media.count))
                     metadataRow("Created", book.created?.formatted(date: .long, time: .omitted))
                     metadataRow("Last Updated", book.lastModified?.formatted(date: .long, time: .omitted))
@@ -2616,10 +2726,27 @@ private struct BookInformationView: View {
             .padding(28)
         }
         .frame(minWidth: 680, idealWidth: 760, minHeight: 520)
+        .task(id: book.id) {
+            guard sectionCount == nil else { return }
+            countedSections = try? await model.library.bookSections(moduleID: book.id).count
+        }
         .toolbar {
+            if remove != nil {
+                ToolbarItem(placement: .destructiveAction) {
+                    Button("Remove Book…", role: .destructive) { confirmsRemoval = true }
+                }
+            }
             ToolbarItem(placement: .confirmationAction) {
                 Button("Done") { dismiss() }
             }
+        }
+        .confirmationDialog("Remove Book?", isPresented: $confirmsRemoval) {
+            Button("Remove \(book.title)", role: .destructive) {
+                remove?()
+                dismiss()
+            }
+        } message: {
+            Text(BookRemoval.message(for: book.title))
         }
     }
 

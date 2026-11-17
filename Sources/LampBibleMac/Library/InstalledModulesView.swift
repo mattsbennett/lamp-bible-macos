@@ -15,6 +15,8 @@ struct InstalledModulesView: View {
     @State private var moduleToRemove: LampInstalledModule?
     @State private var exportRequest: ModuleExportRequest?
     @State private var filterText = ""
+    /// The shelves shown, by title, one to a line; every shelf when empty.
+    @AppStorage("modules.shelfFilter") private var shelfFilter = ""
     let showImporter: () -> Void
 
     private var exportChoices: [ModuleExportChoice] {
@@ -22,7 +24,7 @@ struct InstalledModulesView: View {
             + model.modules.filter { !$0.isBundled }.map(ModuleExportChoice.installed)
     }
 
-    private var shelves: [(title: String, modules: [LampInstalledModule])] {
+    private var allShelves: [(title: String, modules: [LampInstalledModule])] {
         [
             ("Translations", model.modules.filter { $0.kind == .translation }),
             ("Dictionaries", model.modules.filter { $0.kind == .dictionary }),
@@ -34,12 +36,45 @@ struct InstalledModulesView: View {
             ("Notes", model.noteModules),
             ("Highlights", model.highlightModules),
         ]
-        .map { ($0.0, $0.1.filter(matchesFilter)) }
         .filter { !$0.1.isEmpty }
     }
 
+    private static let personalShelf = "Personal"
+
+    /// The kinds the library holds, each with how many: the chips under
+    /// the title, and the toolbar's menu.
+    private var shelfChoices: [(title: String, count: Int)] {
+        [(Self.personalShelf, LampPersonalModule.allCases.count)]
+            + allShelves.map { ($0.title, $0.modules.count) }
+    }
+
+    /// The shelves chosen that the library still holds: a choice left from a
+    /// kind since removed would otherwise show an empty page.
+    private var chosenShelves: Set<String> {
+        let stored = Set(shelfFilter.split(separator: "\n").map(String.init))
+        return stored.intersection(shelfChoices.map(\.title))
+    }
+
+    private func isShown(_ title: String) -> Bool {
+        chosenShelves.isEmpty || chosenShelves.contains(title)
+    }
+
+    private func toggleShelf(_ title: String) {
+        var chosen = chosenShelves
+        if chosen.contains(title) { chosen.remove(title) } else { chosen.insert(title) }
+        shelfFilter = chosen.sorted().joined(separator: "\n")
+    }
+
+    private var shelves: [(title: String, modules: [LampInstalledModule])] {
+        allShelves
+            .filter { isShown($0.title) }
+            .map { ($0.0, $0.1.filter(matchesFilter)) }
+            .filter { !$0.1.isEmpty }
+    }
+
     private var personalModules: [LampPersonalModule] {
-        LampPersonalModule.allCases.filter { matchesFilter(name: $0.name, abbreviation: nil) }
+        guard isShown(Self.personalShelf) else { return [] }
+        return LampPersonalModule.allCases.filter { matchesFilter(name: $0.name, abbreviation: nil) }
     }
 
     private var trimmedFilter: String {
@@ -69,21 +104,22 @@ struct InstalledModulesView: View {
         GridItem(.flexible(), spacing: 16, alignment: .top),
     ]
 
-    /// "14 translations · 2 dictionaries · 30 books": what the library holds,
-    /// said once under the title.
-    private var summary: String {
-        let all: [(LampModuleKind, Int)] = [
-            (.translation, model.modules.filter { $0.kind == .translation }.count),
-            (.dictionary, model.modules.filter { $0.kind == .dictionary }.count),
-            (.commentary, model.modules.filter { $0.kind == .commentary }.count),
-            (.book, model.modules.filter { $0.kind == .book }.count),
-            (.plan, model.planModules.count),
-            (.devotional, model.devotionalModules.count),
-            (.quiz, model.quizModuleInstallations.count),
-        ]
-        return all.filter { $0.1 > 0 }
-            .map { "\($0.1) \(noun(for: $0.0, count: $0.1))" }
-            .joined(separator: "  ·  ")
+    /// "14 translations": a shelf's chip, the count first, as the line of
+    /// counts under the title read before it became the filter.
+    private func chipLabel(_ title: String, count: Int) -> String {
+        let kind: LampModuleKind? = switch title {
+        case "Translations": .translation
+        case "Dictionaries": .dictionary
+        case "Commentaries": .commentary
+        case "Books": .book
+        case "Reading Plans": .plan
+        case "Writing": .devotional
+        case "Quizzes": .quiz
+        case "Notes": .notes
+        case "Highlights": .highlights
+        default: nil
+        }
+        return "\(count) \(kind.map { noun(for: $0, count: count) } ?? title.lowercased())"
     }
 
     private func noun(for kind: LampModuleKind, count: Int) -> String {
@@ -101,28 +137,53 @@ struct InstalledModulesView: View {
         }
     }
 
-    /// The page's own title, set large in the reading face, with what the
-    /// library holds beneath it — the shelf announces itself as a library
-    /// before it is a grid.
+    /// The page's own title, set large in the reading face — the shelf
+    /// announces itself as a library before it is a grid.
     private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Modules")
-                .font(.system(size: 32, weight: .bold, design: .serif))
-                .accessibilityAddTraits(.isHeader)
-            Text(summary)
-                .font(.title3)
-                .foregroundStyle(Color.lampSecondaryText)
+        Text("Modules")
+            .font(.system(size: 32, weight: .bold, design: .serif))
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    /// What the library holds, a chip a kind: choosing some shows only
+    /// those shelves, and choosing none shows them all.
+    private var shelfChips: some View {
+        WrappingRow(spacing: 8) {
+            ForEach(shelfChoices, id: \.title) { choice in
+                let isChosen = chosenShelves.contains(choice.title)
+                Button {
+                    toggleShelf(choice.title)
+                } label: {
+                    Text(chipLabel(choice.title, count: choice.count))
+                        .monospacedDigit()
+                        .foregroundStyle(isChosen ? Color.accentColor : Color.primary)
+                        .moduleShelfChip(isChosen: isChosen)
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(isChosen ? .isSelected : [])
+                .help(isChosen ? "Stop showing only these" : "Show only these")
+            }
+            if !chosenShelves.isEmpty {
+                Button("Show All") { shelfFilter = "" }
+                    .buttonStyle(.borderless)
+                    .font(.callout)
+                    .frame(height: 30)
+                    .padding(.leading, 4)
+            }
         }
     }
 
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 36) {
-                if trimmedFilter.isEmpty {
-                    header
+                VStack(alignment: .leading, spacing: 14) {
+                    if trimmedFilter.isEmpty {
+                        header
+                    }
+                    shelfChips
                 }
                 if !personalModules.isEmpty {
-                    shelfHeading("Personal", count: personalModules.count)
+                    shelfHeading(Self.personalShelf, count: personalModules.count)
                         .padding(.bottom, -20)
                     LazyVGrid(columns: personalColumns, alignment: .leading, spacing: 16) {
                         ForEach(personalModules) { personalModule in
@@ -141,6 +202,8 @@ struct InstalledModulesView: View {
                     }
                 }
                 if personalModules.isEmpty && shelves.isEmpty {
+                    // Only the words typed can empty the page: a kind is
+                    // offered only while the library holds some of it.
                     ContentUnavailableView.search(text: trimmedFilter)
                         .frame(maxWidth: .infinity)
                         .padding(.top, 60)
@@ -155,6 +218,29 @@ struct InstalledModulesView: View {
         .navigationTitle("Modules")
         .searchable(text: $filterText, placement: .toolbar, prompt: "Filter Modules")
         .toolbar {
+            ToolbarItem {
+                // The chips' choices again, for when they are scrolled away.
+                Menu {
+                    Button("All Modules") { shelfFilter = "" }
+                    Divider()
+                    ForEach(shelfChoices, id: \.title) { choice in
+                        Toggle(choice.title, isOn: Binding(
+                            get: { chosenShelves.contains(choice.title) },
+                            set: { _ in toggleShelf(choice.title) }
+                        ))
+                    }
+                } label: {
+                    Label(
+                        "Show",
+                        systemImage: chosenShelves.isEmpty
+                            ? "line.3.horizontal.decrease.circle"
+                            : "line.3.horizontal.decrease.circle.fill"
+                    )
+                }
+                .help(chosenShelves.isEmpty
+                    ? "Show only some kinds of module"
+                    : "Showing " + chosenShelves.sorted().joined(separator: ", "))
+            }
             ToolbarItemGroup {
                 Button("Install Module…", systemImage: "plus", action: showImporter)
                     .help("Install a Lamp module")
@@ -548,5 +634,17 @@ struct TranslationPickerOptions<Tag: Hashable>: View {
                 .badge(translation.strongsMenuBadge)
                 .tag(tag(translation))
         }
+    }
+}
+
+private extension View {
+    /// A shelf's chip: Search's filter capsule, tinted when chosen.
+    func moduleShelfChip(isChosen: Bool) -> some View {
+        font(.callout)
+            .padding(.horizontal, 12)
+            .frame(height: 30)
+            .background(Capsule().fill(isChosen ? Color.accentColor.opacity(0.14) : Color.lampTileFill))
+            .overlay(Capsule().strokeBorder(isChosen ? Color.accentColor.opacity(0.55) : Color.lampCardStroke))
+            .contentShape(Capsule())
     }
 }
