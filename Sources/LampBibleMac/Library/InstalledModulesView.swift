@@ -857,6 +857,10 @@ struct ModuleInfoWindow: View {
 
     @EnvironmentObject private var model: LibraryModel
     @State private var showsTechnicalDetails = false
+    /// Everything the library holds about this module, read on request: it
+    /// hashes the module's file, so it is not carried by the module list.
+    @State private var record: LampModuleRecord?
+    @State private var recordFailure: String?
 
     /// Every installed module, not only the ones `modules` holds: a reading
     /// plan, a writing, a quiz, notes and highlights are each their own
@@ -890,6 +894,7 @@ struct ModuleInfoWindow: View {
             if let module {
                 content(module)
                     .navigationTitle(windowTitle(module))
+                    .task(id: module.id) { await load(module) }
             } else {
                 noLongerInstalled
                     .navigationTitle("Module Info")
@@ -966,14 +971,17 @@ struct ModuleInfoWindow: View {
         if let abbreviation = module.abbreviation, !abbreviation.isEmpty {
             rows.append(("Abbreviation", abbreviation))
         }
-        if let language = module.language, !language.isEmpty {
-            // "en" is not a language a reader recognises. The library holds a
-            // `language_name` beside the code and does not expose it yet, so
-            // the system names the code until core's record read lands; the
-            // code itself stays, under Technical Details.
+        // The library names the language beside its code; the system's name
+        // for the code is the fallback, and the code itself is technical.
+        if let named = text("language_name") {
+            rows.append(("Language", named))
+        } else if let language = module.language, !language.isEmpty {
             let named = Locale.current.localizedString(forIdentifier: language)
                 ?? Locale.current.localizedString(forLanguageCode: language)
             rows.append(("Language", named ?? language))
+        }
+        for (column, label) in Self.readerFields {
+            if let value = text(column) { rows.append((label, value)) }
         }
         rows.append(("Source", module.isBundled ? "Built in to Lamp Bible" : "Installed"))
         if !module.isBundled {
@@ -982,6 +990,42 @@ struct ModuleInfoWindow: View {
             )))
         }
         return rows
+    }
+
+    /// What a reader is told without opening anything, in this order. Columns
+    /// no kind of module has are simply never found.
+    /// Description comes last on purpose. A module's own description can run
+    /// to paragraphs — the bundled KJV's is a page of translation credits —
+    /// and at the top it pushed everything the window was opened for below
+    /// the fold.
+    private static let readerFields: [(String, String)] = [
+        ("translation_philosophy", "Philosophy"),
+        ("author", "Author"),
+        ("editor", "Editor"),
+        ("publisher", "Publisher"),
+        ("year", "Year"),
+        ("edition", "Edition"),
+        ("isbn", "ISBN"),
+        ("copyright", "Copyright"),
+        ("copyright_year", "Copyright year"),
+        ("license", "Licence"),
+        ("website", "Website"),
+        ("description", "Description"),
+    ]
+
+    /// A column as a sentence, or nil where this kind has no such column or
+    /// this module left it empty. The two are different, and only the second
+    /// is worth a row saying so — under Technical Details, where the whole
+    /// record is laid out as it is held.
+    private func text(_ column: String) -> String? {
+        switch record?.value(of: column) {
+        case .text(let value):
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        case .integer(let value): return String(value)
+        case .real(let value): return String(value)
+        case .blob, .null, .none: return nil
+        }
     }
 
     private func scriptureRows(_ module: LampInstalledModule) -> [(String, String)] {
@@ -998,15 +1042,28 @@ struct ModuleInfoWindow: View {
                     : "\(books) \(books == 1 ? "book" : "books") · \(chapters) chapters"
             ))
         }
+        if let versification = text("versification") {
+            rows.append(("Versification", versification))
+        }
+        if let direction = text("text_direction") {
+            rows.append((
+                "Direction", direction == "rtl" ? "Right to left" : "Left to right"
+            ))
+        }
         return rows
     }
 
-    /// The fields that answer "which copy is this", kept behind a reveal.
-    ///
-    /// Thin for now: the library holds a version, a hash, a publisher, a
-    /// licence, a versification and its timestamps, and `LampInstalledModule`
-    /// carries none of them. Core is adding a read that returns the whole
-    /// record, for this window and the phone's; this grows then.
+    private func load(_ module: LampInstalledModule) async {
+        do {
+            record = try await model.library.moduleRecord(kind: module.kind, id: module.id)
+            recordFailure = record == nil ? "The library has no record of this module." : nil
+        } catch {
+            record = nil
+            recordFailure = error.localizedDescription
+        }
+    }
+
+    /// What identifies this copy, and where it is kept.
     private func technicalRows(_ module: LampInstalledModule) -> [(String, String)] {
         var rows: [(String, String)] = [("Identifier", module.id)]
         if let language = module.language, !language.isEmpty {
@@ -1020,7 +1077,79 @@ struct ModuleInfoWindow: View {
                 earlier.joined(separator: ", ")
             ))
         }
+        switch record?.storage {
+        case .installed(let moduleFile, let database):
+            if let moduleFile {
+                rows += Self.fileRows("Module file", moduleFile)
+            }
+            rows += Self.fileRows("Database", database)
+        case .bundled(let database):
+            rows += Self.fileRows("Database", database)
+        case nil:
+            break
+        }
         return rows
+    }
+
+    private static func fileRows(_ label: String, _ file: LampModuleRecord.File) -> [(String, String)] {
+        var rows = [("\(label) path", file.url.path)]
+        if let bytes = file.byteCount {
+            rows.append((
+                "\(label) size",
+                ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+            ))
+        }
+        if let modified = file.modifiedAt {
+            rows.append(("\(label) modified", modified.formatted(date: .abbreviated, time: .shortened)))
+        }
+        // Only a module's own file is hashed, and only when it did not change
+        // while being read: core leaves it nil rather than reporting a digest
+        // of two revisions at once.
+        if let hash = file.sha256 {
+            rows.append(("\(label) SHA-256", hash))
+        }
+        return rows
+    }
+
+    /// Every column the library holds for this module, as it holds it.
+    ///
+    /// The curated rows above are a reading of the record; this is the record.
+    /// A column shown as "not set" is one this kind has and this module left
+    /// empty, and a column that does not appear at all is one its kind has no
+    /// place for — a distinction core keeps deliberately, and the reason a
+    /// blank row here is information rather than a fault.
+    private var recordTables: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            ForEach(record?.tables ?? [], id: \.name) { table in
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(table.name)
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(Color.lampSecondaryText)
+                    ForEach(Array(table.rows.enumerated()), id: \.offset) { _, row in
+                        ForEach(row, id: \.name) { field in
+                            detailRow(field.name, Self.shown(field.value), monospaced: true)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if let recordFailure {
+                Text(recordFailure)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.lampSecondaryText)
+            }
+        }
+    }
+
+    private static func shown(_ value: LampModuleRecord.Value) -> String {
+        switch value {
+        case .null: "not set"
+        case .integer(let number): String(number)
+        case .real(let number): String(number)
+        case .text(let text): text
+        case .blob(let byteCount):
+            ByteCountFormatter.string(fromByteCount: Int64(byteCount), countStyle: .file)
+        }
     }
 
     // MARK: Pieces
@@ -1031,6 +1160,7 @@ struct ModuleInfoWindow: View {
                 ForEach(technicalRows(module), id: \.0) { row in
                     detailRow(row.0, row.1, monospaced: true)
                 }
+                recordTables
             }
             .padding(.top, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
