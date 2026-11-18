@@ -52,6 +52,11 @@ struct UnifiedSearchView: View {
     @State private var typing: Typing?
     /// The themes highlights are found by, read when the Highlights scope is.
     @State private var markThemes: [LampHighlightTheme] = []
+    /// My highlight sets, whose highlights can be removed from here; an
+    /// installed module's are not mine to remove.
+    @State private var personalHighlightSetIDs: Set<String> = []
+    /// Colours seen on highlights found, for colours no theme names.
+    @State private var seenHighlightColors: Set<String> = []
 
     /// Settled deliberately at the same 250ms the search itself waits, and
     /// for the same reason. It costs no delay: the search is driven by the
@@ -581,11 +586,15 @@ struct UnifiedSearchView: View {
             runSearch()
         }
         .task(id: listsHighlights) {
+            let sets = Set(((try? await model.library.highlightSets()) ?? []).map(\.id))
+            if sets != personalHighlightSetIDs { personalHighlightSetIDs = sets }
             guard listsHighlights else { return }
             let loaded = await model.highlightThemesForSearch()
             if loaded != markThemes { markThemes = loaded }
         }
         .onChange(of: model.moduleSearchResults) { _, results in
+            let colors = Set(results.compactMap { $0.kind == .highlights ? $0.highlightColor : nil })
+            if !colors.isSubset(of: seenHighlightColors) { seenHighlightColors.formUnion(colors) }
             if !results.contains(where: { $0.id == selectedResultID }) {
                 // The first row on screen, which grouping may have moved
                 // from the first result core returned.
@@ -1429,7 +1438,8 @@ struct UnifiedSearchView: View {
                 .buttonStyle(.borderedProminent)
             }
             // A highlight found can be taken off here, without going to it.
-            if result.kind == .highlights, let reference = result.startReference,
+            if result.kind == .highlights, personalHighlightSetIDs.contains(result.moduleID),
+               let reference = result.startReference,
                let id = result.id.split(separator: ":").last.flatMap({ Int64($0) }) {
                 Button("Remove Highlight", systemImage: "eraser") {
                     Task {
@@ -1709,7 +1719,7 @@ struct UnifiedSearchView: View {
         selectedKind = entry.kinds?.first
         selectedModuleID = heldModuleID(entry.moduleIDs?.first)
         strongsKey = entry.strongsKey ?? ""
-        highlightColors = entry.highlightColors ?? []
+        highlightColors = Set((entry.highlightColors ?? []).map(LampHighlightSearch.normalizedColor))
         highlightStyles = entry.highlightStyles ?? []
         highlightThemes = entry.highlightThemes ?? []
         if let range = entry.bookRange,
@@ -1909,11 +1919,15 @@ struct UnifiedSearchView: View {
         )
     }
 
-    /// The palette's colours, then any other a theme is made in.
+    /// The palette's colours, then any other a theme is made in or a
+    /// highlight found wears, each as core spells it.
     private var markColors: [(hex: String, name: String)] {
-        var colors = StudyHighlightPalette.colors.map { (hex: $0.hex, name: $0.name) }
-        for theme in markThemes where !colors.contains(where: { $0.hex.caseInsensitiveCompare(theme.color) == .orderedSame }) {
-            colors.append((theme.color, "#\(theme.color)"))
+        var colors = StudyHighlightPalette.colors.map {
+            (hex: LampHighlightSearch.normalizedColor($0.hex), name: $0.name)
+        }
+        let others = markThemes.map(\.color) + seenHighlightColors.sorted() + highlightColors.sorted()
+        for other in others.map(LampHighlightSearch.normalizedColor) where !colors.contains(where: { $0.hex == other }) {
+            colors.append((other, "#\(other)"))
         }
         return colors
     }

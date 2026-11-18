@@ -257,19 +257,21 @@ struct TranslationReaderView: View, Equatable {
         }
         return ReaderHighlighter.Actions(
             highlights: { model.personalHighlights(for: $0, in: workspace.selectedTranslationID) },
+            translation: { workspace.selectedTranslationID },
             verseLength: { verse($0)?.text.count },
-            save: { span, color, style in
-                guard let setID = setID() else { return }
+            save: { span, color, style, translationID in
                 try await model.saveVerseHighlight(
                     reference: span.reference, startOffset: span.start, endOffset: span.end,
-                    style: style, color: color, setID: setID
+                    style: style, color: color,
+                    setID: "personal-highlights:\(LampTranslationID.original(translationID))",
+                    translationID: translationID
                 )
             },
             restyle: { old, color, style in
                 try await model.deleteVerseHighlight(id: old.id, reference: old.reference)
                 try await model.saveVerseHighlight(
                     reference: old.reference, startOffset: old.startOffset, endOffset: old.endOffset,
-                    style: style, color: color, setID: old.setID
+                    style: style, color: color, setID: old.setID, translationID: old.translationID
                 )
             },
             delete: { try await model.deleteVerseHighlight(id: $0.id, reference: $0.reference) },

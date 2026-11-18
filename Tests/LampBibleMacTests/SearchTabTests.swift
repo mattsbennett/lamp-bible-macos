@@ -54,12 +54,24 @@ struct SearchTabTests {
     /// colour; it comes back as that colour chosen.
     @Test func aTabsOneColourComesBackAsAMark() throws {
         let id = UUID()
-        let old = #"{"id":"\#(id.uuidString)","query":"","kind":"highlights","highlightColor":"FFCC00"}"#
+        let old = ##"{"id":"\##(id.uuidString)","query":"","kind":"highlights","highlightColor":"#ffcc00"}"##
         let tab = try JSONDecoder().decode(SearchTab.self, from: Data(old.utf8))
-        #expect(tab.highlightColors == ["FFCC00"])
+        #expect(tab.highlightColors == ["FFCC00"], "spelled as the picker spells it")
         #expect(tab.highlightStyles.isEmpty && tab.highlightThemes.isEmpty)
         let again = try JSONDecoder().decode(SearchTab.self, from: JSONEncoder().encode(tab))
         #expect(again == tab)
+    }
+
+    /// All Highlights asks for every highlight: a tab of green ones is not it.
+    @Test func aTabFilteredByMarksIsNotTheListOfAll() {
+        var tabs = SearchTabCollection()
+        tabs.show(SearchTab(kind: .highlights, highlightColors: ["34C759"]))
+        let green = tabs.selectedID
+        tabs.show(SearchTab(kind: .highlights))
+        #expect(tabs.selectedID != green)
+        #expect(tabs.selected.highlightColors.isEmpty)
+        tabs.show(SearchTab(kind: .highlights, highlightColors: ["34C759"]))
+        #expect(tabs.selectedID == green)
     }
 
     @Test func aCollectionAlwaysHasATabAndASelectionThatNamesOne() {

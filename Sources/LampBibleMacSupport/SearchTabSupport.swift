@@ -66,7 +66,7 @@ public struct SearchTab: Codable, Identifiable, Equatable, Sendable {
         self.moduleID = moduleID
         self.bookScopeRawValue = bookScopeRawValue
         self.strongsKey = strongsKey
-        self.highlightColors = highlightColors
+        self.highlightColors = Set(highlightColors.map(LampHighlightSearch.normalizedColor))
         self.highlightStyles = highlightStyles
         self.highlightThemes = highlightThemes
         self.devotionalDate = devotionalDate
@@ -94,8 +94,9 @@ public struct SearchTab: Codable, Identifiable, Equatable, Sendable {
         bookScopeRawValue = ((try? values.decodeIfPresent(String.self, forKey: .bookScopeRawValue)) ?? nil) ?? ""
         strongsKey = ((try? values.decodeIfPresent(String.self, forKey: .strongsKey)) ?? nil) ?? ""
         let color = ((try? values.decodeIfPresent(String.self, forKey: .highlightColor)) ?? nil) ?? ""
-        highlightColors = ((try? values.decodeIfPresent(Set<String>.self, forKey: .highlightColors)) ?? nil)
-            ?? (color.isEmpty ? [] : [color])
+        // Spelled as core spells a colour, which the picker's choices are.
+        highlightColors = Set((((try? values.decodeIfPresent(Set<String>.self, forKey: .highlightColors)) ?? nil)
+            ?? (color.isEmpty ? [] : [color])).map(LampHighlightSearch.normalizedColor))
         highlightStyles = ((try? values.decodeIfPresent(Set<LampHighlightStyle>.self, forKey: .highlightStyles)) ?? nil) ?? []
         highlightThemes = ((try? values.decodeIfPresent(Set<LampHighlightMark>.self, forKey: .highlightThemes)) ?? nil) ?? []
         devotionalDate = ((try? values.decodeIfPresent(String.self, forKey: .devotionalDate)) ?? nil) ?? ""
@@ -154,6 +155,11 @@ public struct SearchTab: Codable, Identifiable, Equatable, Sendable {
             && strongsKey.trimmingCharacters(in: .whitespacesAndNewlines)
                 == other.strongsKey.trimmingCharacters(in: .whitespacesAndNewlines)
             && kind == other.kind
+            // Marks say which highlights are listed: a tab of green ones is
+            // not the list of all of them.
+            && highlightColors == other.highlightColors
+            && highlightStyles == other.highlightStyles
+            && highlightThemes == other.highlightThemes
             && !other.isEmpty
     }
 

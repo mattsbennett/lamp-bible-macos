@@ -1623,9 +1623,12 @@ final class ReaderHighlighter: NSObject {
     struct Actions {
         /// The reader's own highlights on a verse, in the translation read.
         var highlights: (Int) -> [LampVerseHighlight]
+        /// The translation being read: what new highlights are made in.
+        var translation: () -> String?
         /// How many `Character`s a verse has.
         var verseLength: (Int) -> Int?
-        var save: (ReaderHighlightMarks.Span, String, LampHighlightStyle) async throws -> Void
+        /// Saves words as a highlight in the translation named.
+        var save: (ReaderHighlightMarks.Span, String, LampHighlightStyle, String) async throws -> Void
         /// Gives a highlight a new colour or style, keeping its words and set.
         var restyle: (LampVerseHighlight, String, LampHighlightStyle) async throws -> Void
         var delete: (LampVerseHighlight) async throws -> Void
@@ -1761,16 +1764,16 @@ final class ReaderHighlighter: NSObject {
             color: currentColor(of: target),
             style: currentStyle(of: target),
             stacked: true,
-            choose: { [weak self] hex, style in
-                row.menu?.cancelTracking()
+            choose: { [weak self, weak row] hex, style in
+                row?.menu?.cancelTracking()
                 self?.apply(hex, style: style, to: target)
             },
-            chooseStyle: { [weak self] style in
+            chooseStyle: { [weak self, weak row] style in
                 // A highlight takes the style at once; for words, it is the
                 // style the colour chosen next is drawn in.
                 guard let self else { return }
                 if case .existing = target {
-                    row.menu?.cancelTracking()
+                    row?.menu?.cancelTracking()
                 }
                 self.restyle(style, target)
             }
@@ -1801,7 +1804,7 @@ final class ReaderHighlighter: NSObject {
             let remove = NSMenuItem(title: "Remove Highlight", action: #selector(menuRemove(_:)), keyEquivalent: "")
             remove.target = self
             remove.image = NSImage(systemSymbolName: "eraser", accessibilityDescription: nil)
-            remove.representedObject = highlights.map(\.id)
+            remove.representedObject = highlights
             items.append(remove)
         }
         return items
@@ -1862,19 +1865,12 @@ final class ReaderHighlighter: NSObject {
     }
 
     @objc private func menuRemove(_ sender: NSMenuItem) {
-        guard let ids = sender.representedObject as? [Int64], let actions else { return }
-        let all = Set(ids)
+        guard let highlights = sender.representedObject as? [LampVerseHighlight], let actions else { return }
         Task {
-            // The highlights named, wherever they are in the chapter.
-            for highlight in highlightsNamed(all) {
+            for highlight in highlights {
                 do { try await actions.delete(highlight) } catch { actions.failed(error) }
             }
         }
-    }
-
-    private var lastShownHighlights: [LampVerseHighlight] = []
-    private func highlightsNamed(_ ids: Set<Int64>) -> [LampVerseHighlight] {
-        lastShownHighlights.filter { ids.contains($0.id) }
     }
 
     // MARK: The bar
@@ -1882,7 +1878,6 @@ final class ReaderHighlighter: NSObject {
     private func show(_ target: Target, in textView: NSTextView, at range: NSRange) {
         guard let layoutManager = textView.layoutManager, let container = textView.textContainer else { return }
         close()
-        if case .existing(let highlights) = target { lastShownHighlights = highlights }
         if case .words(_, let text) = target { isShowingForSelection = !text.isEmpty } else { isShowingForSelection = false }
         // The first line of what it acts on, so the bar sits just above the
         // words, where the reader is looking.
@@ -2022,18 +2017,29 @@ final class ReaderHighlighter: NSObject {
         noteUse(color: hex, style: style)
         let textView = barTextView
         close()
+        // What is replaced, and the translation it is in, are read now: the
+        // reader can move to another translation while the saves are made.
+        let translation = actions.translation()
+        let replaced: [(ReaderHighlightMarks.Span, [LampVerseHighlight])]
+        if case .words(let spans, _) = target {
+            // Highlights wholly inside the words are replaced, so a colour
+            // chosen again reads as a change, not a layer.
+            replaced = spans.map { span in
+                (span, actions.highlights(span.reference).filter {
+                    $0.startOffset >= span.start && $0.endOffset <= span.end
+                })
+            }
+        } else {
+            replaced = []
+        }
         Task {
             do {
                 switch target {
-                case .words(let spans, _):
-                    for span in spans {
-                        // Highlights wholly inside the words are replaced, so a
-                        // colour chosen again reads as a change, not a layer.
-                        for old in actions.highlights(span.reference)
-                        where old.startOffset >= span.start && old.endOffset <= span.end {
-                            try await actions.delete(old)
-                        }
-                        try await actions.save(span, hex, style)
+                case .words:
+                    guard let translation else { return }
+                    for (span, olds) in replaced {
+                        for old in olds { try await actions.delete(old) }
+                        try await actions.save(span, hex, style, translation)
                     }
                 case .existing(let highlights):
                     for highlight in highlights { try await actions.restyle(highlight, hex, style) }

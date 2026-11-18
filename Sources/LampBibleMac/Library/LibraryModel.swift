@@ -1311,9 +1311,12 @@ final class LibraryModel: ObservableObject {
         endOffset: Int,
         style: LampHighlightStyle,
         color: String,
-        setID: String
+        setID: String,
+        translationID asked: String? = nil
     ) async throws {
-        guard let translationID = selectedTranslationID else { return }
+        // The translation the words were chosen in, where the caller knows it:
+        // the reader may have moved on by the time this runs.
+        guard let translationID = asked ?? selectedTranslationID else { return }
         let highlight = try await library.saveVerseHighlight(
             translationID: translationID,
             reference: reference,
