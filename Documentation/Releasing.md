@@ -76,11 +76,14 @@ Help → Third-Party Notices. It exits non-zero, and the release stops, when:
   dated decision to ship it anyway (currently only SwiftUIEKtensions). `--allow-gaps` skips this
   check entirely and is for development builds only;
 - a newly resolved package has no entry in the script's `PACKAGES` or `EXCLUDED` tables;
-- the TipTap editor bundle no longer matches the iOS app's, whose JavaScript notices it reuses,
-  and the difference is not recorded in the script's `REVIEWED_EDITOR_DIVERGENCE`. Diff the two
-  bundles: a package added or upgraded needs its own notice, while a difference that carries no
-  package change is recorded there against both hashes, which also stops the notices claiming the
-  two bundles are identical.
+- the Mac's TipTap editor bundle is not the copy the script's `MAC_EDITOR_SHA256` records, or the
+  editor's packages have moved since `MAC_EDITOR_FROM`, the iOS build that copy was taken from.
+  The two bundles are deliberately not identical — the Mac does not take the phone's editor
+  redesign — so the check compares the editor project's lockfile in the iOS repository rather than
+  the built files: a package added, removed or upgraded needs its own notice in
+  `EDITOR_NOTICE_FILES`, while a rebuild that moves no package needs nothing. Taking a newer iOS
+  bundle into the Mac means updating both constants and `MAC_EDITOR_REVIEW`, which is also what
+  stops the notices claiming the two bundles are identical.
 
 The notices depend on the content database, so run this *after* gate 1. The CrossWire KJV notice
 is included only when the database contains the CrossWire KJV, under either spelling of its id

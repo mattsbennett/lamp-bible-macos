@@ -11,10 +11,11 @@ Sources, all checked rather than assumed:
   matching SwiftPM checkouts in .build/checkouts (run `swift package resolve` first). Every
   resolved package must be listed in PACKAGES or EXCLUDED, so a new dependency can't ship
   without a notice.
-- Editor bundle: the TipTap editor is byte-identical to the iOS app's, so its JavaScript
-  notices are copied from the iOS repo. If the bundles differ, generation stops unless the
-  difference is recorded in REVIEWED_EDITOR_DIVERGENCE, which pins both hashes and says why
-  the iOS notices still describe the Mac's copy.
+- Editor bundle: the Mac's TipTap editor is a copy of the iOS app's, so its JavaScript notices
+  are copied from the iOS repo. The two files are deliberately no longer byte-identical, so what
+  is checked is the packages rather than the bytes: the Mac's copy must still be the one
+  MAC_EDITOR_SHA256 records, and the editor project's lockfile in the iOS repo must list the same
+  packages now as at MAC_EDITOR_FROM, the build that copy came from.
 - Bundled content: the CrossWire KJV notice is included only when the bundled module database
   actually contains the CrossWire KJV translation, under either spelling of its id.
 
@@ -32,6 +33,7 @@ import json
 import re
 import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import zlib
@@ -45,8 +47,10 @@ XCODE_RESOLVED = ROOT / "Lamp Bible.xcodeproj/project.xcworkspace/xcshareddata/s
 SPM_RESOLVED = ROOT / "Package.resolved"
 CHECKOUTS = ROOT / ".build" / "checkouts"
 
-IOS_NOTICES = REPOS / "lamp-bible-ios" / "Resource Files" / "Third Party Licenses"
-IOS_EDITOR = REPOS / "lamp-bible-ios" / "Lamp Bible" / "Resources" / "TipTapEditor" / "index.html"
+IOS_REPO = REPOS / "lamp-bible-ios"
+IOS_NOTICES = IOS_REPO / "Resource Files" / "Third Party Licenses"
+IOS_EDITOR = IOS_REPO / "Lamp Bible" / "Resources" / "TipTapEditor" / "index.html"
+IOS_EDITOR_LOCKFILE = "tiptap-editor/package-lock.json"
 MAC_EDITOR = ROOT / "Sources" / "LampBibleMac" / "Resources" / "TipTapEditor" / "index.html"
 BUNDLED_DB = REPOS / "lamp-bible-modules" / "modules_db" / "bundled_modules.db.zlib"
 VERSIFICATION_DATA = (
@@ -91,27 +95,33 @@ ACCEPTED_GAPS: dict[str, str] = {
     ),
 }
 
-# A reviewed difference between the two editor bundles, keyed by (iOS sha256, Mac sha256)
-# and read like ACCEPTED_GAPS: a dated decision, with the reason the iOS notices still
-# describe the Mac's copy. Pinning both hashes means the record is spent the moment
-# either bundle is rebuilt, so the review happens again rather than being inherited.
+# The Mac's editor bundle is a copy of the iPhone's, built from the editor project in the iOS
+# repository and patched by hand since. The two files are not byte-identical and will not become
+# so: the Mac does not take the phone's editor redesign (owner decision, 2026-11-17), and its own
+# injected stylesheet carries that intent tuned for a window instead.
 #
-# Only a difference in what the bundle *contains* belongs here. A new or upgraded
-# JavaScript dependency on either side is not reviewable: it needs its own notice in
-# EDITOR_NOTICE_FILES.
-REVIEWED_EDITOR_DIVERGENCE: dict[tuple[str, str], str] = {
-    (
-        "8fd20b8e2fcbc62de96dc2ef7b2f14cc897ddff3d67e9bee70b7a138a2cdeb88",
-        "1d5fb2bd3c7db1d77a296f8e8660dacd633be3c2b27f6215018f411e82babefc",
-    ): (
-        "2026-11-17: the Mac's copy is the iOS bundle at c98d4f3; iOS has since taken the "
-        "iPhone editor redesign (7c13d54) and core's link blue (bf061dd), which the Mac "
-        "takes through its own injected stylesheet instead. Diffed in full: the whole "
-        "JavaScript difference is 43 characters, a `light` class toggle added to setTheme "
-        "for the redesign's `body.light` rules, and the rest is CSS. No package is added, "
-        "removed or upgraded on either side, so the iOS notices describe both bundles."
-    ),
-}
+# So what is checked is the packages, not the bytes. The notices in EDITOR_NOTICE_FILES have to
+# cover every JavaScript package in the Mac's copy, and that is read from the editor project's
+# lockfile — a manifest — rather than guessed from minified output. Two things are pinned:
+#
+#   MAC_EDITOR_SHA256  the copy this record describes, so an edit to the Mac's own bundle is
+#                      reviewed rather than inherited;
+#   MAC_EDITOR_FROM    the iOS commit it was built at, whose lockfile is the package set the
+#                      iOS notices were checked against.
+#
+# A rebuild of the iOS editor that adds, removes or upgrades no package then passes with no fresh
+# review, because rebuilt bytes cannot leave a package unlicensed. A package that does move stops
+# the run, which is exactly when EDITOR_NOTICE_FILES needs a file.
+MAC_EDITOR_SHA256 = "1d5fb2bd3c7db1d77a296f8e8660dacd633be3c2b27f6215018f411e82babefc"
+MAC_EDITOR_FROM = "c98d4f3"
+MAC_EDITOR_REVIEW = (
+    "2026-11-17: the Mac's copy is the iOS editor built at c98d4f3, with one change applied by "
+    "hand — Mac 450e42f set the link colour to core's link blue, the same #1A61CC/#78ABF5 iOS "
+    "itself shipped in bf061dd, so both bundles now draw links identically. iOS has since taken "
+    "the iPhone editor redesign (7c13d54), which the Mac does not take. Diffed in full: the whole "
+    "JavaScript difference is 43 characters, a `light` class toggle added to setTheme for the "
+    "redesign's `body.light` rules, and the rest is CSS."
+)
 
 # Resolved but not linked into anything that ships.
 EXCLUDED: dict[str, str] = {
@@ -257,6 +267,98 @@ def bundled_translation_ids() -> set[str]:
             connection.close()
 
 
+def editor_packages(text: str, source: str) -> dict[str, str]:
+    """Every package the iOS editor project installs, by its place in the dependency tree, with
+    the version installed there. Keyed by the lockfile's own path, so a nested copy of a package
+    at a second version stays visible instead of collapsing onto the first."""
+    try:
+        document = json.loads(text)
+    except json.JSONDecodeError as error:
+        raise NoticeError(f"the iOS editor lockfile, {source}, is not readable JSON: {error}") from error
+    packages = document.get("packages")
+    if not packages:
+        raise NoticeError(
+            f"the iOS editor lockfile, {source}, lists no packages (lockfileVersion "
+            f"{document.get('lockfileVersion', 'unknown')}); this check reads 2 and 3."
+        )
+    return {path: meta.get("version", "") for path, meta in packages.items() if path}
+
+
+def ios_editor_lockfile(rev: str | None) -> tuple[str, str]:
+    """The editor project's lockfile from the iOS checkout, at a commit or as it stands now, with
+    a name for it that an error message can use."""
+    if rev is None:
+        path = IOS_REPO / IOS_EDITOR_LOCKFILE
+        if not path.exists():
+            raise NoticeError(f"{path} is missing, so the editor's packages cannot be checked.")
+        return path.read_text(encoding="utf-8"), f"{IOS_EDITOR_LOCKFILE} as it stands"
+    shown = subprocess.run(
+        ["git", "-C", str(IOS_REPO), "show", f"{rev}:{IOS_EDITOR_LOCKFILE}"],
+        capture_output=True,
+        text=True,
+    )
+    if shown.returncode != 0:
+        raise NoticeError(
+            f"could not read {IOS_EDITOR_LOCKFILE} at {rev} in {IOS_REPO}: {shown.stderr.strip()}\n"
+            "Fetch the iOS repository, or correct MAC_EDITOR_FROM."
+        )
+    return shown.stdout, f"{IOS_EDITOR_LOCKFILE} at {rev}"
+
+
+def package_changes(before: dict[str, str], after: dict[str, str]) -> list[str]:
+    """Each package added, removed, or moved to another version, one line each."""
+
+    def name(path: str) -> str:
+        return path.removeprefix("node_modules/")
+
+    lines = [f"added    {name(path)} {after[path]}" for path in sorted(set(after) - set(before))]
+    lines += [f"removed  {name(path)} {before[path]}" for path in sorted(set(before) - set(after))]
+    lines += [
+        f"upgraded {name(path)} {before[path]} -> {after[path]}"
+        for path in sorted(set(before) & set(after))
+        if before[path] != after[path]
+    ]
+    return lines
+
+
+def editor_divergence() -> str | None:
+    """The record saying the iOS editor notices describe the Mac's copy as well, or None when the
+    two bundles are the same file and there is nothing to say.
+
+    Raises when the Mac's copy is not the one the record describes, or when the editor's packages
+    have moved since the build it came from — the only difference that can leave a shipped package
+    with no notice.
+    """
+    ios_editor, mac_editor = sha256(IOS_EDITOR), sha256(MAC_EDITOR)
+    if ios_editor == mac_editor:
+        print(
+            "note: the editor bundles are identical again; the MAC_EDITOR_* record is spent and "
+            "can be removed."
+        )
+        return None
+    if mac_editor != MAC_EDITOR_SHA256:
+        raise NoticeError(
+            "The Mac TipTap editor bundle is not the copy this script records.\n"
+            f"  recorded {MAC_EDITOR_SHA256}\n  on disk  {mac_editor}\n"
+            "If the Mac took a newer iOS build, set MAC_EDITOR_FROM to the commit it was built at "
+            "and MAC_EDITOR_SHA256 to the hash on disk, and say in MAC_EDITOR_REVIEW what changed."
+        )
+    reviewed = editor_packages(*ios_editor_lockfile(MAC_EDITOR_FROM))
+    current = editor_packages(*ios_editor_lockfile(None))
+    changes = package_changes(reviewed, current)
+    if changes:
+        raise NoticeError(
+            "The iOS editor's packages have moved since the build the Mac's copy came from "
+            f"({MAC_EDITOR_FROM}), so the iOS editor notices may no longer cover the Mac's "
+            "bundle:\n"
+            + "".join(f"  {line}\n" for line in changes)
+            + "Give each added or upgraded package its own notice in EDITOR_NOTICE_FILES. Then "
+            "either take the matching iOS bundle into the Mac, updating MAC_EDITOR_FROM and "
+            "MAC_EDITOR_SHA256, or say in MAC_EDITOR_REVIEW why the Mac keeps an older build."
+        )
+    return MAC_EDITOR_REVIEW
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
@@ -283,24 +385,7 @@ def main() -> int:
             + ", ".join(sorted(unknown))
         )
 
-    ios_editor, mac_editor = sha256(IOS_EDITOR), sha256(MAC_EDITOR)
-    reviewed_divergence = None
-    if ios_editor != mac_editor:
-        reviewed_divergence = REVIEWED_EDITOR_DIVERGENCE.get((ios_editor, mac_editor))
-        if reviewed_divergence is None:
-            raise NoticeError(
-                "The Mac TipTap editor bundle differs from the iOS one, so the iOS editor notices "
-                "may not describe it.\n"
-                f"  iOS {ios_editor}\n  Mac {mac_editor}\n"
-                "Diff the two bundles. If a package was added or upgraded, give it a notice in "
-                "EDITOR_NOTICE_FILES. If the difference carries no package change, record that "
-                "review in REVIEWED_EDITOR_DIVERGENCE under exactly these two hashes."
-            )
-    elif REVIEWED_EDITOR_DIVERGENCE:
-        print(
-            "note: the editor bundles are identical again; the REVIEWED_EDITOR_DIVERGENCE "
-            "records are spent and can be removed."
-        )
+    reviewed_divergence = editor_divergence()
 
     if OUTPUT.exists():
         shutil.rmtree(OUTPUT)
