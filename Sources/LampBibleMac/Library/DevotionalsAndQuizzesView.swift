@@ -164,8 +164,19 @@ struct DevotionalsView: View {
     /// Whether a writing is being edited here: the window folds its sections
     /// away while one is.
     @Binding var isEditingInPlace: Bool
+    /// A new writing asked for from the menu or the palette. Taken and
+    /// cleared, as a requested writing is.
+    @Binding var requestedNewWriting: DevotionalEditorRequest?
     let showImporter: () -> Void
     let openReference: (Int) -> Void
+
+    /// Edits the new writing asked for, and forgets the request.
+    private func takeRequestedNewWriting() {
+        guard let request = requestedNewWriting else { return }
+        requestedNewWriting = nil
+        editing = request
+        selection = nil
+    }
 
     /// Selects the writing a search result named, and forgets the request.
     ///
@@ -299,10 +310,12 @@ struct DevotionalsView: View {
             Text(deletionWarning)
         }
         .onAppear {
+            takeRequestedNewWriting()
             takeRequestedDevotional()
             selectFirstIfNeeded()
         }
         .onChange(of: initialDevotionalID) { _, _ in takeRequestedDevotional() }
+        .onChange(of: requestedNewWriting) { _, _ in takeRequestedNewWriting() }
         .onChange(of: model.devotionals) { _, _ in selectFirstIfNeeded() }
         .onChange(of: query) { _, _ in selectFirstIfNeeded() }
         // Written only as editing starts and stops: a change of the window's

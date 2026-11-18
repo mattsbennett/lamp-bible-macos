@@ -31,6 +31,13 @@ struct CommandPaletteActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
+/// ⇧⌘N in a library window: a new writing, edited in place in its Writing
+/// section. Where no library window is in front, the writing gets a window
+/// of its own.
+struct NewWritingActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
 extension Notification.Name {
     /// ⌘K when no scene has published `commandPaletteAction`: the library
     /// window it names (`object`) answers it.
@@ -63,6 +70,11 @@ extension FocusedValues {
         set { self[NewTabActionKey.self] = newValue }
     }
 
+    var newWritingAction: (() -> Void)? {
+        get { self[NewWritingActionKey.self] }
+        set { self[NewWritingActionKey.self] = newValue }
+    }
+
     var goToPassageAction: (() -> Void)? {
         get { self[GoToPassageActionKey.self] }
         set { self[GoToPassageActionKey.self] = newValue }
@@ -81,6 +93,7 @@ struct LampBibleCommands: Commands {
     @FocusedValue(\.importStudyDataAction) private var importStudyData
     @FocusedValue(\.newTabAction) private var newTab
     @FocusedValue(\.goToPassageAction) private var goToPassage
+    @FocusedValue(\.newWritingAction) private var newWriting
     @FocusedValue(\.writingFind) private var writingFind
     @FocusedObject private var scrollLink: ReaderScrollLink?
 
@@ -120,7 +133,11 @@ struct LampBibleCommands: Commands {
             }
 
             Button("New Writing") {
-                openWindow(id: "devotional-editor", value: DevotionalEditorRequest())
+                if let newWriting {
+                    newWriting()
+                } else {
+                    openWindow(id: "devotional-editor", value: DevotionalEditorRequest())
+                }
             }
             .keyboardShortcut("n", modifiers: [.command, .shift])
 

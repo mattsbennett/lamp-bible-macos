@@ -176,6 +176,9 @@ struct LibraryRootView: View {
     /// sections fold away while it does, and the list, the writing and its
     /// side pane have the window.
     @State private var writingIsEditing = false
+    /// A new writing asked for from the menu or the palette, for Writing to
+    /// take up and edit in place.
+    @State private var requestedNewWriting: DevotionalEditorRequest?
     /// The sections: shown, or folded while a writing is edited. Never kept
     /// across launches, so the window opens with them even after a quit or a
     /// crash mid-edit, when AppKit has saved the column folded: this state's
@@ -399,6 +402,7 @@ struct LibraryRootView: View {
         // Window-wide rather than focus-bound: ⌘K must work whatever in the
         // window has focus, the reader's text or nothing at all.
         .focusedSceneValue(\.commandPaletteAction, { showingCommandPalette.toggle() })
+        .focusedSceneValue(\.newWritingAction, { startNewWriting() })
         .modifier(CommandPaletteToggleReceiver(isPalettePresented: $showingCommandPalette))
         .overlay(alignment: .top) {
             if showingCommandPalette {
@@ -1814,6 +1818,7 @@ struct LibraryRootView: View {
             DevotionalsView(
                 initialDevotionalID: $requestedDevotionalID,
                 isEditingInPlace: $writingIsEditing,
+                requestedNewWriting: $requestedNewWriting,
                 showImporter: { showingImporter = true },
                 openReference: { reference in
                     workspace.openReference(reference)
@@ -1989,6 +1994,12 @@ fileprivate enum LibraryRoute {
 }
 
 extension LibraryRootView {
+    /// A new writing, edited in place in Writing, as one begun there is.
+    private func startNewWriting() {
+        requestedNewWriting = DevotionalEditorRequest()
+        selection = .section(.devotionals)
+    }
+
     fileprivate func go(to route: LibraryRoute) {
         switch route {
         case .passage(let start, let end, let translationID, let placement):
@@ -2250,7 +2261,7 @@ extension LibraryRootView {
             CommandPaletteItem(
                 id: "command:new-writing", group: .commands, title: "New Writing",
                 systemImage: "square.and.pencil", keywords: ["Write", "Devotional", "Note"],
-                perform: { _ in openWindow(id: "devotional-editor", value: DevotionalEditorRequest(devotionalID: nil)) }
+                perform: { _ in startNewWriting() }
             ),
             CommandPaletteItem(
                 id: "command:new-deck", group: .commands, title: "New Presentation Deck",
