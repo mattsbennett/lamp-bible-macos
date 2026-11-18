@@ -260,9 +260,9 @@ struct SlideStudioView: View {
         let store = store
         let summaries = decks.map { ($0.id, $0.title) }
         let ordered = await Task.detached(priority: .utility) {
-            PresentationsShelf.sorted(
+            LampPresentationShelf.sorted(
                 summaries.map {
-                    PresentationsShelf.Deck(
+                    LampPresentationShelf.Deck(
                         id: $0.0, title: $0.1, writingID: nil, writingTitle: nil,
                         modified: store.modificationDate(ofDeck: $0.0)
                     )

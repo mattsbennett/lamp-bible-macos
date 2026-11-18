@@ -3,81 +3,6 @@ import LampCore
 import LampPresentationUI
 import SwiftUI
 
-/// What the Presentations section shows of the library's decks: those a
-/// search and a filter leave, in the order chosen, and how many each filter
-/// would show for the search as it stands, so a chip's count agrees with the
-/// decks beneath it.
-struct PresentationsShelf: Equatable {
-    struct Deck: Equatable, Identifiable {
-        let id: String
-        let title: String
-        /// The writing it was built from, if any, and that writing's title
-        /// where the library still has it.
-        let writingID: String?
-        let writingTitle: String?
-        let modified: Date
-    }
-
-    enum Filter: String, CaseIterable, Identifiable {
-        case all = "All"
-        case fromWriting = "From Writing"
-        case standalone = "Standalone"
-        var id: Self { self }
-
-        func includes(_ deck: Deck) -> Bool {
-            switch self {
-            case .all: true
-            case .fromWriting: deck.writingID != nil
-            case .standalone: deck.writingID == nil
-            }
-        }
-    }
-
-    enum Sort: String, CaseIterable, Identifiable {
-        case recent = "Recently Changed"
-        case title = "Title"
-        var id: Self { self }
-    }
-
-    var decks: [Deck]
-
-    /// Whether a deck's title, or its writing's, holds the search's words.
-    static func matches(_ deck: Deck, query: String) -> Bool {
-        let words = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        return words.isEmpty
-            || deck.title.localizedCaseInsensitiveContains(words)
-            || deck.writingTitle?.localizedCaseInsensitiveContains(words) == true
-    }
-
-    func count(of filter: Filter, query: String) -> Int {
-        decks.filter { filter.includes($0) && Self.matches($0, query: query) }.count
-    }
-
-    func shown(filter: Filter, sort: Sort, query: String) -> [Deck] {
-        Self.sorted(decks.filter { filter.includes($0) && Self.matches($0, query: query) }, by: sort)
-    }
-
-    /// Most recently changed first, or by title; ties by title, so the order
-    /// is the same every time.
-    static func sorted(_ decks: [Deck], by sort: Sort) -> [Deck] {
-        decks.sorted { a, b in
-            if sort == .recent, a.modified != b.modified { return a.modified > b.modified }
-            return a.title.localizedStandardCompare(b.title) == .orderedAscending
-        }
-    }
-}
-
-extension LampPresentationDeckStore {
-    /// When a deck's file was last written: what "recently changed" means
-    /// here, since a deck records no date of its own.
-    func modificationDate(ofDeck id: String) -> Date {
-        // By the store's own naming, which differs from the id for some ids.
-        let url = deckFileURL(for: id)
-        return (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
-            ?? .distantPast
-    }
-}
-
 /// The library's decks, as Books shows its shelf: each by its first slide,
 /// its title, how long it is and when it was last changed, and the writing
 /// it was built from. A deck opens in Slide Studio's own window, where it is
@@ -93,8 +18,8 @@ struct PresentationsLibraryView: View {
     @State private var entries: [Entry] = []
     @State private var hasLoaded = false
     @State private var query = ""
-    @State private var filter: PresentationsShelf.Filter = .all
-    @AppStorage("presentations.sortOrder") private var sortRawValue = PresentationsShelf.Sort.recent.rawValue
+    @State private var filter: LampPresentationShelf.Filter = .all
+    @AppStorage("presentations.sortOrder") private var sortRawValue = LampPresentationShelf.Sort.recent.rawValue
     @AppStorage("presentations.layout") private var layoutRawValue = Layout.grid.rawValue
     @Environment(\.colorScheme) private var colorScheme
     /// Shows a deck's writing in Writing.
@@ -114,23 +39,17 @@ struct PresentationsLibraryView: View {
         var systemImage: String { self == .grid ? "square.grid.2x2" : "list.bullet" }
     }
 
-    private var sort: PresentationsShelf.Sort { PresentationsShelf.Sort(rawValue: sortRawValue) ?? .recent }
+    private var sort: LampPresentationShelf.Sort { LampPresentationShelf.Sort(rawValue: sortRawValue) ?? .recent }
     private var layout: Layout { Layout(rawValue: layoutRawValue) ?? .grid }
 
     private var store: LampPresentationDeckStore {
         LampPresentationDeckStore(rootURL: model.library.rootURL)
     }
 
-    private var shelf: PresentationsShelf {
-        PresentationsShelf(decks: entries.map { entry in
-            let writingID = entry.deck.source?.kind == .devotional ? entry.deck.source?.id : nil
-            return PresentationsShelf.Deck(
-                id: entry.id,
-                title: entry.deck.title,
-                writingID: writingID,
-                writingTitle: writingTitle(of: entry.deck),
-                modified: entry.modified
-            )
+    private var shelf: LampPresentationShelf {
+        let titles = Dictionary(model.devotionals.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
+        return LampPresentationShelf(decks: entries.map { entry in
+            LampPresentationShelf.Deck(entry.deck, modified: entry.modified) { titles[$0] }
         })
     }
 
@@ -205,7 +124,7 @@ struct PresentationsLibraryView: View {
                 .help("Show decks as covers or as a list")
                 Menu {
                     Picker("Sort By", selection: $sortRawValue) {
-                        ForEach(PresentationsShelf.Sort.allCases) { sort in
+                        ForEach(LampPresentationShelf.Sort.allCases) { sort in
                             Text(sort.rawValue).tag(sort.rawValue)
                         }
                     }
@@ -232,7 +151,7 @@ struct PresentationsLibraryView: View {
     private var filterChips: some View {
         let shelf = shelf
         return HStack(spacing: 8) {
-            ForEach(PresentationsShelf.Filter.allCases) { choice in
+            ForEach(LampPresentationShelf.Filter.allCases) { choice in
                 // For the search as it stands: the count agrees with the
                 // decks beneath it.
                 let count = shelf.count(of: choice, query: query)
