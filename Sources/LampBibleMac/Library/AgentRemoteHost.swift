@@ -22,7 +22,8 @@ import Network
 /// chat in a window.
 ///
 /// Network work runs on the main queue: the chats are main-actor objects,
-/// and a chat's traffic is a person typing and a reply arriving.
+/// and a chat's traffic is a person typing and a reply arriving. What is slow
+/// — the keychain, reading every transcript — is done off it.
 @MainActor
 final class AgentRemoteHost: ObservableObject {
     enum Status: Equatable {
@@ -33,6 +34,13 @@ final class AgentRemoteHost: ObservableObject {
     }
 
     static let enabledKey = "agentRemote.enabled"
+
+    /// A connection has this long to prove itself, and may say this much
+    /// before it has; and only so many may be waiting at once. Nothing
+    /// unproven holds more than a handshake's worth of this Mac.
+    private static let handshakeDeadline: Duration = .seconds(10)
+    private static let handshakeBytes = 16 * 1_024
+    private static let unprovenConnections = 6
 
     @Published private(set) var status: Status = .off
     @Published private(set) var devices: [LampAgentRemotePairedDevice] = []
@@ -49,11 +57,22 @@ final class AgentRemoteHost: ObservableObject {
     /// against without waiting on it.
     private var knownCredentials: [LampAgentRemoteCredential] = []
     private var knownHostSecret: String?
+    /// Moves on with every change to what is trusted. A read of the keychain
+    /// begun before a change is dropped when it lands, so it cannot put back
+    /// a device forgotten while it was reading.
+    private var trustGeneration = 0
+    /// Devices forgotten this run, refused whatever a read of the keychain
+    /// says, so no ordering of reads and writes can let one back in.
+    private var revoked: Set<String> = []
     private var listener: NWListener?
     private var peers: [ObjectIdentifier: Peer] = [:]
     private weak var libraryModel: LibraryModel?
 
     private var settingsObserver: AnyCancellable?
+
+    private var isAllowed: Bool {
+        AIFeatures.isEnabledNow && UserDefaults.standard.bool(forKey: Self.enabledKey)
+    }
 
     /// Given the library at launch, and from then on follows the settings:
     /// on exactly while the AI switch and this host's own are both on.
@@ -77,13 +96,13 @@ final class AgentRemoteHost: ObservableObject {
     }
 
     private func followSettings() {
-        update(aiEnabled: AIFeatures.isEnabledNow, enabled: UserDefaults.standard.bool(forKey: Self.enabledKey))
-    }
-
-    /// Running exactly while it should be: the AI switch on, and this
-    /// setting.
-    func update(aiEnabled: Bool, enabled: Bool) {
-        if aiEnabled, enabled { start() } else { stop() }
+        if isAllowed { start() } else { stop() }
+        // Library access may have changed: the open chats' helpers read their
+        // policy file on every call, so it is rewritten now, not at the next
+        // turn.
+        for open in Set(peers.values.compactMap { $0.open?.workspace }) {
+            try? writePolicy(in: open)
+        }
     }
 
     // MARK: Pairing and devices
@@ -91,20 +110,34 @@ final class AgentRemoteHost: ObservableObject {
     /// Reads the paired devices: on demand, never at launch, so the keychain
     /// is not asked with nothing on screen to say why.
     func refreshDevices() {
-        let trust = trust
+        let trust = trust, generation = trustGeneration
         trustQueue.async { [weak self] in
             let devices = trust.devices()
             let credentials = trust.credentials()
             let secret = trust.hostSecret()
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    guard let self else { return }
-                    self.devices = devices
-                    self.knownCredentials = credentials
+                    guard let self, generation == self.trustGeneration else { return }
+                    let revoked = self.revoked
+                    self.devices = devices.filter { !revoked.contains($0.id) }
+                    self.knownCredentials = credentials.filter {
+                        if case .device(let id) = $0.kind { return !revoked.contains(id) }
+                        return false
+                    }
                     self.knownHostSecret = secret
+                    self.closeUntrusted()
                 }
             }
         }
+    }
+
+    /// A change to what is trusted: reads begun before it are dropped, and a
+    /// fresh one queued behind the write.
+    private func changeTrust(_ write: @escaping @Sendable (LampAgentRemoteTrustStore) -> Void) {
+        trustGeneration += 1
+        let trust = trust
+        trustQueue.async { write(trust) }
+        refreshDevices()
     }
 
     func beginPairing() {
@@ -116,12 +149,26 @@ final class AgentRemoteHost: ObservableObject {
     }
 
     func forget(_ device: LampAgentRemotePairedDevice) {
-        // Refused at once, before the keychain catches up.
+        // Refused at once, before the keychain catches up, and whatever it
+        // says when it does.
+        revoked.insert(device.id)
         knownCredentials.removeAll { $0.kind == .device(id: device.id) }
-        for peer in Array(peers.values) where peer.deviceID == device.id { close(peer) }
-        let trust = trust
-        trustQueue.async { trust.forget(deviceID: device.id) }
-        refreshDevices()
+        devices.removeAll { $0.id == device.id }
+        closeUntrusted()
+        let id = device.id
+        changeTrust { $0.forget(deviceID: id) }
+    }
+
+    /// Ends every connection from a device no longer trusted, stopping what
+    /// it started: a forgotten device's turn does not run on.
+    private func closeUntrusted() {
+        let trusted = Set(devices.map(\.id))
+        for peer in Array(peers.values) {
+            guard let id = peer.deviceID, peer.channel != nil else { continue }
+            if revoked.contains(id) || (!peer.isPairing && !trusted.contains(id)) {
+                revoke(peer, reason: "This device is no longer paired with the Mac.", code: LampAgentRemoteFailure.notAllowed)
+            }
+        }
     }
 
     // MARK: Listening
@@ -163,9 +210,9 @@ final class AgentRemoteHost: ObservableObject {
         listener?.cancel()
         listener = nil
         for peer in Array(peers.values) {
-            // Told why, where it can be: the switch went off under it.
-            send(.failed(LampAgentRemoteFailure.aiOff, "Chats from this Mac are turned off."), to: peer)
-            close(peer)
+            // Told why, where it can be, and what it started stopped: the
+            // switch went off under it.
+            revoke(peer, reason: "Chats from this Mac are turned off.", code: LampAgentRemoteFailure.aiOff)
         }
         status = .off
         connectedNames = []
@@ -179,8 +226,14 @@ final class AgentRemoteHost: ObservableObject {
         let start: LampAgentRemoteHandshake.HostStart
         var channel: LampAgentRemoteSecureChannel?
         var deviceID: String?
+        /// Paired by code on this connection, with its key still being kept.
+        var isPairing = false
         var name = "Device"
         var open: OpenChat?
+        /// Chats this device sent a turn to, whose runs stop if it is
+        /// forgotten or the host turned off.
+        var started: [NativeAgentChatModel] = []
+        var tasks: [Task<Void, Never>] = []
 
         init(connection: NWConnection, start: LampAgentRemoteHandshake.HostStart) {
             self.connection = connection
@@ -205,6 +258,10 @@ final class AgentRemoteHost: ObservableObject {
     }
 
     private func accept(_ connection: NWConnection) {
+        guard peers.values.filter({ $0.channel == nil }).count < Self.unprovenConnections else {
+            connection.cancel()
+            return
+        }
         let peer = Peer(connection: connection, start: LampAgentRemoteHandshake.hostStart(hostSecret: knownHostSecret))
         peers[ObjectIdentifier(connection)] = peer
         connection.stateUpdateHandler = { [weak self, weak peer] state in
@@ -221,12 +278,21 @@ final class AgentRemoteHost: ObservableObject {
             connection.send(content: hello, completion: .contentProcessed { _ in })
         }
         receive(from: peer)
+        Task { [weak self, weak peer] in
+            try? await Task.sleep(for: Self.handshakeDeadline)
+            guard let self, let peer, peer.channel == nil, self.isConnected(peer) else { return }
+            self.close(peer)
+        }
+    }
+
+    private func isConnected(_ peer: Peer) -> Bool {
+        peers[ObjectIdentifier(peer.connection)] === peer
     }
 
     private func receive(from peer: Peer) {
         peer.connection.receive(minimumIncompleteLength: 1, maximumLength: 256 * 1_024) { [weak self, weak peer] data, _, isComplete, error in
             MainActor.assumeIsolated {
-                guard let self, let peer else { return }
+                guard let self, let peer, self.isConnected(peer) else { return }
                 if let data, !data.isEmpty {
                     peer.buffer.append(data)
                     guard self.read(peer) else { return }
@@ -245,6 +311,7 @@ final class AgentRemoteHost: ObservableObject {
     private func read(_ peer: Peer) -> Bool {
         do {
             if peer.channel == nil {
+                guard peer.buffer.count <= Self.handshakeBytes else { throw LampAgentRemoteError.malformedHandshake }
                 guard let auth = try LampAgentRemoteFraming.decode(LampAgentRemoteAuth.self, from: &peer.buffer) else {
                     return true
                 }
@@ -272,58 +339,76 @@ final class AgentRemoteHost: ObservableObject {
             pairing?.failed()
             throw error
         }
-        peer.channel = accepted.channel
         switch accepted.credential.kind {
         case .pairing:
             // Spent the moment it pairs: a code is for one device.
             pairing?.paired()
+            peer.channel = accepted.channel
+            peer.isPairing = true
             // Minted and kept off the main thread; the device waits for
             // `accepted` before it says anything else.
+            trustGeneration += 1
             let trust = trust
             trustQueue.async { [weak self, weak peer] in
                 let minted = trust.pair(name: nil)
                 DispatchQueue.main.async {
                     MainActor.assumeIsolated {
-                        guard let self, let peer else { return }
-                        peer.deviceID = minted.credential.deviceID
-                        self.send(.accepted(pairing: minted.credential, hostSecret: minted.hostSecret), to: peer)
+                        guard let self else { return }
                         self.refreshDevices()
+                        guard let peer, self.isConnected(peer) else { return }
+                        peer.deviceID = minted.credential.deviceID
+                        peer.isPairing = false
+                        self.devices.append(LampAgentRemotePairedDevice(
+                            credential: minted.credential, name: nil, pairedAt: Date()
+                        ))
+                        self.send(.accepted(pairing: minted.credential, hostSecret: minted.hostSecret), to: peer)
                         self.publishConnected()
                     }
                 }
             }
         case .device(let id):
+            guard !revoked.contains(id) else { throw LampAgentRemoteError.unknownDevice }
+            peer.channel = accepted.channel
             peer.deviceID = id
             peer.name = devices.first { $0.id == id }?.name ?? peer.name
             send(.accepted(), to: peer)
+            publishConnected()
         }
-        publishConnected()
+    }
+
+    /// Whether this peer may still have a turn run for it: connected, its
+    /// device still trusted, and the host still allowed.
+    private func mayAct(_ peer: Peer) -> Bool {
+        guard isConnected(peer), listener != nil, isAllowed, let id = peer.deviceID else { return false }
+        return !revoked.contains(id) && devices.contains { $0.id == id }
     }
 
     private func handle(_ message: LampAgentRemoteMessage, from peer: Peer) {
-        guard AIFeatures.isEnabledNow else {
+        guard isAllowed else {
             send(.failed(LampAgentRemoteFailure.aiOff, "AI features are turned off on this Mac.", requestID: message.requestID), to: peer)
             return
         }
+        // Nothing but `accepted` reaches a device still being paired, and it
+        // says nothing until then.
+        guard peer.deviceID != nil else { return }
         switch message.kind {
         case .introduce:
-            if let name = message.clientName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            if let name = message.clientName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty,
+               let id = peer.deviceID {
                 peer.name = String(name.prefix(80))
-                if let id = peer.deviceID {
-                    let trust = trust, name = peer.name
-                    trustQueue.async { trust.rename(deviceID: id, name: name) }
-                }
-                refreshDevices()
+                let renamed = peer.name
+                if let index = devices.firstIndex(where: { $0.id == id }) { devices[index].name = renamed }
+                changeTrust { $0.rename(deviceID: id, name: renamed) }
                 publishConnected()
             }
         case .listChats:
-            send(.chats(summaries(), requestID: message.requestID), to: peer)
+            track(peer, Task { await self.list(for: peer, requestID: message.requestID) })
         case .openChat:
             open(message.chatID, for: peer, requestID: message.requestID)
         case .closeChat:
             peer.open = nil
         case .send:
-            Task { await self.send(message, from: peer) }
+            track(peer, Task { await self.send(message, from: peer) })
         case .cancel:
             guard let open = peer.open, message.chatID == open.id.uuidString else {
                 send(.failed(LampAgentRemoteFailure.notFound, "That chat isn't open.", requestID: message.requestID), to: peer)
@@ -331,7 +416,7 @@ final class AgentRemoteHost: ObservableObject {
             }
             open.model.cancel()
         case .startChat:
-            Task { await self.startChat(message, from: peer) }
+            track(peer, Task { await self.startChat(message, from: peer) })
         case .ping:
             send(.pong, to: peer)
         default:
@@ -340,16 +425,26 @@ final class AgentRemoteHost: ObservableObject {
         }
     }
 
+    private func track(_ peer: Peer, _ task: Task<Void, Never>) {
+        peer.tasks.removeAll { $0.isCancelled }
+        peer.tasks.append(task)
+    }
+
     // MARK: Chats
 
     private var libraryRootURL: URL? { libraryModel?.library.rootURL }
 
-    private func appProvider() -> AIProviderCLI {
-        AIProviderCLI(rawValue: ReaderChatTurns.appProviderID) ?? .codex
-    }
+    private static let providers = AIProviderCLI.allCases.map { LampAgentRemoteHosting.Provider(id: $0.rawValue, name: $0.name) }
 
     private static func hostingProvider(_ provider: AIProviderCLI) -> LampAgentRemoteHosting.Provider {
         .init(id: provider.rawValue, name: provider.name)
+    }
+
+    /// The provider a chat goes on with: what the reader chat pane would open
+    /// it on.
+    private func continuingProvider(in workspace: URL) -> AIProviderCLI {
+        let id = LampAgentRemoteHosting.continuingProviderID(in: workspace, appProviderID: ReaderChatTurns.appProviderID)
+        return AIProviderCLI(rawValue: id) ?? .codex
     }
 
     private func transcripts(in workspace: URL) -> [LampAgentRemoteHosting.ProviderTranscript] {
@@ -367,51 +462,80 @@ final class AgentRemoteHost: ObservableObject {
         return LampAgentRemoteHosting.summary(
             chatID: id,
             transcripts: transcripts(in: workspace),
-            appProvider: Self.hostingProvider(appProvider()),
+            continuing: Self.hostingProvider(continuingProvider(in: workspace)),
             isRunning: KeptAgentChats.isRunning(in: workspace)
         )
     }
 
-    private func summaries() -> [LampAgentRemoteChatSummary] {
-        guard let root = libraryRootURL else { return [] }
-        return ReaderChatWorkspaceStore.chats(libraryRootURL: root).compactMap { summary(of: $0.id) }
+    /// Every reader chat, read off the main thread, with whether a reply is
+    /// running in it added from the live models here.
+    private func list(for peer: Peer, requestID: UUID?) async {
+        guard let root = libraryRootURL else {
+            send(.chats([], requestID: requestID), to: peer)
+            return
+        }
+        let providers = Self.providers, appProvider = ReaderChatTurns.appProviderID
+        let read = await Task.detached(priority: .userInitiated) {
+            LampAgentRemoteHosting.readSummaries(libraryRootURL: root, providers: providers, appProviderID: appProvider)
+        }.value
+        guard isConnected(peer) else { return }
+        let summaries = read.map { item -> LampAgentRemoteChatSummary in
+            var summary = item.summary
+            summary.isRunning = KeptAgentChats.isRunning(in: item.workspace)
+            return summary
+        }
+        send(.chats(summaries, requestID: requestID), to: peer)
+    }
+
+    private func writePolicy(in workspace: URL) throws {
+        guard let libraryModel else { return }
+        try ReaderChatTurns.writeAccessPolicy(
+            ReaderChatTurns.currentAccessPolicy(libraryModel: libraryModel), workspace: workspace
+        )
     }
 
     /// The model a chat runs in, made ready: the same one a window on this
     /// chat uses, if one is open.
-    private func model(for id: UUID, provider requested: AIProviderCLI? = nil) throws -> (model: NativeAgentChatModel, workspace: URL) {
+    private func model(for id: UUID) throws -> (model: NativeAgentChatModel, workspace: URL) {
         guard let libraryModel, let root = libraryRootURL else {
             throw CocoaError(.fileReadUnknown, userInfo: [NSLocalizedDescriptionKey: "The library isn't open yet."])
         }
         let workspace = ReaderChatWorkspaceStore.workspaceURL(libraryRootURL: root, chatID: id)
-        let provider = requested
-            ?? LampAgentRemoteHosting.current(transcripts(in: workspace)).flatMap { AIProviderCLI(rawValue: $0.provider.id) }
-            ?? appProvider()
         let configuration = try ReaderChatTurns.prepare(
             workspace: workspace,
             policy: ReaderChatTurns.currentAccessPolicy(libraryModel: libraryModel),
             libraryRootURL: root
         )
-        let model = KeptAgentChats.model(provider: provider, workspace: workspace, mode: .reader(configuration))
+        let model = KeptAgentChats.model(
+            provider: continuingProvider(in: workspace), workspace: workspace, mode: .reader(configuration)
+        )
         model.load()
         return (model, workspace)
     }
 
-    private func open(_ chatID: String?, for peer: Peer, requestID: UUID?) {
+    @discardableResult
+    private func open(_ chatID: String?, for peer: Peer, requestID: UUID?) -> OpenChat? {
         guard let chatID, let id = UUID(uuidString: chatID), let summary = summary(of: id) else {
             send(.failed(LampAgentRemoteFailure.notFound, "That chat isn't on this Mac.", requestID: requestID, chatID: chatID), to: peer)
-            return
+            return nil
         }
         do {
             let (model, workspace) = try model(for: id)
-            let open = OpenChat(id: id, workspace: workspace, model: model)
-            open.told = Self.state(of: model)
-            peer.open = open
-            send(.snapshot(LampAgentRemoteHosting.snapshot(summary: summary, state: open.told), requestID: requestID), to: peer)
-            watch(open, for: peer)
+            return follow(OpenChat(id: id, workspace: workspace, model: model), summary: summary, for: peer, requestID: requestID)
         } catch {
             send(.failed(LampAgentRemoteFailure.needsSetup, error.localizedDescription, requestID: requestID, chatID: chatID), to: peer)
+            return nil
         }
+    }
+
+    /// Makes a chat the one this peer has open: a snapshot first, then what
+    /// changes in it.
+    private func follow(_ open: OpenChat, summary: LampAgentRemoteChatSummary, for peer: Peer, requestID: UUID?) -> OpenChat {
+        open.told = Self.state(of: open.model)
+        peer.open = open
+        send(.snapshot(LampAgentRemoteHosting.snapshot(summary: summary, state: open.told), requestID: requestID), to: peer)
+        watch(open, for: peer)
+        return open
     }
 
     private static func state(of model: NativeAgentChatModel) -> LampAgentRemoteHosting.ChatState {
@@ -454,18 +578,26 @@ final class AgentRemoteHost: ObservableObject {
         .dropFirst()
         // The model changes its values one at a time — running before the
         // question is in, running off before the answer is — so each is
-        // taken together with the rest of the same change: told apart, the
-        // phone heard a turn begin with no question and end before its
-        // answer.
+        // taken with the rest of the same change. Turns that run together in
+        // one step are still told apart (`LampAgentRemoteHosting.events`).
         .debounce(for: .milliseconds(30), scheduler: DispatchQueue.main)
         .sink { [weak self, weak peer, weak open] messages, isRunning, activity, rest in
             MainActor.assumeIsolated {
-                guard let self, let peer, let open, peer.open === open else { return }
+                guard let self, let peer, let open, peer.open === open, self.isConnected(peer) else { return }
                 let next = Self.state(
                     messages: messages, arriving: rest.0, activity: activity, isRunning: isRunning, failure: rest.1
                 )
-                for event in LampAgentRemoteHosting.events(chatID: open.id.uuidString, from: open.told, to: next) {
-                    self.send(.event(event), to: peer)
+                if LampAgentRemoteHosting.needsSnapshot(from: open.told, to: next),
+                   let summary = self.summary(of: open.id) ?? Optional(LampAgentRemoteHosting.untitled(
+                       open.id, Self.hostingProvider(self.continuingProvider(in: open.workspace)), isRunning: isRunning
+                   )) {
+                    // Cleared, or turns undone, on the Mac: start the phone's
+                    // copy again rather than patch it.
+                    self.send(.snapshot(LampAgentRemoteHosting.snapshot(summary: summary, state: next)), to: peer)
+                } else {
+                    for event in LampAgentRemoteHosting.events(chatID: open.id.uuidString, from: open.told, to: next) {
+                        self.send(.event(event), to: peer)
+                    }
                 }
                 open.told = next
             }
@@ -478,8 +610,8 @@ final class AgentRemoteHost: ObservableObject {
             send(.failed(LampAgentRemoteFailure.notFound, "That chat isn't on this Mac.", requestID: message.requestID), to: peer)
             return
         }
-        if peer.open?.id != id { open(chatID, for: peer, requestID: nil) }
-        guard let open = peer.open, open.id == id else { return }
+        let open = peer.open?.id == id ? peer.open : open(chatID, for: peer, requestID: nil)
+        guard let open else { return }
         await run(text, reading: message.reading, in: open, requestID: message.requestID, peer: peer)
     }
 
@@ -493,33 +625,56 @@ final class AgentRemoteHost: ObservableObject {
             send(.failed(LampAgentRemoteFailure.notAllowed, "Write something to start the chat.", requestID: message.requestID), to: peer)
             return
         }
+        guard let root = libraryRootURL else { return }
         let id = UUID()
+        let workspace = ReaderChatWorkspaceStore.workspaceURL(libraryRootURL: root, chatID: id)
         do {
-            let (model, workspace) = try model(for: id, provider: newChat.provider.flatMap(AIProviderCLI.init(rawValue:)))
-            let open = OpenChat(id: id, workspace: workspace, model: model)
-            open.told = Self.state(of: model)
-            peer.open = open
-            watch(open, for: peer)
+            // The provider chosen is the chat's own, pinned as the pane pins
+            // it, so the chat opens on it in a window too.
+            let provider = newChat.provider.flatMap(AIProviderCLI.init(rawValue:))
+                ?? AIProviderCLI(rawValue: ReaderChatTurns.appProviderID) ?? .codex
+            var choices = AgentChatChoicesStore.load(in: workspace)
+            choices.set(provider.rawValue, for: AgentChatChoices.providerKey)
+            try AgentChatChoicesStore.save(choices, in: workspace)
+            _ = AgentChatOwnChoices.pinned(in: workspace, appProviderID: provider.rawValue)
+
+            let (model, _) = try model(for: id)
+            let summary = LampAgentRemoteHosting.untitled(
+                id, Self.hostingProvider(provider), title: ReaderChatWorkspaceStore.label(first), isRunning: false
+            )
+            // The snapshot before anything streams, so every event after it
+            // is for a chat the phone already holds.
+            let open = follow(OpenChat(id: id, workspace: workspace, model: model), summary: summary, for: peer, requestID: message.requestID)
             await run(first, reading: newChat.reading, in: open, requestID: message.requestID, peer: peer)
-            if let summary = summary(of: id) {
-                send(.snapshot(LampAgentRemoteHosting.snapshot(summary: summary, state: Self.state(of: model)), requestID: message.requestID), to: peer)
-            }
         } catch {
             send(.failed(LampAgentRemoteFailure.needsSetup, error.localizedDescription, requestID: message.requestID), to: peer)
         }
     }
 
     /// Sends a turn through the chat's model, with the passage the phone is
-    /// reading, as a window would send it.
+    /// reading, as a window would send it — checked again just before it
+    /// goes, since preparing it waits, and the device may have been forgotten
+    /// or the host turned off meanwhile.
     private func run(_ text: String, reading: LampAgentRemoteReading?, in open: OpenChat, requestID: UUID?, peer: Peer) async {
         guard !open.model.isRunning else {
             send(.failed(LampAgentRemoteFailure.busy, "A reply is still arriving in this chat.", requestID: requestID, chatID: open.id.uuidString), to: peer)
             return
         }
         let conversation = open.model.conversationID
-        let prompt = await contextualPrompt(text, reading: reading, workspace: open.workspace)
+        do {
+            // Every turn, whether or not it names a passage: the helper reads
+            // this file on each call, and access may have narrowed since.
+            try writePolicy(in: open.workspace)
+        } catch {
+            send(.failed(LampAgentRemoteFailure.needsSetup, error.localizedDescription, requestID: requestID, chatID: open.id.uuidString), to: peer)
+            return
+        }
+        let prompt = await contextualPrompt(text, reading: reading)
+        guard !Task.isCancelled, mayAct(peer) else { return }
+        peer.started.removeAll { $0 === open.model }
+        peer.started.append(open.model)
         let taken = await open.model.send(text, contextualPrompt: prompt, inConversation: conversation)
-        if !taken {
+        if !taken, isConnected(peer), peer.open === open {
             send(.failed(LampAgentRemoteFailure.busy, "This chat changed on the Mac before the message could go.", requestID: requestID, chatID: open.id.uuidString), to: peer)
         }
     }
@@ -527,7 +682,7 @@ final class AgentRemoteHost: ObservableObject {
     /// The question with the passage it was asked over, by ids the phone
     /// sent: the notes and highlights are this Mac's own, read under its own
     /// policy. A question with no passage goes as it is.
-    private func contextualPrompt(_ text: String, reading: LampAgentRemoteReading?, workspace: URL) async -> String {
+    private func contextualPrompt(_ text: String, reading: LampAgentRemoteReading?) async -> String {
         guard let libraryModel, let reference = reading?.verse ?? reading?.chapter,
               let translation = libraryModel.translations.first(where: { $0.id == reading?.translationID })
                 ?? libraryModel.translations.first
@@ -536,8 +691,6 @@ final class AgentRemoteHost: ObservableObject {
         guard let chapter = try? await libraryModel.library.chapter(
             moduleID: translation.id, bookNumber: book, chapterNumber: chapterNumber
         ) else { return text }
-        let policy = ReaderChatTurns.currentAccessPolicy(libraryModel: libraryModel)
-        try? ReaderChatTurns.writeAccessPolicy(policy, workspace: workspace)
         let capture = ReaderChatTurns.capture(
             book: chapter.book,
             chapter: chapterNumber,
@@ -545,21 +698,33 @@ final class AgentRemoteHost: ObservableObject {
             selectedVerse: reading?.verse,
             selection: nil,
             chapterVerses: chapter.verses,
-            policy: policy,
+            policy: ReaderChatTurns.currentAccessPolicy(libraryModel: libraryModel),
             libraryModel: libraryModel
         )
         let notes = await ReaderChatTurns.notes(on: capture.noteReferences, libraryModel: libraryModel)
         return capture.context(notes: notes).prompt(for: text)
     }
 
-    // MARK: Sending
+    // MARK: Sending and closing
 
     private func send(_ message: LampAgentRemoteMessage, to peer: Peer) {
         guard let channel = peer.channel, let frame = try? channel.seal(message) else { return }
         peer.connection.send(content: frame, completion: .contentProcessed { _ in })
     }
 
+    /// Ends a connection whose device may no longer act, stopping the runs it
+    /// started and the work it has waiting.
+    private func revoke(_ peer: Peer, reason: String, code: String) {
+        send(.failed(code, reason), to: peer)
+        for model in peer.started where model.isRunning { model.cancel() }
+        close(peer)
+    }
+
+    /// A connection gone: a phone asleep or out of range. What it started
+    /// runs on, as a run outlives a closed window.
     private func close(_ peer: Peer) {
+        peer.tasks.forEach { $0.cancel() }
+        peer.tasks = []
         peer.open = nil
         peers.removeValue(forKey: ObjectIdentifier(peer.connection))
         peer.connection.cancel()
@@ -567,7 +732,7 @@ final class AgentRemoteHost: ObservableObject {
     }
 
     private func publishConnected() {
-        connectedNames = peers.values.filter { $0.channel != nil }.map(\.name).sorted()
+        connectedNames = peers.values.filter { $0.deviceID != nil }.map(\.name).sorted()
         guard listener != nil else { return }
         if case .failed = status { return }
         status = connectedNames.isEmpty ? .waiting : .connected

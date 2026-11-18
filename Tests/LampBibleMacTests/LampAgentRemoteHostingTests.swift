@@ -15,7 +15,7 @@ struct LampAgentRemoteHostingTests {
         AgentChatTranscript(messages: messages)
     }
 
-    @Test func achatIsListedByItsOpeningUnderTheProviderSpokenToLast() throws {
+    @Test func achatIsListedByItsOpeningUnderTheProviderItGoesOnWith() throws {
         let id = UUID()
         let summary = try #require(LampAgentRemoteHosting.summary(
             chatID: id,
@@ -23,7 +23,7 @@ struct LampAgentRemoteHostingTests {
                 .init(provider: codex, transcript: transcript([said("What does agape mean?", .user, 0), said("Love…", .assistant, 1)])),
                 .init(provider: claude, transcript: transcript([said("And phileo?", .user, 5), said("Affection…", .assistant, 6)])),
             ],
-            appProvider: codex,
+            continuing: claude,
             isRunning: false
         ))
         #expect(summary.id == id.uuidString)
@@ -35,9 +35,9 @@ struct LampAgentRemoteHostingTests {
     }
 
     @Test func achatNothingWasSaidInIsNotListed() {
-        #expect(LampAgentRemoteHosting.summary(chatID: UUID(), transcripts: [], appProvider: codex, isRunning: false) == nil)
+        #expect(LampAgentRemoteHosting.summary(chatID: UUID(), transcripts: [], continuing: codex, isRunning: false) == nil)
         #expect(LampAgentRemoteHosting.summary(
-            chatID: UUID(), transcripts: [.init(provider: codex, transcript: transcript([]))], appProvider: codex, isRunning: false
+            chatID: UUID(), transcripts: [.init(provider: codex, transcript: transcript([]))], continuing: codex, isRunning: false
         ) == nil)
     }
 
@@ -87,5 +87,31 @@ struct LampAgentRemoteHostingTests {
         #expect(running.partialReply == "So far" && running.activity?.kind == "writing")
         let stopped = LampAgentRemoteHosting.snapshot(summary: summary, state: .init(arriving: "stale", activity: .writing))
         #expect(stopped.partialReply == nil && stopped.activity == nil)
+    }
+
+    @Test func twoTurnsInOneStepAreToldAsTwoAndEachReplyUnderItsQuestion() {
+        let first = said("First?", .user, 0), firstAnswer = said("One.", .assistant, 1)
+        let second = said("Second?", .user, 2)
+        let events = LampAgentRemoteHosting.events(
+            chatID: "c",
+            from: .init(messages: [first], isRunning: true),
+            to: .init(messages: [first, firstAnswer, second], isRunning: true)
+        )
+        #expect(events.map(\.kind) == ["reply", "turn-ended", "turn-started"])
+        #expect(events[0].turnID == first.id && events[1].turnID == first.id)
+        #expect(events[2].turnID == second.id && events[2].message?.id == second.id)
+    }
+
+    @Test func awholeTurnInOneStepStillBeginsAndEnds() {
+        let question = said("Quick?", .user, 0), answer = said("Yes.", .assistant, 1)
+        let events = LampAgentRemoteHosting.events(chatID: "c", from: .init(), to: .init(messages: [question, answer]))
+        #expect(events.map(\.kind) == ["turn-started", "reply", "turn-ended"])
+        #expect(events.allSatisfy { $0.turnID == question.id })
+    }
+
+    @Test func aclearedConversationNeedsAFreshSnapshot() {
+        let question = said("Q", .user, 0)
+        #expect(LampAgentRemoteHosting.needsSnapshot(from: .init(messages: [question]), to: .init()))
+        #expect(!LampAgentRemoteHosting.needsSnapshot(from: .init(messages: [question]), to: .init(messages: [question, said("A", .assistant, 1)])))
     }
 }
