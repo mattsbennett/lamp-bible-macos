@@ -124,6 +124,9 @@ struct DevotionalsView: View {
     /// a window of its own (owner, Nov 2026).
     @State private var editing: DevotionalEditorRequest?
     @State private var layout = WritingInPlaceLayout()
+    /// The section's width: the window's, while a writing is edited and the
+    /// sections are folded. Whether the toolbar's names fit.
+    @State private var width: CGFloat = 1_400
     @EnvironmentObject private var model: LibraryModel
     @AppStorage("devotional.fontSize")
     private var devotionalFontSize = LampTextScale.writingReadingText.defaultValue
@@ -258,6 +261,7 @@ struct DevotionalsView: View {
             }
         }
         .navigationTitle("Writing")
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .toolbar {
             if editing != nil {
                 // The one button on the left while editing: the window's
@@ -276,6 +280,8 @@ struct DevotionalsView: View {
                 }
             }
         }
+        // Outside the toolbar, so its own button sees it as the editor's do.
+        .environment(\.toolbarLabelsFit, width >= ToolbarLabelFit.writingEditorWidth)
         .confirmationDialog(
             "Delete this writing?",
             isPresented: Binding(
@@ -351,7 +357,7 @@ struct DevotionalsView: View {
         .accessibilityLabel(shown ? "Hide Writing List" : "Show Writing List")
         .accessibilityValue(shown ? "Shown" : "Hidden")
         if titled {
-            button.labelStyle(.titleAndIcon)
+            button.fittingToolbarLabel()
         } else {
             button.labelStyle(.iconOnly)
         }
