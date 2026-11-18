@@ -253,14 +253,21 @@ struct PaneResizeHandle: View {
             // Dragging is the only other way to size the pane, so VoiceOver
             // and Full Keyboard Access get the same range as a slider.
             .accessibilityRepresentation {
-                Slider(
-                    value: Binding(
-                        get: { displayedSize },
-                        set: { preferredSize = min(max($0, minimumSize), maximumSize) }
-                    ),
-                    in: minimumSize...max(minimumSize, maximumSize),
-                    step: 10
-                ) {
+                // A window too narrow to resize the pane leaves a range of one
+                // size, and a Slider over it traps (opening the agent pane in
+                // a narrow window crashed).
+                if maximumSize > minimumSize {
+                    Slider(
+                        value: Binding(
+                            get: { displayedSize },
+                            set: { preferredSize = min(max($0, minimumSize), maximumSize) }
+                        ),
+                        in: minimumSize...maximumSize,
+                        step: min(10, maximumSize - minimumSize)
+                    ) {
+                        Text(axis == .horizontal ? "Pane width" : "Pane height")
+                    }
+                } else {
                     Text(axis == .horizontal ? "Pane width" : "Pane height")
                 }
             }
