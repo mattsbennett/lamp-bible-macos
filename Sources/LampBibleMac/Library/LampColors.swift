@@ -641,3 +641,90 @@ private struct ListHighlightSuppressor: NSViewRepresentable {
     func makeNSView(context: Context) -> Finder { Finder() }
     func updateNSView(_ view: Finder, context: Context) { view.quiet() }
 }
+
+// MARK: - Toolbar names that fit
+
+/// Whether a toolbar has room for its buttons' names: set by the view the
+/// toolbar belongs to, from the width it is given (`toolbarLabelsFit(from:)`).
+extension EnvironmentValues {
+    @Entry var toolbarLabelsFit: Bool = true
+}
+
+/// A toolbar button's name beside its icon while the window has room for
+/// the names, its icon alone when it has not. The overflow menu is left for
+/// a window too narrow even for the icons, where a button went before its
+/// name did. Sidebar buttons, Undo and Redo, the arrows that step through
+/// passages and search fields keep to icons, as the system's do.
+///
+/// A name shown is the button's own, shortened where it is long; the full
+/// name stays as what VoiceOver says and the overflow menu reads.
+struct FittingToolbarLabel: ViewModifier {
+    @Environment(\.toolbarLabelsFit) private var fits
+
+    func body(content: Content) -> some View {
+        if fits {
+            content.labelStyle(.titleAndIcon)
+        } else {
+            content.labelStyle(.iconOnly)
+        }
+    }
+}
+
+/// Sets `toolbarLabelsFit` from this view's own width. Outside the view's
+/// `.toolbar`, so its items see it. Written only when the answer changes,
+/// not with every point of a resize: in a view as large as the library's,
+/// a write per point rebuilt it all the way through a drag.
+private struct ToolbarLabelsFitting: ViewModifier {
+    let minimumWidth: CGFloat
+    @State private var fits = true
+
+    func body(content: Content) -> some View {
+        content
+            .onGeometryChange(for: Bool.self) { $0.size.width >= minimumWidth } action: { fits = $0 }
+            .environment(\.toolbarLabelsFit, fits)
+    }
+}
+
+extension View {
+    func fittingToolbarLabel() -> some View {
+        modifier(FittingToolbarLabel())
+    }
+
+    /// Names this view's toolbar buttons while it is at least
+    /// `minimumWidth` wide: the width, measured with every name showing,
+    /// below which a name would push a button into the overflow menu.
+    func toolbarLabelsFit(from minimumWidth: CGFloat) -> some View {
+        modifier(ToolbarLabelsFitting(minimumWidth: minimumWidth))
+    }
+}
+
+/// The widths from which each toolbar's names fit, measured with every name
+/// showing (Nov 2026): the view's own width, which beside the window's
+/// sections is the window's less the sidebar's 235. Where no width the
+/// window allows was too narrow, the figure is a floor, kept so a name that
+/// grows still gives way before a button does.
+enum ToolbarLabelFit {
+    /// The writing editor's window, or Writing with its sections folded:
+    /// List, Save, History and Workspace on the left; the surface, Details,
+    /// Assistant, the deck and Done on the right. Overflowed below 1,120.
+    static let writingEditor: CGFloat = 1_120
+    /// Writing while reading: List alone.
+    static let writingList: CGFloat = 400
+    /// The reader: History, the passage, Side by Side, Appearance, Read
+    /// Aloud, Chat and Study. With "BSB · Genesis 1" in the passage button,
+    /// fit at 1,005 (a 1,240pt window) and overflowed at 985; the button
+    /// grows with the book's name, "1 Thessalonians" by some 80, which the
+    /// figure leaves room for.
+    static let reader: CGFloat = 1_090
+    /// Books and the Book Reader window: Group, Add Book and the search
+    /// field; Contents and Open in Window in a book. Fit at every width.
+    static let books: CGFloat = 600
+    /// Reading Plans: New Plan.
+    static let readingPlans: CGFloat = 400
+    /// Modules: Show, Install, Export, Show in Finder and the filter field.
+    /// Fit at every width; the field narrows to its icon first.
+    static let modules: CGFloat = 700
+    /// Slide Studio: Undo and Redo, Deck, Remote and Play. Fit at the
+    /// narrowest the window goes.
+    static let slideStudio: CGFloat = 700
+}

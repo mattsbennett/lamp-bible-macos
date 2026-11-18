@@ -124,9 +124,6 @@ struct DevotionalsView: View {
     /// a window of its own (owner, Nov 2026).
     @State private var editing: DevotionalEditorRequest?
     @State private var layout = WritingInPlaceLayout()
-    /// The section's width: the window's, while a writing is edited and the
-    /// sections are folded. Whether the toolbar's names fit.
-    @State private var width: CGFloat = 1_400
     @EnvironmentObject private var model: LibraryModel
     @AppStorage("devotional.fontSize")
     private var devotionalFontSize = LampTextScale.writingReadingText.defaultValue
@@ -272,14 +269,13 @@ struct DevotionalsView: View {
             }
         }
         .navigationTitle("Writing")
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .toolbar {
             if editing != nil {
                 // The one button on the left while editing: the window's
                 // own sidebar button is taken away (LibraryRootView), and the
                 // sections come back with Done.
                 ToolbarItem(placement: .navigation) {
-                    listToggle(systemImage: "sidebar.left", titled: true)
+                    listToggle(systemImage: "sidebar.left")
                 }
             } else {
                 ToolbarItemGroup {
@@ -287,12 +283,12 @@ struct DevotionalsView: View {
                         filterMenu
                     }
                     // As Books' list hides, so this one does, to read wide.
-                    listToggle(systemImage: "sidebar.squares.left", titled: false)
+                    listToggle(systemImage: "sidebar.squares.left")
                 }
             }
         }
         // Outside the toolbar, so its own button sees it as the editor's do.
-        .environment(\.toolbarLabelsFit, width >= ToolbarLabelFit.writingEditorWidth)
+        .toolbarLabelsFit(from: editing == nil ? ToolbarLabelFit.writingList : ToolbarLabelFit.writingEditor)
         .confirmationDialog(
             "Delete this writing?",
             isPresented: Binding(
@@ -354,26 +350,20 @@ struct DevotionalsView: View {
         }
     }
 
-    /// The list's button. Named while editing, as the editor's buttons
-    /// beside it are; an icon while reading, as Books' is.
-    @ViewBuilder
-    private func listToggle(systemImage: String, titled: Bool) -> some View {
+    /// The list's button, named while the toolbar has room.
+    private func listToggle(systemImage: String) -> some View {
         let shown = layout.showsList(readingShowsList: showsWritingList)
-        let button = Button {
+        return Button {
             withAnimation(.easeInOut(duration: 0.2)) {
                 layout.toggleList(readingShowsList: &showsWritingList)
             }
         } label: {
-            Label(titled ? "List" : (shown ? "Hide Writing List" : "Show Writing List"), systemImage: systemImage)
+            Label("List", systemImage: systemImage)
         }
+        .fittingToolbarLabel()
         .help(shown ? "Hide Writing List" : "Show Writing List")
         .accessibilityLabel(shown ? "Hide Writing List" : "Show Writing List")
         .accessibilityValue(shown ? "Shown" : "Hidden")
-        if titled {
-            button.fittingToolbarLabel()
-        } else {
-            button.labelStyle(.iconOnly)
-        }
     }
 
     private var writingListWidth: CGFloat {

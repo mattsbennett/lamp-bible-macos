@@ -182,9 +182,11 @@ struct ReadingPlansView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button("New Plan", systemImage: "calendar.badge.plus") { isMakingPlan = true }
+                    .fittingToolbarLabel()
                     .help("Make a reading plan from the passages you want to read")
             }
         }
+        .toolbarLabelsFit(from: ToolbarLabelFit.readingPlans)
         .sheet(isPresented: $isMakingPlan) { NewReadingPlanSheet() }
         .task {
             await model.loadPlanProgress(year: LampPlanCalendar.year(for: date))

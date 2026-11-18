@@ -276,6 +276,7 @@ struct SlideStudioView: View {
         }
         .navigationTitle(deck?.title ?? "Slide Studio")
         .toolbar { studioToolbar }
+        .toolbarLabelsFit(from: ToolbarLabelFit.slideStudio)
         .task(id: request) { loadInitialDeck() }
         .task {
             typefaceFamilies = await Task.detached(priority: .utility) {
@@ -435,13 +436,17 @@ struct SlideStudioView: View {
         }
 
         ToolbarItem {
-            Button(
-                remoteHost.connectedClientNames.isEmpty ? "Pair Remote" : "Remote Connected",
-                systemImage: remoteHost.connectedClientNames.isEmpty ? "qrcode" : "iphone.and.arrow.forward"
-            ) {
+            Button {
                 remoteHost.start()
                 showingRemotePairing = true
+            } label: {
+                Label(
+                    remoteHost.connectedClientNames.isEmpty ? "Remote" : "Remote Connected",
+                    systemImage: remoteHost.connectedClientNames.isEmpty ? "qrcode" : "iphone.and.arrow.forward"
+                )
             }
+            .fittingToolbarLabel()
+            .accessibilityLabel(remoteHost.connectedClientNames.isEmpty ? "Pair Remote" : "Remote Connected")
             .popover(isPresented: $showingRemotePairing, arrowEdge: .bottom) {
                 SlideRemotePairingView(
                     pairingCode: remoteHost.pairingCode,

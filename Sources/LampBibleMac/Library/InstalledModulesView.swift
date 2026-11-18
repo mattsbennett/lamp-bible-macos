@@ -239,23 +239,39 @@ struct InstalledModulesView: View {
                             : "line.3.horizontal.decrease.circle.fill"
                     )
                 }
+                .fittingToolbarLabel()
                 .help(chosenShelves.isEmpty
                     ? "Show only some kinds of module"
                     : "Showing " + chosenShelves.sorted().joined(separator: ", "))
             }
+            // Shown by shorter names where the window has room; the full ones
+            // stay as what VoiceOver says and the overflow menu reads.
             ToolbarItemGroup {
-                Button("Install Module…", systemImage: "plus", action: showImporter)
-                    .help("Install a Lamp module")
-                Button("Export Module…", systemImage: "square.and.arrow.up") {
+                Button(action: showImporter) {
+                    Label("Install", systemImage: "plus")
+                }
+                .fittingToolbarLabel()
+                .accessibilityLabel("Install Module…")
+                .help("Install a Lamp module")
+                Button {
                     exportRequest = ModuleExportRequest(initialChoiceID: nil)
+                } label: {
+                    Label("Export", systemImage: "square.and.arrow.up")
                 }
+                .fittingToolbarLabel()
+                .accessibilityLabel("Export Module…")
                 .help("Export a personal or user-installed module")
-                Button("Show Library in Finder", systemImage: "folder") {
+                Button {
                     NSWorkspace.shared.open(model.library.rootURL)
+                } label: {
+                    Label("Show in Finder", systemImage: "folder")
                 }
+                .fittingToolbarLabel()
+                .accessibilityLabel("Show Library in Finder")
                 .help("Show the Lamp Bible library in Finder")
             }
         }
+        .toolbarLabelsFit(from: ToolbarLabelFit.modules)
         .sheet(item: $exportRequest) { request in
             ModuleExportWizard(
                 choices: exportChoices,

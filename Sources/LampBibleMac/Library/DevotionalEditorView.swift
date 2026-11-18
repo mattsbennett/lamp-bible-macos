@@ -441,7 +441,6 @@ struct WritingEditorWindow: View {
     @AppStorage("writing.editorShowsLibrary") private var showsLibrary = true
     /// For a window restored without its value.
     @State private var blank = DevotionalEditorRequest()
-    @State private var windowWidth: CGFloat = 1_400
 
     private var shown: DevotionalEditorRequest { request ?? blank }
 
@@ -479,7 +478,6 @@ struct WritingEditorWindow: View {
             // being done is closing the window, back to the library.
             DevotionalEditorView(request: shown)
                 .id(shown.editorIdentity)
-                .environment(\.toolbarLabelsFit, windowWidth >= ToolbarLabelFit.writingEditorWidth)
                 .environment(\.writingEditorDone, WritingEditorDone(help: "Close the editor and go back to Writing") {
                     dismissWindow()
                 })
@@ -492,7 +490,7 @@ struct WritingEditorWindow: View {
                 .help(showsLibrary ? "Hide the list of writing" : "Show the list of writing")
             }
         }
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { windowWidth = $0 }
+        .toolbarLabelsFit(from: ToolbarLabelFit.writingEditor)
     }
 
     /// The Writing section's list as it is there: the same search over it,
@@ -3532,40 +3530,4 @@ struct WritingAssistantOpenKey: PreferenceKey {
 
 extension EnvironmentValues {
     @Entry var writingEditorDone: WritingEditorDone?
-}
-
-/// Whether the window has room for its toolbar buttons' names: set by the
-/// writing editor's host from the width it is given (`ToolbarLabelFit`).
-extension EnvironmentValues {
-    @Entry var toolbarLabelsFit: Bool = true
-}
-
-/// A toolbar button's name beside its icon while the window has room for
-/// the names, its icon alone when it has not. The overflow menu is left for
-/// a window too narrow even for the icons, where a button went before its
-/// name did.
-struct FittingToolbarLabel: ViewModifier {
-    @Environment(\.toolbarLabelsFit) private var fits
-
-    func body(content: Content) -> some View {
-        if fits {
-            content.labelStyle(.titleAndIcon)
-        } else {
-            content.labelStyle(.iconOnly)
-        }
-    }
-}
-
-extension View {
-    func fittingToolbarLabel() -> some View {
-        modifier(FittingToolbarLabel())
-    }
-}
-
-/// How wide a writing editor's window must be for its toolbar's names: the
-/// list, Save, History and Workspace on the left; the surface, Details,
-/// Assistant, the deck and Done on the right. Measured, not reckoned: below
-/// it, the names went to the overflow menu with their buttons.
-enum ToolbarLabelFit {
-    static let writingEditorWidth: CGFloat = 1_120
 }

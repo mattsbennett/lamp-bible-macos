@@ -1202,6 +1202,15 @@ struct LibraryRootView: View {
         }
     }
 
+    /// The read-aloud button's name where the toolbar shows it.
+    private var readAloudShortTitle: String {
+        switch workspace.readAloud.state {
+        case .stopped: "Read Aloud"
+        case .playing: "Pause"
+        case .paused: "Resume"
+        }
+    }
+
     private var readAloudButtonImage: String {
         switch workspace.readAloud.state {
         case .stopped: "play.fill"
@@ -1400,7 +1409,7 @@ struct LibraryRootView: View {
             .disabled(!workspace.canGoForwardInHistory)
             .keyboardShortcut("]", modifiers: [.command, .option])
 
-            Menu("Reading History", systemImage: "clock.arrow.circlepath") {
+            Menu {
                 if workspace.recentLocations.isEmpty {
                     Text("No Reading History")
                 } else {
@@ -1414,9 +1423,13 @@ struct LibraryRootView: View {
                         workspace.clearHistory()
                     }
                 }
+            } label: {
+                Label("History", systemImage: "clock.arrow.circlepath")
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
+            .fittingToolbarLabel()
+            .accessibilityLabel("Reading History")
         }
 
         ToolbarItemGroup {
@@ -1424,6 +1437,7 @@ struct LibraryRootView: View {
                 Label(ReaderLayoutMode.sideBySide.title, systemImage: ReaderLayoutMode.sideBySide.systemImage)
             }
             .toggleStyle(.button)
+            .fittingToolbarLabel()
             .disabled(readerLayoutMode != .sideBySide && model.translations.count < 2)
             .help(
                 readerLayoutMode == .sideBySide
@@ -1431,7 +1445,7 @@ struct LibraryRootView: View {
                     : "Read another translation beside this one"
             )
 
-            Menu("Reader Appearance", systemImage: "textformat") {
+            Menu {
                 Picker("Layout", selection: readerLayoutSelection) {
                     ForEach(ReaderLayoutMode.allCases) { mode in
                         Label(mode.title, systemImage: mode.systemImage)
@@ -1459,9 +1473,13 @@ struct LibraryRootView: View {
                     Text("Purple book in the margin — study notes")
                     Text("Blue letter in the text — translator’s note")
                 }
+            } label: {
+                Label("Appearance", systemImage: "textformat")
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
+            .fittingToolbarLabel()
+            .accessibilityLabel("Reader Appearance")
             .help("Choose the reader layout, typeface, and text size, and see what the verse marks mean")
 
             // One control, as Music's play button is: a click plays or pauses,
@@ -1486,12 +1504,14 @@ struct LibraryRootView: View {
                 Button("Stop", systemImage: "stop") { workspace.readAloud.stop() }
                     .disabled(workspace.readAloud.state == .stopped)
             } label: {
-                Label(readAloudButtonTitle, systemImage: readAloudButtonImage)
+                Label(readAloudShortTitle, systemImage: readAloudButtonImage)
             } primaryAction: {
                 toggleReadAloud()
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
+            .fittingToolbarLabel()
+            .accessibilityLabel(readAloudButtonTitle)
             .disabled(readAloudVerses.isEmpty || !readAloudHasVoice)
             .help(readAloudHasVoice
                 ? "\(readAloudButtonTitle) — the arrow has where to start from"
@@ -1508,8 +1528,10 @@ struct LibraryRootView: View {
                 Button {
                     showingReaderChat.wrappedValue.toggle()
                 } label: {
-                    Label("Reader Chat", systemImage: "bubble.left.and.bubble.right")
+                    Label("Chat", systemImage: "bubble.left.and.bubble.right")
                 }
+                .fittingToolbarLabel()
+                .accessibilityLabel("Reader Chat")
                 .help(showingReaderChat.wrappedValue ? "Hide Reader Chat" : "Show Reader Chat")
                 .keyboardShortcut("j", modifiers: [.command, .shift])
             }
@@ -1517,8 +1539,10 @@ struct LibraryRootView: View {
             Button {
                 showingStudyInspector.wrappedValue.toggle()
             } label: {
-                Label("Study Tools", systemImage: "sidebar.trailing")
+                Label("Study", systemImage: "sidebar.trailing")
             }
+            .fittingToolbarLabel()
+            .accessibilityLabel("Study Tools")
             .help(showingStudyInspector.wrappedValue ? "Hide Study Tools" : "Show Study Tools")
             .keyboardShortcut("i", modifiers: [.command, .shift])
         }
@@ -1750,6 +1774,9 @@ struct LibraryRootView: View {
         // readers would each bring theirs, and the toolbar was rebuilt on
         // every switch — a third of a switch's work.
         .toolbar { if isShown { readerToolbar } }
+        // The reader's own width, flipped only when the answer changes:
+        // never this view's state, whose every write rebuilds the library.
+        .toolbarLabelsFit(from: ToolbarLabelFit.reader)
         // On the view, not on the toolbar button: a toolbar item is not in
         // the focus chain, so a focused value published from one never
         // reaches the menu and the command stays greyed out.

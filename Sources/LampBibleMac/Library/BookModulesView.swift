@@ -228,26 +228,29 @@ struct BookModulesView: View {
             }
             ToolbarItemGroup(placement: .primaryAction) {
                 if showsShelf, !books.isEmpty {
-                    Menu("Group Books", systemImage: "rectangle.3.group") {
+                    Menu {
                         Picker("Group By", selection: $groupByRawValue) {
                             ForEach(BookGrouping.allCases) { grouping in
                                 Text(grouping.title).tag(grouping.rawValue)
                             }
                         }
                         .pickerStyle(.inline)
+                    } label: {
+                        Label("Group", systemImage: "rectangle.3.group")
                     }
-                    .labelStyle(.iconOnly)
+                    .fittingToolbarLabel()
+                    .accessibilityLabel("Group Books")
                     .help("Group books")
                 }
 
                 if !showsShelf {
-                Button(
-                    showsTableOfContents ? "Hide Table of Contents" : "Show Table of Contents",
-                    systemImage: "list.bullet.indent"
-                ) {
+                Button {
                     showsTableOfContents.toggle()
+                } label: {
+                    Label("Contents", systemImage: "list.bullet.indent")
                 }
-                .labelStyle(.iconOnly)
+                .fittingToolbarLabel()
+                .accessibilityLabel(showsTableOfContents ? "Hide Table of Contents" : "Show Table of Contents")
                 .help(
                     showsTableOfContents
                         ? "Hide Table of Contents"
@@ -256,7 +259,7 @@ struct BookModulesView: View {
                 .accessibilityValue(showsTableOfContents ? "Shown" : "Hidden")
 
                 if allowsStandaloneWindow {
-                    Button("Open in Book Reader", systemImage: "macwindow") {
+                    Button {
                         openWindow(
                             id: "book-reader",
                             value: BookReaderRequest(
@@ -264,20 +267,27 @@ struct BookModulesView: View {
                                 sectionID: selectedSectionID
                             )
                         )
+                    } label: {
+                        Label("Open in Window", systemImage: "macwindow")
                     }
-                    .labelStyle(.iconOnly)
+                    .fittingToolbarLabel()
+                    .accessibilityLabel("Open in Book Reader")
                     .help("Open the current book in a separate reader window")
                     .disabled(selectedBookID == nil)
                 }
                 }
 
                 if showsShelf {
-                    Button("Add Book…", systemImage: "plus", action: showImporter)
-                        .labelStyle(.iconOnly)
+                    Button(action: showImporter) {
+                        Label("Add Book", systemImage: "plus")
+                    }
+                    .fittingToolbarLabel()
+                    .accessibilityLabel("Add Book…")
                         .help("Add a book: install a .lamp book module")
                 }
             }
         }
+        .toolbarLabelsFit(from: ToolbarLabelFit.books)
         .task(id: reloadID) { await loadBooks() }
         .onChange(of: selectedBookID) { _, _ in
             sectionSearchText = ""
