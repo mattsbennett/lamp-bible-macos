@@ -35,14 +35,14 @@ struct BookReaderRequest: Codable, Hashable {
 struct BookModulesView: View {
     @Environment(\.openWindow) private var openWindow
     @EnvironmentObject private var model: LibraryModel
-    @AppStorage("books.showsBookList") private var showsBookList = true
     @AppStorage("books.showsTableOfContents") private var showsTableOfContents = true
     /// How the book list is grouped: by genre unless the reader chose none.
     @AppStorage("books.groupBy") private var groupByRawValue = BookGrouping.genre.rawValue
-    /// A shelf of covers to choose from, or a list beside the page.
-    @AppStorage("books.viewMode") private var viewModeRawValue = BookViewMode.list.rawValue
-    /// In the shelf view: the shelf, rather than the book chosen from it.
+    /// The shelf, rather than the book chosen from it.
     @State private var isShowingShelf = true
+    /// What the shelf is narrowed to: title, author, or anything else the
+    /// library holds about a book.
+    @State private var shelfSearchText = ""
     @State private var books: [LampBook] = []
     /// Whether `books` has been read yet: until it has, an empty list is
     /// not news, and "No Books Installed" flashed on every visit before the
@@ -123,13 +123,17 @@ struct BookModulesView: View {
         orderedSections.filter { bookmarkIDs.contains($0.id) }
     }
 
-    /// The view the reader chose. A book reader window shows one book, so it
-    /// has no shelf.
-    private var viewMode: BookViewMode {
-        allowsStandaloneWindow ? BookViewMode(rawValue: viewModeRawValue) ?? .list : .list
-    }
+    private var showsShelf: Bool { isShowingShelf }
 
-    private var showsShelf: Bool { viewMode == .shelf && isShowingShelf }
+    /// The books the shelf search finds; nil when there is no search.
+    private var shelfMatches: Set<String>? {
+        let query = LampSearchQuery(shelfSearchText)
+        guard !query.isEmpty else { return nil }
+        let genreNames = Dictionary(genres.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+        return Set(books.filter { book in
+            book.matchesLibrarySearch(query, genreName: book.genre.flatMap { genreNames[$0] })
+        }.map(\.id))
+    }
 
     private func openFromShelf(_ bookID: String) {
         selectedBookID = bookID
@@ -166,6 +170,7 @@ struct BookModulesView: View {
             } else if showsShelf {
                 BookShelfView(
                     books: books,
+                    matches: shelfMatches,
                     genres: genres,
                     grouping: groupBy,
                     continueReading: continueReading,
@@ -174,15 +179,13 @@ struct BookModulesView: View {
                 ) { book in
                     bookActions(book)
                 }
+                .searchable(text: $shelfSearchText, prompt: "Title, author, or subject")
             } else {
                 BookReaderResizableLayout(
-                    showsBookList: viewMode == .list && showsBookList,
                     // A search's results are listed in the contents column,
                     // so it shows while there is one, hidden or not.
                     showsTableOfContents: showsTableOfContents || !sectionSearchText.isEmpty
                 ) {
-                    booksList
-                } tableOfContents: {
                     contentsList
                 } reader: {
                     if let book = selectedBook, let section = selectedSection {
@@ -214,7 +217,7 @@ struct BookModulesView: View {
         .navigationTitle(showsShelf ? "Books" : selectedBook?.title ?? "Books")
         .navigationSubtitle(showsShelf ? "" : selectedSection?.title ?? "")
         .toolbar {
-            if viewMode == .shelf, !isShowingShelf {
+            if !isShowingShelf {
                 ToolbarItem(placement: .navigation) {
                     Button("All Books", systemImage: "chevron.backward") {
                         isShowingShelf = true
@@ -223,19 +226,7 @@ struct BookModulesView: View {
                 }
             }
             ToolbarItemGroup(placement: .primaryAction) {
-
-                if allowsStandaloneWindow {
-                    Picker("View", selection: $viewModeRawValue) {
-                        ForEach(BookViewMode.allCases) { mode in
-                            Label(mode.title, systemImage: mode.systemImage).tag(mode.rawValue)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelStyle(.iconOnly)
-                    .help("Show books as a shelf of covers or a list beside the page")
-                }
-
-                if (viewMode == .list && showsBookList) || showsShelf {
+                if showsShelf {
                     Menu("Group Books", systemImage: "rectangle.3.group") {
                         Picker("Group By", selection: $groupByRawValue) {
                             ForEach(BookGrouping.allCases) { grouping in
@@ -246,18 +237,6 @@ struct BookModulesView: View {
                     }
                     .labelStyle(.iconOnly)
                     .help("Group books")
-                }
-
-                if viewMode == .list {
-                    Button(
-                        showsBookList ? "Hide Book List" : "Show Book List",
-                        systemImage: "books.vertical"
-                    ) {
-                        showsBookList.toggle()
-                    }
-                    .labelStyle(.iconOnly)
-                    .help(showsBookList ? "Hide Book List" : "Show Book List")
-                    .accessibilityValue(showsBookList ? "Shown" : "Hidden")
                 }
 
                 if !showsShelf {
@@ -291,7 +270,6 @@ struct BookModulesView: View {
                 }
                 }
 
-                // The list has its own beside its heading.
                 if showsShelf {
                     Button("Add Book…", systemImage: "plus", action: showImporter)
                         .labelStyle(.iconOnly)
@@ -322,8 +300,6 @@ struct BookModulesView: View {
             selectedBookID = newBookID
             isShowingShelf = false
         }
-        // Choosing the shelf shows it; a book asked for by a link opens.
-        .onChange(of: viewModeRawValue) { _, _ in isShowingShelf = initialBookID == nil }
         // The reader saves where it is as it goes, which nothing announces,
         // so what Continue Reading says is read again when it is shown and
         // as the reader moves through a book.
@@ -372,11 +348,11 @@ struct BookModulesView: View {
     private func remove(_ module: LampInstalledModule) {
         // Back to the shelf rather than on to whatever book is chosen next,
         // which the reader did not ask for.
-        if module.id == selectedBookID, viewMode == .shelf { isShowingShelf = true }
+        if module.id == selectedBookID { isShowingShelf = true }
         model.remove(module)
     }
 
-    /// What a book offers from the shelf, the list and Continue Reading.
+    /// What a book offers from the shelf and Continue Reading.
     @ViewBuilder
     private func bookActions(_ book: LampBook) -> some View {
         Button("Book Information", systemImage: "info.circle") {
@@ -390,141 +366,8 @@ struct BookModulesView: View {
         }
     }
 
-    private var booksList: some View {
-        // Held a point below the toolbar. A list whose top meets the
-        // window's top is drawn up under the toolbar's glass, so the books
-        // above the one being read — and the list opens scrolled to it, often
-        // far down — showed blurred behind the window's title.
-        VStack(alignment: .leading, spacing: 0) {
-            Color.clear.frame(height: 1)
-            // A fixed heading rather than a pinned section header: rows
-            // scrolled under a pinned header showed through its glass.
-            HStack(alignment: .firstTextBaseline) {
-                Text("Books")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Color.lampSecondaryText)
-                Spacer()
-                Button("Add Book…", systemImage: "plus", action: showImporter)
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(Color.lampSecondaryText)
-                    .help("Add a book: install a .lamp book module")
-            }
-            .padding(.leading, 20)
-            .padding(.trailing, 14)
-            .padding(.top, 10)
-            .padding(.bottom, 6)
-            Divider().padding(.horizontal, 12)
-            booksListContent
-        }
-    }
-
-    private var booksListContent: some View {
-        List(selection: $selectedBookID) {
-            // The list below is alphabetical, which is how you find a book you
-            // mean to open and no help at all in finding the one you were in
-            // the middle of. These name the section as well, which the rows
-            // below can only do for the book whose sections are loaded.
-            if !continueReading.isEmpty {
-                Section("Continue Reading") {
-                    ForEach(continueReading) { entry in
-                        Button {
-                            selectedBookID = entry.book.id
-                        } label: {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(entry.book.title)
-                                    .font(.system(size: LampMetrics.listTitleSize, weight: .medium))
-                                    .lineLimit(2)
-                                Label(
-                                    entry.sectionTitle ?? "Resume reading",
-                                    systemImage: "bookmark"
-                                )
-                                .font(.system(size: LampMetrics.listCaptionSize))
-                                .foregroundStyle(Color.lampSecondaryText)
-                                .lineLimit(1)
-                            }
-                            .padding(.vertical, 2)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(.rect)
-                        }
-                        .buttonStyle(.plain)
-                        .contextMenu { bookActions(entry.book) }
-                    }
-                }
-                if groupBy == .none { Section("All Books") { bookRows(books) } }
-            }
-            if groupBy == .genre {
-                let sections = LampBookGenre.grouped(books, genre: \.genre, catalog: genres)
-                ForEach(Array(sections.enumerated()), id: \.element.id) { index, section in
-                    Section {
-                        bookRows(section.books)
-                    } header: {
-                        // The group above the first of its genres: "Bible and
-                        // Faith", then its genres beneath it.
-                        let opensGroup = section.group != nil
-                            && (index == 0 || sections[index - 1].group != section.group)
-                        VStack(alignment: .leading, spacing: 2) {
-                            if opensGroup, let group = section.group {
-                                Text(group)
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(Color.lampSecondaryText)
-                                    .textCase(.uppercase)
-                                    .padding(.top, index == 0 ? 0 : 6)
-                            }
-                            // A library whose books carry no genre yet has
-                            // one run of them, which is all of its books.
-                            Text(sections.count == 1 && section.group == nil ? "All Books" : section.title)
-                        }
-                    }
-                }
-            } else if continueReading.isEmpty {
-                bookRows(books)
-            }
-        }
-        // Inset, not sidebar: a sidebar list draws under the toolbar, so the
-        // window's title was painted over the first book, half of which
-        // showed through beneath it. Inset keeps below the toolbar, and its
-        // ground matches the contents column beside it.
-        .listStyle(.inset)
-    }
-
     private var groupBy: BookGrouping {
         BookGrouping(rawValue: groupByRawValue) ?? .genre
-    }
-
-    private func bookRows(_ books: [LampBook]) -> some View {
-        ForEach(books) { book in
-            // Title and author only: at this column's width a cover would be
-            // a letter tile, too small to tell one book from another and
-            // heavy beside the page.
-            VStack(alignment: .leading, spacing: 3) {
-                // Two lines rather than one: in a column this narrow one
-                // line cut most titles off before the words that tell
-                // them apart ("Rome, the Greek World,…" twice).
-                Text(book.title)
-                    .font(.system(size: LampMetrics.listTitleSize, weight: .medium))
-                    .lineLimit(2)
-                if let author = book.author, !author.isEmpty {
-                    Text(author)
-                        .font(.system(size: LampMetrics.listDetailSize))
-                        .foregroundStyle(Color.lampSecondaryText)
-                        .lineLimit(1)
-                }
-                if let position = readingState.position(for: book.id) {
-                    let sectionTitle = book.id == selectedBookID
-                        ? sections.first(where: { $0.id == position.sectionID })?.title
-                        : nil
-                    Label(sectionTitle ?? "Resume reading", systemImage: "bookmark")
-                        .font(.system(size: LampMetrics.listCaptionSize))
-                        .foregroundStyle(Color.lampSecondaryText)
-                        .lineLimit(1)
-                }
-            }
-            .padding(.vertical, 6)
-            .tag(Optional(book.id))
-            .lampListRow(isSelected: selectedBookID == book.id)
-            .contextMenu { bookActions(book) }
-        }
     }
 
     private var contentsList: some View {
@@ -743,51 +586,30 @@ struct BookModulesView: View {
 }
 
 private struct BookReaderResizableLayout<
-    BookList: View,
     TableOfContents: View,
     Reader: View
 >: View {
-    let showsBookList: Bool
     let showsTableOfContents: Bool
-    let bookList: BookList
     let tableOfContents: TableOfContents
     let reader: Reader
 
-    @State private var preferredBookListWidth = 235.0
     @State private var preferredTableOfContentsWidth = 250.0
 
-    private let minimumBookListWidth: CGFloat = 160
-    private let maximumBookListWidth: CGFloat = 280
     private let minimumTableOfContentsWidth: CGFloat = 160
     private let maximumTableOfContentsWidth: CGFloat = 270
 
     init(
-        showsBookList: Bool,
         showsTableOfContents: Bool,
-        @ViewBuilder bookList: () -> BookList,
         @ViewBuilder tableOfContents: () -> TableOfContents,
         @ViewBuilder reader: () -> Reader
     ) {
-        self.showsBookList = showsBookList
         self.showsTableOfContents = showsTableOfContents
-        self.bookList = bookList()
         self.tableOfContents = tableOfContents()
         self.reader = reader()
     }
 
     var body: some View {
         HStack(spacing: 0) {
-            if showsBookList {
-                bookList
-                    .frame(width: bookListWidth)
-                LampColumnResizeHandle(
-                    preferredWidth: $preferredBookListWidth,
-                    displayedWidth: Double(bookListWidth),
-                    minimumWidth: Double(minimumBookListWidth),
-                    maximumWidth: Double(maximumBookListWidth),
-                    label: "Resize Book List"
-                )
-            }
             if showsTableOfContents {
                 tableOfContents
                     .frame(width: tableOfContentsWidth)
@@ -803,13 +625,6 @@ private struct BookReaderResizableLayout<
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .layoutPriority(2)
         }
-    }
-
-    private var bookListWidth: CGFloat {
-        min(
-            max(CGFloat(preferredBookListWidth), minimumBookListWidth),
-            maximumBookListWidth
-        )
     }
 
     private var tableOfContentsWidth: CGFloat {
@@ -933,21 +748,15 @@ private struct LampColumnResizeGrip: NSViewRepresentable {
     }
 }
 
-/// How Books shows the library: a shelf of covers, or a list beside the page.
-enum BookViewMode: String, CaseIterable, Identifiable {
-    case shelf
-    case list
-
-    var id: String { rawValue }
-    var title: String { self == .shelf ? "Shelf" : "List" }
-    var systemImage: String { self == .shelf ? "square.grid.2x2" : "sidebar.left" }
-}
-
 /// The books as a shelf of covers, as Modules shows the library: the books
 /// being read first, with the section each was left in, then every book,
-/// grouped as the list is. Choosing one opens it.
+/// grouped by genre unless the reader chose otherwise. Choosing one opens it.
 private struct BookShelfView<Actions: View>: View {
     let books: [LampBook]
+    /// The books a search found, or nil when there is no search. A search
+    /// shows what it found and nothing else, so Continue Reading stands
+    /// aside while there is one.
+    let matches: Set<String>?
     let genres: [LampBookGenre]
     let grouping: BookGrouping
     let continueReading: [BookContinueReadingEntry]
@@ -969,12 +778,42 @@ private struct BookShelfView<Actions: View>: View {
         GridItem(.flexible(), spacing: 16, alignment: .top),
     ]
 
-    private var shelves: [(title: String, books: [LampBook])] {
-        guard grouping == .genre else { return [("All Books", books)] }
-        let sections = LampBookGenre.grouped(books, genre: \.genre, catalog: genres)
-        guard sections.count > 1 || sections.first?.group != nil else { return [("All Books", books)] }
-        return sections.map { ($0.title, $0.books) }
+    private var isSearching: Bool { matches != nil }
+
+    /// Each shelf's books with the place each has on the whole shelf, which
+    /// picks its cover. Placed before a search narrows them, so a book found
+    /// by a search keeps the cover it has on the shelf.
+    private struct PlacedBook: Identifiable {
+        let book: LampBook
+        let position: Int
+        var id: String { book.id }
     }
+
+    private struct Shelf: Identifiable {
+        let title: String
+        let books: [PlacedBook]
+        var id: String { title }
+    }
+
+    private var shelves: [Shelf] {
+        let all: [(title: String, books: [LampBook])]
+        if grouping == .genre {
+            let sections = LampBookGenre.grouped(books, genre: \.genre, catalog: genres)
+            all = sections.count > 1 || sections.first?.group != nil
+                ? sections.map { ($0.title, $0.books) }
+                : [("All Books", books)]
+        } else {
+            all = [("All Books", books)]
+        }
+        return all.enumerated().compactMap { shelfIndex, shelf -> Shelf? in
+            let placed = shelf.books.enumerated()
+                .map { PlacedBook(book: $0.element, position: $0.offset + shelfIndex * 5) }
+                .filter { matches?.contains($0.book.id) ?? true }
+            return placed.isEmpty ? nil : Shelf(title: shelf.title, books: placed)
+        }
+    }
+
+    private var shownCount: Int { matches?.count ?? books.count }
 
     var body: some View {
         ScrollView {
@@ -983,11 +822,15 @@ private struct BookShelfView<Actions: View>: View {
                     Text("Books")
                         .font(.system(size: 32, weight: .bold, design: .serif))
                         .accessibilityAddTraits(.isHeader)
-                    Text(books.count == 1 ? "1 book" : "\(books.count) books")
+                    Text(countText)
                         .font(.title3)
                         .foregroundStyle(Color.lampSecondaryText)
                 }
-                if !continueReading.isEmpty {
+                if isSearching, shownCount == 0 {
+                    Text("No book's title, author or details match the search.")
+                        .foregroundStyle(Color.lampSecondaryText)
+                }
+                if !isSearching, !continueReading.isEmpty {
                     VStack(alignment: .leading, spacing: 16) {
                         heading("Continue Reading", count: nil)
                         LazyVGrid(columns: continueColumns, alignment: .leading, spacing: 16) {
@@ -997,12 +840,12 @@ private struct BookShelfView<Actions: View>: View {
                         }
                     }
                 }
-                ForEach(Array(shelves.enumerated()), id: \.element.title) { shelfIndex, shelf in
+                ForEach(shelves) { shelf in
                     VStack(alignment: .leading, spacing: 16) {
                         heading(shelf.title, count: shelf.books.count)
                         LazyVGrid(columns: columns, alignment: .leading, spacing: 30) {
-                            ForEach(Array(shelf.books.enumerated()), id: \.element.id) { index, book in
-                                bookCard(book, shelfPosition: index + shelfIndex * 5)
+                            ForEach(shelf.books) { placed in
+                                bookCard(placed.book, shelfPosition: placed.position)
                             }
                         }
                     }
@@ -1014,6 +857,11 @@ private struct BookShelfView<Actions: View>: View {
             .frame(maxWidth: 1_180, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    private var countText: String {
+        let all = books.count == 1 ? "1 book" : "\(books.count) books"
+        return isSearching ? "\(shownCount) of \(all)" : all
     }
 
     private func heading(_ title: String, count: Int?) -> some View {
