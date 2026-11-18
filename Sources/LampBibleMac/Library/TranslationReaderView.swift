@@ -766,11 +766,26 @@ struct TranslationReaderView: View, Equatable {
                        top > 24, top < viewport.size.height * 0.7 {
                         return
                     }
+                    // scrollTo lines the paragraph's point at the anchor up
+                    // with the viewport's: the anchor that puts the verse,
+                    // so far into its paragraph, a fifth of the way down.
+                    var anchor = 0.2
+                    if readerLayoutMode == .continuousParagraphs,
+                       let place = paragraphAnchors.placement(of: reference) {
+                        let viewportHeight = viewport.size.height
+                        if abs(viewportHeight - place.height) > 1 {
+                            anchor = (0.2 * viewportHeight - place.fraction * place.height) / (viewportHeight - place.height)
+                        }
+                        anchor = min(max(anchor, 0), 1)
+                    }
                     withAnimation(.easeInOut(duration: 0.25)) {
-                        proxy.scrollTo(scrollTarget(for: reference, in: chapters), anchor: UnitPoint(x: 0.5, y: 0.2))
+                        proxy.scrollTo(scrollTarget(for: reference, in: chapters), anchor: UnitPoint(x: 0.5, y: anchor))
                     }
                 }
-                .onChange(of: workspace.selectedVerseReference) { _, _ in
+                .onChange(of: workspace.selectedVerseReference) { _, reference in
+                    // Another verse chosen before the pane settled: that one
+                    // no longer needs keeping in sight.
+                    if let kept = verseToKeepInView, kept != reference { verseToKeepInView = nil }
                     // Selecting a verse by clicking it in the reader must not move
                     // the reader: the verse is already under the pointer. This
                     // scroll is for selections made elsewhere — search, history, a
@@ -782,6 +797,7 @@ struct TranslationReaderView: View, Equatable {
                     scrollToReaderLocation(proxy, chapters: chapters)
                 }
                 .onChange(of: passageIdentity, initial: true) { _, _ in
+                    verseToKeepInView = nil
                     paragraphAnchors.prepare(for: chapters)
                     guard isActiveReader else { return }
                     scrollLink.reset()
@@ -2493,7 +2509,9 @@ struct TranslationReaderView: View, Equatable {
         studyPane.noteQuote = quote.map { StudyPaneState.NoteQuote(reference: reference, text: $0) }
         studyPane.noteToCompose = reference
         studyPane.tool = "notes"
-        if !showingStudyInspector { verseToKeepInView = reference }
+        // Only a sidebar that opens narrows the reader; one switching from
+        // the chat keeps its width and starts no transition to wait for.
+        verseToKeepInView = readerSidebar == nil ? reference : nil
         showingStudyInspector = true
     }
 

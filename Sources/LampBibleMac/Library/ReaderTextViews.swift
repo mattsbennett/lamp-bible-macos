@@ -205,12 +205,18 @@ final class ReaderParagraphAnchorStore {
     /// paragraph's top, then as far into the paragraph as its characters
     /// come. Nil while its paragraph is not laid out.
     func estimatedTop(of reference: Int) -> CGFloat? {
+        placement(of: reference).map { $0.top + $0.height * $0.fraction }
+    }
+
+    /// A verse's paragraph, where it is and how tall, and how far into it
+    /// (0 to 1) the verse begins, by its characters.
+    func placement(of reference: Int) -> (top: CGFloat, height: CGFloat, fraction: CGFloat)? {
         for (paragraph, segments) in segmentsByParagraph {
             guard let index = segments.firstIndex(where: { $0.reference == reference }),
                   let frame = frames[paragraph] else { continue }
             let before = segments[..<index].reduce(0) { $0 + $1.characterCount }
             let total = max(segments.reduce(0) { $0 + $1.characterCount }, 1)
-            return frame.minY + frame.height * CGFloat(before) / CGFloat(total)
+            return (frame.minY, frame.height, CGFloat(before) / CGFloat(total))
         }
         return nil
     }

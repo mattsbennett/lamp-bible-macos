@@ -35,32 +35,35 @@ public enum CommandPaletteMatch {
         // above the note that held the word.
         let letters = needle.filter { $0 != " " }
         guard letters.count > 1,
-              let atWordStarts = [true, false].lazy.compactMap({ wordStartsMatched(letters, in: haystack, preferringStarts: $0) }).first,
+              let atWordStarts = mostWordStarts(letters, in: haystack),
               atWordStarts * 2 >= letters.count else { return nil }
         return 0.4
     }
 }
 
 extension CommandPaletteMatch {
-    /// How many of the letters, found in order, start a word; nil if they
-    /// are not all there. Preferring starts takes each letter at the next
-    /// word it begins, where there is one, before any letter inside a word.
-    static func wordStartsMatched(_ letters: String, in haystack: String, preferringStarts: Bool) -> Int? {
-        func startsWord(_ i: String.Index) -> Bool {
-            guard i != haystack.startIndex else { return true }
-            let before = haystack[haystack.index(before: i)]
-            return !before.isLetter && !before.isNumber
+    /// The most of the letters that can start words, over every way of
+    /// finding them in order; nil if they are not all there. "imppsd" in
+    /// "Import Personal Study Data" takes P, S and D at their words, though
+    /// taking each letter at its first chance would spend them early.
+    static func mostWordStarts(_ letters: String, in haystack: String) -> Int? {
+        let text = Array(haystack), wanted = Array(letters)
+        let starts = text.indices.map { $0 == 0 || !(text[$0 - 1].isLetter || text[$0 - 1].isNumber) }
+        // best[j]: the most word starts matching the letters so far with the
+        // last one at or before text position j - 1; nil while impossible.
+        var best = [Int?](repeating: 0, count: text.count + 1)
+        for letter in wanted {
+            var next = [Int?](repeating: nil, count: text.count + 1)
+            for j in text.indices {
+                next[j + 1] = next[j]
+                if text[j] == letter, let before = best[j] {
+                    let here = before + (starts[j] ? 1 : 0)
+                    next[j + 1] = max(next[j + 1] ?? -1, here)
+                }
+            }
+            best = next
         }
-        var index = haystack.startIndex, starts = 0
-        for character in letters {
-            let rest = haystack[index...]
-            let found = (preferringStarts ? rest.indices.first { rest[$0] == character && startsWord($0) } : nil)
-                ?? rest.firstIndex(of: character)
-            guard let found else { return nil }
-            if startsWord(found) { starts += 1 }
-            index = haystack.index(after: found)
-        }
-        return starts
+        return best[text.count]
     }
 }
 

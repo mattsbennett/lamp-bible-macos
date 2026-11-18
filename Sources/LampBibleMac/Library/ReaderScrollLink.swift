@@ -145,6 +145,10 @@ struct VerseAnchoredScrollView<Content: View>: View {
     /// case where clicking a verse already at the top scrolls the reader nowhere
     /// and so reports nothing.
     var focusedReference: Int?
+    /// A change that re-lays every card out (the notes pane switching
+    /// between Read and Edit): the focused verse is scrolled to again once
+    /// the new cards are in, or the old offset lands somewhere else.
+    var relayout: Int = 0
     @ViewBuilder let content: Content
 
     @EnvironmentObject private var scrollLink: ReaderScrollLink
@@ -257,6 +261,20 @@ struct VerseAnchoredScrollView<Content: View>: View {
                 guard isOnScreen else { return }
                 scrollLink.reset()
                 scroll(proxy, to: reference)
+            }
+            .onChange(of: relayout) { _, _ in
+                guard isOnScreen else { return }
+                // The reader stays where it is: this pane is following it,
+                // not leading it to wherever the new cards happen to fall.
+                scrollLink.prepareForStudyPaneChange()
+                Task {
+                    await Task.yield()
+                    scroll(proxy, to: focusedReference)
+                    // Lazy cards report their real heights as they come in;
+                    // land again once they have.
+                    try? await Task.sleep(for: .milliseconds(150))
+                    scroll(proxy, to: focusedReference)
+                }
             }
         }
     }

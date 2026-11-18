@@ -414,7 +414,8 @@ private struct NotesInspectorView: View {
                     } else {
                         VerseAnchoredScrollView(
                             anchors: groups.map { VerseAnchor(reference: $0.id, endReference: $0.endReference) },
-                            focusedReference: reader.selectedVerseReference
+                            focusedReference: reader.selectedVerseReference,
+                            relayout: isReadingNotes ? 1 : 0
                         ) {
                             ForEach(groups) { group in
                                 noteCard(group)
@@ -1131,6 +1132,10 @@ private struct PersonalNoteEditor: View {
         .task(id: NoteEditorLoad(reference: reference, token: reloadToken)) {
             await load()
         }
+        // Words chosen while this verse's editor is already open.
+        .onChange(of: studyPane.noteQuote) { _, _ in
+            if !isLoading { takeQuote() }
+        }
         .onChange(of: hasUnsavedEdits, initial: true) { _, dirty in
             isDirty = dirty
         }
@@ -1176,21 +1181,27 @@ private struct PersonalNoteEditor: View {
             savedRangeEndVerse = rangeEndVerse
             savedFootnotes = personalFootnotes
             seededContent = ""
-            if let quote = studyPane.noteQuote, quote.reference == reference {
-                studyPane.noteQuote = nil
-                if note == nil {
-                    seededContent = quote.text
-                        .components(separatedBy: .newlines)
-                        .map { "> " + $0 }
-                        .joined(separator: "\n") + "\n\n"
-                    content = seededContent
-                }
-            }
+            takeQuote()
         } catch {
             guard !Task.isCancelled else { return }
             errorMessage = error.localizedDescription
         }
         isLoading = false
+    }
+
+    /// Begins a new, untouched note with the words the reader chose, quoted.
+    /// A note already written, or one being written, is left as it is.
+    private func takeQuote() {
+        guard let quote = studyPane.noteQuote, quote.reference == reference else { return }
+        studyPane.noteQuote = nil
+        let untouched = savedTitle.isEmpty && savedContent.isEmpty && title.isEmpty
+            && (content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSeededOnly)
+        guard untouched else { return }
+        seededContent = quote.text
+            .components(separatedBy: .newlines)
+            .map { "> " + $0 }
+            .joined(separator: "\n") + "\n\n"
+        content = seededContent
     }
 
     /// TipTap reports edits on a debounce, so ⌘S struck straight after a keystroke
@@ -1229,6 +1240,8 @@ private struct PersonalNoteEditor: View {
                     mediaJSON: mediaJSON
                 )
                 if reader.selectedVerseReference == reference {
+                    // Saved, the quote is the note's like anything else in it.
+                    seededContent = ""
                     savedTitle = submittedTitle
                     savedContent = submittedContent
                     savedRangeEndVerse = submittedRangeEndVerse
