@@ -29,9 +29,11 @@ struct XcodeProjectSourcesTests {
         var unstyled: [String] = []
         for file in files {
             let text = try String(contentsOf: file, encoding: .utf8)
-            // The style itself names the type it conforms to, and says so in
-            // its own documentation; neither is a use.
-            guard file.lastPathComponent != "LampColors.swift" else { continue }
+            // No file is exempt, the style's own included. It names
+            // `DisclosureGroupStyle` and discusses `DisclosureGroup` in prose,
+            // and neither opens a call, so the counting below already passes it.
+            // Exempting that file by name would have hidden a real group in it
+            // from the day it became the home of shared view modifiers.
             let groups = text.components(separatedBy: "DisclosureGroup").count - 1
             let styled = text.components(separatedBy: "disclosureGroupStyle(LampDisclosureStyle").count - 1
             // A mention in a comment is not a group; count the ones that open
