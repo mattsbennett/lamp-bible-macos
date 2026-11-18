@@ -159,12 +159,13 @@ struct BookModulesView: View {
             } else if !hasLoadedBooks {
                 Color.clear
             } else if books.isEmpty {
-                ContentUnavailableView {
-                    Label("No Books Installed", systemImage: "book.closed")
-                } description: {
-                    Text("Install a long-form book module to read it here.")
-                } actions: {
-                    Button("Install Module…", action: showImporter)
+                LampEmptyState(
+                    systemImage: "book.closed",
+                    caption: "Books",
+                    title: "No Books Yet",
+                    message: "Books you add stand here on a shelf, each keeping your place, with every passage they cite a click away."
+                ) {
+                    Button("Add Book…", systemImage: "plus", action: showImporter)
                         .buttonStyle(.borderedProminent)
                 }
             } else if showsShelf {
@@ -226,7 +227,7 @@ struct BookModulesView: View {
                 }
             }
             ToolbarItemGroup(placement: .primaryAction) {
-                if showsShelf {
+                if showsShelf, !books.isEmpty {
                     Menu("Group Books", systemImage: "rectangle.3.group") {
                         Picker("Group By", selection: $groupByRawValue) {
                             ForEach(BookGrouping.allCases) { grouping in
@@ -320,6 +321,8 @@ struct BookModulesView: View {
                       $0.id == newSectionID || $0.sectionID == newSectionID
                   }) else { return }
             selectedSectionID = section.id
+            // A link into the book open before going back to the shelf.
+            isShowingShelf = false
         }
         .modifier(bookManagement)
     }
@@ -539,13 +542,26 @@ struct BookModulesView: View {
             await loadContinueReading()
             errorMessage = nil
             if !books.contains(where: { $0.id == selectedBookID }) {
-                let requested = books.first(where: { $0.id == initialBookID })?.id
+                // A book was open and has gone: removed from Modules or from
+                // another window. Back to the shelf, rather than on into
+                // whichever book would be chosen in its place.
+                let lostOpenBook = selectedBookID != nil
+                let requested = lostOpenBook
+                    ? nil
+                    : books.first(where: { $0.id == initialBookID })?.id
                 let mostRecent = books
                     .compactMap { book in
                         readingState.position(for: book.id).map { (book.id, $0.updatedAt) }
                     }
                     .max { $0.1 < $1.1 }?.0
                 selectedBookID = requested ?? mostRecent ?? books.first?.id
+                if lostOpenBook {
+                    isShowingShelf = true
+                } else if requested != nil {
+                    // Asked for before the books had been read, when the
+                    // request's own observer could not find it.
+                    isShowingShelf = false
+                }
             } else {
                 await loadSections()
             }

@@ -60,14 +60,15 @@ struct TodayView: View {
     var body: some View {
         Group {
             if model.plans.isEmpty {
-                ContentUnavailableView {
-                    Label("No Reading Plans Installed", systemImage: "calendar.badge.plus")
-                } description: {
-                    Text("Make a plan from the passages you want to read, or install a plan .lamp module.")
-                } actions: {
-                    Button("New Plan…") { isMakingPlan = true }
+                LampEmptyState(
+                    systemImage: "calendar",
+                    caption: "Today",
+                    title: "Nothing Planned Yet",
+                    message: "Today brings each day’s readings from your reading plans. Make a plan from the passages you want to read, or add one someone has shared as a .lamp file."
+                ) {
+                    Button("New Plan…", systemImage: "square.and.pencil") { isMakingPlan = true }
                         .buttonStyle(.borderedProminent)
-                    Button("Install Module…", action: showImporter)
+                    Button("Add Plan…", systemImage: "plus", action: showImporter)
                 }
             } else {
                 ScrollView {

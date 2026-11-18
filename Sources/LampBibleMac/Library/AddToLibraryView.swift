@@ -6,6 +6,11 @@ private extension UTType {
         exportedAs: "com.neus.lamp-bible.lamp",
         conformingTo: .data
     )
+}
+
+extension UTType {
+    /// Markdown, for importing notes and writing: here, and from Writing's
+    /// empty state.
     static let markdownFile = UTType(
         importedAs: "net.daringfireball.markdown",
         conformingTo: .plainText

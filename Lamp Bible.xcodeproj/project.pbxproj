@@ -145,6 +145,7 @@
 		A1000000000000000000003A /* WrappingRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000036 /* WrappingRow.swift */; };
 		A1000000000000000000B002 /* InstalledModulesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000B002 /* InstalledModulesView.swift */; };
 		A1000000000000000000B001 /* LibraryCover.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000B001 /* LibraryCover.swift */; };
+		A1000000000000000000E904 /* LampEmptyState.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000E904 /* LampEmptyState.swift */; };
 		A1000000000000000000003B /* NativeAgentChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000037 /* NativeAgentChatView.swift */; };
 		A1000000000000000000003C /* AgentChatSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000038 /* AgentChatSupport.swift */; };
 		A100000000000000000000F7 /* ChatSurfaceSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000F7 /* ChatSurfaceSupport.swift */; };
@@ -284,6 +285,7 @@
 		B10000000000000000000036 /* WrappingRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/WrappingRow.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000B002 /* InstalledModulesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/InstalledModulesView.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000B001 /* LibraryCover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/LibraryCover.swift; sourceTree = SOURCE_ROOT; };
+		B1000000000000000000E904 /* LampEmptyState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/LampEmptyState.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000037 /* NativeAgentChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/NativeAgentChatView.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000038 /* AgentChatSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/AgentChatSupport.swift; sourceTree = SOURCE_ROOT; };
 		B100000000000000000000F7 /* ChatSurfaceSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/ChatSurfaceSupport.swift; sourceTree = SOURCE_ROOT; };
@@ -435,6 +437,7 @@
 				B10000000000000000000036 /* WrappingRow.swift */,
 				B1000000000000000000B002 /* InstalledModulesView.swift */,
 				B1000000000000000000B001 /* LibraryCover.swift */,
+				B1000000000000000000E904 /* LampEmptyState.swift */,
 				B10000000000000000000010 /* DevotionalEditorView.swift */,
 				B10000000000000000000016 /* DevotionalContentView.swift */,
 				B10000000000000000000052 /* ReadingTimeMenu.swift */,
@@ -744,6 +747,7 @@
 				A1000000000000000000003A /* WrappingRow.swift in Sources */,
 				A1000000000000000000B002 /* InstalledModulesView.swift in Sources */,
 				A1000000000000000000B001 /* LibraryCover.swift in Sources */,
+				A1000000000000000000E904 /* LampEmptyState.swift in Sources */,
 				A10000000000000000000005 /* ReadingPlansView.swift in Sources */,
 				A1000000000000000000022F /* NewReadingPlanSheet.swift in Sources */,
 				A10000000000000000000230 /* ReadingPlanRequestSupport.swift in Sources */,

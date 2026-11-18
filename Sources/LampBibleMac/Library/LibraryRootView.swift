@@ -591,9 +591,14 @@ struct LibraryRootView: View {
         case .strongs(let key):
             go(to: .dictionary(key, word: nil))
         case .book(let moduleID, let sectionID):
-            requestedBookID = moduleID
-            requestedBookSectionID = sectionID
-            selection = .section(.books)
+            // Through go(to:), which asks afresh, so a link to the book last
+            // asked for still opens it after going back to the shelf. A link
+            // naming no book is a link to the shelf.
+            if let moduleID {
+                go(to: .book(moduleID: moduleID, sectionID: sectionID))
+            } else {
+                selection = .section(.books)
+            }
         case .writing(let id):
             // A link from one imported writing to another.
             requestedDevotionalID = id

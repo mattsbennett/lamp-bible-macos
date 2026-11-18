@@ -128,14 +128,15 @@ struct ReadingPlansView: View {
     var body: some View {
         Group {
             if model.plans.isEmpty {
-                ContentUnavailableView {
-                    Label("No Reading Plans Installed", systemImage: "calendar.badge.plus")
-                } description: {
-                    Text("Make a plan from the passages you want to read, or install one as a portable .lamp module.")
-                } actions: {
-                    Button("New Plan…") { isMakingPlan = true }
+                LampEmptyState(
+                    systemImage: "checklist",
+                    caption: "Reading Plans",
+                    title: "No Reading Plans Yet",
+                    message: "Make a plan from the passages you want to read, or add one someone has shared as a .lamp file."
+                ) {
+                    Button("New Plan…", systemImage: "square.and.pencil") { isMakingPlan = true }
                         .buttonStyle(.borderedProminent)
-                    Button("Install Module…", action: showImporter)
+                    Button("Add Plan…", systemImage: "plus", action: showImporter)
                 }
             } else {
                 ScrollViewReader { proxy in

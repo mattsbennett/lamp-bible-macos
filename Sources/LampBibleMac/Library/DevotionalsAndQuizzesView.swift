@@ -199,17 +199,7 @@ struct DevotionalsView: View {
 
         return Group {
             if model.devotionals.isEmpty {
-                ContentUnavailableView {
-                    Label("No Writing", systemImage: "sun.max")
-                } description: {
-                    Text("Create your own writing, install a devotional .lamp module, or build one in Module Studio.")
-                } actions: {
-                    HStack {
-                        Button("New Writing") { beginEditing(nil) }
-                            .buttonStyle(.borderedProminent)
-                        Button("Install Module…", action: showImporter)
-                    }
-                }
+                WritingEmptyState(newWriting: { beginEditing(nil) })
             } else if visibleDevotionals.isEmpty {
                 ContentUnavailableView.search(text: query)
             } else {
@@ -1303,12 +1293,13 @@ struct QuizzesView: View {
     var body: some View {
         Group {
             if model.quizModuleInstallations.isEmpty {
-                ContentUnavailableView {
-                    Label("No Quizzes", systemImage: "questionmark.bubble")
-                } description: {
-                    Text("Install a quiz .lamp module, or build one in Module Studio.")
-                } actions: {
-                    Button("Install Module…", action: showImporter)
+                LampEmptyState(
+                    systemImage: "questionmark.bubble",
+                    caption: "Quizzes",
+                    title: "No Quizzes Yet",
+                    message: "Questions on each day’s reading, set for every age group. A quiz comes as a .lamp file: add one to begin."
+                ) {
+                    Button("Add Quiz…", systemImage: "plus", action: showImporter)
                         .buttonStyle(.borderedProminent)
                 }
             } else if let quiz = selectedModule {
