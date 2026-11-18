@@ -7,6 +7,8 @@ import UniformTypeIdentifiers
 /// Every section uses this one design, so an empty library looks like one
 /// place and not a run of system placeholders.
 struct LampEmptyState<Actions: View>: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     /// The section's mark, as the sidebar draws it.
     let systemImage: String
     /// The section's name, lettered on the middle cover.
@@ -58,10 +60,11 @@ struct LampEmptyState<Actions: View>: View {
 
     private var illustration: some View {
         ZStack {
-            // The shadow the covers cast where they stand. A pool of the
-            // accent here read as a stain, not as light.
+            // The shadow the covers cast where they stand: dark on a light
+            // window, and on a dark one a faint light, which a black shadow
+            // there could not show. A pool of the accent read as a stain.
             Ellipse()
-                .fill(Color.black.opacity(0.2))
+                .fill(colorScheme == .dark ? Color.white.opacity(0.14) : Color.black.opacity(0.2))
                 .frame(width: 250, height: 16)
                 .blur(radius: 9)
                 .offset(y: 80)
