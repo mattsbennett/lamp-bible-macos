@@ -778,14 +778,11 @@ private struct InstalledNoteContent: View {
 /// no note says so, so a click in the reader always lands somewhere.
 private struct NoteReadingCard: View {
     @EnvironmentObject private var model: LibraryModel
-    @EnvironmentObject private var reader: ReaderWorkspace
     let group: NoteGroup
     let reloadToken: UUID
     let edit: () -> Void
     @State private var personalNote: LampVerseNote?
     @State private var hasLoaded = false
-
-    private var isSelected: Bool { reader.selectedVerseReference == group.id }
 
     private var lastReference: Int {
         max(personalNote?.verseReferences.max() ?? group.id, group.endReference ?? group.id)
@@ -835,14 +832,9 @@ private struct NoteReadingCard: View {
         }
         .textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)
+        // The card's own hairline, selected or not, as the editor's card has:
+        // an accent ring round the chosen verse drew more than it said.
         .lampCard(padding: 16)
-        // The verse chosen in the reader, among the chapter's notes.
-        .overlay {
-            if isSelected {
-                RoundedRectangle(cornerRadius: LampMetrics.cardRadius)
-                    .strokeBorder(Color.accentColor.opacity(0.55), lineWidth: 1.5)
-            }
-        }
         .task(id: "\(group.id):\(group.hasPersonalNote):\(reloadToken)") {
             personalNote = group.hasPersonalNote ? try? await model.personalNote(for: group.id) : nil
             hasLoaded = true
