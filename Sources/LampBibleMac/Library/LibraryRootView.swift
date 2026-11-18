@@ -2481,10 +2481,18 @@ enum CommandPaletteWindows {
     /// request is stale, so a window opened later for another reason
     /// doesn't inherit it.
     static var paletteRequestedForNextWindow: Date?
+    /// The same for Slide Studio's Show All Presentations.
+    static var presentationsRequestedForNextWindow: Date?
 
     static func target() -> NSWindow? {
         if let key = NSApp.keyWindow, windows.contains(key) { return key }
         return NSApp.orderedWindows.first { windows.contains($0) && $0.isVisible }
+    }
+
+    /// The frontmost library window, a minimised one included.
+    static func frontmostLibrary() -> NSWindow? {
+        NSApp.orderedWindows.first { windows.contains($0) }
+            ?? NSApp.windows.first { windows.contains($0) && $0.isMiniaturized }
     }
 
     final class Host {
@@ -2502,6 +2510,14 @@ enum CommandPaletteWindows {
                 host?.window = window
                 guard let window else { return }
                 CommandPaletteWindows.windows.add(window)
+                if let requested = CommandPaletteWindows.presentationsRequestedForNextWindow {
+                    CommandPaletteWindows.presentationsRequestedForNextWindow = nil
+                    if Date().timeIntervalSince(requested) < 5 {
+                        DispatchQueue.main.async {
+                            NotificationCenter.default.post(name: .lampShowPresentations, object: window)
+                        }
+                    }
+                }
                 if let requested = CommandPaletteWindows.paletteRequestedForNextWindow {
                     CommandPaletteWindows.paletteRequestedForNextWindow = nil
                     guard Date().timeIntervalSince(requested) < 5 else { return }
@@ -2524,12 +2540,21 @@ enum CommandPaletteWindows {
 }
 
 
-/// Slide Studio's "Show All Presentations": the library window shows its
-/// Presentations section.
+/// Slide Studio's "Show All Presentations": the library window it names
+/// shows its Presentations section, and no other.
 private struct ShowPresentationsReceiver: ViewModifier {
     let show: () -> Void
+    @State private var host = CommandPaletteWindows.Host()
 
     func body(content: Content) -> some View {
-        content.onReceive(NotificationCenter.default.publisher(for: .lampShowPresentations)) { _ in show() }
+        content
+            .background {
+                CommandPaletteWindows.Registrar(host: host)
+                    .frame(width: 0, height: 0)
+                    .accessibilityHidden(true)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .lampShowPresentations)) { note in
+                if let target = note.object as? NSWindow, target === host.window { show() }
+            }
     }
 }

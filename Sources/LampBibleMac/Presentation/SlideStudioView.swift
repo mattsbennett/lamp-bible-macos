@@ -44,6 +44,10 @@ final class SlideStudioInbox: ObservableObject {
     /// The library's decks by title, for a menu that offers them. Shared, so
     /// a deck made from one menu, or in Slide Studio, is in every other.
     @Published private(set) var decks: [DeckSummary] = []
+    /// Moves on whenever a deck's file is written, removed or listed
+    /// differently: what a list showing more than titles (covers, dates,
+    /// order) reloads on. An ordinary save keeps the summaries the same.
+    @Published private(set) var revision = 0
 
     struct DeckSummary: Identifiable, Equatable {
         let id: String
@@ -89,8 +93,17 @@ final class SlideStudioInbox: ObservableObject {
         let summaries = decks
             .map { DeckSummary(id: $0.id, title: $0.title) }
             .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
-        if summaries != self.decks { self.decks = summaries }
+        if summaries != self.decks {
+            self.decks = summaries
+            revision &+= 1
+        }
     }
+    /// A deck's file was written or removed: at once, so a window about to
+    /// close after a deletion still tells the lists before it goes.
+    func deckFilesChanged() {
+        revision &+= 1
+    }
+
     /// The deck each open window shows.
     private var windows: [UUID: String] = [:]
     /// The slide a window opening a deck should show first.
@@ -175,6 +188,11 @@ struct SlideStudioView: View {
     /// the Presentations section sorts them. Read when the decks change,
     /// not on every redraw of the window.
     @State private var menuDeckIDs: [String] = []
+    /// The decks the menu's order was read for: read again when they change.
+    private struct MenuOrderKey: Equatable {
+        let revision: Int
+        let deckIDs: [String]
+    }
     @State private var selectedDeckID: String?
     @State private var deck: LampPresentationDeck?
     /// The decks this window has moved on from, so an edit can be taken back.
@@ -230,6 +248,26 @@ struct SlideStudioView: View {
         LampPresentationDeckStore(rootURL: model.library.rootURL)
     }
 
+    /// Reads the decks' file dates off the main thread and orders the menu
+    /// by them: a read per deck on every autosave held up typing.
+    private func refreshMenuOrder() async {
+        let store = store
+        let summaries = decks.map { ($0.id, $0.title) }
+        let ordered = await Task.detached(priority: .utility) {
+            PresentationsShelf.sorted(
+                summaries.map {
+                    PresentationsShelf.Deck(
+                        id: $0.0, title: $0.1, writingID: nil, writingTitle: nil,
+                        modified: store.modificationDate(ofDeck: $0.0)
+                    )
+                },
+                by: .recent
+            ).map(\.id)
+        }.value
+        guard !Task.isCancelled else { return }
+        if ordered != menuDeckIDs { menuDeckIDs = ordered }
+    }
+
     /// The decks most recently changed first; any not yet ordered, last.
     private var menuDecks: [LampPresentationDeck] {
         let byID = Dictionary(decks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -240,15 +278,14 @@ struct SlideStudioView: View {
     /// Brings the library window forward on Presentations, opening one if
     /// none is open.
     private func showAllPresentations() {
-        let library = NSApp.windows.first { $0.identifier?.rawValue.hasPrefix("reader") == true && $0.isVisible }
-        if let library {
+        if let library = CommandPaletteWindows.frontmostLibrary() {
+            if library.isMiniaturized { library.deminiaturize(nil) }
             library.makeKeyAndOrderFront(nil)
-            NotificationCenter.default.post(name: .lampShowPresentations, object: nil)
+            NotificationCenter.default.post(name: .lampShowPresentations, object: library)
         } else {
+            // None open: the one opened now takes it, as it registers.
+            CommandPaletteWindows.presentationsRequestedForNextWindow = Date()
             openWindow(id: "reader")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                NotificationCenter.default.post(name: .lampShowPresentations, object: nil)
-            }
         }
     }
 
@@ -330,16 +367,8 @@ struct SlideStudioView: View {
         // fires before the value changes, so the slide was not there yet.
         .onChange(of: inbox.pending) { receiveSentSlides() }
         .background(HostWindowReader(box: hostWindow))
+        .task(id: MenuOrderKey(revision: inbox.revision, deckIDs: decks.map(\.id))) { await refreshMenuOrder() }
         .onChange(of: decks, initial: true) { _, decks in
-            menuDeckIDs = PresentationsShelf.sorted(
-                decks.map {
-                    PresentationsShelf.Deck(
-                        id: $0.id, title: $0.title, writingID: nil, writingTitle: nil,
-                        modified: store.modificationDate(ofDeck: $0.id)
-                    )
-                },
-                by: .recent
-            ).map(\.id)
             if !isLoading { inbox.note(decks) }
         }
         .onChange(of: deck) { previousDeck, updatedDeck in
@@ -1181,6 +1210,7 @@ struct SlideStudioView: View {
             } else {
                 let newDeck = starterDeck(devotionalID: request.devotionalID)
                 try store.save(newDeck)
+                inbox.deckFilesChanged()
                 decks.append(newDeck)
                 decks.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
                 applySelection(newDeck)
@@ -1239,6 +1269,7 @@ struct SlideStudioView: View {
         var newDeck = starterDeck(devotionalID: request.devotionalID)
         newDeck.id = id
         try store.save(newDeck)
+        inbox.deckFilesChanged()
         decks.append(newDeck)
         decks.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
         applySelection(newDeck)
@@ -1339,6 +1370,7 @@ struct SlideStudioView: View {
         guard let deck, deck != savedDeck else { return }
         do {
             try store.save(deck)
+            inbox.deckFilesChanged()
             savedDeck = deck
             if let index = decks.firstIndex(where: { $0.id == deck.id }) {
                 decks[index] = deck
@@ -1377,6 +1409,7 @@ struct SlideStudioView: View {
             // their copies bringing the deck back.
             try LampPresentationDeckSync.recordDeletion(of: deck.id, in: model.library.rootURL)
             try store.delete(id: deck.id)
+            inbox.deckFilesChanged()
             decks.removeAll { $0.id == deck.id }
             // Images the removed deck owned, unless another deck shares them.
             try? LampPresentationDeckSync.pruneUnreferencedAssets(in: model.library.rootURL)
@@ -1679,6 +1712,7 @@ struct SlideStudioView: View {
         do {
             let imported = try store.decode(Data(contentsOf: source))
             try store.save(imported)
+            inbox.deckFilesChanged()
             if let index = decks.firstIndex(where: { $0.id == imported.id }) {
                 decks[index] = imported
             } else {

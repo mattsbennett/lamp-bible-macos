@@ -71,7 +71,8 @@ extension LampPresentationDeckStore {
     /// When a deck's file was last written: what "recently changed" means
     /// here, since a deck records no date of its own.
     func modificationDate(ofDeck id: String) -> Date {
-        let url = decksDirectoryURL.appendingPathComponent("\(id).lampdeck")
+        // By the store's own naming, which differs from the id for some ids.
+        let url = deckFileURL(for: id)
         return (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
             ?? .distantPast
     }
@@ -222,8 +223,9 @@ struct PresentationsLibraryView: View {
             }
         }
         .toolbarLabelsFit(from: 560)
-        // Read again whenever a deck is made, renamed or saved anywhere.
-        .task(id: inbox.decks) { await load() }
+        // Read again whenever a deck is made, saved, renamed or removed
+        // anywhere.
+        .task(id: inbox.revision) { await load() }
         .onAppear { inbox.refreshDecks(rootURL: model.library.rootURL, force: true) }
     }
 
@@ -364,6 +366,8 @@ struct PresentationsLibraryView: View {
             let decks = (try? store.decks()) ?? []
             return decks.map { Entry(deck: $0, modified: store.modificationDate(ofDeck: $0.id)) }
         }.value
+        // A read overtaken by a newer one leaves the newer one's decks.
+        guard !Task.isCancelled else { return }
         if found != entries { entries = found }
         hasLoaded = true
     }
