@@ -55,8 +55,8 @@ struct UnifiedSearchView: View {
     /// My highlight sets, whose highlights can be removed from here; an
     /// installed module's are not mine to remove.
     @State private var personalHighlightSetIDs: Set<String> = []
-    /// Colours seen on highlights found, for colours no theme names.
-    @State private var seenHighlightColors: Set<String> = []
+    /// Every colour my highlights are made in, for colours no theme names.
+    @State private var usedHighlightColors: Set<String> = []
 
     /// Settled deliberately at the same 250ms the search itself waits, and
     /// for the same reason. It costs no delay: the search is driven by the
@@ -585,16 +585,18 @@ struct UnifiedSearchView: View {
             guard old.tab == new.tab else { return }
             runSearch()
         }
-        .task(id: listsHighlights) {
+        // Read again with every search: a set or a colour can be made in
+        // another window while this one stays open.
+        .task(id: model.moduleSearchResults) {
             let sets = Set(((try? await model.library.highlightSets()) ?? []).map(\.id))
             if sets != personalHighlightSetIDs { personalHighlightSetIDs = sets }
             guard listsHighlights else { return }
             let loaded = await model.highlightThemesForSearch()
             if loaded != markThemes { markThemes = loaded }
+            let colors = (try? await model.library.highlightColorsInUse()) ?? []
+            if colors != usedHighlightColors { usedHighlightColors = colors }
         }
         .onChange(of: model.moduleSearchResults) { _, results in
-            let colors = Set(results.compactMap { $0.kind == .highlights ? $0.highlightColor : nil })
-            if !colors.isSubset(of: seenHighlightColors) { seenHighlightColors.formUnion(colors) }
             if !results.contains(where: { $0.id == selectedResultID }) {
                 // The first row on screen, which grouping may have moved
                 // from the first result core returned.
@@ -1919,13 +1921,13 @@ struct UnifiedSearchView: View {
         )
     }
 
-    /// The palette's colours, then any other a theme is made in or a
-    /// highlight found wears, each as core spells it.
+    /// The palette's colours, then any other a theme or a highlight of mine
+    /// is made in, each as core spells it.
     private var markColors: [(hex: String, name: String)] {
         var colors = StudyHighlightPalette.colors.map {
             (hex: LampHighlightSearch.normalizedColor($0.hex), name: $0.name)
         }
-        let others = markThemes.map(\.color) + seenHighlightColors.sorted() + highlightColors.sorted()
+        let others = markThemes.map(\.color) + usedHighlightColors.sorted() + highlightColors.sorted()
         for other in others.map(LampHighlightSearch.normalizedColor) where !colors.contains(where: { $0.hex == other }) {
             colors.append((other, "#\(other)"))
         }

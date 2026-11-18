@@ -1326,7 +1326,10 @@ final class LibraryModel: ObservableObject {
             color: color,
             setID: setID
         )
-        guard selectedTranslationID == translationID else { return }
+        // A highlight records the translation by its first id; the one read
+        // may be named by its new one.
+        guard let selected = selectedTranslationID,
+              LampTranslationID.sameTranslation(selected, translationID) else { return }
         highlightsByReference[reference, default: []].append(highlight)
         highlightsByReference[reference]?.sort {
             ($0.startOffset, $0.endOffset, $0.id) < ($1.startOffset, $1.endOffset, $1.id)
