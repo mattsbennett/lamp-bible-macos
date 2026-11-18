@@ -31,6 +31,8 @@ struct CommandPaletteSupportTests {
         #expect(CommandPaletteMatch.score("zzz", title: "New Writing") == nil)
         #expect(CommandPaletteMatch.score("", title: "New Writing") == nil)
         #expect(CommandPaletteMatch.score("x", title: "Books") == nil)
+        // Letters merely in order, few of them starting words, are chance.
+        #expect(CommandPaletteMatch.score("groan", title: "Rome, the Greek World, and the East") == nil)
     }
 
     @Test func macLinksRoundTrip() {

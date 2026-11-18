@@ -98,6 +98,12 @@ final class StudyPaneState {
     /// A verse whose note was asked for from the reader (Add Note), opened
     /// ready to write rather than as the one-line prompt an empty note is.
     var noteToCompose: Int?
+    /// Words chosen in the reader to begin that verse's new note, quoted.
+    struct NoteQuote: Equatable {
+        let reference: Int
+        let text: String
+    }
+    var noteQuote: NoteQuote?
     var dictionaryQuery = ""
     var dictionaryLookup: DictionaryLookup?
     /// The analyses opened over the dictionary entry, the one showing last.
@@ -495,9 +501,7 @@ private struct NotesInspectorView: View {
                             .foregroundStyle(Color.lampSecondaryText)
                             .lineLimit(3)
                     } else if group.hasPersonalNote {
-                        Text("Personal note")
-                            .font(.callout)
-                            .foregroundStyle(Color.lampSecondaryText)
+                        PersonalNotePreview(reference: group.id, reloadToken: reloadToken)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -842,6 +846,33 @@ private struct InstalledNoteContent: View {
 /// A verse's notes to read: the personal note as it reads, then any
 /// installed ones, with none of the editor's controls. A selected verse with
 /// no note says so, so a click in the reader always lands somewhere.
+/// A note folded to a row: its title and first lines, so the chapter's
+/// notes can be told apart without switching to Read. Every row said only
+/// "Personal note".
+private struct PersonalNotePreview: View {
+    @EnvironmentObject private var model: LibraryModel
+    let reference: Int
+    let reloadToken: UUID
+    @State private var note: LampVerseNote?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            if let title = note?.title, !title.isEmpty {
+                Text(title)
+                    .font(.callout.weight(.semibold))
+                    .lineLimit(1)
+            }
+            Text(note.map { WritingStatistics.snippet(from: $0.content, limit: 200) } ?? "Personal note")
+                .font(.callout)
+                .foregroundStyle(Color.lampSecondaryText)
+                .lineLimit(note?.title == nil ? 3 : 2)
+        }
+        .task(id: "\(reference):\(reloadToken)") {
+            note = try? await model.personalNote(for: reference)
+        }
+    }
+}
+
 private struct NoteReadingCard: View {
     @EnvironmentObject private var model: LibraryModel
     let group: NoteGroup
@@ -915,6 +946,7 @@ private struct PersonalNoteEditor: View {
     /// another tab's and drop what was written in it.
     @EnvironmentObject private var reader: ReaderWorkspace
     @EnvironmentObject private var scrollLink: ReaderScrollLink
+    @Environment(StudyPaneState.self) private var studyPane
     let reference: Int
     /// Nil for a verse the translation being read leaves out: it can carry a
     /// note, and nothing to highlight.
@@ -929,6 +961,9 @@ private struct PersonalNoteEditor: View {
     @State private var savedContent = ""
     @State private var rangeEndVerse = 0
     @State private var savedRangeEndVerse = 0
+    /// What a new note was begun with (the reader's chosen words, quoted):
+    /// not an edit to save or to be asked about until something is written.
+    @State private var seededContent = ""
     /// The note's media, as the JSON it is stored as. Kept whole rather
     /// than decoded and rebuilt, so a field a newer Lamp wrote survives a
     /// save here (`LampVerseNote.mediaJSON`).
@@ -947,16 +982,23 @@ private struct PersonalNoteEditor: View {
     @FocusState private var focusedField: NoteEditorField?
 
     private var verseNumber: Int { LampBibleReferenceFormatter.components(of: reference).verse }
+    private var isSeededOnly: Bool {
+        !seededContent.isEmpty
+            && content.trimmingCharacters(in: .whitespacesAndNewlines)
+                == seededContent.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    /// The last verse the note covers, as a reference in this chapter.
+    private var rangeEndReference: Int { reference - verseNumber + max(rangeEndVerse, verseNumber) }
     private var hasUnsavedEdits: Bool {
         title != savedTitle
-            || content != savedContent
+            || (content != savedContent && !isSeededOnly)
             || rangeEndVerse != savedRangeEndVerse
             || personalFootnotes != savedFootnotes
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             HStack {
-                Text(LampBibleReferenceFormatter.describeRange(from: reference, to: reference))
+                Text(LampBibleReferenceFormatter.describeRange(from: reference, to: rangeEndReference))
                     .font(.title3.weight(.bold))
                 Spacer()
                 if isLoading { ProgressView().controlSize(.small) }
@@ -966,7 +1008,11 @@ private struct PersonalNoteEditor: View {
                 Label("Personal Note", systemImage: "note.text")
                     .lampSectionHeading()
                 TextField("Title (optional)", text: $title)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.plain)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.noteFieldStroke))
                     .focused($focusedField, equals: .title)
                 noteEditor
             }
@@ -980,18 +1026,22 @@ private struct PersonalNoteEditor: View {
                 // keys it; only the last is chosen. A menu of numbers, not of
                 // "Verses 5–6", "Verses 5–7"… to the chapter's end, which read
                 // as one long list of ranges to hunt down.
+                // Said as the range it makes, and shown in the heading too:
+                // "Note covers verse 29 to [29]" read as a stepper to puzzle
+                // out.
                 HStack(spacing: 6) {
-                    Text("Note covers verse \(verseNumber) to")
-                    Picker("Last verse", selection: $rangeEndVerse) {
+                    Text("Covers")
+                        .foregroundStyle(Color.lampSecondaryText)
+                    Picker("Verses the note covers", selection: $rangeEndVerse) {
                         // The verse itself first, whether or not this
                         // translation has it.
                         ForEach([verseNumber] + chapter.verses.map(\.number).filter { $0 > verseNumber }, id: \.self) { number in
-                            Text("\(number)").tag(number)
+                            Text(number == verseNumber ? "This verse only" : "Verses \(verseNumber)–\(number)").tag(number)
                         }
                     }
                     .labelsHidden()
                     .fixedSize()
-                    .accessibilityLabel("Last verse the note applies to")
+                    .accessibilityLabel("Verses the note covers")
                 }
             }
 
@@ -1125,6 +1175,17 @@ private struct PersonalNoteEditor: View {
             savedContent = content
             savedRangeEndVerse = rangeEndVerse
             savedFootnotes = personalFootnotes
+            seededContent = ""
+            if let quote = studyPane.noteQuote, quote.reference == reference {
+                studyPane.noteQuote = nil
+                if note == nil {
+                    seededContent = quote.text
+                        .components(separatedBy: .newlines)
+                        .map { "> " + $0 }
+                        .joined(separator: "\n") + "\n\n"
+                    content = seededContent
+                }
+            }
         } catch {
             guard !Task.isCancelled else { return }
             errorMessage = error.localizedDescription
@@ -1258,11 +1319,13 @@ private struct PersonalNoteEditor: View {
             )
             .frame(height: editorHeight)
         }
-        .background(.background.secondary)
+        // The window's colour, as the editor's page is, and an edge that
+        // holds on the dark card: the system's separator all but vanished.
+        .background(Color(nsColor: .windowBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 7))
         .overlay {
             RoundedRectangle(cornerRadius: 7)
-                .stroke(.separator.opacity(0.7))
+                .stroke(Color.noteFieldStroke)
         }
         .onDisappear {
             editorIsReady = false
@@ -4014,4 +4077,12 @@ struct UnderlinedTabs<ID: Hashable>: View {
             }
         }
     }
+}
+
+private extension Color {
+    /// The edge of a note's fields, strong enough to find them on the card
+    /// in both appearances.
+    static let noteFieldStroke = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.lampIsDark ? NSColor(white: 1, alpha: 0.26) : NSColor(white: 0, alpha: 0.16)
+    })
 }

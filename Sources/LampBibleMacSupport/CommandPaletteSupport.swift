@@ -29,14 +29,38 @@ public enum CommandPaletteMatch {
         let words = haystack.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
         if words.contains(where: { $0.hasPrefix(needle) }) { return 0.85 }
         if haystack.contains(needle) { return 0.7 }
-        // Letters in order, each word's first letters counting more:
-        // "nw" for New Writing.
-        var index = haystack.startIndex
-        for character in needle where character != " " {
-            guard let found = haystack[index...].firstIndex(of: character) else { return nil }
+        // Letters in order, most of them starting words: "nwr" for New
+        // Writing. Letters merely in order matched long titles by chance —
+        // "groan" in "Rome, the Greek World, and the East" — and put them
+        // above the note that held the word.
+        let letters = needle.filter { $0 != " " }
+        guard letters.count > 1,
+              let atWordStarts = [true, false].lazy.compactMap({ wordStartsMatched(letters, in: haystack, preferringStarts: $0) }).first,
+              atWordStarts * 2 >= letters.count else { return nil }
+        return 0.4
+    }
+}
+
+extension CommandPaletteMatch {
+    /// How many of the letters, found in order, start a word; nil if they
+    /// are not all there. Preferring starts takes each letter at the next
+    /// word it begins, where there is one, before any letter inside a word.
+    static func wordStartsMatched(_ letters: String, in haystack: String, preferringStarts: Bool) -> Int? {
+        func startsWord(_ i: String.Index) -> Bool {
+            guard i != haystack.startIndex else { return true }
+            let before = haystack[haystack.index(before: i)]
+            return !before.isLetter && !before.isNumber
+        }
+        var index = haystack.startIndex, starts = 0
+        for character in letters {
+            let rest = haystack[index...]
+            let found = (preferringStarts ? rest.indices.first { rest[$0] == character && startsWord($0) } : nil)
+                ?? rest.firstIndex(of: character)
+            guard let found else { return nil }
+            if startsWord(found) { starts += 1 }
             index = haystack.index(after: found)
         }
-        return needle.count > 1 ? 0.4 : nil
+        return starts
     }
 }
 

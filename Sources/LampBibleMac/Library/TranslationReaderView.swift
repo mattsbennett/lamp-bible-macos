@@ -103,6 +103,9 @@ struct TranslationReaderView: View, Equatable {
     /// Set by the reader's own click handlers, so the selection they make does not
     /// come back as an instruction to scroll to it.
     @State private var isSelectingVerseFromReader = false
+    /// A verse a note was opened on as the study pane opened: brought back
+    /// into sight if the re-wrapped page left it low or off screen.
+    @State private var verseToKeepInView: Int?
     /// The verse the reader was showing when its side-by-side columns changed,
     /// and the passage it was in, until the new columns' text is in.
     @State private var heldColumnsAnchor: (passage: String, reference: Int)?
@@ -275,13 +278,10 @@ struct TranslationReaderView: View, Equatable {
                 )
             },
             delete: { try await model.deleteVerseHighlight(id: $0.id, reference: $0.reference) },
-            openNote: { reference in
-                prepareChapterForStudy(reference: reference)
-                selectVerseFromReader(reference)
-                studyPane.noteToCompose = reference
-                studyPane.tool = "notes"
-                showingStudyInspector = true
+            openNote: { reference, quote in
+                composeNote(on: reference, quoting: quote)
             },
+            hasNote: { model.hasPersonalNote(for: $0) },
             copy: { spans, text in
                 let verses = spans.compactMap { verse($0.reference) }
                 copyAsCitation(verses, selectedText: text.isEmpty ? nil : text)
@@ -754,6 +754,21 @@ struct TranslationReaderView: View, Equatable {
                 // And when the app quits, for a place no settled scroll noted.
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                     workspace.scrollMemory.saveCurrent()
+                }
+                .onChange(of: isPanelTransitioning) { _, transitioning in
+                    guard !transitioning, let reference = verseToKeepInView else { return }
+                    verseToKeepInView = nil
+                    guard isShown, isActiveReader else { return }
+                    // Left where it is when it is still comfortably in view:
+                    // the reader was not asked to move.
+                    if readerLayoutMode == .continuousParagraphs,
+                       let top = paragraphAnchors.estimatedTop(of: reference),
+                       top > 24, top < viewport.size.height * 0.7 {
+                        return
+                    }
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        proxy.scrollTo(scrollTarget(for: reference, in: chapters), anchor: UnitPoint(x: 0.5, y: 0.2))
+                    }
                 }
                 .onChange(of: workspace.selectedVerseReference) { _, _ in
                     // Selecting a verse by clicking it in the reader must not move
@@ -2038,11 +2053,7 @@ struct TranslationReaderView: View, Equatable {
             model.hasPersonalNote(for: verse.id) ? "Edit Note" : "Add Note",
             systemImage: "square.and.pencil"
         ) {
-            prepareChapterForStudy(reference: verse.id)
-            selectVerseFromReader(verse.id)
-            studyPane.noteToCompose = verse.id
-            studyPane.tool = "notes"
-            showingStudyInspector = true
+            composeNote(on: verse.id, quoting: nil)
         })
         entries.append(.action("Show Study Tools", systemImage: "sidebar.trailing") {
             prepareChapterForStudy(reference: verse.id)
@@ -2473,6 +2484,19 @@ struct TranslationReaderView: View, Equatable {
     /// not scroll the reader to the verse, because the verse is already on screen
     /// under the pointer. Selections from elsewhere — search, history, read-aloud,
     /// a cross-reference — still scroll, because there the verse may be anywhere.
+    /// Opens a verse's note to write, beside the text. The words chosen, if
+    /// any, begin a new note as a quotation. A pane that opens narrows the
+    /// reader, which re-wraps it: the verse is kept in sight once it settles.
+    private func composeNote(on reference: Int, quoting quote: String?) {
+        prepareChapterForStudy(reference: reference)
+        selectVerseFromReader(reference)
+        studyPane.noteQuote = quote.map { StudyPaneState.NoteQuote(reference: reference, text: $0) }
+        studyPane.noteToCompose = reference
+        studyPane.tool = "notes"
+        if !showingStudyInspector { verseToKeepInView = reference }
+        showingStudyInspector = true
+    }
+
     private func selectVerseFromReader(_ reference: Int) {
         // Armed only for a change, which is what clears it: choosing the verse
         // already chosen changes nothing, and a flag left armed would swallow

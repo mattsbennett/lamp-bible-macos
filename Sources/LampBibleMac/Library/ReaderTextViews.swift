@@ -201,6 +201,20 @@ final class ReaderParagraphAnchorStore {
         )
     }
 
+    /// Roughly how far below the reader's top edge a verse begins: its
+    /// paragraph's top, then as far into the paragraph as its characters
+    /// come. Nil while its paragraph is not laid out.
+    func estimatedTop(of reference: Int) -> CGFloat? {
+        for (paragraph, segments) in segmentsByParagraph {
+            guard let index = segments.firstIndex(where: { $0.reference == reference }),
+                  let frame = frames[paragraph] else { continue }
+            let before = segments[..<index].reduce(0) { $0 + $1.characterCount }
+            let total = max(segments.reduce(0) { $0 + $1.characterCount }, 1)
+            return frame.minY + frame.height * CGFloat(before) / CGFloat(total)
+        }
+        return nil
+    }
+
     /// The verse at the reader's top edge: the highest paragraph still on screen,
     /// then the verse that far into it.
     var topEdgeReference: Int? {
@@ -777,7 +791,7 @@ private final class ReaderTextView: LampTextView {
         let key = "\(name)-\(size)"
         if let image = icons[key] { return image }
         let color: NSColor = kind == .personal ? .systemOrange : .systemPurple
-        let configuration = NSImage.SymbolConfiguration(pointSize: size * 0.82, weight: .semibold)
+        let configuration = NSImage.SymbolConfiguration(pointSize: size * 0.95, weight: .semibold)
             .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
         let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
             .withSymbolConfiguration(configuration) ?? NSImage()
@@ -1632,7 +1646,10 @@ final class ReaderHighlighter: NSObject {
         /// Gives a highlight a new colour or style, keeping its words and set.
         var restyle: (LampVerseHighlight, String, LampHighlightStyle) async throws -> Void
         var delete: (LampVerseHighlight) async throws -> Void
-        var openNote: (Int) -> Void
+        /// Opens the verse's note; the words chosen, if any, to quote in a
+        /// new one.
+        var openNote: (Int, String?) -> Void
+        var hasNote: (Int) -> Bool
         var copy: ([ReaderHighlightMarks.Span], String) -> Void
         var moreOptions: (Int) -> Void
         var failed: (Error) -> Void
@@ -1807,7 +1824,30 @@ final class ReaderHighlighter: NSObject {
             remove.representedObject = highlights
             items.append(remove)
         }
+        // A note, from the same menu that highlights: judged a dead end when
+        // only the bar offered one.
+        if let reference = reference(of: target) {
+            items.append(.separator())
+            let title = actions.hasNote(reference) ? "Edit Note" : "Add Note"
+            let note = NSMenuItem(title: title, action: #selector(menuNote(_:)), keyEquivalent: "")
+            note.target = self
+            note.image = NSImage(systemSymbolName: "square.and.pencil", accessibilityDescription: nil)
+            note.representedObject = NoteChoice(reference: reference, quote: Self.quote(of: target))
+            items.append(note)
+        }
         return items
+    }
+
+    private final class NoteChoice: NSObject {
+        let reference: Int
+        let quote: String?
+        init(reference: Int, quote: String?) { self.reference = reference; self.quote = quote }
+    }
+
+    @objc private func menuNote(_ sender: NSMenuItem) {
+        guard let choice = sender.representedObject as? NoteChoice else { return }
+        close()
+        actions?.openNote(choice.reference, choice.quote)
     }
 
     private func verseNumber(in storage: NSAttributedString, at index: Int) -> Int? {
@@ -2072,7 +2112,15 @@ final class ReaderHighlighter: NSObject {
     private func note(_ target: Target) {
         guard let reference = reference(of: target) else { return }
         close()
-        actions?.openNote(reference)
+        actions?.openNote(reference, Self.quote(of: target))
+    }
+
+    /// The words to begin a new note with: those selected, not a whole verse
+    /// or a highlight, which the note's reference already names.
+    private static func quote(of target: Target) -> String? {
+        guard case .words(_, let text) = target else { return nil }
+        let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return words.isEmpty ? nil : words
     }
 
     private func copy(_ target: Target) {
@@ -2354,7 +2402,16 @@ struct ReaderHighlightBar: View {
                     .help("Remove this highlight")
                     .padding(.trailing, 4)
             }
-            barButton("Add Note", systemImage: "square.and.pencil", action: note)
+            // Named, as Remove is: an icon at the end of the colours was
+            // passed over.
+            Button("Note", systemImage: "square.and.pencil", action: note)
+                .labelStyle(.titleAndIcon)
+                .fixedSize()
+                .buttonStyle(.borderless)
+                .font(.system(size: 13))
+                .help("Add a note on this verse")
+                .accessibilityLabel("Add Note")
+                .padding(.horizontal, 4)
             barButton("Copy as Citation", systemImage: "doc.on.doc", action: copy)
             barButton("More Highlight Options", systemImage: "ellipsis.circle", action: more)
         }
