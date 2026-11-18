@@ -58,18 +58,13 @@ struct LampEmptyState<Actions: View>: View {
 
     private var illustration: some View {
         ZStack {
-            // A soft pool of the accent under the covers.
+            // The shadow the covers cast where they stand. A pool of the
+            // accent here read as a stain, not as light.
             Ellipse()
-                .fill(
-                    RadialGradient(
-                        colors: [Color.accentColor.opacity(0.18), Color.accentColor.opacity(0)],
-                        center: .center,
-                        startRadius: 0,
-                        endRadius: 170
-                    )
-                )
-                .frame(width: 360, height: 150)
-                .offset(y: 70)
+                .fill(Color.black.opacity(0.2))
+                .frame(width: 250, height: 16)
+                .blur(radius: 9)
+                .offset(y: 80)
             sideCover(position: 1)
                 .rotationEffect(.degrees(-12), anchor: .bottom)
                 .offset(x: -62, y: 10)
