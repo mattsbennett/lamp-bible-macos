@@ -62,6 +62,7 @@ struct LampBibleMacApp: App {
     @StateObject private var syncController = LibrarySyncController()
     @StateObject private var scrollLink = ReaderScrollLink()
     @StateObject private var presentationRemoteHost = LampPresentationRemoteHost()
+    @StateObject private var agentRemoteHost = AgentRemoteHost()
     @StateObject private var softwareUpdater = SoftwareUpdater()
 
     init() {
@@ -83,6 +84,9 @@ struct LampBibleMacApp: App {
         WindowGroup("Lamp Bible", id: "reader") {
             LibraryRootView()
                 .modifier(WritingImportReviewOpener())
+                // Chats from a paired phone, once there is a library to
+                // serve them from.
+                .onAppear { agentRemoteHost.attach(libraryModel) }
                 .environmentObject(libraryModel)
                 .environmentObject(syncController)
                 .environmentObject(scrollLink)
@@ -184,6 +188,7 @@ struct LampBibleMacApp: App {
             ReaderSettingsView()
                 .environmentObject(libraryModel)
                 .environmentObject(syncController)
+                .environmentObject(agentRemoteHost)
                 .environmentObject(softwareUpdater)
                 .lampWritingToolsGate()
         }
@@ -777,6 +782,8 @@ private struct ReaderSettingsView: View {
                         .foregroundStyle(.secondary)
                     }
                     .id(SettingsAnchor.readerChats)
+
+                    AgentRemoteSettingsSection()
 
                     Section("Use Lamp in Other Apps") {
                         Toggle(
@@ -1719,7 +1726,7 @@ extension ReaderSettingsSection {
         case .writing: ["Editor", "Writing Text Size", "Reading Time", "Writing Typeface"]
         case .aiAndAgents:
             AIFeatures.isEnabledNow
-                ? ["AI Features", "Agents", "Provider Accounts", "Reader Chats", "Claude Desktop", "Other Apps"]
+                ? ["AI Features", "Agents", "Provider Accounts", "Reader Chats", "Chats on iPhone and iPad", "Claude Desktop", "Other Apps"]
                 : ["AI Features"]
         case .readingPlans: ["External Bible", "Daily reading reminder", "Reminder Time"]
         case .sync: ["iCloud Drive", "Folder", "Provider", "Sync automatically", "Password"]

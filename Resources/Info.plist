@@ -33,6 +33,7 @@
     <key>NSBonjourServices</key>
     <array>
         <string>_lamp-present._tcp</string>
+        <string>_lamp-agent._tcp</string>
     </array>
     <key>CFBundleURLTypes</key>
     <array>

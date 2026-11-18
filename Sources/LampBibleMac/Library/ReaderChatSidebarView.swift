@@ -46,9 +46,7 @@ struct ReaderChatSidebarView: View {
     @State private var isChoosingChat = false
 
     private var provider: AIProviderCLI {
-        AIProviderCLI(
-            rawValue: chatChoices.value(for: AgentChatChoices.providerKey, orAppDefault: providerID) ?? providerID
-        ) ?? .codex
+        ReaderChatTurns.provider(chatChoices: chatChoices, appDefault: providerID)
     }
 
     /// Picking a provider sets this chat's, and what the app remembers, so the
@@ -155,17 +153,11 @@ struct ReaderChatSidebarView: View {
     }
 
     private var accessPolicy: LampAgentAccessPolicy {
-        // Reader research used to span the whole installed library whatever the
-        // Module Access scope said, on the grounds that research wants breadth.
-        // But the scope exists so the reader decides, a module may be hidden
-        // for privacy rather than tidiness, and Settings offers it as one
-        // choice over agents with nothing to say this pane is exempt.
-        AgentModuleAccessPreferences.policy(
-            isEnabled: moduleAccessEnabled,
-            scope: AgentModuleAccessScope(rawValue: moduleAccessScope) ?? .enabledModules,
-            includesPersonalContent: personalContentEnabled,
-            modules: libraryModel.modules,
-            hiddenModuleIDs: libraryModel.hiddenModuleIDs
+        ReaderChatTurns.accessPolicy(
+            moduleAccessEnabled: moduleAccessEnabled,
+            moduleAccessScope: moduleAccessScope,
+            personalContentEnabled: personalContentEnabled,
+            libraryModel: libraryModel
         )
     }
 
@@ -179,41 +171,10 @@ struct ReaderChatSidebarView: View {
 
     private var context: ReaderChatContext? { capture()?.context(notes: []) }
 
-    /// What a message is sent with that can be read from the reader at once.
-    /// The reader's notes are read from the library after, by `notes(on:)`.
-    private struct Capture {
-        let reference: String
-        let translationID: String
-        let translationName: String
-        let selectedVerse: String?
-        let selection: ReaderChatContext.Selection?
-        let sharesPersonalStudy: Bool
-        let highlights: [ReaderChatContext.Highlight]
-        let noteReferences: [Int]
-
-        func context(notes: [ReaderChatContext.Note]) -> ReaderChatContext {
-            ReaderChatContext(
-                reference: reference,
-                translationID: translationID,
-                translationName: translationName,
-                selectedVerse: selectedVerse,
-                selection: selection,
-                personalStudy: sharesPersonalStudy
-                    ? .shared(notes: notes, highlights: highlights)
-                    : .notShared
-            )
-        }
-    }
-
-    private func capture() -> Capture? {
+    private func capture() -> ReaderChatTurns.Capture? {
         guard let book = reader.selectedBook,
               let translation = libraryModel.translations.first(where: { $0.id == reader.selectedTranslationID })
         else { return nil }
-        let chapter = reader.selectedChapterNumber
-        let inChapter = { (reference: Int) in
-            reference / 1_000 == book.id * 1_000 + chapter
-        }
-        let sharesPersonalStudy = ReaderChatContext.sharesPersonalStudy(under: accessPolicy)
         let selection = reader.textSelection.current.map { passage in
             ReaderChatContext.Selection(
                 text: passage.text,
@@ -223,99 +184,16 @@ struct ReaderChatSidebarView: View {
                 } ?? translation.name
             )
         }
-        return Capture(
-            reference: "\(book.name) \(chapter)",
-            translationID: translation.id,
-            translationName: translation.name,
-            selectedVerse: reader.selectedVerseReference.flatMap { reference in
-                inChapter(reference)
-                    ? LampBibleReferenceFormatter.describeRange(from: reference, to: reference)
-                    : nil
-            },
+        return ReaderChatTurns.capture(
+            book: book,
+            chapter: reader.selectedChapterNumber,
+            translation: translation,
+            selectedVerse: reader.selectedVerseReference,
             selection: selection,
-            sharesPersonalStudy: sharesPersonalStudy,
-            highlights: sharesPersonalStudy
-                ? personalHighlights(in: translation.id, where: inChapter)
-                : [],
-            noteReferences: sharesPersonalStudy
-                ? libraryModel.noteReferences.filter(inChapter).sorted()
-                : []
+            chapterVerses: reader.contents.chapter?.verses ?? [],
+            policy: accessPolicy,
+            libraryModel: libraryModel
         )
-    }
-
-    /// The reader's own highlights in the chapter, with the words each marks:
-    /// this tab's chapter and translation, which by the time a queued
-    /// question is sent need not be the library's.
-    private func personalHighlights(
-        in translationID: String,
-        where inChapter: @escaping (Int) -> Bool
-    ) -> [ReaderChatContext.Highlight] {
-        let verses = Dictionary(
-            (reader.contents.chapter?.verses ?? []).map { ($0.id, $0.text) },
-            uniquingKeysWith: { first, _ in first }
-        )
-        return libraryModel.highlightsByReference.keys.filter(inChapter).sorted().flatMap { reference in
-            libraryModel.personalHighlights(for: reference, in: translationID).map { highlight in
-                ReaderChatContext.Highlight(
-                    reference: LampBibleReferenceFormatter.describeRange(from: reference, to: reference),
-                    color: highlight.color.map(Self.colorName),
-                    style: Self.styleName(highlight.style),
-                    words: verses[reference].flatMap { Self.words(of: highlight, in: $0) }
-                )
-            }
-        }
-    }
-
-    /// The words a highlight marks, or nil when it marks the whole verse or
-    /// its offsets no longer fit the verse.
-    private static func words(of highlight: LampVerseHighlight, in text: String) -> String? {
-        let start = max(highlight.startOffset, 0)
-        let end = min(highlight.endOffset, text.count)
-        guard end > start, start > 0 || end < text.count else { return nil }
-        let characters = Array(text)
-        return String(characters[start..<end]).trimmingCharacters(in: .whitespaces)
-    }
-
-    private static func colorName(_ hex: String) -> String {
-        let stored = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
-        return StudyHighlightPalette.colors
-            .first { $0.hex.caseInsensitiveCompare(stored) == .orderedSame }?
-            .name.lowercased() ?? hex
-    }
-
-    private static func styleName(_ style: LampHighlightStyle) -> String? {
-        switch style {
-        case .highlight: nil
-        case .underlineSolid: "underlined"
-        case .underlineDashed: "dashed underline"
-        case .underlineDotted: "dotted underline"
-        }
-    }
-
-    /// The reader's own notes on these verses, each once: a note on several
-    /// verses is found from each of them.
-    private func notes(on references: [Int]) async -> [ReaderChatContext.Note] {
-        var seen: Set<String> = []
-        var notes: [ReaderChatContext.Note] = []
-        for reference in references {
-            guard let note = try? await libraryModel.personalNote(for: reference),
-                  seen.insert(note.id).inserted else { continue }
-            // Verse 0 is the chapter's own note, which "Genesis 1:0" would
-            // not say.
-            let verses = ([reference] + note.verseReferences).filter { $0 % 1_000 != 0 }
-            let chapter = reference - reference % 1_000
-            notes.append(ReaderChatContext.Note(
-                reference: verses.isEmpty
-                    ? LampBibleReferenceFormatter.describeRange(from: chapter + 1, to: chapter + 999)
-                        + " (the whole chapter)"
-                    : LampBibleReferenceFormatter.describeRange(
-                        from: verses.min() ?? reference, to: verses.max() ?? reference
-                    ),
-                title: note.title,
-                content: note.content
-            ))
-        }
-        return notes
     }
 
     var body: some View {
@@ -424,7 +302,7 @@ struct ReaderChatSidebarView: View {
                             ])
                         }
                         try writeAccessPolicy()
-                        let notes = await notes(on: capture.noteReferences)
+                        let notes = await ReaderChatTurns.notes(on: capture.noteReferences, libraryModel: libraryModel)
                         return capture.context(notes: notes).prompt(for: question)
                     },
                     onRunningChanged: { running in
@@ -603,13 +481,8 @@ struct ReaderChatSidebarView: View {
         }
     }
 
-    private var policyURL: URL { workspace.appendingPathComponent(".lamp/module-policy.json") }
-
     private func writeAccessPolicy() throws {
-        try FileManager.default.createDirectory(
-            at: policyURL.deletingLastPathComponent(), withIntermediateDirectories: true
-        )
-        try JSONEncoder().encode(accessPolicy).write(to: policyURL, options: .atomic)
+        try ReaderChatTurns.writeAccessPolicy(accessPolicy, workspace: workspace)
     }
 
     private func loadChoices() {
@@ -621,25 +494,10 @@ struct ReaderChatSidebarView: View {
         // is never built against a provider this chat is not on.
         loadChoices()
         do {
-            guard let helper = AgentModuleAccessPreferences.mcpHelperExecutableURL else {
-                throw CocoaError(.fileNoSuchFile, userInfo: [
-                    NSLocalizedDescriptionKey: "The Lamp module helper is unavailable. Rebuild or reinstall Lamp Bible to restore chat access to your library.",
-                ])
-            }
-            let configuration = ReaderChatWorkspaceStore.configuration(
-                helperExecutableURL: helper,
-                libraryRootURL: libraryModel.library.rootURL,
-                bundledModulesArchiveURL: Bundle.main.url(
-                    forResource: "bundled_modules.db", withExtension: "zlib"
-                ),
-                policyURL: policyURL,
-                workspace: workspace
-            )
-            try writeAccessPolicy()
-            try ReaderChatWorkspaceStore.prepare(
+            let configuration = try ReaderChatTurns.prepare(
                 workspace: workspace,
-                configuration: configuration,
-                bundledSkillsCatalog: LampBundledSkills.catalogURL
+                policy: accessPolicy,
+                libraryRootURL: libraryModel.library.rootURL
             )
             self.configuration = configuration
             preparationError = nil

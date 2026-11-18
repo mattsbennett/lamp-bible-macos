@@ -968,6 +968,9 @@ final class NativeAgentChatModel: ObservableObject {
     /// only: the other providers' streams don't say, and `AgentChatWireParser`
     /// invents nothing for them.
     @Published private(set) var activity: AgentChatActivity?
+    /// The reply so far while it arrives, as the pane shows it: for a paired
+    /// phone following this chat (`AgentRemoteHost`). Empty between runs.
+    @Published private(set) var arrivingReply = ""
 
     let provider: AIProviderCLI
     private let workspace: URL
@@ -1409,6 +1412,7 @@ final class NativeAgentChatModel: ObservableObject {
         // could not be resumed starts from nothing, as it does.
         streamedReply = ""
         shownStreamedReply = ""
+        arrivingReply = ""
         streamingMessage = nil
         activity = nil
         let proposedSessionID = provider == .claude && resumedSessionID == nil
@@ -1547,6 +1551,7 @@ final class NativeAgentChatModel: ObservableObject {
         shownStreamedReply = streamedReply
         let markdown = streamedReply.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !markdown.isEmpty else { return }
+        arrivingReply = markdown
         if let streamingMessage {
             // The array is not touched again while the reply arrives: the cell
             // is watching this.
@@ -1587,6 +1592,7 @@ final class NativeAgentChatModel: ObservableObject {
         activity = nil
         streamedReply = ""
         shownStreamedReply = ""
+        arrivingReply = ""
         streamingMessage = nil
         // Whatever the loader became — a partial reply, or the loader still —
         // goes, and the run's own reading of its output takes its place.
