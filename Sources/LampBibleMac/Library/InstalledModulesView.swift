@@ -245,7 +245,7 @@ struct InstalledModulesView: View {
                     : "Showing " + chosenShelves.sorted().joined(separator: ", "))
             }
             // Shown by shorter names where the window has room; the full ones
-            // stay as what VoiceOver says and the overflow menu reads.
+            // stay as what VoiceOver says.
             ToolbarItemGroup {
                 Button(action: showImporter) {
                     Label("Install", systemImage: "plus")

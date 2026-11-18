@@ -657,7 +657,7 @@ extension EnvironmentValues {
 /// passages and search fields keep to icons, as the system's do.
 ///
 /// A name shown is the button's own, shortened where it is long; the full
-/// name stays as what VoiceOver says and the overflow menu reads.
+/// name stays as what VoiceOver says.
 struct FittingToolbarLabel: ViewModifier {
     @Environment(\.toolbarLabelsFit) private var fits
 
