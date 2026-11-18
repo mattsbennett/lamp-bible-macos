@@ -14,6 +14,7 @@ private enum LibrarySection: String, CaseIterable, Identifiable, Hashable {
     case books = "Books"
     case plans = "Reading Plans"
     case devotionals = "Writing"
+    case presentations = "Presentations"
     case quizzes = "Quizzes"
     case search = "Search"
     case modules = "Modules"
@@ -27,6 +28,7 @@ private enum LibrarySection: String, CaseIterable, Identifiable, Hashable {
         case .books: "book.closed"
         case .plans: "checklist"
         case .devotionals: "sun.max"
+        case .presentations: "rectangle.stack"
         case .quizzes: "questionmark.bubble"
         case .search: "magnifyingglass"
         case .modules: "square.stack.3d.up"
@@ -403,6 +405,8 @@ struct LibraryRootView: View {
         // window has focus, the reader's text or nothing at all.
         .focusedSceneValue(\.commandPaletteAction, { showingCommandPalette.toggle() })
         .focusedSceneValue(\.newWritingAction, { startNewWriting() })
+        // A modifier of its own: this body is at the type-checker's limit.
+        .modifier(ShowPresentationsReceiver { selection = .section(.presentations) })
         .modifier(CommandPaletteToggleReceiver(isPalettePresented: $showingCommandPalette))
         .overlay(alignment: .top) {
             if showingCommandPalette {
@@ -1852,6 +1856,11 @@ struct LibraryRootView: View {
                     selection = .section(.reader)
                 }
             )
+        case .section(.presentations):
+            PresentationsLibraryView(openWriting: { id in
+                requestedDevotionalID = id
+                selection = .section(.devotionals)
+            })
         case .section(.quizzes):
             QuizzesView(
                 initialModuleID: $requestedQuizModuleID,
@@ -2511,5 +2520,16 @@ enum CommandPaletteWindows {
         }
 
         func updateNSView(_ probe: Probe, context: Context) {}
+    }
+}
+
+
+/// Slide Studio's "Show All Presentations": the library window shows its
+/// Presentations section.
+private struct ShowPresentationsReceiver: ViewModifier {
+    let show: () -> Void
+
+    func body(content: Content) -> some View {
+        content.onReceive(NotificationCenter.default.publisher(for: .lampShowPresentations)) { _ in show() }
     }
 }

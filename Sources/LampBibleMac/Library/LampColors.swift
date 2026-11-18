@@ -728,3 +728,33 @@ enum ToolbarLabelFit {
     /// narrowest the window goes.
     static let slideStudio: CGFloat = 700
 }
+
+// MARK: - Filter chips
+
+extension View {
+    /// A filter chip: Search's filter capsule, tinted when chosen. Modules'
+    /// shelves, Writing's categories and Presentations' kinds are chosen
+    /// with it.
+    func lampFilterChip(isChosen: Bool, compact: Bool = false) -> some View {
+        modifier(LampFilterChip(isChosen: isChosen, compact: compact))
+    }
+}
+
+/// A filter chip, tinted when chosen. Stronger in dark, where the light
+/// tint and outline barely parted a chosen chip from the rest.
+private struct LampFilterChip: ViewModifier {
+    let isChosen: Bool
+    let compact: Bool
+    @Environment(\.colorScheme) private var colorScheme
+
+    func body(content: Content) -> some View {
+        let dark = colorScheme == .dark
+        content
+            .font(compact ? .system(size: 12) : .callout)
+            .padding(.horizontal, compact ? 9 : 12)
+            .frame(height: compact ? 26 : 30)
+            .background(Capsule().fill(isChosen ? Color.accentColor.opacity(dark ? 0.28 : 0.14) : Color.lampTileFill))
+            .overlay(Capsule().strokeBorder(isChosen ? Color.accentColor.opacity(dark ? 0.85 : 0.55) : Color.lampCardStroke))
+            .contentShape(Capsule())
+    }
+}

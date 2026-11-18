@@ -171,6 +171,10 @@ struct SlideStudioView: View {
     let request: SlideStudioRequest
 
     @State private var decks: [LampPresentationDeck] = []
+    /// The decks in the deck menu's order: most recently changed first, as
+    /// the Presentations section sorts them. Read when the decks change,
+    /// not on every redraw of the window.
+    @State private var menuDeckIDs: [String] = []
     @State private var selectedDeckID: String?
     @State private var deck: LampPresentationDeck?
     /// The decks this window has moved on from, so an edit can be taken back.
@@ -216,12 +220,36 @@ struct SlideStudioView: View {
     /// follows the window's appearance.
     private static let restingThumbnailShade = Color(nsColor: NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            ? NSColor.black.withAlphaComponent(0.2)
+            // Enough to keep the rail from glaring, not so much that the
+            // slides not being worked on look disabled.
+            ? NSColor.black.withAlphaComponent(0.1)
             : .clear
     })
 
     private var store: LampPresentationDeckStore {
         LampPresentationDeckStore(rootURL: model.library.rootURL)
+    }
+
+    /// The decks most recently changed first; any not yet ordered, last.
+    private var menuDecks: [LampPresentationDeck] {
+        let byID = Dictionary(decks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let ordered = menuDeckIDs.compactMap { byID[$0] }
+        return ordered + decks.filter { !menuDeckIDs.contains($0.id) }
+    }
+
+    /// Brings the library window forward on Presentations, opening one if
+    /// none is open.
+    private func showAllPresentations() {
+        let library = NSApp.windows.first { $0.identifier?.rawValue.hasPrefix("reader") == true && $0.isVisible }
+        if let library {
+            library.makeKeyAndOrderFront(nil)
+            NotificationCenter.default.post(name: .lampShowPresentations, object: nil)
+        } else {
+            openWindow(id: "reader")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                NotificationCenter.default.post(name: .lampShowPresentations, object: nil)
+            }
+        }
     }
 
     /// The remembered width, held to the range the handle allows, so a stored
@@ -303,6 +331,15 @@ struct SlideStudioView: View {
         .onChange(of: inbox.pending) { receiveSentSlides() }
         .background(HostWindowReader(box: hostWindow))
         .onChange(of: decks, initial: true) { _, decks in
+            menuDeckIDs = PresentationsShelf.sorted(
+                decks.map {
+                    PresentationsShelf.Deck(
+                        id: $0.id, title: $0.title, writingID: nil, writingTitle: nil,
+                        modified: store.modificationDate(ofDeck: $0.id)
+                    )
+                },
+                by: .recent
+            ).map(\.id)
             if !isLoading { inbox.note(decks) }
         }
         .onChange(of: deck) { previousDeck, updatedDeck in
@@ -483,12 +520,17 @@ struct SlideStudioView: View {
             // a question — off after a few words.
             Menu {
                 Picker("Deck", selection: $selectedDeckID) {
-                    ForEach(decks) { candidate in
+                    ForEach(menuDecks) { candidate in
                         Text(candidate.title).tag(Optional(candidate.id))
                     }
                 }
                 .pickerStyle(.inline)
                 .labelsHidden()
+                Divider()
+                // The way back to every deck, in the library window.
+                Button("Show All Presentations", systemImage: "rectangle.stack") {
+                    showAllPresentations()
+                }
             } label: {
                 HStack(alignment: .center, spacing: 6) {
                     VStack(alignment: .leading, spacing: 2) {

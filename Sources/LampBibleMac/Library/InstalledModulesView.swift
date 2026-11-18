@@ -751,18 +751,7 @@ struct TranslationPickerOptions<Tag: Hashable>: View {
     }
 }
 
-extension View {
-    /// A filter chip: Search's filter capsule, tinted when chosen. Modules'
-    /// shelves and Writing's categories are chosen with it.
-    func lampFilterChip(isChosen: Bool, compact: Bool = false) -> some View {
-        font(compact ? .system(size: 12) : .callout)
-            .padding(.horizontal, compact ? 9 : 12)
-            .frame(height: compact ? 26 : 30)
-            .background(Capsule().fill(isChosen ? Color.accentColor.opacity(0.14) : Color.lampTileFill))
-            .overlay(Capsule().strokeBorder(isChosen ? Color.accentColor.opacity(0.55) : Color.lampCardStroke))
-            .contentShape(Capsule())
-    }
-}
+
 
 
 /// Why a module is marked, and what can be done about it.
