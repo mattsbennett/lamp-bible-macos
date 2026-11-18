@@ -14,16 +14,28 @@ struct DevotionalEditorRequest: Codable, Hashable {
     /// Opens the writing with its agent pane showing: for a writing started
     /// from a reader chat, whose conversation is in that pane.
     var opensAgentPane = false
+    /// Tells one new writing from the next: two asked for in turn were the
+    /// same request, so the second kept the first's editor and typed into
+    /// the draft it had saved. Nil for a writing that has an id.
+    var draftID: UUID?
 
     init(devotionalID: String? = nil, opensAgentPane: Bool = false) {
         self.devotionalID = devotionalID
         self.opensAgentPane = opensAgentPane
+        self.draftID = devotionalID == nil ? UUID() : nil
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         devotionalID = try container.decodeIfPresent(String.self, forKey: .devotionalID)
         opensAgentPane = try container.decodeIfPresent(Bool.self, forKey: .opensAgentPane) ?? false
+        draftID = try container.decodeIfPresent(UUID.self, forKey: .draftID)
+    }
+
+    /// What an editor for this request is known by: the writing, or the
+    /// new draft.
+    var editorIdentity: String {
+        devotionalID ?? draftID?.uuidString ?? "new"
     }
 }
 
@@ -420,14 +432,17 @@ private struct DevotionalEditorToolbarScrollView<Content: View>: View {
 /// beside its page. Without the list the only way back to the rest of one's
 /// writing was another window.
 struct WritingEditorWindow: View {
-    let request: DevotionalEditorRequest
+    /// The window's own value: the writing open here, the one asked for and
+    /// then whichever is chosen. Kept as the window's value, so asking for a
+    /// writing again finds the window showing it, not the one it opened on.
+    @Binding var request: DevotionalEditorRequest?
 
     @EnvironmentObject private var model: LibraryModel
     @AppStorage("writing.editorShowsLibrary") private var showsLibrary = true
-    /// The writing open here: the one asked for, then whichever is chosen.
-    @State private var current: DevotionalEditorRequest?
+    /// For a window restored without its value.
+    @State private var blank = DevotionalEditorRequest()
 
-    private var shown: DevotionalEditorRequest { current ?? request }
+    private var shown: DevotionalEditorRequest { request ?? blank }
 
     @State private var query = ""
     @State private var category: String?
@@ -462,7 +477,7 @@ struct WritingEditorWindow: View {
             // The way back, named: the writing is saved as it is typed, so
             // being done is closing the window, back to the library.
             DevotionalEditorView(request: shown)
-                .id(shown.devotionalID ?? "new")
+                .id(shown.editorIdentity)
                 .environment(\.writingEditorDone, WritingEditorDone(help: "Close the editor and go back to Writing") {
                     dismissWindow()
                 })
@@ -494,7 +509,7 @@ struct WritingEditorWindow: View {
                 .background(RoundedRectangle(cornerRadius: 7).fill(Color.lampTileFill))
                 .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Color.lampCardStroke))
                 Button("New Writing", systemImage: "plus") {
-                    current = DevotionalEditorRequest()
+                    request = DevotionalEditorRequest()
                 }
                 .labelStyle(.iconOnly)
                 .buttonStyle(.borderless)
@@ -507,7 +522,7 @@ struct WritingEditorWindow: View {
             Divider()
             List(selection: Binding(
                 get: { shown.devotionalID },
-                set: { id in if let id, id != shown.devotionalID { current = DevotionalEditorRequest(devotionalID: id) } }
+                set: { id in if let id, id != shown.devotionalID { request = DevotionalEditorRequest(devotionalID: id) } }
             )) {
                 Section {
                     ForEach(writings) { writing in

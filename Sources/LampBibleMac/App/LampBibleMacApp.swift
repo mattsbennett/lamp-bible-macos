@@ -134,7 +134,7 @@ struct LampBibleMacApp: App {
         // reader open beside it — the scripture being written about is usually the
         // reason for writing.
         WindowGroup("Writing", id: "devotional-editor", for: DevotionalEditorRequest.self) { $request in
-            WritingEditorWindow(request: request ?? DevotionalEditorRequest())
+            WritingEditorWindow(request: $request)
                 .environmentObject(libraryModel)
                 .environmentObject(syncController)
                 .lampWritingToolsGate()

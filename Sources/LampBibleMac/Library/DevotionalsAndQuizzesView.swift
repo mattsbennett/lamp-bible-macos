@@ -228,7 +228,7 @@ struct DevotionalsView: View {
 
                     if let request = editing {
                         DevotionalEditorView(request: request)
-                            .id(request.devotionalID ?? "new")
+                            .id(request.editorIdentity)
                             // The editor puts Done last in its toolbar.
                             .environment(\.writingEditorDone, WritingEditorDone(help: "Stop editing and read the writing") {
                                 editing = nil
@@ -310,9 +310,17 @@ struct DevotionalsView: View {
             editing = nil
             isEditingInPlace = false
         }
-        // Another writing chosen in the list is edited in its place.
+        // Another writing chosen in the list is edited in its place; one
+        // that cannot be edited, an installed writing, is read instead. No
+        // selection leaves the editing as it is: the list loses its
+        // selection when a draft starts.
         .onChange(of: selection) { _, chosen in
-            if editing != nil { editing = DevotionalEditorRequest(devotionalID: chosen) }
+            guard editing != nil, let chosen, chosen != editing?.devotionalID else { return }
+            if model.devotionals.first(where: { $0.id == chosen })?.isEditable == true {
+                editing = DevotionalEditorRequest(devotionalID: chosen)
+            } else {
+                editing = nil
+            }
         }
         .onChange(of: categoryFilter) { _, _ in selectFirstIfNeeded() }
         .onChange(of: moduleFilter) { _, _ in selectFirstIfNeeded() }
@@ -1150,6 +1158,9 @@ struct DevotionalsView: View {
 
     private func beginEditing(_ devotional: LampDevotional?) {
         editing = DevotionalEditorRequest(devotionalID: devotional?.id)
+        // The list says what is open: the writing, or nothing for a draft,
+        // so the writing before it can be chosen again.
+        selection = devotional?.id
     }
 
     private func presentationDecks(for devotional: LampDevotional) -> [LampPresentationDeck] {
@@ -1264,6 +1275,9 @@ struct DevotionalsView: View {
     /// opening with nothing selected at all. Clicking away still empties the
     /// preview — nothing calls this until the data or a filter actually changes.
     private func selectFirstIfNeeded() {
+        // Not while editing: a save that takes the writing out of the
+        // filter would otherwise move the editor to another, or to a draft.
+        guard editing == nil else { return }
         if !filteredDevotionals.contains(where: { $0.id == selection }) {
             selection = filteredDevotionals.first?.id
         }

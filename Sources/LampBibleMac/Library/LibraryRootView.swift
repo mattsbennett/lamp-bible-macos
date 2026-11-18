@@ -176,8 +176,13 @@ struct LibraryRootView: View {
     /// sections fold away while it does, and the list, the writing and its
     /// side pane have the window.
     @State private var writingIsEditing = false
-    /// The sections: shown, or folded while a writing is edited. Not kept
-    /// across launches, so the window always opens with them.
+    /// The sections: shown, or folded while a writing is edited. Never kept
+    /// across launches, so the window opens with them even after a quit or a
+    /// crash mid-edit, when AppKit has saved the column folded: this state's
+    /// first value wins over AppKit's, which is observed, not documented, so
+    /// look again after an Xcode update. Kept in @SceneStorage, it would
+    /// outlive a crash and come back folded with nothing being edited. View ▸
+    /// Toggle Sidebar opens the sections whatever happens.
     @State private var sidebarVisibility: NavigationSplitViewVisibility = .all
     /// What the sections were before editing folded them, to put back.
     @State private var sidebarVisibilityBeforeEditing: NavigationSplitViewVisibility = .all
