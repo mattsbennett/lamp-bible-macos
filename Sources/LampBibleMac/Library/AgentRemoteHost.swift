@@ -66,6 +66,11 @@ final class AgentRemoteHost: ObservableObject {
     private var revoked: Set<String> = []
     private var listener: NWListener?
     private var peers: [ObjectIdentifier: Peer] = [:]
+    /// The turns a device has running, by the id of the question that began
+    /// each: kept here rather than on its connection, which a phone going to
+    /// sleep closes while the turn runs on, so forgetting the device or
+    /// turning the host off still stops them — and only them.
+    private var runs: [String: [(model: NativeAgentChatModel, turn: UUID)]] = [:]
     private weak var libraryModel: LibraryModel?
 
     private var settingsObserver: AnyCancellable?
@@ -155,6 +160,7 @@ final class AgentRemoteHost: ObservableObject {
         knownCredentials.removeAll { $0.kind == .device(id: device.id) }
         devices.removeAll { $0.id == device.id }
         closeUntrusted()
+        stopRuns(of: device.id)
         let id = device.id
         changeTrust { $0.forget(deviceID: id) }
     }
@@ -214,6 +220,7 @@ final class AgentRemoteHost: ObservableObject {
             // switch went off under it.
             revoke(peer, reason: "Chats from this Mac are turned off.", code: LampAgentRemoteFailure.aiOff)
         }
+        for device in Array(runs.keys) { stopRuns(of: device) }
         status = .off
         connectedNames = []
     }
@@ -230,10 +237,8 @@ final class AgentRemoteHost: ObservableObject {
         var isPairing = false
         var name = "Device"
         var open: OpenChat?
-        /// Chats this device sent a turn to, whose runs stop if it is
-        /// forgotten or the host turned off.
-        var started: [NativeAgentChatModel] = []
-        var tasks: [Task<Void, Never>] = []
+        /// Requests still being worked on, cancelled if the connection goes.
+        var tasks: [UUID: Task<Void, Never>] = [:]
 
         init(connection: NWConnection, start: LampAgentRemoteHandshake.HostStart) {
             self.connection = connection
@@ -402,13 +407,13 @@ final class AgentRemoteHost: ObservableObject {
                 publishConnected()
             }
         case .listChats:
-            track(peer, Task { await self.list(for: peer, requestID: message.requestID) })
+            track(peer) { await self.list(for: peer, requestID: message.requestID) }
         case .openChat:
             open(message.chatID, for: peer, requestID: message.requestID)
         case .closeChat:
             peer.open = nil
         case .send:
-            track(peer, Task { await self.send(message, from: peer) })
+            track(peer) { await self.send(message, from: peer) }
         case .cancel:
             guard let open = peer.open, message.chatID == open.id.uuidString else {
                 send(.failed(LampAgentRemoteFailure.notFound, "That chat isn't open.", requestID: message.requestID), to: peer)
@@ -416,7 +421,7 @@ final class AgentRemoteHost: ObservableObject {
             }
             open.model.cancel()
         case .startChat:
-            track(peer, Task { await self.startChat(message, from: peer) })
+            track(peer) { await self.startChat(message, from: peer) }
         case .ping:
             send(.pong, to: peer)
         default:
@@ -425,9 +430,13 @@ final class AgentRemoteHost: ObservableObject {
         }
     }
 
-    private func track(_ peer: Peer, _ task: Task<Void, Never>) {
-        peer.tasks.removeAll { $0.isCancelled }
-        peer.tasks.append(task)
+    /// Works on a request, holding it only while it is in flight.
+    private func track(_ peer: Peer, _ work: @escaping () async -> Void) {
+        let id = UUID()
+        peer.tasks[id] = Task { [weak peer] in
+            await work()
+            peer?.tasks[id] = nil
+        }
     }
 
     // MARK: Chats
@@ -670,10 +679,14 @@ final class AgentRemoteHost: ObservableObject {
             return
         }
         let prompt = await contextualPrompt(text, reading: reading)
-        guard !Task.isCancelled, mayAct(peer) else { return }
-        peer.started.removeAll { $0 === open.model }
-        peer.started.append(open.model)
-        let taken = await open.model.send(text, contextualPrompt: prompt, inConversation: conversation)
+        guard !Task.isCancelled, mayAct(peer), let device = peer.deviceID else { return }
+        // The question's id is chosen here, so the turn is known as this
+        // device's for as long as it runs, and no longer.
+        let turn = UUID()
+        runs[device, default: []].append((open.model, turn))
+        let taken = await open.model.send(text, contextualPrompt: prompt, messageID: turn, inConversation: conversation)
+        runs[device]?.removeAll { $0.turn == turn }
+        if runs[device]?.isEmpty == true { runs[device] = nil }
         if !taken, isConnected(peer), peer.open === open {
             send(.failed(LampAgentRemoteFailure.busy, "This chat changed on the Mac before the message could go.", requestID: requestID, chatID: open.id.uuidString), to: peer)
         }
@@ -712,19 +725,28 @@ final class AgentRemoteHost: ObservableObject {
         peer.connection.send(content: frame, completion: .contentProcessed { _ in })
     }
 
-    /// Ends a connection whose device may no longer act, stopping the runs it
-    /// started and the work it has waiting.
+    /// Ends a connection whose device may no longer act, and the work it
+    /// has waiting.
     private func revoke(_ peer: Peer, reason: String, code: String) {
         send(.failed(code, reason), to: peer)
-        for model in peer.started where model.isRunning { model.cancel() }
         close(peer)
+    }
+
+    /// Stops the turns a device has running, connected or not: each only if
+    /// the chat is still on that turn, so a turn someone else began since is
+    /// left alone.
+    private func stopRuns(of device: String) {
+        for run in runs.removeValue(forKey: device) ?? [] where run.model.isRunning {
+            let current = run.model.messages.last { $0.isSender }?.id
+            if current == run.turn { run.model.cancel() }
+        }
     }
 
     /// A connection gone: a phone asleep or out of range. What it started
     /// runs on, as a run outlives a closed window.
     private func close(_ peer: Peer) {
-        peer.tasks.forEach { $0.cancel() }
-        peer.tasks = []
+        peer.tasks.values.forEach { $0.cancel() }
+        peer.tasks = [:]
         peer.open = nil
         peers.removeValue(forKey: ObjectIdentifier(peer.connection))
         peer.connection.cancel()
