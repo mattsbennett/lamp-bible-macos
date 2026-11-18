@@ -59,7 +59,7 @@ struct PresentationsLibraryView: View {
     }
 
     private func writingTitle(of deck: LampPresentationDeck) -> String? {
-        guard deck.source?.kind == .devotional, let id = deck.source?.id else { return nil }
+        guard let id = deck.writingID else { return nil }
         return model.devotionals.first { $0.id == id }?.title
     }
 
@@ -212,7 +212,7 @@ struct PresentationsLibraryView: View {
         .help("Open \(deck.title) in Slide Studio")
         .contextMenu {
             Button("Open in Slide Studio", systemImage: "rectangle.stack") { open(deck) }
-            if writing != nil, let id = deck.source?.id {
+            if writing != nil, let id = deck.writingID {
                 Button("Show Writing", systemImage: "sun.max") { openWriting(id) }
             }
         }
@@ -265,7 +265,7 @@ struct PresentationsLibraryView: View {
         .help("Open \(deck.title) in Slide Studio")
         .contextMenu {
             Button("Open in Slide Studio", systemImage: "rectangle.stack") { open(deck) }
-            if writing != nil, let id = deck.source?.id {
+            if writing != nil, let id = deck.writingID {
                 Button("Show Writing", systemImage: "sun.max") { openWriting(id) }
             }
         }

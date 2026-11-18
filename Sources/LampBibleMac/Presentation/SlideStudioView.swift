@@ -1089,9 +1089,8 @@ struct SlideStudioView: View {
 
     /// The writing this deck is linked to, when there is one.
     private var manuscript: String? {
-        guard let source = deck?.source,
-              source.kind == .devotional || source.kind == .writing,
-              let devotional = model.devotionals.first(where: { $0.id == source.id })
+        guard let writingID = deck?.writingID,
+              let devotional = model.devotionals.first(where: { $0.id == writingID })
         else { return nil }
         return devotional.displayMarkdown
     }
@@ -1205,7 +1204,7 @@ struct SlideStudioView: View {
                 requestedDeck = decks.first { $0.id == deckID }
             } else if let devotionalID = request.devotionalID {
                 requestedDeck = decks.first {
-                    $0.source?.kind == .devotional && $0.source?.id == devotionalID
+                    $0.writingID == devotionalID
                 }
             } else {
                 requestedDeck = decks.first

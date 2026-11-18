@@ -105,8 +105,7 @@ enum LinkedPresentationDeckLookup {
     static func groupedByDevotional(rootURL: URL) throws -> [String: [LampPresentationDeck]] {
         var result: [String: [LampPresentationDeck]] = [:]
         for deck in try LampPresentationDeckStore(rootURL: rootURL).decks() {
-            guard deck.source?.kind == .devotional,
-                  let devotionalID = deck.source?.id else { continue }
+            guard let devotionalID = deck.writingID else { continue }
             result[devotionalID, default: []].append(deck)
         }
         return result
