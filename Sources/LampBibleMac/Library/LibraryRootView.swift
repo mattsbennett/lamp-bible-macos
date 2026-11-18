@@ -433,6 +433,11 @@ struct LibraryRootView: View {
             showSearch(SearchTab(query: words))
             workspace.requestedSearch = nil
         }
+        .onChange(of: workspace.requestedSearchTab) { _, tab in
+            guard let tab else { return }
+            showSearch(tab)
+            workspace.requestedSearchTab = nil
+        }
         .onChange(of: workspace.requestedStrongsKey) { _, key in
             guard let key else { return }
             // Scripture is named here rather than left to the pane. The pane

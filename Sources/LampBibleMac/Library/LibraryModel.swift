@@ -964,6 +964,20 @@ final class LibraryModel: ObservableObject {
             .union(personalSetIDs)
     }
 
+    /// The themes of my highlight sets, one per mark, the first name kept:
+    /// what Search finds highlights by besides colours and styles.
+    func highlightThemesForSearch() async -> [LampHighlightTheme] {
+        var seen = Set<LampHighlightMark>()
+        var themes: [LampHighlightTheme] = []
+        for set in (try? await library.highlightSets()) ?? [] {
+            for theme in (try? await library.highlightThemes(setID: set.id)) ?? []
+            where seen.insert(LampHighlightMark(color: theme.color, style: theme.style)).inserted {
+                themes.append(theme)
+            }
+        }
+        return themes
+    }
+
     func searchModules(
         _ query: String,
         kind: LampModuleKind? = nil,
@@ -971,6 +985,9 @@ final class LibraryModel: ObservableObject {
         bookRange: ClosedRange<Int>? = nil,
         strongsKey: String? = nil,
         highlightColors: Set<String>? = nil,
+        highlightStyles: Set<LampHighlightStyle>? = nil,
+        highlightThemes: Set<LampHighlightMark>? = nil,
+        listsHighlights: Bool = false,
         devotionalCriteria: LampDevotionalSearchCriteria = .init()
     ) {
         moduleSearchTask?.cancel()
@@ -980,6 +997,7 @@ final class LibraryModel: ObservableObject {
         guard !trimmedQuery.isEmpty
             || strongsKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
             || highlightColors?.isEmpty == false
+            || highlightStyles?.isEmpty == false || highlightThemes?.isEmpty == false || listsHighlights
             || devotionalCriteria != LampDevotionalSearchCriteria() else {
             moduleSearchResults = []
             moduleSearchKindsWithMore = []
@@ -993,6 +1011,7 @@ final class LibraryModel: ObservableObject {
         let request = ModuleSearchRequest(
             query: trimmedQuery, kind: kind, moduleID: moduleID, bookRange: bookRange,
             strongsKey: strongsKey, highlightColors: highlightColors,
+            highlightStyles: highlightStyles, highlightThemes: highlightThemes, listsHighlights: listsHighlights,
             devotionalCriteria: devotionalCriteria, readingTranslationID: reading
         )
         // A search asked again — a Search tab chosen again, mostly — shows
@@ -1036,6 +1055,9 @@ final class LibraryModel: ObservableObject {
                         bookRange: bookRange,
                         strongsKey: strongsKey,
                         highlightColors: highlightColors,
+                        highlightStyles: highlightStyles,
+                        highlightThemes: highlightThemes,
+                        listsHighlights: listsHighlights,
                         devotionalCriteria: devotionalCriteria,
                         limit: 250
                     )
@@ -1052,6 +1074,9 @@ final class LibraryModel: ObservableObject {
                         bookRange: bookRange,
                         strongsKey: strongsKey,
                         highlightColors: highlightColors,
+                        highlightStyles: highlightStyles,
+                        highlightThemes: highlightThemes,
+                        listsHighlights: listsHighlights,
                         devotionalCriteria: devotionalCriteria,
                         preferredTranslationID: reading,
                         limit: 60
@@ -2078,6 +2103,9 @@ struct ModuleSearchRequest: Equatable {
     let bookRange: ClosedRange<Int>?
     let strongsKey: String?
     let highlightColors: Set<String>?
+    let highlightStyles: Set<LampHighlightStyle>?
+    let highlightThemes: Set<LampHighlightMark>?
+    let listsHighlights: Bool
     let devotionalCriteria: LampDevotionalSearchCriteria
     let readingTranslationID: String?
 }

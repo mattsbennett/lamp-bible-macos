@@ -438,6 +438,7 @@ private struct ReaderTextRepresentable: NSViewRepresentable {
         textView.marks = marks
         textView.openNote = openNote
         textView.selectionStore = context.environment.readerTextSelection
+        textView.highlighter = context.environment.readerHighlighter
         return textView
     }
 
@@ -445,14 +446,18 @@ private struct ReaderTextRepresentable: NSViewRepresentable {
         context.coordinator.openLink = openLink
         textView.openNote = openNote
         textView.selectionStore = context.environment.readerTextSelection
+        textView.highlighter = context.environment.readerHighlighter
         textView.textLeading = textLeading
         if textView.attributedString() != attributedText {
             let selection = textView.selectedRange()
+            // Put back, not chosen: it must not bring the highlight bar back.
+            textView.isRestoringSelection = true
             textView.textStorage?.setAttributedString(attributedText)
             if selection.location != NSNotFound,
                NSMaxRange(selection) <= attributedText.length {
                 textView.setSelectedRange(selection)
             }
+            textView.isRestoringSelection = false
         }
         // After the text, which the marks' locations count in.
         textView.marks = marks
@@ -523,6 +528,14 @@ private final class ReaderTextView: LampTextView {
     var openNote: ((Int) -> Void)?
     /// Told what the reader selects here, for the reader chat.
     weak var selectionStore: ReaderTextSelectionStore?
+    /// Shows the highlight controls by what the reader selects or clicks.
+    weak var highlighter: ReaderHighlighter?
+    /// Set while the view puts its own selection back after its text is
+    /// replaced, which is not the reader choosing anything.
+    var isRestoringSelection = false
+    /// What was selected before a right-click, which selects the word under
+    /// the pointer itself: that word is not what the reader chose to mark.
+    private var selectionBeforeRightClick: NSRange?
 
     /// The strip the marks are drawn in. Drawn in the text view's own pass,
     /// after its text, they never reached the screen.
@@ -541,6 +554,22 @@ private final class ReaderTextView: LampTextView {
         selectionStore.textView(
             self, selected: ReaderTextMarks.passage(in: textStorage, range: selectedRange())
         )
+        // A right-click's own word is not a selection to offer a bar for,
+        // nor one put back after a redraw.
+        guard selectionBeforeRightClick == nil, !isRestoringSelection else { return }
+        highlighter?.selectionDidEnd(in: self)
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil { highlighter?.textViewWillLeave(self) }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        selectionBeforeRightClick = selectedRange()
+        highlighter?.close()
+        defer { selectionBeforeRightClick = nil }
+        super.rightMouseDown(with: event)
     }
 
     override var textContainerOrigin: NSPoint { NSPoint(x: textLeading, y: 0) }
@@ -553,6 +582,63 @@ private final class ReaderTextView: LampTextView {
             return
         }
         super.mouseDown(with: event)
+        // A click that selected nothing: on a highlight, its controls.
+        if event.clickCount == 1, selectedRange().length == 0 {
+            highlighter?.didClick(in: self, at: character(under: convert(event.locationInWindow, from: nil)))
+        }
+    }
+
+    /// What a text view offers for editing, which scripture is not: cut and
+    /// paste, and the spelling, substitution, transformation and font menus.
+    private static let editingActions: Set<String> = [
+        "cut:", "paste:", "pasteAsPlainText:", "showGuessPanel:", "checkSpelling:",
+        "toggleContinuousSpellChecking:", "orderFrontSubstitutionsPanel:",
+        "toggleSmartInsertDelete:", "uppercaseWord:", "orderFrontFontPanel:", "toggleAutomaticQuoteSubstitution:",
+    ]
+
+    private static func removeEditingItems(from menu: NSMenu) {
+        for item in menu.items.reversed() {
+            let actions = ([item] + (item.submenu?.items ?? [])).compactMap { $0.action.map(NSStringFromSelector) }
+            if actions.contains(where: editingActions.contains) { menu.removeItem(item) }
+        }
+        // No separators left doubled, or at either end.
+        var previousWasSeparator = true
+        for item in menu.items {
+            if item.isSeparatorItem, previousWasSeparator { menu.removeItem(item) } else { previousWasSeparator = item.isSeparatorItem }
+        }
+        if menu.items.last?.isSeparatorItem == true { menu.removeItem(at: menu.items.count - 1) }
+    }
+
+    /// The character under a point, or `NSNotFound` where there is none:
+    /// past the end of a line, the nearest one is a word the reader did not
+    /// click.
+    private func character(under point: NSPoint) -> Int {
+        guard let layoutManager, let textContainer else { return NSNotFound }
+        let inContainer = NSPoint(x: point.x - textContainerOrigin.x, y: point.y - textContainerOrigin.y)
+        var fraction: CGFloat = 0
+        let glyph = layoutManager.glyphIndex(for: inContainer, in: textContainer, fractionOfDistanceThroughGlyph: &fraction)
+        let box = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: textContainer)
+        guard box.insetBy(dx: -1, dy: -2).contains(inContainer) else { return NSNotFound }
+        return layoutManager.characterIndexForGlyph(at: glyph)
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard let menu = super.menu(for: event) else { return nil }
+        Self.removeEditingItems(from: menu)
+        guard let highlighter else { return menu }
+        let items = highlighter.menuItems(
+            in: self,
+            selection: selectionBeforeRightClick ?? selectedRange(),
+            at: character(under: convert(event.locationInWindow, from: nil))
+        )
+        guard !items.isEmpty else { return menu }
+        var at = 0
+        for item in items {
+            menu.insertItem(item, at: at)
+            at += 1
+        }
+        menu.insertItem(.separator(), at: at)
+        return menu
     }
 
     override func setFrameSize(_ newSize: NSSize) {
@@ -1424,5 +1510,859 @@ struct ReaderLexicalHoverObserver: NSViewRepresentable {
             super.viewDidMoveToWindow()
             interactionStore?.attach(to: window)
         }
+    }
+}
+
+// MARK: - Highlighting in place
+
+/// Where the reader's own words begin in the text drawn for them, so a
+/// selection or a click can be traced to a verse and to the `Character` a
+/// highlight counts from.
+///
+/// Set over each run of a verse's words, holding the offset in the verse at
+/// which that run begins: a poetry line drawn on its own starts part way in.
+/// Verse numbers and note letters inside the run are apparatus, and not
+/// counted. The space after a verse number carries no offset, so it is never
+/// part of a highlight.
+enum ReaderHighlightMarks {
+    static let offset = NSAttributedString.Key("LampReaderVerseOffset")
+
+    /// Part of one verse's words, in its `Character`s.
+    struct Span: Equatable {
+        let reference: Int
+        let start: Int
+        let end: Int
+    }
+
+    /// The verse words in `range`, a span per verse. Words of a companion
+    /// translation are left out: highlights are made in the one being read.
+    static func spans(in text: NSAttributedString, range: NSRange) -> [Span] {
+        var spans: [Span] = []
+        forEachBody(in: text) { reference, base, body in
+            let overlap = NSIntersectionRange(body, range)
+            guard overlap.length > 0 else { return }
+            let start = base + characters(in: text, from: body.location, to: overlap.location)
+            let end = base + characters(in: text, from: body.location, to: NSMaxRange(overlap))
+            guard end > start else { return }
+            if let last = spans.last, last.reference == reference, last.end == start {
+                spans[spans.count - 1] = Span(reference: reference, start: last.start, end: end)
+            } else {
+                spans.append(Span(reference: reference, start: start, end: end))
+            }
+        }
+        return spans
+    }
+
+    /// The verse and the `Character` in it at a character of the drawn text.
+    static func position(in text: NSAttributedString, at index: Int) -> (reference: Int, offset: Int)? {
+        var found: (Int, Int)?
+        forEachBody(in: text) { reference, base, body in
+            guard found == nil, NSLocationInRange(index, body) else { return }
+            found = (reference, base + characters(in: text, from: body.location, to: index))
+        }
+        return found
+    }
+
+    /// The drawn range of part of a verse's words, for placing a control by it.
+    static func drawnRange(of span: Span, in text: NSAttributedString) -> NSRange? {
+        var result: NSRange?
+        forEachBody(in: text) { reference, base, body in
+            guard reference == span.reference else { return }
+            var offset = base
+            text.enumerateAttribute(ReaderTextMarks.apparatus, in: body) { value, run, _ in
+                guard value == nil else { return }
+                let piece = (text.string as NSString).substring(with: run)
+                var location = run.location
+                for character in piece {
+                    let length = String(character).utf16.count
+                    if offset >= span.start, offset < span.end {
+                        let here = NSRange(location: location, length: length)
+                        result = result.map { NSUnionRange($0, here) } ?? here
+                    }
+                    offset += 1
+                    location += length
+                }
+            }
+        }
+        return result
+    }
+
+    private static func forEachBody(
+        in text: NSAttributedString,
+        _ visit: (_ reference: Int, _ base: Int, _ body: NSRange) -> Void
+    ) {
+        let whole = NSRange(location: 0, length: text.length)
+        text.enumerateAttribute(offset, in: whole) { value, run, _ in
+            guard let base = (value as? NSNumber)?.intValue,
+                  text.attribute(ReaderTextMarks.translation, at: run.location, effectiveRange: nil) == nil,
+                  let reference = (text.attribute(ReaderTextMarks.verse, at: run.location, effectiveRange: nil)
+                    as? NSNumber)?.intValue else { return }
+            visit(reference, base, run)
+        }
+    }
+
+    /// The verse's own characters between two places in the drawn text.
+    private static func characters(in text: NSAttributedString, from start: Int, to end: Int) -> Int {
+        guard end > start else { return 0 }
+        var count = 0
+        text.enumerateAttribute(
+            ReaderTextMarks.apparatus, in: NSRange(location: start, length: end - start)
+        ) { value, run, _ in
+            guard value == nil else { return }
+            count += (text.string as NSString).substring(with: run).count
+        }
+        return count
+    }
+}
+
+/// The reader's highlight controls, shown where the reader is: by the words
+/// selected, by a highlight clicked, and in the right-click menu. The reader
+/// view hands it what it needs to read and write highlights.
+@MainActor
+final class ReaderHighlighter: NSObject {
+    struct Actions {
+        /// The reader's own highlights on a verse, in the translation read.
+        var highlights: (Int) -> [LampVerseHighlight]
+        /// How many `Character`s a verse has.
+        var verseLength: (Int) -> Int?
+        var save: (ReaderHighlightMarks.Span, String, LampHighlightStyle) async throws -> Void
+        /// Gives a highlight a new colour or style, keeping its words and set.
+        var restyle: (LampVerseHighlight, String, LampHighlightStyle) async throws -> Void
+        var delete: (LampVerseHighlight) async throws -> Void
+        var openNote: (Int) -> Void
+        var copy: ([ReaderHighlightMarks.Span], String) -> Void
+        var moreOptions: (Int) -> Void
+        var failed: (Error) -> Void
+    }
+
+    /// What the controls act on: words not yet highlighted, or highlights
+    /// already made.
+    enum Target {
+        case words([ReaderHighlightMarks.Span], text: String)
+        case existing([LampVerseHighlight])
+    }
+
+    var actions: Actions?
+    private var panel: NSPanel?
+    private var dismissMonitor: Any?
+    /// What closes the bar when the words it is beside move: the page
+    /// scrolling, the window resizing, the panes beside the reader opening.
+    private var moveObservers: [NSObjectProtocol] = []
+    /// Whether the bar showing is for selected words, not a highlight.
+    private var isShowingForSelection = false
+
+    /// The reader's named colours and styles in the set new highlights go
+    /// to (`LampHighlightTheme`): "Promise" for green, say. Handed in by the
+    /// reader, which reads them from the library.
+    var themes: [LampHighlightTheme] = [] {
+        didSet { themes = Self.byLastUse(themes) }
+    }
+
+    /// The themes used most lately first, so the few the bar has room for
+    /// are the ones in use now (`reader.recentHighlightThemes`).
+    private static func byLastUse(_ themes: [LampHighlightTheme]) -> [LampHighlightTheme] {
+        let recent = UserDefaults.standard.stringArray(forKey: "reader.recentHighlightThemes") ?? []
+        return themes.sorted { a, b in
+            let ia = recent.firstIndex(of: a.id) ?? Int.max, ib = recent.firstIndex(of: b.id) ?? Int.max
+            return ia != ib ? ia < ib : a.name.localizedStandardCompare(b.name) == .orderedAscending
+        }
+    }
+
+    private func noteUse(color: String, style: LampHighlightStyle) {
+        guard let used = theme(color: color, style: style) else { return }
+        var recent = UserDefaults.standard.stringArray(forKey: "reader.recentHighlightThemes") ?? []
+        recent.removeAll { $0 == used.id }
+        recent.insert(used.id, at: 0)
+        UserDefaults.standard.set(Array(recent.prefix(20)), forKey: "reader.recentHighlightThemes")
+        themes = Self.byLastUse(themes)
+    }
+
+    /// The theme a colour and style carry, if the reader named them.
+    func theme(color: String?, style: LampHighlightStyle) -> LampHighlightTheme? {
+        guard let color else { return nil }
+        let hex = color.trimmingCharacters(in: CharacterSet(charactersIn: "#")).uppercased()
+        return themes.first { $0.color == hex && $0.style == style }
+    }
+
+    /// The style a new highlight takes: the last one chosen, as a pen is
+    /// picked up again where it was put down.
+    var newStyle: LampHighlightStyle {
+        get { LampHighlightStyle(rawValue: UserDefaults.standard.integer(forKey: "reader.highlightStyle")) ?? .highlight }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "reader.highlightStyle") }
+    }
+    private weak var barTextView: NSTextView?
+
+    // MARK: From the text view
+
+    func selectionDidEnd(in textView: NSTextView) {
+        let range = textView.selectedRange()
+        guard range.length > 0, let storage = textView.textStorage else {
+            // Only the words' own bar goes with their selection. A click that
+            // opened a highlight's bar also chooses its verse, which redraws
+            // the text and puts the empty selection back.
+            if isShowingForSelection { close() }
+            return
+        }
+        let spans = ReaderHighlightMarks.spans(in: storage, range: range)
+        guard !spans.isEmpty else { close(); return }
+        let text = (storage.string as NSString).substring(with: range)
+        show(.words(spans, text: text), in: textView, at: range)
+    }
+
+    /// A click that selected nothing: on a highlight, it opens that
+    /// highlight's controls.
+    func didClick(in textView: NSTextView, at index: Int) {
+        guard let storage = textView.textStorage, index >= 0, index < storage.length,
+              // A link's click is the link's: a verse number, a note's letter.
+              storage.attribute(.link, at: index, effectiveRange: nil) == nil,
+              let (reference, offset) = ReaderHighlightMarks.position(in: storage, at: index) else { return }
+        let here = (actions?.highlights(reference) ?? []).filter { $0.startOffset <= offset && offset < $0.endOffset }
+        guard !here.isEmpty else { close(); return }
+        let span = ReaderHighlightMarks.Span(reference: reference, start: here[0].startOffset, end: here[0].endOffset)
+        let range = ReaderHighlightMarks.drawnRange(of: span, in: storage) ?? NSRange(location: index, length: 1)
+        show(.existing(here), in: textView, at: range)
+    }
+
+    /// The highlight items for a right-click at `index`: the words selected
+    /// when the click is on them, otherwise the verse clicked.
+    func menuItems(in textView: NSTextView, selection: NSRange, at index: Int) -> [NSMenuItem] {
+        guard let storage = textView.textStorage, let actions else { return [] }
+        let target: Target
+        if selection.length > 0, NSLocationInRange(index, selection) {
+            let spans = ReaderHighlightMarks.spans(in: storage, range: selection)
+            guard !spans.isEmpty else { return [] }
+            target = .words(spans, text: (storage.string as NSString).substring(with: selection))
+        } else if let (reference, offset) = ReaderHighlightMarks.position(in: storage, at: index)
+                    ?? verseNumber(in: storage, at: index).map({ ($0, 0) }) {
+            let here = actions.highlights(reference).filter { $0.startOffset <= offset && offset < $0.endOffset }
+            if !here.isEmpty {
+                target = .existing(here)
+            } else if let length = actions.verseLength(reference) {
+                target = .words([ReaderHighlightMarks.Span(reference: reference, start: 0, end: length)], text: "")
+            } else {
+                return []
+            }
+        } else {
+            return []
+        }
+
+        var items: [NSMenuItem] = []
+        let header: String
+        switch target {
+        case .words(let spans, _):
+            header = spans.count == 1 && spans[0].start == 0 && spans[0].end == actions.verseLength(spans[0].reference)
+                ? "Highlight Verse" : "Highlight Selection"
+        case .existing:
+            header = "Highlight"
+        }
+        items.append(NSMenuItem.sectionHeader(title: header))
+        let row = NSMenuItem()
+        let palette = NSHostingView(rootView: ReaderHighlightPalette(
+            color: currentColor(of: target),
+            style: currentStyle(of: target),
+            stacked: true,
+            choose: { [weak self] hex, style in
+                row.menu?.cancelTracking()
+                self?.apply(hex, style: style, to: target)
+            },
+            chooseStyle: { [weak self] style in
+                // A highlight takes the style at once; for words, it is the
+                // style the colour chosen next is drawn in.
+                guard let self else { return }
+                if case .existing = target {
+                    row.menu?.cancelTracking()
+                }
+                self.restyle(style, target)
+            }
+        ))
+        palette.frame.size = palette.fittingSize
+        row.view = palette
+        items.append(row)
+        // However many there are, one line: the menu lists them, each with
+        // its mark and what it means.
+        if !themes.isEmpty {
+            let current = theme(color: currentColor(of: target), style: currentStyle(of: target))
+            let submenu = NSMenu(title: "Theme")
+            for theme in themes {
+                let item = NSMenuItem(title: theme.name, action: #selector(menuTheme(_:)), keyEquivalent: "")
+                item.target = self
+                item.image = Self.themeImage(theme)
+                item.subtitle = theme.description
+                item.state = theme.id == current?.id ? .on : .off
+                item.representedObject = ThemeChoice(theme: theme, target: target)
+                submenu.addItem(item)
+            }
+            let themeItem = NSMenuItem(title: "Theme", action: nil, keyEquivalent: "")
+            themeItem.image = NSImage(systemSymbolName: "tag", accessibilityDescription: nil)
+            themeItem.submenu = submenu
+            items.append(themeItem)
+        }
+        if case .existing(let highlights) = target {
+            let remove = NSMenuItem(title: "Remove Highlight", action: #selector(menuRemove(_:)), keyEquivalent: "")
+            remove.target = self
+            remove.image = NSImage(systemSymbolName: "eraser", accessibilityDescription: nil)
+            remove.representedObject = highlights.map(\.id)
+            items.append(remove)
+        }
+        return items
+    }
+
+    private func verseNumber(in storage: NSAttributedString, at index: Int) -> Int? {
+        guard index >= 0, index < storage.length,
+              storage.attribute(ReaderTextMarks.apparatus, at: index, effectiveRange: nil) != nil else { return nil }
+        return (storage.attribute(ReaderTextMarks.verse, at: index, effectiveRange: nil) as? NSNumber)?.intValue
+    }
+
+    private final class ThemeChoice: NSObject {
+        let theme: LampHighlightTheme
+        let target: Target
+        init(theme: LampHighlightTheme, target: Target) {
+            self.theme = theme
+            self.target = target
+        }
+    }
+
+    @objc private func menuTheme(_ sender: NSMenuItem) {
+        guard let choice = sender.representedObject as? ThemeChoice else { return }
+        apply(choice.theme.color, style: choice.theme.style, to: choice.target)
+    }
+
+    /// A theme's mark as a menu image: a swatch of its colour, or a line
+    /// under one, as its style draws.
+    static func themeImage(_ theme: LampHighlightTheme) -> NSImage {
+        markImage(color: theme.color, style: theme.style)
+    }
+
+    /// A colour drawn in a style, at a menu item's size: a theme's mark, or
+    /// a highlight found.
+    static func markImage(color hex: String, style: LampHighlightStyle) -> NSImage {
+        let color = NSColor(Color(lampHex: hex) ?? .yellow)
+        return NSImage(size: NSSize(width: 16, height: 16), flipped: false) { rect in
+            switch style {
+            case .highlight:
+                color.withAlphaComponent(0.55).setFill()
+                NSBezierPath(roundedRect: rect.insetBy(dx: 1, dy: 2), xRadius: 3, yRadius: 3).fill()
+            case .underlineSolid, .underlineDashed, .underlineDotted:
+                color.setStroke()
+                let line = NSBezierPath()
+                line.lineWidth = 2.5
+                line.move(to: NSPoint(x: 1, y: 3))
+                line.line(to: NSPoint(x: 15, y: 3))
+                if style == .underlineDashed { line.setLineDash([4, 2], count: 2, phase: 0) }
+                if style == .underlineDotted {
+                    line.lineCapStyle = .round
+                    line.setLineDash([0.1, 3.5], count: 2, phase: 0)
+                }
+                line.stroke()
+                NSColor.labelColor.setFill()
+                NSBezierPath(ovalIn: NSRect(x: 5, y: 7, width: 6, height: 6)).fill()
+            }
+            return true
+        }
+    }
+
+    @objc private func menuRemove(_ sender: NSMenuItem) {
+        guard let ids = sender.representedObject as? [Int64], let actions else { return }
+        let all = Set(ids)
+        Task {
+            // The highlights named, wherever they are in the chapter.
+            for highlight in highlightsNamed(all) {
+                do { try await actions.delete(highlight) } catch { actions.failed(error) }
+            }
+        }
+    }
+
+    private var lastShownHighlights: [LampVerseHighlight] = []
+    private func highlightsNamed(_ ids: Set<Int64>) -> [LampVerseHighlight] {
+        lastShownHighlights.filter { ids.contains($0.id) }
+    }
+
+    // MARK: The bar
+
+    private func show(_ target: Target, in textView: NSTextView, at range: NSRange) {
+        guard let layoutManager = textView.layoutManager, let container = textView.textContainer else { return }
+        close()
+        if case .existing(let highlights) = target { lastShownHighlights = highlights }
+        if case .words(_, let text) = target { isShowingForSelection = !text.isEmpty } else { isShowingForSelection = false }
+        // The first line of what it acts on, so the bar sits just above the
+        // words, where the reader is looking.
+        let glyphs = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        var firstLine = NSRect.null
+        layoutManager.enumerateEnclosingRects(
+            forGlyphRange: glyphs, withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0), in: container
+        ) { rect, stop in
+            firstLine = rect
+            stop.pointee = true
+        }
+        guard !firstLine.isNull else { return }
+        firstLine.origin.x += textView.textContainerOrigin.x
+        firstLine.origin.y += textView.textContainerOrigin.y
+
+        let bar = ReaderHighlightBar(
+            color: currentColor(of: target),
+            style: currentStyle(of: target),
+            themes: themes,
+            // What a highlight means, where the reader said: its theme.
+            caption: nil,
+            canRemove: { if case .existing = target { return true } else { return false } }(),
+            choose: { [weak self] hex, style in self?.apply(hex, style: style, to: target) },
+            chooseStyle: { [weak self] style in self?.restyle(style, target) },
+            remove: { [weak self] in self?.remove(target) },
+            note: { [weak self] in self?.note(target) },
+            copy: { [weak self] in self?.copy(target) },
+            more: { [weak self] in self?.more(target) }
+        )
+        // A panel of its own over the page, solid and shadowed, rather than a
+        // popover: the popover's glass let the verse beneath show through,
+        // and on a white page its edge all but vanished.
+        let host = NSHostingView(rootView: bar)
+        host.frame.size = host.fittingSize
+        let panel = ReaderHighlightPanel(
+            contentRect: NSRect(origin: .zero, size: host.frame.size),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.contentView = host
+        guard let window = textView.window else { return }
+        let onScreen = window.convertToScreen(textView.convert(firstLine, to: nil))
+        let size = host.frame.size
+        // Centred over the words and clear of them, above their first line,
+        // or below it where the window has no room above.
+        let margin = ReaderHighlightBar.margin
+        var origin = NSPoint(x: onScreen.midX - size.width / 2, y: onScreen.maxY + 6 - margin)
+        if origin.y + size.height - margin > window.frame.maxY - 60 {
+            origin.y = onScreen.minY - size.height - 6 + margin
+        }
+        origin.x = min(max(origin.x, window.frame.minX + 8), window.frame.maxX - size.width - 8)
+        panel.setFrameOrigin(origin)
+        window.addChildWindow(panel, ordered: .above)
+        self.panel = panel
+        barTextView = textView
+        // Gone at the next click, scroll or key anywhere else, as a menu is.
+        dismissMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .scrollWheel, .keyDown]
+        ) { [weak self] event in
+            if event.window !== self?.panel { self?.close() }
+            return event
+        }
+        // Left where it was, it would mark words that are no longer there.
+        let center = NotificationCenter.default
+        var moved: [(NSNotification.Name, AnyObject)] = [
+            (NSWindow.didResizeNotification, window),
+            (NSView.frameDidChangeNotification, textView),
+        ]
+        textView.postsFrameChangedNotifications = true
+        if let clip = textView.enclosingScrollView?.contentView {
+            clip.postsBoundsChangedNotifications = true
+            moved.append((NSView.boundsDidChangeNotification, clip))
+        }
+        moveObservers = moved.map { name, object in
+            center.addObserver(forName: name, object: object, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.close() }
+            }
+        }
+    }
+
+    /// Closes the bar if it belongs to this text view, which is leaving.
+    func textViewWillLeave(_ textView: NSTextView) {
+        if barTextView === textView { close() }
+    }
+
+    func close() {
+        if let dismissMonitor { NSEvent.removeMonitor(dismissMonitor) }
+        dismissMonitor = nil
+        moveObservers.forEach(NotificationCenter.default.removeObserver)
+        moveObservers = []
+        guard let panel else { return }
+        panel.parent?.removeChildWindow(panel)
+        panel.orderOut(nil)
+        self.panel = nil
+    }
+
+    private func currentStyle(of target: Target) -> LampHighlightStyle {
+        if case .existing(let highlights) = target, let first = highlights.first { return first.style }
+        return newStyle
+    }
+
+    private func restyle(_ style: LampHighlightStyle, _ target: Target) {
+        guard case .existing(let highlights) = target else {
+            newStyle = style
+            return
+        }
+        guard let actions else { return }
+        newStyle = style
+        close()
+        Task {
+            for highlight in highlights where highlight.style != style {
+                do {
+                    try await actions.restyle(highlight, highlight.color ?? "FFCC00", style)
+                } catch {
+                    actions.failed(error)
+                }
+            }
+        }
+    }
+
+    private func currentColor(of target: Target) -> String? {
+        switch target {
+        case .existing(let highlights):
+            highlights.first?.color.map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "#")).uppercased() }
+        case .words:
+            nil
+        }
+    }
+
+    private func apply(_ hex: String, style: LampHighlightStyle, to target: Target) {
+        guard let actions else { return }
+        newStyle = style
+        noteUse(color: hex, style: style)
+        let textView = barTextView
+        close()
+        Task {
+            do {
+                switch target {
+                case .words(let spans, _):
+                    for span in spans {
+                        // Highlights wholly inside the words are replaced, so a
+                        // colour chosen again reads as a change, not a layer.
+                        for old in actions.highlights(span.reference)
+                        where old.startOffset >= span.start && old.endOffset <= span.end {
+                            try await actions.delete(old)
+                        }
+                        try await actions.save(span, hex, style)
+                    }
+                case .existing(let highlights):
+                    for highlight in highlights { try await actions.restyle(highlight, hex, style) }
+                }
+            } catch {
+                actions.failed(error)
+            }
+        }
+        // Done with the words: the highlight now marks them.
+        if let textView { textView.setSelectedRange(NSRange(location: textView.selectedRange().location, length: 0)) }
+    }
+
+    private func remove(_ target: Target) {
+        guard let actions, case .existing(let highlights) = target else { return }
+        close()
+        Task {
+            for highlight in highlights {
+                do { try await actions.delete(highlight) } catch { actions.failed(error) }
+            }
+        }
+    }
+
+    private func reference(of target: Target) -> Int? {
+        switch target {
+        case .words(let spans, _): spans.first?.reference
+        case .existing(let highlights): highlights.first?.reference
+        }
+    }
+
+    private func note(_ target: Target) {
+        guard let reference = reference(of: target) else { return }
+        close()
+        actions?.openNote(reference)
+    }
+
+    private func copy(_ target: Target) {
+        close()
+        switch target {
+        case .words(let spans, let text): actions?.copy(spans, text)
+        case .existing(let highlights):
+            let spans = highlights.map {
+                ReaderHighlightMarks.Span(reference: $0.reference, start: $0.startOffset, end: $0.endOffset)
+            }
+            actions?.copy(spans, "")
+        }
+    }
+
+    private func more(_ target: Target) {
+        guard let reference = reference(of: target) else { return }
+        close()
+        actions?.moreOptions(reference)
+    }
+}
+
+/// The bar's window: never key, so the text keeps its selection and the
+/// reader's keyboard while the bar is up, and a click on it goes straight to
+/// the control under the pointer.
+private final class ReaderHighlightPanel: NSPanel {
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+}
+
+private struct ReaderHighlighterKey: EnvironmentKey {
+    static let defaultValue: ReaderHighlighter? = nil
+}
+
+extension EnvironmentValues {
+    var readerHighlighter: ReaderHighlighter? {
+        get { self[ReaderHighlighterKey.self] }
+        set { self[ReaderHighlighterKey.self] = newValue }
+    }
+}
+
+/// The palette: its colours, the one in use ticked, and the four ways a
+/// passage can be marked. A colour marks the words in the style chosen
+/// beside it.
+struct ReaderHighlightPalette: View {
+    let color: String?
+    @State var style: LampHighlightStyle
+    /// Styles on a line of their own, under the colours: a menu is narrow.
+    var stacked = false
+    let themes: [LampHighlightTheme]
+    let choose: (String, LampHighlightStyle) -> Void
+    let chooseStyle: (LampHighlightStyle) -> Void
+
+    init(
+        color: String?,
+        style: LampHighlightStyle,
+        stacked: Bool = false,
+        themes: [LampHighlightTheme] = [],
+        choose: @escaping (String, LampHighlightStyle) -> Void,
+        chooseStyle: @escaping (LampHighlightStyle) -> Void
+    ) {
+        self.color = color
+        _style = State(initialValue: style)
+        self.stacked = stacked
+        self.themes = themes
+        self.choose = choose
+        self.chooseStyle = chooseStyle
+    }
+
+    var body: some View {
+        if stacked {
+            VStack(alignment: .leading, spacing: 6) {
+                colors
+                styles
+                if !themes.isEmpty { themeMenu }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 5)
+        } else {
+            // One row, so the bar covers as little of the passage as it can.
+            HStack(spacing: 8) {
+                styles
+                Divider().frame(height: 20)
+                colors
+                if !themes.isEmpty { themeMenu }
+            }
+        }
+    }
+
+    /// The reader's named marks, in one pill that says which is in use and
+    /// lists them all, the most lately used first: chips took a second row
+    /// over the text, and had room for only a few.
+    private var themeMenu: some View {
+        let current = themes.first { $0.color == color && $0.style == style }
+        return Menu {
+            ForEach(themes) { theme in
+                Button {
+                    choose(theme.color, theme.style)
+                } label: {
+                    Label {
+                        Text(theme.name)
+                        if let description = theme.description { Text(description) }
+                    } icon: {
+                        Image(nsImage: ReaderHighlighter.themeImage(theme))
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "tag")
+                    .font(.system(size: 11))
+                Text(current?.name ?? "Themes")
+                    .font(.system(size: 12, weight: .medium))
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+        }
+        .menuStyle(.button)
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .fixedSize()
+        .help(current.map { [$0.name, $0.description].compactMap { $0 }.joined(separator: " — ") }
+            ?? "Mark with a theme")
+    }
+
+    private func themeName(_ hex: String) -> String? {
+        themes.first { $0.color == hex && $0.style == style }?.name
+    }
+
+    private var colors: some View {
+        HStack(spacing: 4) {
+            ForEach(StudyHighlightPalette.colors) { item in
+                Button {
+                    choose(item.hex, style)
+                } label: {
+                    HighlightSwatch(color: item.color, isSelected: color == item.hex, size: 20)
+                }
+                .buttonStyle(.plain)
+                // The reader's name for the colour, where they gave it one.
+                .help(themeName(item.hex).map { "\($0) (\(item.name))" } ?? item.name)
+                .accessibilityLabel("\(item.name) highlight")
+            }
+        }
+    }
+
+    private var styles: some View {
+        HStack(spacing: 2) {
+            ForEach(LampHighlightStyle.allCases, id: \.self) { option in
+                Button {
+                    style = option
+                    chooseStyle(option)
+                } label: {
+                    Self.glyph(option, color: Color(lampHex: color ?? "FFCC00") ?? .yellow)
+                        .frame(width: 30, height: 28)
+                        .background(
+                            style == option ? AnyShapeStyle(Color.primary.opacity(0.1)) : AnyShapeStyle(.clear),
+                            in: RoundedRectangle(cornerRadius: 5)
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(Self.name(option))
+                .accessibilityLabel(Self.name(option))
+                .accessibilityAddTraits(style == option ? .isSelected : [])
+            }
+        }
+    }
+
+    static func name(_ style: LampHighlightStyle) -> String {
+        switch style {
+        case .highlight: "Highlight"
+        case .underlineSolid: "Underline"
+        case .underlineDashed: "Dashed Underline"
+        case .underlineDotted: "Dotted Underline"
+        }
+    }
+
+    /// The letter "a" marked as the style marks words, in the colour in use,
+    /// with the line drawn heavy enough to tell solid, dashed and dotted apart
+    /// at a glance.
+    @ViewBuilder
+    static func glyph(_ style: LampHighlightStyle, color: Color) -> some View {
+        // Shapes, not four letters "a" told apart by a hairline: a block of
+        // colour for a highlight, and the line itself for each underline.
+        switch style {
+        case .highlight:
+            RoundedRectangle(cornerRadius: 3)
+                .fill(color.opacity(0.55))
+                .frame(width: 18, height: 13)
+        case .underlineSolid, .underlineDashed, .underlineDotted:
+            StyleLine(style: style)
+                .fill(color)
+                .frame(width: 20, height: 3.5)
+        }
+    }
+}
+
+/// The line under a style's sample: solid, three dashes, or five dots.
+private struct StyleLine: Shape {
+    let style: LampHighlightStyle
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        switch style {
+        case .underlineDashed:
+            let dash = rect.width / 4
+            for i in 0..<3 {
+                path.addRect(CGRect(x: CGFloat(i) * dash * 1.5, y: rect.minY, width: dash, height: rect.height))
+            }
+        case .underlineDotted:
+            let step = rect.width / 5
+            for i in 0..<5 {
+                path.addEllipse(in: CGRect(
+                    x: CGFloat(i) * step + (step - rect.height) / 2, y: rect.minY,
+                    width: rect.height, height: rect.height
+                ))
+            }
+        default:
+            path.addRoundedRect(in: rect, cornerSize: CGSize(width: 1, height: 1))
+        }
+        return path
+    }
+}
+
+/// The controls by the words selected or the highlight clicked: how to mark
+/// them, then what else one does with a passage one has marked.
+struct ReaderHighlightBar: View {
+    let color: String?
+    let style: LampHighlightStyle
+    let themes: [LampHighlightTheme]
+    let caption: String?
+    let canRemove: Bool
+    let choose: (String, LampHighlightStyle) -> Void
+    let chooseStyle: (LampHighlightStyle) -> Void
+    let remove: () -> Void
+    let note: () -> Void
+    let copy: () -> Void
+    let more: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let caption {
+                Text(caption)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Color.lampSecondaryText)
+                    .lineLimit(2)
+                    .frame(maxWidth: 420, alignment: .leading)
+            }
+            row
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        // Solid, edged and lifted off the page: it is a control over the
+        // text, and must not read as part of it.
+        .background(
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.16))
+        )
+        // Its own shadow, in the clear margin of its window, so it is drawn
+        // the same wherever the window lands.
+        .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
+        .padding(ReaderHighlightBar.margin)
+    }
+
+    private var row: some View {
+        HStack(alignment: .top, spacing: 4) {
+            ReaderHighlightPalette(color: color, style: style, themes: themes, choose: choose, chooseStyle: chooseStyle)
+            Divider().frame(height: 20).padding(.horizontal, 4)
+            if canRemove {
+                // Named: an eraser alone was read as one more style.
+                Button("Remove", systemImage: "eraser", action: remove)
+                    .labelStyle(.titleAndIcon)
+                    .fixedSize()
+                    .buttonStyle(.borderless)
+                    .font(.system(size: 13))
+                    .help("Remove this highlight")
+                    .padding(.trailing, 4)
+            }
+            barButton("Add Note", systemImage: "square.and.pencil", action: note)
+            barButton("Copy as Citation", systemImage: "doc.on.doc", action: copy)
+            barButton("More Highlight Options", systemImage: "ellipsis.circle", action: more)
+        }
+    }
+
+    /// The clear margin round the bar that its shadow is drawn in.
+    static let margin: CGFloat = 14
+
+    private func barButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(title, systemImage: systemImage, action: action)
+            .labelStyle(.iconOnly)
+            .buttonStyle(.borderless)
+            .font(.system(size: 14))
+            .frame(width: 26, height: 24)
+            .help(title)
     }
 }

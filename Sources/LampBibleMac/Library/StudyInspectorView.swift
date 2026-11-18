@@ -95,6 +95,9 @@ final class StudyPaneState {
         self.recentAnalyses = recentAnalyses ?? StudyPaneRecents(capacity: 4)
     }
     var tool = "commentary"
+    /// A verse whose note was asked for from the reader (Add Note), opened
+    /// ready to write rather than as the one-line prompt an empty note is.
+    var noteToCompose: Int?
     var dictionaryQuery = ""
     var dictionaryLookup: DictionaryLookup?
     /// The analyses opened over the dictionary entry, the one showing last.
@@ -338,13 +341,18 @@ private struct NotesInspectorView: View {
     /// sight, a pane must go on showing its tab's, not follow the library to
     /// another tab's and drop what was written in it.
     @EnvironmentObject private var reader: ReaderWorkspace
+    @Environment(StudyPaneState.self) private var studyPane
+    /// The verse whose empty note was opened to write, from its prompt.
+    @State private var composingReference: Int?
+    /// The reader's names for colours and styles, by set, for the chapter's
+    /// highlights list.
+    @State private var themesBySet: [String: [LampHighlightTheme]] = [:]
     @State private var isExporting = false
     @State private var exportedURL: URL?
     @State private var transferStatus: String?
     @State private var exportError: String?
     @State private var editorIsDirty = false
     @State private var reloadToken = UUID()
-    @State private var highlightVerse: LampVerse?
     /// The notes to read rather than to write: each drawn as it reads, with
     /// none of the editor, the highlight palette or the range around it.
     @AppStorage("notes.readingMode") private var isReadingNotes = false
@@ -417,10 +425,6 @@ private struct NotesInspectorView: View {
                 }
             }
         }
-        .sheet(item: $highlightVerse) { verse in
-            VerseHighlightEditorView(verse: verse)
-                .environmentObject(model)
-        }
         // A note editor waiting before a verse is chosen, and after each one,
         // so choosing one never waits for a web view.
         .onAppear {
@@ -435,14 +439,31 @@ private struct NotesInspectorView: View {
                 reader.focusVerse(group.id)
                 isReadingNotes = false
             }
+        } else if group.id == reader.selectedVerseReference, !group.hasPersonalNote,
+                  group.installedNotes.isEmpty, composingReference != group.id,
+                  studyPane.noteToCompose != group.id {
+            // A verse with no note yet: a line offering one, not an empty
+            // editor, which stood over the chapter's highlights and pushed
+            // them out of sight.
+            HStack(alignment: .firstTextBaseline) {
+                Text(LampBibleReferenceFormatter.describeRange(from: group.id, to: group.id))
+                    .font(.headline)
+                Spacer()
+                Button("Add a Note", systemImage: "square.and.pencil") {
+                    composingReference = group.id
+                }
+                .buttonStyle(.bordered)
+                .help("Write a note on this verse")
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .lampCard(padding: 14)
         } else if group.id == reader.selectedVerseReference {
             PersonalNoteEditor(
                 reference: group.id,
                 verse: group.verse,
                 installedNotes: group.installedNotes,
                 reloadToken: reloadToken,
-                isDirty: $editorIsDirty,
-                editHighlightSelection: { highlightVerse = group.verse }
+                isDirty: $editorIsDirty
             )
         } else {
             Button {
@@ -488,18 +509,29 @@ private struct NotesInspectorView: View {
         }
     }
 
-    /// The verses highlighted in this chapter, each with its colour and its
-    /// opening words, so the chapter's highlights can be seen and gone to from
-    /// the pane that sets them, rather than only found by scrolling the text.
+    /// The chapter's highlights, each with its colour and the words it
+    /// marks, so they can be seen and gone to from the pane, rather than only
+    /// found by scrolling the text. All of the reader's highlights are a
+    /// search away.
     @ViewBuilder
     private var chapterHighlights: some View {
         let rows = highlightRows
         if !rows.isEmpty, let chapter = reader.chapter {
             VStack(alignment: .leading, spacing: 8) {
-                Label("Highlights in \(chapter.book.name) \(chapter.number)", systemImage: "highlighter")
-                    .lampSectionHeading()
+                HStack(alignment: .firstTextBaseline) {
+                    Label("Highlights in \(chapter.book.name) \(chapter.number)", systemImage: "highlighter")
+                        .lampSectionHeading()
+                    Spacer()
+                    Button("All Highlights") {
+                        reader.requestedSearchTab = SearchTab(kind: .highlights)
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.callout)
+                    .foregroundStyle(.tint)
+                    .help("Every highlight, in Search")
+                }
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(rows.enumerated()), id: \.element.verse.id) { index, row in
+                    ForEach(Array(rows.enumerated()), id: \.element.highlight.id) { index, row in
                         if index > 0 { Divider().padding(.leading, 18) }
                         highlightRow(row, chapter: chapter)
                     }
@@ -507,35 +539,69 @@ private struct NotesInspectorView: View {
                 .lampCard(padding: 6)
             }
             .padding(.top, 6)
+            .task(id: Set(rows.map(\.highlight.setID))) {
+                var loaded: [String: [LampHighlightTheme]] = [:]
+                for setID in Set(rows.map(\.highlight.setID)) {
+                    loaded[setID] = (try? await model.library.highlightThemes(setID: setID)) ?? []
+                }
+                if loaded != themesBySet { themesBySet = loaded }
+            }
         }
     }
 
-    private var highlightRows: [(verse: LampVerse, color: Color)] {
+    private func themeName(of highlight: LampVerseHighlight) -> String? {
+        let hex = (highlight.color ?? "FFCC00").trimmingCharacters(in: CharacterSet(charactersIn: "#")).uppercased()
+        return themesBySet[highlight.setID]?.first { $0.color == hex && $0.style == highlight.style }?.name
+    }
+
+    private var highlightRows: [(verse: LampVerse, highlight: LampVerseHighlight)] {
         guard let chapter = reader.chapter else { return [] }
-        return chapter.verses.compactMap { verse in
-            guard let highlight = model.personalHighlights(for: verse.id).first else { return nil }
-            return (verse, Color(lampHex: highlight.color ?? "FFCC00") ?? .yellow)
+        return chapter.verses.flatMap { verse in
+            model.personalHighlights(for: verse.id, in: reader.selectedTranslationID)
+                .sorted { $0.startOffset < $1.startOffset }
+                .map { (verse, $0) }
         }
     }
 
-    private func highlightRow(_ row: (verse: LampVerse, color: Color), chapter: LampChapter) -> some View {
+    /// The words a highlight marks, with an ellipsis where it begins or ends
+    /// inside the verse: the verse whole read as though all of it was marked.
+    private func markedWords(_ highlight: LampVerseHighlight, in verse: LampVerse) -> String {
+        let characters = Array(verse.text)
+        let start = min(max(highlight.startOffset, 0), characters.count)
+        let end = min(max(highlight.endOffset, start), characters.count)
+        let words = String(characters[start..<end]).trimmingCharacters(in: .whitespaces)
+        return (start > 0 ? "…" : "") + words + (end < characters.count ? "…" : "")
+    }
+
+    private func highlightRow(
+        _ row: (verse: LampVerse, highlight: LampVerseHighlight),
+        chapter: LampChapter
+    ) -> some View {
         let isSelected = reader.selectedVerseReference == row.verse.id
+        let color = Color(lampHex: row.highlight.color ?? "FFCC00") ?? .yellow
         return Button {
             reader.focusVerse(row.verse.id)
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 RoundedRectangle(cornerRadius: 2)
-                    .fill(row.color)
+                    .fill(color)
                     .frame(width: 4, height: 14)
                     .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
                 Text("\(chapter.number):\(row.verse.number)")
                     .font(.callout.weight(.semibold).monospacedDigit())
                     .frame(minWidth: 34, alignment: .leading)
-                Text(row.verse.text)
-                    .font(.callout)
-                    .foregroundStyle(Color.lampSecondaryText)
-                    .lineLimit(3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: 2) {
+                    if let theme = themeName(of: row.highlight) {
+                        Text(theme)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.primary)
+                    }
+                    Text(markedWords(row.highlight, in: row.verse))
+                        .font(.callout)
+                        .foregroundStyle(Color.lampSecondaryText)
+                        .lineLimit(3)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 7)
@@ -856,7 +922,6 @@ private struct PersonalNoteEditor: View {
     let installedNotes: [LampVerseNote]
     let reloadToken: UUID
     @Binding var isDirty: Bool
-    let editHighlightSelection: () -> Void
 
     @State private var title = ""
     @State private var content = ""
@@ -888,11 +953,6 @@ private struct PersonalNoteEditor: View {
             || rangeEndVerse != savedRangeEndVerse
             || personalFootnotes != savedFootnotes
     }
-    private var selectedHighlightColor: String? {
-        model.personalHighlights(for: reference).first?.color
-            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "#")).uppercased() }
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             HStack {
@@ -900,44 +960,6 @@ private struct PersonalNoteEditor: View {
                     .font(.title3.weight(.bold))
                 Spacer()
                 if isLoading { ProgressView().controlSize(.small) }
-            }
-
-            if verse != nil {
-            VStack(alignment: .leading, spacing: 12) {
-                Label("Highlight", systemImage: "highlighter")
-                    .lampSectionHeading()
-                HStack(spacing: 12) {
-                    ForEach(StudyHighlightPalette.colors) { item in
-                        Button {
-                            setHighlight(item.hex)
-                        } label: {
-                            HighlightSwatch(color: item.color, isSelected: selectedHighlightColor == item.hex)
-                        }
-                        .buttonStyle(.plain)
-                        .help(item.name)
-                        .accessibilityLabel("\(item.name) highlight")
-                        .accessibilityAddTraits(selectedHighlightColor == item.hex ? .isSelected : [])
-                    }
-                    if selectedHighlightColor != nil {
-                        Button("Remove Highlight", systemImage: "xmark.circle") {
-                            setHighlight(nil)
-                        }
-                        .labelStyle(.iconOnly)
-                        .buttonStyle(.plain)
-                        .font(.title3)
-                        .foregroundStyle(Color.lampSecondaryText)
-                        .help("Remove highlight")
-                    }
-                }
-                // No ellipsis: at the end of a label that hugs the button it was
-                // read as the label being cut off.
-                Button("Highlight Part of the Verse", systemImage: "selection.pin.in.out") {
-                    editHighlightSelection()
-                }
-                .fixedSize()
-            }
-
-            Divider()
             }
 
             VStack(alignment: .leading, spacing: 10) {
@@ -1159,22 +1181,6 @@ private struct PersonalNoteEditor: View {
         }
     }
 
-    private func setHighlight(_ color: String?) {
-        Task {
-            do {
-                guard let verse else { return }
-                try await model.setWholeVerseHighlight(
-                    reference: reference,
-                    textLength: verse.text.count,
-                    color: color
-                )
-                errorMessage = nil
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-        }
-    }
-
     /// The same visual editor the devotional editor uses, in its compact layout so
     /// it grows with the note instead of scrolling inside the notes column.
     private var noteEditor: some View {
@@ -1358,38 +1364,6 @@ private struct PersonalNoteEditor: View {
 
     private func moduleName(for moduleID: String) -> String {
         model.noteModules.first { $0.id == moduleID }?.name ?? moduleID
-    }
-}
-
-/// One colour of the highlight palette. The chosen one wears a ring set off
-/// from it by a gap, as the system's colour wells mark theirs, and a check,
-/// so which is chosen does not rest on telling a thin ring from none.
-private struct HighlightSwatch: View {
-    let color: Color
-    let isSelected: Bool
-
-    var body: some View {
-        Circle()
-            .fill(color)
-            .frame(width: 24, height: 24)
-            .overlay {
-                Circle().strokeBorder(Color.black.opacity(0.12), lineWidth: 1)
-            }
-            .overlay {
-                if isSelected {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(.white)
-                        .shadow(color: .black.opacity(0.25), radius: 1)
-                }
-            }
-            .padding(3)
-            .overlay {
-                if isSelected {
-                    Circle().strokeBorder(Color.primary.opacity(0.85), lineWidth: 2)
-                }
-            }
-            .contentShape(Circle())
     }
 }
 

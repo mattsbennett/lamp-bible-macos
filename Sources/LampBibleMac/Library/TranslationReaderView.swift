@@ -81,6 +81,8 @@ struct TranslationReaderView: View, Equatable {
         nonmutating set { workspace.isChoosingPassage = newValue }
     }
     @State private var highlightVerse: LampVerse?
+    /// The highlight controls by the words selected or the highlight clicked.
+    @State private var highlighter = ReaderHighlighter()
     // The tab's, which the window's toolbar reads too (`ReaderWorkspace`).
     private var planReadingChapters: [LampChapter] {
         get { workspace.planReadingChapters }
@@ -230,6 +232,61 @@ struct TranslationReaderView: View, Equatable {
         })
         // The tab's own: a chat reads the selection of the tab it belongs to.
         .environment(\.readerTextSelection, workspace.textSelection)
+        .environment(\.readerHighlighter, highlighter)
+        .onAppear { highlighter.actions = highlighterActions }
+        // The named marks of the set new highlights go to, read again when
+        // the options sheet, where they are named, closes.
+        .task(id: "\(workspace.selectedTranslationID ?? "")|\(highlightVerse == nil)") {
+            guard highlightVerse == nil, let translationID = workspace.selectedTranslationID else { return }
+            let setID = "personal-highlights:\(LampTranslationID.original(translationID))"
+            highlighter.themes = (try? await model.library.highlightThemes(setID: setID)) ?? []
+        }
+    }
+
+    /// What the highlight controls read and write: the reader's own
+    /// highlights in the translation being read.
+    private var highlighterActions: ReaderHighlighter.Actions {
+        let model = model
+        let workspace = workspace
+        func setID() -> String? {
+            workspace.selectedTranslationID.map { "personal-highlights:\(LampTranslationID.original($0))" }
+        }
+        func verse(_ reference: Int) -> LampVerse? {
+            displayedChapters.lazy.flatMap(\.verses).first { $0.id == reference }
+                ?? workspace.chapter?.verses.first { $0.id == reference }
+        }
+        return ReaderHighlighter.Actions(
+            highlights: { model.personalHighlights(for: $0, in: workspace.selectedTranslationID) },
+            verseLength: { verse($0)?.text.count },
+            save: { span, color, style in
+                guard let setID = setID() else { return }
+                try await model.saveVerseHighlight(
+                    reference: span.reference, startOffset: span.start, endOffset: span.end,
+                    style: style, color: color, setID: setID
+                )
+            },
+            restyle: { old, color, style in
+                try await model.deleteVerseHighlight(id: old.id, reference: old.reference)
+                try await model.saveVerseHighlight(
+                    reference: old.reference, startOffset: old.startOffset, endOffset: old.endOffset,
+                    style: style, color: color, setID: old.setID
+                )
+            },
+            delete: { try await model.deleteVerseHighlight(id: $0.id, reference: $0.reference) },
+            openNote: { reference in
+                prepareChapterForStudy(reference: reference)
+                selectVerseFromReader(reference)
+                studyPane.noteToCompose = reference
+                studyPane.tool = "notes"
+                showingStudyInspector = true
+            },
+            copy: { spans, text in
+                let verses = spans.compactMap { verse($0.reference) }
+                copyAsCitation(verses, selectedText: text.isEmpty ? nil : text)
+            },
+            moreOptions: { reference in highlightVerse = verse(reference) },
+            failed: { model.errorMessage = $0.localizedDescription }
+        )
     }
 
     /// Whether this is the window's reader on screen: kept readers of other
@@ -1822,6 +1879,10 @@ struct TranslationReaderView: View, Equatable {
         )
         let whole = NSRange(location: 0, length: body.length)
         body.addAttribute(ReaderTextMarks.verse, value: NSNumber(value: verse.id), range: whole)
+        // Where these words begin in the verse, for highlighting them in place.
+        body.addAttribute(
+            ReaderHighlightMarks.offset, value: NSNumber(value: range?.startOffset ?? 0), range: whole
+        )
         if let companionID = column.companionID {
             body.addAttribute(ReaderTextMarks.translation, value: companionID, range: whole)
         }
@@ -1962,30 +2023,14 @@ struct TranslationReaderView: View, Equatable {
             }
     }
 
+    // Highlighting is offered by the text view itself (`ReaderHighlighter`),
+    // for the verse or the words under the pointer.
     private func paragraphContextMenuEntries(_ paragraph: ReaderParagraph) -> [ReaderContextMenuEntry] {
-        var entries = copyContextMenuEntries(for: paragraph.verses)
-        entries.append(.separator)
-        if paragraph.verses.count == 1, let verse = paragraph.verses.first {
-            entries += highlightContextMenuEntries(for: verse)
-        } else {
-            entries.append(.submenu(
-                "Highlight Verse",
-                systemImage: "highlighter",
-                entries: paragraph.verses.map { verse in
-                    .submenu(
-                        "Verse \(verse.number)",
-                        entries: highlightColorEntries(for: verse, includesRemoval: true)
-                    )
-                }
-            ))
-        }
-        return entries
+        copyContextMenuEntries(for: paragraph.verses)
     }
 
     private func verseContextMenuEntries(_ verse: LampVerse) -> [ReaderContextMenuEntry] {
         var entries = copyContextMenuEntries(for: [verse])
-        entries.append(.separator)
-        entries += highlightContextMenuEntries(for: verse)
         entries.append(.separator)
         entries.append(.action(
             model.hasPersonalNote(for: verse.id) ? "Edit Note" : "Add Note",
@@ -1993,6 +2038,7 @@ struct TranslationReaderView: View, Equatable {
         ) {
             prepareChapterForStudy(reference: verse.id)
             selectVerseFromReader(verse.id)
+            studyPane.noteToCompose = verse.id
             studyPane.tool = "notes"
             showingStudyInspector = true
         })
@@ -2012,52 +2058,18 @@ struct TranslationReaderView: View, Equatable {
         ]
     }
 
-    private func highlightContextMenuEntries(for verse: LampVerse) -> [ReaderContextMenuEntry] {
-        [
-            .action("Highlight Words…", systemImage: "selection.pin.in.out") {
-                highlightVerse = verse
-            },
-            .submenu(
-                "Highlight Verse",
-                systemImage: "highlighter",
-                entries: highlightColorEntries(for: verse, includesRemoval: false)
-            ),
-        ] + (model.personalHighlights(for: verse.id, in: workspace.selectedTranslationID).isEmpty ? [] : [
-            .action("Remove Highlight", systemImage: "eraser") {
-                setHighlight(nil, for: verse)
-            },
-        ])
-    }
-
-    private func highlightColorEntries(
-        for verse: LampVerse,
-        includesRemoval: Bool
-    ) -> [ReaderContextMenuEntry] {
-        var entries = StudyHighlightPalette.colors.map { item in
-            ReaderContextMenuEntry.action(item.name) {
-                setHighlight(item.hex, for: verse)
-            }
-        }
-        if includesRemoval, !model.personalHighlights(for: verse.id, in: workspace.selectedTranslationID).isEmpty {
-            entries.append(.separator)
-            entries.append(.action("Remove Highlight", systemImage: "eraser") {
-                setHighlight(nil, for: verse)
-            })
-        }
-        return entries
-    }
-
-    private func copyAsCitation(_ fallbackVerses: [LampVerse]) {
+    private func copyAsCitation(_ fallbackVerses: [LampVerse], selectedText: String? = nil) {
         guard let firstReference = fallbackVerses.first?.id,
               let chapter = displayedChapters.first(where: { chapter in
                   chapter.verses.contains(where: { $0.id == firstReference })
               }) ?? workspace.chapter else { return }
         let pasteboard = NSPasteboard.general
         let originalChangeCount = pasteboard.changeCount
-        let copiedSelection = NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil)
-            && pasteboard.changeCount != originalChangeCount
-            ? pasteboard.string(forType: .string)
-            : nil
+        let copiedSelection = selectedText
+            ?? (NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil)
+                && pasteboard.changeCount != originalChangeCount
+                ? pasteboard.string(forType: .string)
+                : nil)
         let citationVerses = fallbackVerses.map { verse in
             ReaderCitationVerse(
                 number: verse.number,
@@ -2365,20 +2377,22 @@ struct TranslationReaderView: View, Equatable {
                     value: ReaderHighlightGrounds.ground(for: color),
                     range: range
                 )
+            // Thick: at the reader's size a single line read as faint, and a
+            // dotted one as a link.
             case .underlineSolid:
                 result.addAttributes([
-                    .underlineStyle: NSUnderlineStyle.single.rawValue,
+                    .underlineStyle: NSUnderlineStyle.thick.rawValue,
                     .underlineColor: color,
                 ], range: range)
             case .underlineDashed:
                 result.addAttributes([
-                    .underlineStyle: NSUnderlineStyle.single
+                    .underlineStyle: NSUnderlineStyle.thick
                         .union(.patternDash).rawValue,
                     .underlineColor: color,
                 ], range: range)
             case .underlineDotted:
                 result.addAttributes([
-                    .underlineStyle: NSUnderlineStyle.single
+                    .underlineStyle: NSUnderlineStyle.thick
                         .union(.patternDot).rawValue,
                     .underlineColor: color,
                 ], range: range)
@@ -2492,20 +2506,6 @@ struct TranslationReaderView: View, Equatable {
             openLexicon(lookup)
         }
         return true
-    }
-
-    private func setHighlight(_ color: String?, for verse: LampVerse) {
-        Task {
-            do {
-                try await model.setWholeVerseHighlight(
-                    reference: verse.id,
-                    textLength: verse.text.count,
-                    color: color
-                )
-            } catch {
-                model.errorMessage = error.localizedDescription
-            }
-        }
     }
 
     private func topPadding(for verse: LampVerse) -> CGFloat {

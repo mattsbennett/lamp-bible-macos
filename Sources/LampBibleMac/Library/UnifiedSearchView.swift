@@ -50,6 +50,8 @@ struct UnifiedSearchView: View {
     }
 
     @State private var typing: Typing?
+    /// The themes highlights are found by, read when the Highlights scope is.
+    @State private var markThemes: [LampHighlightTheme] = []
 
     /// Settled deliberately at the same 250ms the search itself waits, and
     /// for the same reason. It costs no delay: the search is driven by the
@@ -127,9 +129,17 @@ struct UnifiedSearchView: View {
         get { tabs.selected.strongsKey }
         nonmutating set { tabs.updateSelected { $0.strongsKey = newValue } }
     }
-    private var highlightColor: String {
-        get { tabs.selected.highlightColor }
-        nonmutating set { tabs.updateSelected { $0.highlightColor = newValue } }
+    private var highlightColors: Set<String> {
+        get { tabs.selected.highlightColors }
+        nonmutating set { tabs.updateSelected { $0.highlightColors = newValue } }
+    }
+    private var highlightStyles: Set<LampHighlightStyle> {
+        get { tabs.selected.highlightStyles }
+        nonmutating set { tabs.updateSelected { $0.highlightStyles = newValue } }
+    }
+    private var highlightThemes: Set<LampHighlightMark> {
+        get { tabs.selected.highlightThemes }
+        nonmutating set { tabs.updateSelected { $0.highlightThemes = newValue } }
     }
 
     /// A binding onto one of the selected tab's fields, for the controls that
@@ -286,9 +296,19 @@ struct UnifiedSearchView: View {
         )
     }
 
-    private var hasActiveHighlightColor: Bool {
-        selectedKind == .highlights
-            && !highlightColor.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    /// The Highlights scope lists one's highlights with nothing typed, by
+    /// their marks or every one, where other scopes wait for words.
+    private var listsHighlights: Bool { selectedKind == .highlights }
+
+    private var hasHighlightMarks: Bool {
+        selectedKind == .highlights && tabs.selected.hasHighlightMarks
+    }
+
+    /// The marks chosen, as one value to watch.
+    private struct ChosenMarks: Equatable {
+        let colors: Set<String>
+        let styles: Set<LampHighlightStyle>
+        let themes: Set<LampHighlightMark>
     }
 
     private var selectedResult: LampModuleSearchResult? {
@@ -407,8 +427,8 @@ struct UnifiedSearchView: View {
             if showsStrongsAnalysis {
                 strongsAnalysis
             } else if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                && !hasActiveStrongsFilter && !hasActiveHighlightColor
-                && !hasActiveDevotionalFilter {
+                && !hasActiveStrongsFilter && !hasHighlightMarks
+                && !hasActiveDevotionalFilter && !listsHighlights {
                 searchLanding
             } else if model.isModuleSearching && model.moduleSearchResults.isEmpty {
                 ProgressView("Searching Library…")
@@ -555,9 +575,15 @@ struct UnifiedSearchView: View {
             }
             runSearch()
         }
-        .onChange(of: tabbed(highlightColor)) { old, new in
+        .onChange(of: tabbed(ChosenMarks(colors: highlightColors, styles: highlightStyles, themes: highlightThemes))) {
+            old, new in
             guard old.tab == new.tab else { return }
             runSearch()
+        }
+        .task(id: listsHighlights) {
+            guard listsHighlights else { return }
+            let loaded = await model.highlightThemesForSearch()
+            if loaded != markThemes { markThemes = loaded }
         }
         .onChange(of: model.moduleSearchResults) { _, results in
             if !results.contains(where: { $0.id == selectedResultID }) {
@@ -572,8 +598,8 @@ struct UnifiedSearchView: View {
             // so no observer fires and the results on the model may be from
             // whatever was searched last. Run the restored search once.
             if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || hasActiveStrongsFilter || hasActiveHighlightColor
-                || hasActiveDevotionalFilter {
+                || hasActiveStrongsFilter || hasHighlightMarks
+                || hasActiveDevotionalFilter || listsHighlights {
                 runSearch()
             }
         }
@@ -602,7 +628,7 @@ struct UnifiedSearchView: View {
         if bookScope != .all {
             widenings.append(.init(title: "Search All Books", detail: nil) { bookScope = .all })
         }
-        let shown = query.isEmpty ? (hasActiveStrongsFilter ? strongsKey : highlightColor) : query
+        let shown = query.isEmpty ? (hasActiveStrongsFilter ? strongsKey : markSummary ?? "Highlights") : query
         return SearchNothingFound(
             query: shown,
             widenings: widenings,
@@ -1224,8 +1250,8 @@ struct UnifiedSearchView: View {
         let isSelected = result.id == selectedResult?.id
         return VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline, spacing: 7) {
-                if let highlightColor = color(for: result.highlightColor) {
-                    Circle().fill(highlightColor).frame(width: 9, height: 9)
+                if result.kind == .highlights, let hex = result.highlightColor {
+                    Image(nsImage: ReaderHighlighter.markImage(color: hex, style: result.highlightStyle ?? .highlight))
                 }
                 // A Greek or Hebrew headword in a face and size its points
                 // read at: at 13.5pt a vav with its sheva read as "!".
@@ -1245,7 +1271,7 @@ struct UnifiedSearchView: View {
                         .frame(maxWidth: 240, alignment: .trailing)
                 }
             }
-            snippetText(result.snippet)
+            snippetText(for: result)
                 .font(.system(size: isScripture ? hitFontSize : max(13, hitFontSize - 3)))
                 .lineSpacing(isScripture ? 2 : 5)
                 .lineLimit(3)
@@ -1341,7 +1367,7 @@ struct UnifiedSearchView: View {
                         Text("Where \u{201C}\(query)\u{201D} appears")
                             .lampSectionHeading()
                             .font(.caption.weight(.semibold))
-                        snippetText(result.snippet)
+                        snippetText(for: result)
                             .font(.system(size: detailFontSize - 3, design: .serif))
                             .lineSpacing(3)
                             .lineLimit(3)
@@ -1353,7 +1379,7 @@ struct UnifiedSearchView: View {
                     .background(RoundedRectangle(cornerRadius: 10).fill(Color.lampCardFill))
                     .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.lampCardStroke))
                     SearchDictionaryEntry(key: key, moduleID: result.moduleID) {
-                        snippetText(result.snippet)
+                        snippetText(for: result)
                             .font(.system(size: detailFontSize - 1, design: detailDesign(for: result.kind)))
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
@@ -1362,7 +1388,7 @@ struct UnifiedSearchView: View {
                     .id(result.id)
                 } else if result.kind == .commentary {
                     SearchCommentaryHit(result: result, query: query, fontSize: detailFontSize) {
-                        snippetText(result.snippet)
+                        snippetText(for: result)
                             .font(.system(size: detailFontSize - 1, design: .serif))
                             .lineSpacing(detailFontSize * 0.4)
                             .textSelection(.enabled)
@@ -1370,7 +1396,7 @@ struct UnifiedSearchView: View {
                     }
                     .id(result.id)
                 } else {
-                    snippetText(result.snippet)
+                    snippetText(for: result)
                         .font(.system(size: detailFontSize - 1, design: detailDesign(for: result.kind)))
                         .lineSpacing(detailFontSize * 0.4)
                         .textSelection(.enabled)
@@ -1401,6 +1427,20 @@ struct UnifiedSearchView: View {
                     openReference(reference, translationID(of: result))
                 }
                 .buttonStyle(.borderedProminent)
+            }
+            // A highlight found can be taken off here, without going to it.
+            if result.kind == .highlights, let reference = result.startReference,
+               let id = result.id.split(separator: ":").last.flatMap({ Int64($0) }) {
+                Button("Remove Highlight", systemImage: "eraser") {
+                    Task {
+                        do {
+                            try await model.deleteVerseHighlight(id: id, reference: reference)
+                            runSearch()
+                        } catch {
+                            model.errorMessage = error.localizedDescription
+                        }
+                    }
+                }
             }
             if result.kind == .book {
                 Button("Open Book", systemImage: "book.closed") {
@@ -1585,50 +1625,8 @@ struct UnifiedSearchView: View {
                     .help("A Strong's number such as G26 or H430, to find every place it is translated")
                 }
                 if showsColour {
-                    // The palette for the colours highlights are actually made
-                    // in, and the field kept beside it for anything else: a
-                    // highlight imported from elsewhere, or made before a palette
-                    // colour changed, has a hex nothing in the menu matches.
-                    HStack(spacing: 6) {
-                        Menu {
-                            Button("Any Colour") { highlightColor = "" }
-                            Divider()
-                            ForEach(StudyHighlightPalette.colors) { swatch in
-                                Button {
-                                    highlightColor = swatch.hex
-                                } label: {
-                                    Label {
-                                        Text(swatch.name)
-                                    } icon: {
-                                        Image(systemName: "circle.fill")
-                                            .foregroundStyle(swatch.color)
-                                    }
-                                }
-                            }
-                        } label: {
-                            Label {
-                                Text(highlightName ?? "Any Colour")
-                            } icon: {
-                                Image(systemName: "circle.fill")
-                                    .foregroundStyle(
-                                        color(for: highlightColor) ?? Color.secondary.opacity(0.4)
-                                    )
-                            }
-                        }
-                        .menuStyle(.borderlessButton)
-                        .fixedSize()
-                        .help(highlightName ?? "Filter by highlight colour")
-
-                        TextField(
-                            "Hex",
-                            text: field(\.highlightColor),
-                            prompt: Text("Hex").foregroundStyle(Color.lampSecondaryText)
-                        )
-                        .textFieldStyle(.plain)
-                        .frame(width: 64)
-                        .help("Six hex digits, for a colour not in the palette")
-                    }
-                    .filterChip()
+                    highlightMarkPicker
+                        .filterChip()
                 }
                 Spacer(minLength: 0)
             }
@@ -1655,7 +1653,10 @@ struct UnifiedSearchView: View {
                 ? bookScope.range : nil,
             strongsKey: (selectedKind == .translation || selectedKind == .dictionary)
                 ? strongsKey : nil,
-            highlightColors: hasActiveHighlightColor ? [highlightColor] : nil,
+            highlightColors: hasHighlightMarks ? highlightColors : nil,
+            highlightStyles: hasHighlightMarks ? highlightStyles : nil,
+            highlightThemes: hasHighlightMarks ? highlightThemes : nil,
+            listsHighlights: listsHighlights,
             devotionalCriteria: criteria
         )
     }
@@ -1674,7 +1675,9 @@ struct UnifiedSearchView: View {
                 moduleIDs: selectedModuleID.map { [$0] },
                 bookRange: bookScope.range,
                 strongsKey: strongsKey.isEmpty ? nil : strongsKey,
-                highlightColors: hasActiveHighlightColor ? [highlightColor] : nil,
+                highlightColors: hasHighlightMarks ? highlightColors : nil,
+                highlightStyles: hasHighlightMarks ? highlightStyles : nil,
+                highlightThemes: hasHighlightMarks ? highlightThemes : nil,
                 devotionalCriteria: devotionalCriteria
             ),
             resultCount: showsStrongsAnalysis
@@ -1706,7 +1709,9 @@ struct UnifiedSearchView: View {
         selectedKind = entry.kinds?.first
         selectedModuleID = heldModuleID(entry.moduleIDs?.first)
         strongsKey = entry.strongsKey ?? ""
-        highlightColor = entry.highlightColors?.first ?? ""
+        highlightColors = entry.highlightColors ?? []
+        highlightStyles = entry.highlightStyles ?? []
+        highlightThemes = entry.highlightThemes ?? []
         if let range = entry.bookRange,
            let scope = BookSearchScope.allCases.first(where: { $0.range == range }) {
             bookScope = scope
@@ -1801,19 +1806,142 @@ struct UnifiedSearchView: View {
         Text.lampMarked(source)
     }
 
-    /// The palette's name for the chosen colour, where it has one.
-    private var highlightName: String? {
-        StudyHighlightPalette.colors
-            .first { $0.hex.caseInsensitiveCompare(highlightColor) == .orderedSame }?
-            .name
+    /// A result's words. A highlight's are marked as the highlight itself
+    /// is, in its own colour and style: the yellow of a found word, over a
+    /// green or pink highlight or a dotted line, said the opposite of what
+    /// it was.
+    private func snippetText(for result: LampModuleSearchResult) -> Text {
+        guard result.kind == .highlights, let hex = result.highlightColor,
+              let color = NSColor(Color(lampHex: hex) ?? .yellow).usingColorSpace(.sRGB) else {
+            return snippetText(result.snippet)
+        }
+        let mark: LampTextMark = switch result.highlightStyle ?? .highlight {
+        case .highlight: .ground(Color(nsColor: ReaderHighlightGrounds.ground(for: color)))
+        case .underlineSolid: .underline(Color(nsColor: color), .solid)
+        case .underlineDashed: .underline(Color(nsColor: color), .dash)
+        case .underlineDotted: .underline(Color(nsColor: color), .dot)
+        }
+        return Text.lampMarked(result.snippet, mark: mark)
     }
 
-    private func color(for hex: String?) -> Color? {
-        guard let hex, hex.count == 6, let value = Int(hex, radix: 16) else { return nil }
-        return Color(
-            red: Double((value >> 16) & 0xFF) / 255,
-            green: Double((value >> 8) & 0xFF) / 255,
-            blue: Double(value & 0xFF) / 255
+    /// What highlights are found by: themes, colours and styles, several at
+    /// once. Colours and styles narrow together; a theme is found besides
+    /// them (`LampHighlightSearch.matches`). Many themes go in a menu of
+    /// their own, as the reader's do.
+    private var highlightMarkPicker: some View {
+        Menu {
+            if hasHighlightMarks {
+                Button("Any Mark") {
+                    highlightColors = []
+                    highlightStyles = []
+                    highlightThemes = []
+                }
+                Divider()
+            }
+            if !markThemes.isEmpty {
+                if markThemes.count > 6 {
+                    Menu("Themes") { themeToggles }
+                } else {
+                    Text("Themes")
+                    themeToggles
+                }
+                Divider()
+            }
+            Text("Colours")
+            ForEach(markColors, id: \.hex) { swatch in
+                Toggle(isOn: chosen(swatch.hex, in: \.highlightColors)) {
+                    Label {
+                        Text(swatch.name)
+                    } icon: {
+                        Image(nsImage: ReaderHighlighter.markImage(color: swatch.hex, style: .highlight))
+                    }
+                }
+            }
+            Divider()
+            Text("Styles")
+            ForEach(LampHighlightStyle.allCases, id: \.self) { style in
+                Toggle(isOn: chosen(style, in: \.highlightStyles)) {
+                    Label {
+                        Text(ReaderHighlightPalette.name(style))
+                    } icon: {
+                        Image(nsImage: ReaderHighlighter.markImage(color: "8E8E93", style: style))
+                    }
+                }
+            }
+        } label: {
+            Label {
+                Text(markSummary ?? "Any Mark")
+            } icon: {
+                if let image = markSummaryImage {
+                    Image(nsImage: image)
+                } else {
+                    Image(systemName: "highlighter")
+                }
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Find highlights by theme, colour or style")
+    }
+
+    @ViewBuilder
+    private var themeToggles: some View {
+        ForEach(markThemes) { theme in
+            Toggle(isOn: chosen(LampHighlightMark(color: theme.color, style: theme.style), in: \.highlightThemes)) {
+                Label {
+                    Text(theme.name)
+                } icon: {
+                    Image(nsImage: ReaderHighlighter.themeImage(theme))
+                }
+            }
+        }
+    }
+
+    /// Whether one mark is chosen, as a menu's toggle.
+    private func chosen<Mark: Hashable>(_ mark: Mark, in field: WritableKeyPath<SearchTab, Set<Mark>>) -> Binding<Bool> {
+        Binding(
+            get: { tabs.selected[keyPath: field].contains(mark) },
+            set: { isOn in
+                tabs.updateSelected { tab in
+                    if isOn { tab[keyPath: field].insert(mark) } else { tab[keyPath: field].remove(mark) }
+                }
+            }
+        )
+    }
+
+    /// The palette's colours, then any other a theme is made in.
+    private var markColors: [(hex: String, name: String)] {
+        var colors = StudyHighlightPalette.colors.map { (hex: $0.hex, name: $0.name) }
+        for theme in markThemes where !colors.contains(where: { $0.hex.caseInsensitiveCompare(theme.color) == .orderedSame }) {
+            colors.append((theme.color, "#\(theme.color)"))
+        }
+        return colors
+    }
+
+    /// The marks chosen, in words: one or two by name, more by count.
+    private var markSummary: String? {
+        guard hasHighlightMarks else { return nil }
+        let themes = highlightThemes.map { mark in
+            markThemes.first { $0.color == mark.color && $0.style == mark.style }?.name
+                ?? ReaderHighlightPalette.name(mark.style)
+        }.sorted()
+        let colors = highlightColors.map { hex in
+            markColors.first { $0.hex.caseInsensitiveCompare(hex) == .orderedSame }?.name ?? "#\(hex)"
+        }.sorted()
+        let styles = LampHighlightStyle.allCases.filter(highlightStyles.contains).map(ReaderHighlightPalette.name)
+        let names = themes + colors + styles
+        return names.count <= 2 ? names.joined(separator: ", ") : "\(names.count) Marks"
+    }
+
+    /// The one mark chosen, drawn; nil for none or several.
+    private var markSummaryImage: NSImage? {
+        guard hasHighlightMarks else { return nil }
+        if highlightThemes.count == 1, highlightColors.isEmpty, highlightStyles.isEmpty, let mark = highlightThemes.first {
+            return ReaderHighlighter.markImage(color: mark.color, style: mark.style)
+        }
+        guard highlightThemes.isEmpty, highlightColors.count <= 1, highlightStyles.count <= 1 else { return nil }
+        return ReaderHighlighter.markImage(
+            color: highlightColors.first ?? "8E8E93", style: highlightStyles.first ?? .highlight
         )
     }
 
@@ -2222,7 +2350,7 @@ extension UnifiedSearchView {
         if !words.isEmpty { return words }
         let key = tab.strongsKey.trimmingCharacters(in: .whitespacesAndNewlines)
         if !key.isEmpty { return key }
-        if !tab.highlightColor.isEmpty { return "Highlights" }
+        if tab.hasHighlightMarks { return "Highlights" }
         if !tab.devotionalDate.isEmpty { return tab.devotionalDate }
         if !tab.devotionalTag.isEmpty { return tab.devotionalTag }
         if !tab.devotionalCategory.isEmpty { return tab.devotionalCategory }

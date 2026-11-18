@@ -26,7 +26,9 @@ struct SearchTabTests {
             moduleID: "nic",
             bookScopeRawValue: "New Testament",
             strongsKey: "G5485",
-            highlightColor: "#ffcc00",
+            highlightColors: ["#ffcc00"],
+            highlightStyles: [.underlineDotted],
+            highlightThemes: [LampHighlightMark(color: "34C759", style: .underlineSolid)],
             devotionalDate: "12-25",
             devotionalTag: "advent",
             devotionalCategory: "writing"
@@ -40,10 +42,24 @@ struct SearchTabTests {
         #expect(a.moduleID == b.moduleID, "moduleID: \(note)")
         #expect(a.bookScopeRawValue == b.bookScopeRawValue, "bookScope: \(note)")
         #expect(a.strongsKey == b.strongsKey, "strongsKey: \(note)")
-        #expect(a.highlightColor == b.highlightColor, "highlightColor: \(note)")
+        #expect(a.highlightColors == b.highlightColors, "highlightColors: \(note)")
+        #expect(a.highlightStyles == b.highlightStyles, "highlightStyles: \(note)")
+        #expect(a.highlightThemes == b.highlightThemes, "highlightThemes: \(note)")
         #expect(a.devotionalDate == b.devotionalDate, "devotionalDate: \(note)")
         #expect(a.devotionalTag == b.devotionalTag, "devotionalTag: \(note)")
         #expect(a.devotionalCategory == b.devotionalCategory, "devotionalCategory: \(note)")
+    }
+
+    /// A tab kept before highlights were found by their marks held one
+    /// colour; it comes back as that colour chosen.
+    @Test func aTabsOneColourComesBackAsAMark() throws {
+        let id = UUID()
+        let old = #"{"id":"\#(id.uuidString)","query":"","kind":"highlights","highlightColor":"FFCC00"}"#
+        let tab = try JSONDecoder().decode(SearchTab.self, from: Data(old.utf8))
+        #expect(tab.highlightColors == ["FFCC00"])
+        #expect(tab.highlightStyles.isEmpty && tab.highlightThemes.isEmpty)
+        let again = try JSONDecoder().decode(SearchTab.self, from: JSONEncoder().encode(tab))
+        #expect(again == tab)
     }
 
     @Test func aCollectionAlwaysHasATabAndASelectionThatNamesOne() {
@@ -216,7 +232,8 @@ struct SearchTabTests {
         #expect(SearchTab(bookScopeRawValue: "New Testament").isEmpty)
         #expect(!SearchTab(query: "grace").isEmpty)
         #expect(!SearchTab(strongsKey: "G5485").isEmpty)
-        #expect(!SearchTab(highlightColor: "#ffcc00").isEmpty)
+        #expect(!SearchTab(highlightColors: ["#ffcc00"]).isEmpty)
+        #expect(!SearchTab(highlightStyles: [.underlineDashed]).isEmpty)
         #expect(!SearchTab(devotionalTag: "advent").isEmpty)
     }
 

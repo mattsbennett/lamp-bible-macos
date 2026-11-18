@@ -385,7 +385,7 @@ extension Text {
     ///
     /// A number after Hebrew is held to the English after it first, reading
     /// the text as drawn, without its tags.
-    static func lampMarked(_ source: String) -> Text {
+    static func lampMarked(_ source: String, mark: LampTextMark? = nil) -> Text {
         let source = LampBidiNumbers.holdingLeftToRight(
             source, ignoring: [LampSearchSnippet.openingMark, LampSearchSnippet.closingMark]
         )
@@ -395,11 +395,31 @@ extension Text {
               let closing = remaining[opening.upperBound...]
                   .range(of: LampSearchSnippet.closingMark) {
             rendered = rendered + Text(String(remaining[..<opening.lowerBound]))
-            rendered = rendered + Text.lampFindMatch(remaining[opening.upperBound..<closing.lowerBound])
+            let words = remaining[opening.upperBound..<closing.lowerBound]
+            if let mark {
+                // A mark of the reader's own, drawn as it is in the reader.
+                var marked = AttributedString(String(words))
+                switch mark {
+                case .ground(let color):
+                    marked.backgroundColor = color
+                case .underline(let color, let pattern):
+                    marked.swiftUI.underlineStyle = Text.LineStyle(pattern: pattern, color: color)
+                }
+                rendered = rendered + Text(marked)
+            } else {
+                rendered = rendered + Text.lampFindMatch(words)
+            }
             remaining = remaining[closing.upperBound...]
         }
         return rendered + Text(String(remaining))
     }
+}
+
+/// How a reader's own highlight is drawn over the words it marks, where a
+/// search shows them: a ground behind them, or a line beneath.
+enum LampTextMark {
+    case ground(Color)
+    case underline(Color, Text.LineStyle.Pattern)
 }
 
 /// A control that is words alone, such as "More in Scripture" or "Ask Me

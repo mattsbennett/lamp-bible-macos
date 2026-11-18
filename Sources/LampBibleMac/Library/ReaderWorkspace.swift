@@ -27,6 +27,9 @@ final class ReaderWorkspace: ObservableObject {
     /// no way to reach the sidebar's selection itself, and this is the object
     /// they already share.
     @Published var requestedSearch: String?
+    /// A search tab to show as it is: the study pane's way to the reader's
+    /// highlights across the library.
+    @Published var requestedSearchTab: SearchTab?
     /// A Strong's key typed into the same field, which belongs to the
     /// analysis rather than to a text search.
     @Published var requestedStrongsKey: String?

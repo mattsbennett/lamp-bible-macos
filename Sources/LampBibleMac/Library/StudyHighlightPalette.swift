@@ -19,6 +19,39 @@ enum StudyHighlightPalette {
     ]
 }
 
+/// One colour of the highlight palette. The chosen one wears a ring set off
+/// from it by a gap, as the system's colour wells mark theirs, and a check,
+/// so which is chosen does not rest on telling a thin ring from none.
+struct HighlightSwatch: View {
+    let color: Color
+    let isSelected: Bool
+    var size: CGFloat = 24
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: size, height: size)
+            .overlay {
+                Circle().strokeBorder(Color.black.opacity(0.12), lineWidth: 1)
+            }
+            .overlay {
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.white)
+                        .shadow(color: .black.opacity(0.25), radius: 1)
+                }
+            }
+            .padding(3)
+            .overlay {
+                if isSelected {
+                    Circle().strokeBorder(Color.primary.opacity(0.85), lineWidth: 2)
+                }
+            }
+            .contentShape(Circle())
+    }
+}
+
 extension Color {
     init?(lampHex: String) {
         var value = lampHex.trimmingCharacters(in: .whitespacesAndNewlines)

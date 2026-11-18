@@ -35,7 +35,11 @@ public struct SearchTab: Codable, Identifiable, Equatable, Sendable {
     public var bookScopeRawValue: String
 
     public var strongsKey: String
-    public var highlightColor: String
+    /// Highlights by their marks. Colours and styles narrow together, and a
+    /// theme's mark is found besides them (`LampHighlightSearch.matches`).
+    public var highlightColors: Set<String>
+    public var highlightStyles: Set<LampHighlightStyle>
+    public var highlightThemes: Set<LampHighlightMark>
     public var devotionalDate: String
     public var devotionalTag: String
     public var devotionalCategory: String
@@ -48,7 +52,9 @@ public struct SearchTab: Codable, Identifiable, Equatable, Sendable {
         moduleID: String? = nil,
         bookScopeRawValue: String = "",
         strongsKey: String = "",
-        highlightColor: String = "",
+        highlightColors: Set<String> = [],
+        highlightStyles: Set<LampHighlightStyle> = [],
+        highlightThemes: Set<LampHighlightMark> = [],
         devotionalDate: String = "",
         devotionalTag: String = "",
         devotionalCategory: String = ""
@@ -60,7 +66,9 @@ public struct SearchTab: Codable, Identifiable, Equatable, Sendable {
         self.moduleID = moduleID
         self.bookScopeRawValue = bookScopeRawValue
         self.strongsKey = strongsKey
-        self.highlightColor = highlightColor
+        self.highlightColors = highlightColors
+        self.highlightStyles = highlightStyles
+        self.highlightThemes = highlightThemes
         self.devotionalDate = devotionalDate
         self.devotionalTag = devotionalTag
         self.devotionalCategory = devotionalCategory
@@ -68,8 +76,10 @@ public struct SearchTab: Codable, Identifiable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, name, query, kind, moduleID, bookScopeRawValue
-        case strongsKey, highlightColor
+        case strongsKey, highlightColors, highlightStyles, highlightThemes
         case devotionalDate, devotionalTag, devotionalCategory
+        /// The one colour a tab held before it held marks: read, not written.
+        case highlightColor
     }
 
     public init(from decoder: Decoder) throws {
@@ -83,15 +93,41 @@ public struct SearchTab: Codable, Identifiable, Equatable, Sendable {
         moduleID = (try? values.decodeIfPresent(String.self, forKey: .moduleID)) ?? nil
         bookScopeRawValue = ((try? values.decodeIfPresent(String.self, forKey: .bookScopeRawValue)) ?? nil) ?? ""
         strongsKey = ((try? values.decodeIfPresent(String.self, forKey: .strongsKey)) ?? nil) ?? ""
-        highlightColor = ((try? values.decodeIfPresent(String.self, forKey: .highlightColor)) ?? nil) ?? ""
+        let color = ((try? values.decodeIfPresent(String.self, forKey: .highlightColor)) ?? nil) ?? ""
+        highlightColors = ((try? values.decodeIfPresent(Set<String>.self, forKey: .highlightColors)) ?? nil)
+            ?? (color.isEmpty ? [] : [color])
+        highlightStyles = ((try? values.decodeIfPresent(Set<LampHighlightStyle>.self, forKey: .highlightStyles)) ?? nil) ?? []
+        highlightThemes = ((try? values.decodeIfPresent(Set<LampHighlightMark>.self, forKey: .highlightThemes)) ?? nil) ?? []
         devotionalDate = ((try? values.decodeIfPresent(String.self, forKey: .devotionalDate)) ?? nil) ?? ""
         devotionalTag = ((try? values.decodeIfPresent(String.self, forKey: .devotionalTag)) ?? nil) ?? ""
         devotionalCategory = ((try? values.decodeIfPresent(String.self, forKey: .devotionalCategory)) ?? nil) ?? ""
     }
 
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encodeIfPresent(name, forKey: .name)
+        try values.encode(query, forKey: .query)
+        try values.encodeIfPresent(kind, forKey: .kind)
+        try values.encodeIfPresent(moduleID, forKey: .moduleID)
+        try values.encode(bookScopeRawValue, forKey: .bookScopeRawValue)
+        try values.encode(strongsKey, forKey: .strongsKey)
+        try values.encode(highlightColors, forKey: .highlightColors)
+        try values.encode(highlightStyles, forKey: .highlightStyles)
+        try values.encode(highlightThemes, forKey: .highlightThemes)
+        try values.encode(devotionalDate, forKey: .devotionalDate)
+        try values.encode(devotionalTag, forKey: .devotionalTag)
+        try values.encode(devotionalCategory, forKey: .devotionalCategory)
+    }
+
+    /// Whether highlights are asked for by a colour, a style or a theme.
+    public var hasHighlightMarks: Bool {
+        !highlightColors.isEmpty || !highlightStyles.isEmpty || !highlightThemes.isEmpty
+    }
+
     /// Whether there is anything in this tab anyone would mind losing.
     ///
-    /// Words, a key, a colour or a devotional facet obviously count. So does
+    /// Words, a key, a highlight's mark or a devotional facet obviously count. So does
     /// a kind or a module chosen with nothing typed yet: someone narrowing
     /// to Commentaries before searching has set that up on purpose, and a
     /// search arriving from the reader should open its own tab rather than
@@ -101,7 +137,7 @@ public struct SearchTab: Codable, Identifiable, Equatable, Sendable {
     public var isEmpty: Bool {
         query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && strongsKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && highlightColor.isEmpty
+            && !hasHighlightMarks
             && devotionalDate.isEmpty && devotionalTag.isEmpty && devotionalCategory.isEmpty
             && kind == nil && moduleID == nil
     }
@@ -223,7 +259,9 @@ public struct SearchTabCollection: Codable, Equatable, Sendable {
             moduleID: source.moduleID,
             bookScopeRawValue: source.bookScopeRawValue,
             strongsKey: source.strongsKey,
-            highlightColor: source.highlightColor,
+            highlightColors: source.highlightColors,
+            highlightStyles: source.highlightStyles,
+            highlightThemes: source.highlightThemes,
             devotionalDate: source.devotionalDate,
             devotionalTag: source.devotionalTag,
             devotionalCategory: source.devotionalCategory
@@ -266,7 +304,9 @@ public struct SearchTabCollection: Codable, Equatable, Sendable {
                 moduleID: tab.moduleID,
                 bookScopeRawValue: tab.bookScopeRawValue,
                 strongsKey: tab.strongsKey,
-                highlightColor: tab.highlightColor,
+                highlightColors: tab.highlightColors,
+                highlightStyles: tab.highlightStyles,
+                highlightThemes: tab.highlightThemes,
                 devotionalDate: tab.devotionalDate,
                 devotionalTag: tab.devotionalTag,
                 devotionalCategory: tab.devotionalCategory
