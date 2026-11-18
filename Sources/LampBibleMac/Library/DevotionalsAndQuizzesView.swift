@@ -36,7 +36,7 @@ private enum WritingGroupBy: String, CaseIterable, Identifiable {
 /// rebuilt every time Writing is chosen in the sidebar, and its rows haven't
 /// changed. Each entry is checked against the writing it was made from.
 @MainActor
-private final class WritingRowSummaries {
+final class WritingRowSummaries {
     static let shared = WritingRowSummaries()
 
     private struct Entry {
@@ -119,6 +119,11 @@ enum LinkedPresentationDeckLookup {
 
 struct DevotionalsView: View {
     @Environment(\.openWindow) private var openWindow
+    /// The writing edited here, in place of its reading view; nil while
+    /// reading. Edited in the main window, beside the list, rather than in
+    /// a window of its own (owner, Nov 2026).
+    @State private var editing: DevotionalEditorRequest?
+    @State private var layout = WritingInPlaceLayout()
     @EnvironmentObject private var model: LibraryModel
     @AppStorage("devotional.fontSize")
     private var devotionalFontSize = LampTextScale.writingReadingText.defaultValue
@@ -129,7 +134,7 @@ struct DevotionalsView: View {
     @State private var selection: String?
     @AppStorage("writing.showsList") private var showsWritingList = true
     /// The list's width, as the reader dragged it.
-    @State private var preferredWritingListWidth = 260.0
+    @State private var preferredWritingListWidth = 340.0
     @State private var query = ""
     @State private var categoryFilter: String?
     @State private var moduleFilter: String?
@@ -153,6 +158,9 @@ struct DevotionalsView: View {
     /// A writing a search result asked for. Cleared once taken, so coming
     /// back to this section later does not jump to it again.
     @Binding var initialDevotionalID: String?
+    /// Whether a writing is being edited here: the window folds its sections
+    /// away while one is.
+    @Binding var isEditingInPlace: Bool
     let showImporter: () -> Void
     let openReference: (Int) -> Void
 
@@ -198,29 +206,39 @@ struct DevotionalsView: View {
         let listSections = writingListSections(from: visibleDevotionals)
 
         return Group {
-            if model.devotionals.isEmpty {
+            if model.devotionals.isEmpty, editing == nil {
                 WritingEmptyState(newWriting: { beginEditing(nil) })
-            } else if visibleDevotionals.isEmpty {
-                ContentUnavailableView.search(text: query)
             } else {
                 // Columns as Books lays them out: a list of a width the
                 // reader set, kept, beside the page. In an HSplitView the list
                 // shrank when a click on its empty space cleared the
                 // selection and the page beside it changed.
                 HStack(spacing: 0) {
-                    if showsWritingList {
+                    if layout.showsList(readingShowsList: showsWritingList) {
                         writingList(listSections)
                             .frame(width: writingListWidth)
                         LampColumnResizeHandle(
                             preferredWidth: $preferredWritingListWidth,
                             displayedWidth: Double(writingListWidth),
-                            minimumWidth: 220,
-                            maximumWidth: 320,
+                            minimumWidth: 240,
+                            maximumWidth: 420,
                             label: "Resize Writing List"
                         )
                     }
 
-                    if let devotional = selectedDevotional {
+                    if let request = editing {
+                        DevotionalEditorView(request: request)
+                            .id(request.devotionalID ?? "new")
+                            // The editor puts Done last in its toolbar.
+                            .environment(\.writingEditorDone, WritingEditorDone(help: "Stop editing and read the writing") {
+                                editing = nil
+                            })
+                            .onPreferenceChange(WritingAssistantOpenKey.self) { open in
+                                withAnimation(.easeInOut(duration: 0.2)) { layout.setAssistantOpen(open) }
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .layoutPriority(2)
+                    } else if let devotional = selectedDevotional {
                         devotionalDetail(devotional)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .layoutPriority(2)
@@ -240,36 +258,21 @@ struct DevotionalsView: View {
             }
         }
         .navigationTitle("Writing")
-        .searchable(text: $query, prompt: "Search writing")
         .toolbar {
-            ToolbarItemGroup {
-                if showsWritingList {
-                    filterMenu
-                    arrangeMenu
+            if editing != nil {
+                // The one button on the left while editing: the window's
+                // own sidebar button is taken away (LibraryRootView), and the
+                // sections come back with Done.
+                ToolbarItem(placement: .navigation) {
+                    listToggle(systemImage: "sidebar.left", titled: true)
                 }
-                // As Books' list hides, so this one does, to read wide.
-                Button(
-                    showsWritingList ? "Hide Writing List" : "Show Writing List",
-                    systemImage: "sidebar.squares.left"
-                ) {
-                    showsWritingList.toggle()
-                }
-                .labelStyle(.iconOnly)
-                .help(showsWritingList ? "Hide Writing List" : "Show Writing List")
-                .accessibilityValue(showsWritingList ? "Shown" : "Hidden")
-                if let devotional = selectedDevotional {
-                    // Named: its figure-at-a-screen symbol, alone, read as
-                    // a person rather than as presenting.
-                    Button {
-                        openWindow(
-                            id: "devotional-presenter",
-                            value: DevotionalPresentationRequest(devotionalID: devotional.id)
-                        )
-                    } label: {
-                        Label("Present", systemImage: "play.rectangle")
-                            .labelStyle(.titleAndIcon)
+            } else {
+                ToolbarItemGroup {
+                    if showsWritingList, devotionalCollections.count > 1 {
+                        filterMenu
                     }
-                    .help("Present selected writing")
+                    // As Books' list hides, so this one does, to read wide.
+                    listToggle(systemImage: "sidebar.squares.left", titled: false)
                 }
             }
         }
@@ -296,6 +299,21 @@ struct DevotionalsView: View {
         .onChange(of: initialDevotionalID) { _, _ in takeRequestedDevotional() }
         .onChange(of: model.devotionals) { _, _ in selectFirstIfNeeded() }
         .onChange(of: query) { _, _ in selectFirstIfNeeded() }
+        // Written only as editing starts and stops: a change of the window's
+        // sections rebuilds all of LibraryRootView.
+        .onChange(of: editing == nil) { _, reading in
+            if reading { layout.endEditing() } else { layout.beginEditing() }
+            isEditingInPlace = !reading
+        }
+        // Leaving Writing ends the editing, and gives the window its sections.
+        .onDisappear {
+            editing = nil
+            isEditingInPlace = false
+        }
+        // Another writing chosen in the list is edited in its place.
+        .onChange(of: selection) { _, chosen in
+            if editing != nil { editing = DevotionalEditorRequest(devotionalID: chosen) }
+        }
         .onChange(of: categoryFilter) { _, _ in selectFirstIfNeeded() }
         .onChange(of: moduleFilter) { _, _ in selectFirstIfNeeded() }
         .task { await monitorLinkedPresentationDecks() }
@@ -309,8 +327,30 @@ struct DevotionalsView: View {
         }
     }
 
+    /// The list's button. Named while editing, as the editor's buttons
+    /// beside it are; an icon while reading, as Books' is.
+    @ViewBuilder
+    private func listToggle(systemImage: String, titled: Bool) -> some View {
+        let shown = layout.showsList(readingShowsList: showsWritingList)
+        let button = Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                layout.toggleList(readingShowsList: &showsWritingList)
+            }
+        } label: {
+            Label(titled ? "List" : (shown ? "Hide Writing List" : "Show Writing List"), systemImage: systemImage)
+        }
+        .help(shown ? "Hide Writing List" : "Show Writing List")
+        .accessibilityLabel(shown ? "Hide Writing List" : "Show Writing List")
+        .accessibilityValue(shown ? "Shown" : "Hidden")
+        if titled {
+            button.labelStyle(.titleAndIcon)
+        } else {
+            button.labelStyle(.iconOnly)
+        }
+    }
+
     private var writingListWidth: CGFloat {
-        CGFloat(min(max(preferredWritingListWidth, 220), 320))
+        CGFloat(min(max(preferredWritingListWidth, 240), 420))
     }
 
     /// Category and collection filters in one menu that says what is shown.
@@ -319,15 +359,6 @@ struct DevotionalsView: View {
     /// while nothing was filtered.
     private var filterMenu: some View {
         Menu {
-            Picker("Category", selection: $categoryFilter) {
-                Text("All Categories").tag(String?.none)
-                ForEach(devotionalCategories, id: \.self) { category in
-                    Text(LampWritingCategory.displayName(category) ?? category)
-                        .tag(Optional(category))
-                }
-            }
-            .pickerStyle(.inline)
-            .accessibilityLabel("Filter writing by category")
             Picker("Collection", selection: $moduleFilter) {
                 Text("All Collections").tag(String?.none)
                 ForEach(devotionalCollections, id: \.id) { collection in
@@ -339,27 +370,24 @@ struct DevotionalsView: View {
         } label: {
             Label(
                 filterSummary,
-                systemImage: categoryFilter == nil && moduleFilter == nil
+                systemImage: moduleFilter == nil
                     ? "line.3.horizontal.decrease.circle"
                     : "line.3.horizontal.decrease.circle.fill"
             )
             .labelStyle(.titleAndIcon)
         }
         .accessibilityLabel("Filter writing")
-        .help("Filter writing by category and collection")
+        .help("Show one collection of writing")
     }
 
     /// What the filter menu says: everything, or the category and the
     /// collection being shown.
     private var filterSummary: String {
         var parts: [String] = []
-        if let categoryFilter {
-            parts.append(LampWritingCategory.displayName(categoryFilter) ?? categoryFilter)
-        }
         if let moduleFilter, let collection = devotionalCollections.first(where: { $0.id == moduleFilter }) {
             parts.append(collection.name)
         }
-        return parts.isEmpty ? "All Writing" : parts.joined(separator: " · ")
+        return parts.isEmpty ? "All Collections" : parts.joined(separator: " · ")
     }
 
     /// Sorting and grouping in one menu: two unlabelled pills beside each
@@ -412,6 +440,115 @@ struct DevotionalsView: View {
     /// Before, this list drew its rules and headings itself, and so looked
     /// unlike every other list in the app.
     private func writingList(_ listSections: [WritingListSection]) -> some View {
+        VStack(spacing: 0) {
+            writingListHeader
+            Divider()
+            writingListRows(listSections)
+        }
+    }
+
+    /// Over the list, what acts on it: the categories to show, as chips with
+    /// their counts, then how many are shown, how they are arranged, and a
+    /// new one. In the window's toolbar they sat over the page, not the list.
+    private var writingListHeader: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            searchField
+            let categories = devotionalCategories
+            if categories.count > 1 {
+                // One line that scrolls, not a row that wraps: wrapped, the
+                // last chip sat alone on a line of its own.
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 5) {
+                        categoryChip(title: "All", count: model.devotionals.count, category: nil)
+                        ForEach(categories, id: \.self) { category in
+                            categoryChip(
+                                title: LampWritingCategory.displayName(category) ?? category,
+                                count: model.devotionals.filter {
+                                    LampWritingCategory.foldedKey($0.category) == LampWritingCategory.foldedKey(category)
+                                }.count,
+                                category: category
+                            )
+                        }
+                    }
+                }
+                // A fade at the edge, so a chip running past it reads as more
+                // to scroll to rather than cut off.
+                .mask(
+                    HStack(spacing: 0) {
+                        Rectangle()
+                        LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                            .frame(width: 18)
+                    }
+                )
+            }
+            HStack(spacing: 10) {
+                Text(filteredDevotionals.count == 1 ? "1 writing" : "\(filteredDevotionals.count) writings")
+                    .font(.system(size: LampMetrics.listCaptionSize))
+                    .foregroundStyle(Color.lampSecondaryText)
+                Spacer()
+                arrangeMenu
+                    .labelStyle(.iconOnly)
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                Button("New Writing", systemImage: "plus") { beginEditing(nil) }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.borderless)
+                    .help("Create new writing")
+            }
+            .font(.system(size: 14))
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    /// Over the list it searches. In the window's toolbar, far to the right,
+    /// it read as searching the page beside it, or the whole library.
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField("Search writing", text: $query)
+                .textFieldStyle(.plain)
+            if !query.isEmpty {
+                Button("Clear Search", systemImage: "xmark.circle.fill") { query = "" }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .font(.system(size: 13))
+        .padding(.horizontal, 9)
+        .frame(height: 28)
+        .background(RoundedRectangle(cornerRadius: 7).fill(Color.lampTileFill))
+        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Color.lampCardStroke))
+    }
+
+    private func categoryChip(title: String, count: Int, category: String?) -> some View {
+        let isChosen = LampWritingCategory.foldedKey(categoryFilter) == LampWritingCategory.foldedKey(category)
+            || (category == nil && categoryFilter == nil)
+        return Button {
+            categoryFilter = category
+        } label: {
+            Text("\(title) \(Text("\(count)").foregroundStyle(Color.lampSecondaryText))")
+                .lampFilterChip(isChosen: isChosen, compact: true)
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isChosen ? .isSelected : [])
+    }
+
+    @ViewBuilder
+    private func writingListRows(_ listSections: [WritingListSection]) -> some View {
+        if listSections.allSatisfy({ $0.devotionals.isEmpty }) {
+            // Under the search that found nothing, which stays to be changed.
+            ContentUnavailableView.search(text: query)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            writingListTable(listSections)
+        }
+    }
+
+    private func writingListTable(_ listSections: [WritingListSection]) -> some View {
         List(selection: $selection) {
             ForEach(listSections) { section in
                 // Always in a section: an inset list draws its row rules
@@ -425,30 +562,6 @@ struct DevotionalsView: View {
         }
         // Inset, as Books' list is: a sidebar list draws under the toolbar.
         .listStyle(.inset)
-        .contentMargins(.bottom, 52, for: .scrollContent)
-        // A footer action in the list's own voice, as the sidebar's Import
-        // or Create… is: a full-width filled button was the loudest thing
-        // in the window, louder than the writing.
-        .overlay(alignment: .bottom) {
-            VStack(spacing: 0) {
-                Divider()
-                Button {
-                    beginEditing(nil)
-                } label: {
-                    Label("New Writing", systemImage: "plus")
-                        .fontWeight(.medium)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.borderless)
-                .foregroundStyle(.tint)
-                .help("Create new writing")
-                .padding(.horizontal, 14)
-                .padding(.vertical, 11)
-            }
-            .frame(maxWidth: .infinity)
-            .background(.bar)
-        }
     }
 
     private func devotionalRows(_ devotionals: [LampDevotional]) -> some View {
@@ -638,10 +751,25 @@ struct DevotionalsView: View {
 
             Spacer()
             if devotional.isEditable {
+                // Named: the one action most come here for, and a lone pencil
+                // among four grey symbols was the hardest of them to find.
                 Button("Edit", systemImage: "pencil") { beginEditing(devotional) }
-                    .labelStyle(.iconOnly)
-                    .help("Edit this writing")
+                    .labelStyle(.titleAndIcon)
+                    .keyboardShortcut("e", modifiers: [.command, .shift])
+                    .help("Edit this writing (⇧⌘E)")
             }
+            // Beside Edit, over the writing it acts on: in the window's
+            // toolbar it sat apart from the other things one does with it.
+            // Named: its figure-at-a-screen symbol, alone, read as a person
+            // rather than as presenting.
+            Button("Present", systemImage: "play.rectangle") {
+                openWindow(
+                    id: "devotional-presenter",
+                    value: DevotionalPresentationRequest(devotionalID: devotional.id)
+                )
+            }
+            .labelStyle(.titleAndIcon)
+            .help("Present this writing")
 
             ShareLink(
                 item: devotional.content,
@@ -1021,7 +1149,7 @@ struct DevotionalsView: View {
     }
 
     private func beginEditing(_ devotional: LampDevotional?) {
-        openWindow(id: "devotional-editor", value: DevotionalEditorRequest(devotionalID: devotional?.id))
+        editing = DevotionalEditorRequest(devotionalID: devotional?.id)
     }
 
     private func presentationDecks(for devotional: LampDevotional) -> [LampPresentationDeck] {

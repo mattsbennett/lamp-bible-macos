@@ -415,6 +415,191 @@ private struct DevotionalEditorToolbarScrollView<Content: View>: View {
     }
 }
 
+/// The writing window: the editor, with the reader's writing listed beside
+/// it so another can be opened in its place, as a writing app's library sits
+/// beside its page. Without the list the only way back to the rest of one's
+/// writing was another window.
+struct WritingEditorWindow: View {
+    let request: DevotionalEditorRequest
+
+    @EnvironmentObject private var model: LibraryModel
+    @AppStorage("writing.editorShowsLibrary") private var showsLibrary = true
+    /// The writing open here: the one asked for, then whichever is chosen.
+    @State private var current: DevotionalEditorRequest?
+
+    private var shown: DevotionalEditorRequest { current ?? request }
+
+    @State private var query = ""
+    @State private var category: String?
+    @Environment(\.dismissWindow) private var dismissWindow
+    @AppStorage(LampReadingMode.defaultsKey) private var readingModeRawValue = LampReadingMode.silent.rawValue
+    @AppStorage(LampReadingMode.silent.wordsPerMinuteKey)
+    private var silentWordsPerMinute = LampReadingMode.silent.defaultWordsPerMinute
+    @AppStorage(LampReadingMode.aloud.wordsPerMinuteKey)
+    private var aloudWordsPerMinute = LampReadingMode.aloud.defaultWordsPerMinute
+
+    private var writings: [LampDevotional] {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return model.devotionals
+            .filter(\.isEditable)
+            .filter { category == nil
+                || LampWritingCategory.foldedKey($0.category) == LampWritingCategory.foldedKey(category) }
+            .filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query)
+                || ($0.content.localizedCaseInsensitiveContains(query)) }
+            .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            if showsLibrary {
+                library
+                    .frame(width: 304)
+                Divider()
+            }
+            // A new editor for each writing: the one going saves what it has
+            // as it goes (`flushPendingSaves`), and nothing of it is carried
+            // into the next.
+            // The way back, named: the writing is saved as it is typed, so
+            // being done is closing the window, back to the library.
+            DevotionalEditorView(request: shown)
+                .id(shown.devotionalID ?? "new")
+                .environment(\.writingEditorDone, WritingEditorDone(help: "Close the editor and go back to Writing") {
+                    dismissWindow()
+                })
+        }
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button(showsLibrary ? "Hide Writing List" : "Show Writing List", systemImage: "sidebar.left") {
+                    showsLibrary.toggle()
+                }
+                .help(showsLibrary ? "Hide the list of writing" : "Show the list of writing")
+            }
+        }
+    }
+
+    /// The Writing section's list as it is there: the same search over it,
+    /// and rows with their opening words and date, chosen in the same grey.
+    private var library: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField("Search writing", text: $query)
+                        .textFieldStyle(.plain)
+                }
+                .font(.system(size: 13))
+                .padding(.horizontal, 9)
+                .frame(height: 28)
+                .background(RoundedRectangle(cornerRadius: 7).fill(Color.lampTileFill))
+                .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Color.lampCardStroke))
+                Button("New Writing", systemImage: "plus") {
+                    current = DevotionalEditorRequest()
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+                .help("Create new writing")
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, LampWritingCategory.kindsHeld(model.devotionals.map(\.category)).count > 1 ? 8 : 10)
+            categoryChips
+            Divider()
+            List(selection: Binding(
+                get: { shown.devotionalID },
+                set: { id in if let id, id != shown.devotionalID { current = DevotionalEditorRequest(devotionalID: id) } }
+            )) {
+                Section {
+                    ForEach(writings) { writing in
+                        row(writing)
+                    }
+                }
+            }
+            .listStyle(.inset)
+        }
+    }
+
+    /// The library's category chips, so the list is filtered here as it is
+    /// there.
+    @ViewBuilder
+    private var categoryChips: some View {
+        let categories = LampWritingCategory.kindsHeld(model.devotionals.map(\.category))
+        if categories.count > 1 {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 5) {
+                    chip("All", count: model.devotionals.filter(\.isEditable).count, category: nil)
+                    ForEach(categories, id: \.self) { kind in
+                        chip(
+                            LampWritingCategory.displayName(kind) ?? kind,
+                            count: model.devotionals.filter {
+                                $0.isEditable && LampWritingCategory.foldedKey($0.category) == LampWritingCategory.foldedKey(kind)
+                            }.count,
+                            category: kind
+                        )
+                    }
+                }
+                .padding(.horizontal, 12)
+            }
+            .padding(.bottom, 10)
+        }
+    }
+
+    /// As the library's chips are, with their counts.
+    private func chip(_ title: String, count: Int, category kind: String?) -> some View {
+        let isChosen = LampWritingCategory.foldedKey(category) == LampWritingCategory.foldedKey(kind)
+            || (kind == nil && category == nil)
+        return Button { category = kind } label: {
+            Text("\(title) \(Text("\(count)").foregroundStyle(Color.lampSecondaryText))")
+                .lampFilterChip(isChosen: isChosen, compact: true)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func rowMetadata(_ writing: LampDevotional) -> String {
+        let mode = LampReadingMode(storedValue: readingModeRawValue)
+        let pace = mode == .aloud ? aloudWordsPerMinute : silentWordsPerMinute
+        var parts = [displayDate(writing.date)].compactMap { $0 }
+        let statistics = WritingRowSummaries.shared.statistics(for: writing)
+        if statistics.wordCount > 0 {
+            parts.append(statistics.readingTimeDescription(mode: mode, wordsPerMinute: pace))
+        }
+        return parts.isEmpty ? "Empty draft" : parts.joined(separator: " · ")
+    }
+
+    /// A stored date as the library shows it, or as stored if unreadable.
+    private func displayDate(_ stored: String?) -> String? {
+        guard let stored, !stored.isEmpty else { return nil }
+        let parser = DateFormatter()
+        parser.locale = Locale(identifier: "en_US_POSIX")
+        parser.dateFormat = "yyyy-MM-dd"
+        guard let date = parser.date(from: String(stored.prefix(10))) else { return stored }
+        return date.formatted(date: .abbreviated, time: .omitted)
+    }
+
+    private func row(_ writing: LampDevotional) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(writing.title)
+                .font(.system(size: LampMetrics.listTitleSize, weight: .medium))
+                .lineLimit(2)
+            if let snippet = WritingRowSummaries.shared.snippet(for: writing) {
+                Text(snippet)
+                    .font(.system(size: LampMetrics.listDetailSize))
+                    .foregroundStyle(Color.lampSecondaryText)
+                    .lineLimit(2)
+                    .lineSpacing(1)
+            }
+            // The library row's line: its date and how long it takes to read.
+            Text(rowMetadata(writing))
+                .font(.system(size: LampMetrics.listCaptionSize))
+                .foregroundStyle(Color.lampSecondaryText)
+        }
+        .padding(.vertical, 5)
+        .listRowSeparator(.visible)
+        .tag(Optional(writing.id))
+        .lampListRow(isSelected: shown.devotionalID == writing.id)
+    }
+}
+
 struct DevotionalEditorView: View {
     let request: DevotionalEditorRequest
 
@@ -440,6 +625,8 @@ struct DevotionalEditorView: View {
     /// pane is closed — a run outlives its pane, and a change nobody was
     /// watching is a change nobody can say the turn made.
     @State private var agentChatTurn: UUID?
+    /// Done, where the host gives one: the way back from editing.
+    @Environment(\.writingEditorDone) private var done
     /// Whether AI features are shown (`AIFeatures`): off, the editor has no
     /// Agent button and no agent pane. The workspace on disk is kept.
     @AppStorage(AIFeatures.key) private var aiFeaturesEnabled = AIFeatures.defaultValue
@@ -705,6 +892,7 @@ struct DevotionalEditorView: View {
                                 ),
                                 agentAccessPolicy: agentAccessPolicy,
                                 devotionalID: identifier,
+                                devotionalTitle: title,
                                 draftMarkdown: content,
                                 contextDocument: agentContextDocument,
                                 editorFocus: editorFocus,
@@ -749,6 +937,7 @@ struct DevotionalEditorView: View {
                 }
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .leading)
+            .preference(key: WritingAssistantOpenKey.self, value: showingAgentWorkspace)
             .clipped()
         }
         .frame(minWidth: 640, minHeight: 540)
@@ -1679,9 +1868,16 @@ struct DevotionalEditorView: View {
     @ToolbarContentBuilder
     private var editorToolbar: some ToolbarContent {
         ToolbarItem(placement: .navigation) {
+            // Named, as the side pane's buttons are: four unlabelled icons
+            // on the left were guessed at.
             Button(action: saveActiveDocument) {
-                Image(nsImage: Self.saveIcon)
+                Label {
+                    Text("Save")
+                } icon: {
+                    Image(nsImage: Self.saveIcon)
+                }
             }
+            .labelStyle(.titleAndIcon)
             .accessibilityLabel("Save")
             .disabled(!activeDocumentCanSave)
             .keyboardShortcut("s", modifiers: .command)
@@ -1689,10 +1885,13 @@ struct DevotionalEditorView: View {
         }
 
         ToolbarItem(placement: .navigation) {
-            Button("Revision History", systemImage: "clock.arrow.circlepath") {
+            Button {
                 showActiveRevisionHistory()
+            } label: {
+                Label("History", systemImage: "clock.arrow.circlepath")
             }
-            .labelStyle(.iconOnly)
+            .labelStyle(.titleAndIcon)
+            .accessibilityLabel("Revision History")
             .disabled(activeRevisionDocumentPath == nil)
             .help(activeRevisionDocumentPath == nil
                 ? "Revision history is available for Markdown workspace files"
@@ -1714,6 +1913,7 @@ struct DevotionalEditorView: View {
                 }
                 .disabled(!workspaceIsAvailable)
             }
+            .labelStyle(.titleAndIcon)
             .help("Companion files in this writing's workspace")
         }
 
@@ -1730,41 +1930,56 @@ struct DevotionalEditorView: View {
                 : "Plain text files use the Markdown editor")
         }
 
+        // The side pane's two kinds, named, together: two small unlabelled
+        // icons were hunted for. One pressed shows its pane; pressed again,
+        // it closes.
         ToolbarItem {
-            Toggle(isOn: Binding(
-                get: { showsDetails && !showingAgentWorkspace },
-                set: { isShowing in
-                    showingAgentWorkspace = false
-                    showsDetails = isShowing
+            ControlGroup {
+                Toggle(isOn: Binding(
+                    get: { showsDetails && !showingAgentWorkspace },
+                    set: { isShowing in
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showingAgentWorkspace = false
+                            showsDetails = isShowing
+                        }
+                    }
+                )) {
+                    Label("Details", systemImage: "info.circle")
                 }
-            )) {
-                Label("Details", systemImage: "info.circle")
+                .help(showsDetails && !showingAgentWorkspace ? "Hide details" : "Show details")
+                if aiFeaturesEnabled {
+                    Toggle(isOn: Binding(
+                        get: { showingAgentWorkspace },
+                        set: { isShowing in
+                            // The assistant covers the details rather than
+                            // closing them: closed again, it leaves the side
+                            // as it found it, details open or not.
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                showingAgentWorkspace = isShowing
+                            }
+                        }
+                    )) {
+                        Label("Assistant", systemImage: "sparkles")
+                    }
+                    .help(showingAgentWorkspace ? "Hide the assistant" : "Show the assistant")
+                }
             }
+            .labelStyle(.titleAndIcon)
             // Shown on as a neutral pressed state, as Pages and Notes show
             // their inspectors, not in the accent: a red disc in the title
-            // bar outshouted the writing beneath it.
-            .tint(.secondary)
-            .help(showsDetails ? "Hide details" : "Show details")
-        }
-
-        if aiFeaturesEnabled {
-        ToolbarItem {
-            Toggle(isOn: Binding(
-                get: { showingAgentWorkspace },
-                set: { isShowing in
-                    showingAgentWorkspace = isShowing
-                    showsDetails = !isShowing
-                }
-            )) {
-                Label("Agent", systemImage: "sparkles")
-            }
-            .tint(.secondary)
-            .help(showingAgentWorkspace ? "Hide agent workspace" : "Show agent workspace")
-        }
+            // bar outshouted the writing beneath it. Strong enough to read
+            // as on in dark mode, where the secondary grey did not.
+            .tint(Color.primary.opacity(0.55))
         }
 
         ToolbarItem {
             presentationToolbarControl
+        }
+
+        // The way out where the way in was, at the right; its shortcut is
+        // Edit's (⇧⌘E: ⌘↩ is the editor's, ⌘E is Use Selection for Find).
+        if let done {
+            WritingDoneToolbarItem(done: done)
         }
     }
 
@@ -3260,4 +3475,43 @@ private struct WritingDateField: View {
             .padding()
         }
     }
+}
+
+
+/// Done, last in the toolbar and in a group of its own.
+struct WritingDoneToolbarItem: ToolbarContent {
+    let done: WritingEditorDone
+
+    private var button: some View {
+        Button("Done", action: done.action)
+            .keyboardShortcut("e", modifiers: [.command, .shift])
+            .help("\(done.help) (⇧⌘E)")
+    }
+
+    var body: some ToolbarContent {
+        if #available(macOS 26.0, *) {
+            ToolbarSpacer(.fixed)
+            ToolbarItem { button }
+        } else {
+            ToolbarItem { button }
+        }
+    }
+}
+
+/// The way back from editing a writing, where the host offers one: back to
+/// reading in place, or the window closed.
+struct WritingEditorDone {
+    let help: String
+    let action: () -> Void
+}
+
+/// Whether the writing editor's assistant pane is open, for a host that
+/// makes room for it.
+struct WritingAssistantOpenKey: PreferenceKey {
+    static var defaultValue = false
+    static func reduce(value: inout Bool, nextValue: () -> Bool) { value = value || nextValue() }
+}
+
+extension EnvironmentValues {
+    @Entry var writingEditorDone: WritingEditorDone?
 }

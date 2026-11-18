@@ -2118,6 +2118,16 @@ struct NativeAgentChatView: View {
     let onTurnChanged: ((UUID?) -> Void)?
     /// Where this chat works, which the header names.
     private let workspaceFolder: URL
+    /// The name the header gives the workspace, where the host
+    /// knows a better one than its folder's (a writing's title, not its id).
+    private var workspaceTitle: String?
+    /// Told whether the provider is connected, for a host that
+    /// shows its setup when it is not.
+    private var onConnectionChanged: ((AIProviderConnectionState) -> Void)?
+    /// The host's own row names the agent, the writing and the
+    /// connection, so this header keeps only its buttons, and only when it
+    /// has one to offer.
+    private var hostNamesIdentity = false
 
     @StateObject private var model: NativeAgentChatModel
     @State private var draft = ""
@@ -2244,7 +2254,9 @@ struct NativeAgentChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            chatHeader
+            if !hostNamesIdentity || headerHasActions {
+                chatHeader
+            }
             if let error = submissionError ?? model.errorMessage {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(error)
@@ -2496,14 +2508,40 @@ struct NativeAgentChatView: View {
     /// The folder this chat works in, by the name a person would know it
     /// by rather than its path.
     private var workspaceName: String {
-        workspaceFolder.lastPathComponent
+        workspaceTitle.flatMap { $0.isEmpty ? nil : $0 } ?? workspaceFolder.lastPathComponent
+    }
+
+    /// See `workspaceTitle`.
+    func workspaceTitle(_ title: String?) -> NativeAgentChatView {
+        var copy = self
+        copy.workspaceTitle = title
+        return copy
+    }
+
+    /// See `hostNamesIdentity`.
+    func identityShownByHost() -> NativeAgentChatView {
+        var copy = self
+        copy.hostNamesIdentity = true
+        return copy
+    }
+
+    /// Whether the header has a button to show.
+    private var headerHasActions: Bool {
+        (connectionState != .connected && connectionState != .checking) || model.isRunning || !model.messages.isEmpty
+    }
+
+    /// See `onConnectionChanged`.
+    func onConnectionChanged(_ action: @escaping (AIProviderConnectionState) -> Void) -> NativeAgentChatView {
+        var copy = self
+        copy.onConnectionChanged = action
+        return copy
     }
 
     private var chatHeader: some View {
         HStack(spacing: 8) {
             // The reader's pane names its provider in its own menu just
             // above; said again here it read as a second header.
-            if !isReaderChat {
+            if !isReaderChat, !hostNamesIdentity {
                 Label(provider.shortName, systemImage: provider.systemImage)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
@@ -2521,9 +2559,11 @@ struct NativeAgentChatView: View {
                         ? "Reads \(workspaceName). It cannot change anything."
                         : "Reads and edits the files in \(workspaceName).")
             }
-            Label(connectionState.label, systemImage: connectionState.systemImage)
-                .font(.caption)
-                .foregroundStyle(connectionState.color)
+            if !hostNamesIdentity {
+                Label(connectionState.label, systemImage: connectionState.systemImage)
+                    .font(.caption)
+                    .foregroundStyle(connectionState.color)
+            }
             Spacer()
             if connectionState != .connected && connectionState != .checking {
                 Button("Connect", systemImage: "person.badge.key") { connect() }
@@ -2574,6 +2614,8 @@ struct NativeAgentChatView: View {
             }
             .padding(24)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        } else if model.messages.isEmpty, !mode.isReadOnly {
+            writingStarters
         } else if model.messages.isEmpty {
             VStack(spacing: 10) {
                 Image(systemName: "bubble.left.and.bubble.right")
@@ -2593,6 +2635,46 @@ struct NativeAgentChatView: View {
             .padding(24)
             .allowsHitTesting(false)
         }
+    }
+
+    /// An empty writing chat offers a first question, each
+    /// put in the message field to be read and sent, never sent for you; and
+    /// says what goes with every message: the writing, and what is selected.
+    private var writingStarters: some View {
+        let name = workspaceName
+        let starters: [(String, String)] = [
+            ("text.quote", "Suggest Scripture that supports this section"),
+            ("checkmark.seal", "Check each quotation against its translation"),
+            ("scissors", "Tighten the paragraph I’ve selected"),
+            ("list.bullet.indent", "Outline “\(name)” as a talk"),
+        ]
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("Ask \(provider.shortName) about “\(name)”")
+                .font(.headline)
+            Text("Each message is sent with the writing and whatever you have selected in it. Changes appear in the editor as they are made, and can be undone.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(starters, id: \.1) { symbol, prompt in
+                    Button {
+                        draft = prompt
+                    } label: {
+                        Label(prompt, systemImage: symbol)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 7)
+                            .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .frame(maxWidth: 420)
+        .padding(.horizontal, 24)
+        .padding(.top, 18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     private var connectionHelp: String {
@@ -2650,6 +2732,7 @@ struct NativeAgentChatView: View {
     private func refreshConnectionState() async {
         connectionState = .checking
         connectionState = await AIProviderCommandRunner.connectionState(for: provider)
+        onConnectionChanged?(connectionState)
     }
 }
 

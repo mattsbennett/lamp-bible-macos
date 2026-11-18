@@ -265,3 +265,63 @@ public struct WritingStatistics: Equatable, Sendable {
         return nil
     }
 }
+
+/// What Writing shows around a writing edited in place, in the main window.
+///
+/// Editing folds the window's sections away, so the list, the writing and
+/// its side pane have the window. The list stays, as the way to another
+/// writing, until the assistant opens: then it folds too, so the text keeps
+/// a readable width beside the conversation, and the list's button asks it
+/// back. Hiding the list while editing lasts for that editing alone; reading
+/// keeps its own choice, which is saved (`readingShowsList`).
+public struct WritingInPlaceLayout: Equatable, Sendable {
+    public private(set) var isEditing = false
+    public private(set) var assistantIsOpen = false
+    private var listHiddenWhileEditing = false
+    private var listAskedBackOverAssistant = false
+
+    public init() {}
+
+    /// Whether the window's sections are folded away.
+    public var foldsSections: Bool { isEditing }
+
+    public func showsList(readingShowsList: Bool) -> Bool {
+        guard isEditing else { return readingShowsList }
+        return !listHiddenWhileEditing && (!assistantIsOpen || listAskedBackOverAssistant)
+    }
+
+    /// Each editing starts with the list, whatever the last one did.
+    public mutating func beginEditing() {
+        isEditing = true
+        listHiddenWhileEditing = false
+        listAskedBackOverAssistant = false
+    }
+
+    public mutating func endEditing() {
+        isEditing = false
+        assistantIsOpen = false
+        listHiddenWhileEditing = false
+        listAskedBackOverAssistant = false
+    }
+
+    /// Each opening of the assistant folds the list again.
+    public mutating func setAssistantOpen(_ open: Bool) {
+        assistantIsOpen = open
+        listAskedBackOverAssistant = false
+    }
+
+    /// The list's button: hides the list if it is shown, shows it if not.
+    public mutating func toggleList(readingShowsList: inout Bool) {
+        guard isEditing else {
+            readingShowsList.toggle()
+            return
+        }
+        if showsList(readingShowsList: readingShowsList) {
+            listHiddenWhileEditing = true
+            listAskedBackOverAssistant = false
+        } else {
+            listHiddenWhileEditing = false
+            if assistantIsOpen { listAskedBackOverAssistant = true }
+        }
+    }
+}

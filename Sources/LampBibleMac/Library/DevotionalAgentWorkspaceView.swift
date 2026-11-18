@@ -825,6 +825,8 @@ struct DevotionalAgentWorkspaceView: View {
     let bundledModulesArchiveURL: URL?
     let agentAccessPolicy: LampAgentAccessPolicy
     let devotionalID: String
+    /// What the chat calls the workspace: the writing's title.
+    var devotionalTitle: String = ""
     let draftMarkdown: String
     let contextDocument: String
     /// What the editor beside this has open and selected, which each message
@@ -845,6 +847,12 @@ struct DevotionalAgentWorkspaceView: View {
     @AppStorage("devotional.agent.sessionMode") private var sessionModeID = AgentSessionDisplayMode.native.rawValue
     /// How tall the draft, context and skills sit above the chat or terminal.
     @AppStorage("devotional.agent.workspaceHeight") private var workspaceSectionHeight = 310.0
+    @AppStorage("devotional.agent.showsSetup") private var showsSetup = false
+    /// The chosen provider's state, as the chat found it.
+    @State private var providerConnection = AIProviderConnectionState.checking
+    /// The setup was opened because the provider needed it,
+    /// so it folds again once the provider is connected.
+    @State private var setupOpenedForConnection = false
     @State private var workspaceURL: URL?
     /// What this writing's chat is set to run with, read from beside its own
     /// transcript. `providerID` above is what the app remembers, which is the
@@ -926,44 +934,48 @@ struct DevotionalAgentWorkspaceView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            agentToolbar
-            Divider()
-            GeometryReader { geometry in
-                // The chat or terminal keeps room for a few lines of its own,
-                // however far the line is dragged.
-                let minimumSection = 60.0
-                let maximumSection = max(minimumSection, Double(geometry.size.height) - 240)
-                let sectionHeight = min(max(workspaceSectionHeight, minimumSection), maximumSection)
-                VStack(spacing: 0) {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 18) {
-                            draftSection
-                            contextSection
-                            skillsSection
-                            if let errorMessage {
-                                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                    Label(errorMessage, systemImage: "exclamationmark.triangle")
+        // The conversation leads; the agent, model, context
+        // and skills wait behind one Setup row.
+        GeometryReader { geometry in
+            // The chat or terminal keeps room for a few lines of its own,
+            // however far the line is dragged.
+            let minimumSection = 60.0
+            let maximumSection = max(minimumSection, Double(geometry.size.height) - 300)
+            let sectionHeight = min(max(workspaceSectionHeight, minimumSection), maximumSection)
+            VStack(spacing: 0) {
+                setupHeader
+                Divider()
+                if showsSetup {
+                    agentToolbar
+                    Divider()
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 18) {
+                                draftSection
+                                contextSection
+                                skillsSection
+                                if let errorMessage {
+                                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                        Label(errorMessage, systemImage: "exclamationmark.triangle")
+                                            .font(.caption)
+                                            .foregroundStyle(.red)
+                                            .textSelection(.enabled)
+                                        Spacer()
+                                        Button("Dismiss", systemImage: "xmark.circle") {
+                                            self.errorMessage = nil
+                                        }
+                                        .labelStyle(.iconOnly)
+                                        .buttonStyle(.borderless)
+                                    }
+                                }
+                                if let refreshErrorMessage {
+                                    Label(refreshErrorMessage, systemImage: "exclamationmark.triangle")
                                         .font(.caption)
                                         .foregroundStyle(.red)
-                                        .textSelection(.enabled)
-                                    Spacer()
-                                    Button("Dismiss", systemImage: "xmark.circle") {
-                                        self.errorMessage = nil
-                                    }
-                                    .labelStyle(.iconOnly)
-                                    .buttonStyle(.borderless)
                                 }
                             }
-                            if let refreshErrorMessage {
-                                Label(refreshErrorMessage, systemImage: "exclamationmark.triangle")
-                                    .font(.caption)
-                                    .foregroundStyle(.red)
-                            }
+                            .padding(12)
                         }
-                        .padding(12)
-                    }
-                    .frame(height: sectionHeight)
+                        .frame(height: sectionHeight)
                     PaneResizeHandle(
                         axis: .vertical,
                         resizes: .before,
@@ -972,11 +984,32 @@ struct DevotionalAgentWorkspaceView: View {
                         minimumSize: minimumSection,
                         maximumSize: maximumSection
                     )
-                    sessionPane
                 }
+                sessionPane
             }
         }
         .background(SwiftUI.Color(nsColor: .windowBackgroundColor))
+        .onChange(of: errorMessage) { _, message in
+            if message != nil { showsSetup = true }
+        }
+        // A provider not installed or not signed in: the setup opens, with
+        // its picker beside the chat's Connect, so another can be chosen.
+        .onChange(of: providerConnection) { _, state in
+            switch state {
+            case .checking:
+                break
+            case .connected:
+                if setupOpenedForConnection {
+                    withAnimation(.easeInOut(duration: 0.15)) { showsSetup = false }
+                    setupOpenedForConnection = false
+                }
+            case .notInstalled, .notConnected, .unavailable:
+                if !showsSetup {
+                    withAnimation(.easeInOut(duration: 0.15)) { showsSetup = true }
+                    setupOpenedForConnection = true
+                }
+            }
+        }
         .onChange(of: selectedProvider) { _, _ in
             if let workspaceURL { loadChoices(in: workspaceURL) }
         }
@@ -1046,8 +1079,65 @@ struct DevotionalAgentWorkspaceView: View {
                     agentSessionControls
                 }
             }
+            // A narrow pane: one control a line, rather than past its edge.
+            VStack(alignment: .leading, spacing: 8) {
+                agentChoiceControls
+                HStack(spacing: 8) {
+                    agentSessionControls
+                }
+            }
         }
         .padding(10)
+    }
+
+    /// The one row the setup keeps while the conversation leads: what agent
+    /// it is and whether the draft is in sync, opened on the whole row.
+    private var setupHeader: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) { showsSetup.toggle() }
+        } label: {
+            // One row says it all: the agent, its model, the writing it
+            // works on, and whether it is connected; it opens the setup.
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(showsSetup ? 90 : 0))
+                    .frame(width: 10)
+                Image(systemName: selectedProvider.systemImage)
+                    .foregroundStyle(.secondary)
+                Text(setupSummary)
+                    .font(.callout.weight(.medium))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Label(providerConnection.label, systemImage: providerConnection.systemImage)
+                    .font(.callout)
+                    .foregroundStyle(providerConnection.color)
+                    .lineLimit(1)
+                if workspaceURL != nil, workspaceDraft != draftMarkdown {
+                    Text("Syncing…")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .help(showsSetup ? "Hide the agent's setup"
+              : "Choose the agent and model, and add context and skills. It reads and edits this writing's files.")
+    }
+
+    private var setupSummary: String {
+        // The model this chat runs, where one is chosen; the provider's own
+        // default goes unnamed, as its menu calls it only "Default model".
+        let key = AgentChatModelChoice.defaultsKey(selectedProvider.wireProvider)
+        let model = chatChoices.value(for: key, orAppDefault: UserDefaults.standard.string(forKey: key)) ?? ""
+        let writing = devotionalTitle.isEmpty ? nil : devotionalTitle
+        return ([selectedProvider.shortName, model.isEmpty ? nil : model, writing].compactMap { $0 })
+            .joined(separator: " · ")
     }
 
     @ViewBuilder
@@ -1294,6 +1384,9 @@ struct DevotionalAgentWorkspaceView: View {
                         chatTurn = turn
                     }
                 )
+                .workspaceTitle(devotionalTitle)
+                .identityShownByHost()
+                .onConnectionChanged { state in providerConnection = state }
                 .id("\(selectedProvider.rawValue)|\(workspaceURL.path)")
                 // Covers the terminal kept alive beneath it.
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

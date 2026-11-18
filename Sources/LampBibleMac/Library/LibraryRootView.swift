@@ -172,6 +172,16 @@ struct LibraryRootView: View {
         )
     }
 
+    /// Whether Writing has a writing open to edit, in this window: the
+    /// sections fold away while it does, and the list, the writing and its
+    /// side pane have the window.
+    @State private var writingIsEditing = false
+    /// The sections: shown, or folded while a writing is edited. Not kept
+    /// across launches, so the window always opens with them.
+    @State private var sidebarVisibility: NavigationSplitViewVisibility = .all
+    /// What the sections were before editing folded them, to put back.
+    @State private var sidebarVisibilityBeforeEditing: NavigationSplitViewVisibility = .all
+
     var body: some View {
         // The interface arrives at once, under the splash, and only the splash
         // fades. An animation on the switch itself also animated the
@@ -317,7 +327,7 @@ struct LibraryRootView: View {
     }
 
     private var libraryInterface: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $sidebarVisibility) {
             List(selection: $selection) {
                 Section {
                     ForEach(LibrarySection.allCases.filter { $0 != .modules }) { section in
@@ -336,7 +346,28 @@ struct LibraryRootView: View {
                 }
             }
             .navigationTitle("Lamp Bible")
+            // While a writing is edited in place, Writing's list button is
+            // the one on the left, so the window's own goes. View ▸ Toggle
+            // Sidebar stays (SidebarCommands), and opens the sections through
+            // `sidebarVisibility`, which is let be.
+            //
+            // Before the column width, and it must stay there: after it, the
+            // removal hides the width from the split view, which then gives
+            // the sections about 144pt at every launch, removed or not. The
+            // Settings window met the same fault and fixed it with a frame
+            // (LampBibleMacApp), which would take the drag from these.
+            .toolbar(removing: writingIsEditing ? .sidebarToggle : nil)
             .navigationSplitViewColumnWidth(min: 210, ideal: 235, max: 300)
+            // Set only as editing starts and stops: a change here rebuilds
+            // all of this view.
+            .onChange(of: writingIsEditing) { _, editing in
+                if editing {
+                    sidebarVisibilityBeforeEditing = sidebarVisibility
+                    sidebarVisibility = .detailOnly
+                } else {
+                    sidebarVisibility = sidebarVisibilityBeforeEditing
+                }
+            }
             .safeAreaInset(edge: .bottom) {
                 Button {
                     openWindow(id: "add-to-library")
@@ -1777,6 +1808,7 @@ struct LibraryRootView: View {
         case .section(.devotionals):
             DevotionalsView(
                 initialDevotionalID: $requestedDevotionalID,
+                isEditingInPlace: $writingIsEditing,
                 showImporter: { showingImporter = true },
                 openReference: { reference in
                     workspace.openReference(reference)
