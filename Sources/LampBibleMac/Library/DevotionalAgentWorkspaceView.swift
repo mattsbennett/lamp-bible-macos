@@ -1828,6 +1828,7 @@ struct DevotionalAgentWorkspaceView: View {
                 over: try? store.deck(id: imported.id)
             )
             let destination = try store.save(imported)
+            SlideStudioInbox.shared.deckFilesChanged()
             try DevotionalAgentWorkspaceStore.markPresentationImported(data, in: workspace)
             // What went into the library, not what came out of the workspace:
             // the two differ by everything Lamp derives, so only this can tell

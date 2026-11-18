@@ -5327,6 +5327,7 @@ struct AddToDeckMenu: View {
                 deck.slides = Array(starter.slides.prefix(1)) + [slide]
             }
             try store.save(deck)
+            inbox.deckFilesChanged()
             inbox.select(slide.id, in: deck.id)
             openWindow(id: "slide-studio", value: SlideStudioRequest(deckID: deck.id))
             inbox.refreshDecks(rootURL: model.library.rootURL, force: true)

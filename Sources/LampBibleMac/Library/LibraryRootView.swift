@@ -589,6 +589,7 @@ struct LibraryRootView: View {
                 let store = LampPresentationDeckStore(rootURL: model.library.rootURL)
                 let deck = try store.decode(Data(contentsOf: url))
                 try store.save(deck)
+                SlideStudioInbox.shared.deckFilesChanged()
                 openWindow(
                     id: "slide-studio",
                     value: SlideStudioRequest(deckID: deck.id)

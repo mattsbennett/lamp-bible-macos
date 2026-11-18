@@ -48,6 +48,8 @@ final class SlideStudioInbox: ObservableObject {
     /// differently: what a list showing more than titles (covers, dates,
     /// order) reloads on. An ordinary save keeps the summaries the same.
     @Published private(set) var revision = 0
+    /// The decks as last listed, to tell a change of contents from none.
+    private var listed: [LampPresentationDeck] = []
 
     struct DeckSummary: Identifiable, Equatable {
         let id: String
@@ -93,8 +95,12 @@ final class SlideStudioInbox: ObservableObject {
         let summaries = decks
             .map { DeckSummary(id: $0.id, title: $0.title) }
             .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
-        if summaries != self.decks {
-            self.decks = summaries
+        if summaries != self.decks { self.decks = summaries }
+        // Any change to a deck's contents, from a save here, a slide added
+        // from the analysis or an agent's import read from disk: covers,
+        // dates and order move with it, though no title did.
+        if decks != listed {
+            listed = decks
             revision &+= 1
         }
     }
