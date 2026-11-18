@@ -25,13 +25,14 @@ struct OrphanedDeckSweepTests {
 
     @discardableResult
     private func deck(
-        _ title: String, of writingID: String?, in library: URL, savedAt offset: TimeInterval
+        _ title: String, of writingID: String?, in library: URL, savedAt offset: TimeInterval,
+        kind: LampPresentationSource.Kind = .devotional
     ) throws -> LampPresentationDeck {
         var deck = LampPresentationDeck(title: title, slides: [
             .init(layout: .scripture, blocks: [.init(kind: .title, text: title)]),
         ])
         if let writingID {
-            deck.source = LampPresentationSource(kind: .devotional, id: writingID)
+            deck.source = LampPresentationSource(kind: kind, id: writingID)
         }
         let url = try LampPresentationDeckStore(rootURL: library).save(deck)
         try FileManager.default.setAttributes(
@@ -67,6 +68,22 @@ struct OrphanedDeckSweepTests {
         )
         #expect(removed.count == 1)
         #expect(try titles(in: library) == ["Kept"])
+    }
+
+    /// A deck that came in with an imported writing names it `writing`, not
+    /// `devotional`: the same writing, and it goes with it.
+    @Test func adeckNamingItsWritingTheOtherWayGoesToo() throws {
+        let library = try library()
+        try deck("Imported", of: "W1", in: library, savedAt: 0, kind: .writing)
+        try deck("From scripture", of: "W1", in: library, savedAt: 0, kind: .scripture)
+
+        let removed = try LampPresentationDeckSync.removeDecksOfDeletedWritings(
+            heldWritingIDs: [],
+            deletedWritings: ledgerDeleting("W1", at: 60),
+            in: library
+        )
+        #expect(removed.count == 1)
+        #expect(try titles(in: library) == ["From scripture"])
     }
 
     /// The deletion has to be recorded for the phone, or the phone's copy

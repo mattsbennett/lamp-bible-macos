@@ -142,8 +142,9 @@ public enum LampPresentationDeckSync {
         for file in try deckFiles(in: decksDirectory(in: libraryRoot), fileManager: fileManager) {
             guard let data = try? Data(contentsOf: file.url),
                   let deck = try? LampPresentationDeckStore.decode(data),
-                  deck.source?.kind == .devotional,
-                  let writing = deck.source?.id.lowercased(),
+                  // Either of the format's names for a writing: a deck that
+                  // came in with an imported writing is named `writing`.
+                  let writing = deck.writingID?.lowercased(),
                   !held.contains(writing),
                   let when = deletedAt[writing]
             else { continue }

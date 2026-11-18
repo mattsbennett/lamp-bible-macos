@@ -68,7 +68,7 @@
   ],
   "source": {
     "id": "replace-with-DEVOTIONAL_ID",
-    "kind": "devotional"
+    "kind": "writing"
   },
   "theme": {
     "accentColor": "#F59E0B",

@@ -1805,7 +1805,7 @@ struct DevotionalAgentWorkspaceView: View {
                 return
             }
             var imported = try store.decode(data)
-            imported.source = LampPresentationSource(kind: .devotional, id: devotionalID)
+            imported.source = LampPresentationSource(kind: .writing, id: devotionalID)
 
             // Notes that follow the manuscript are derived here, against the
             // writing Lamp already holds, so they are right even when no agent

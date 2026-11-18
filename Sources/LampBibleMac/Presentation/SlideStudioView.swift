@@ -1288,7 +1288,9 @@ struct SlideStudioView: View {
         return .starter(
             title: devotional.title,
             subtitle: devotional.subtitle ?? devotional.author,
-            source: .init(kind: .devotional, id: devotional.id)
+            // `writing`, the format's current name; `devotional` is still
+            // read, as every deck made before says it.
+            source: .init(kind: .writing, id: devotional.id)
         )
     }
 

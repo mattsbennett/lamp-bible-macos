@@ -9,7 +9,7 @@
 | `schemaVersion` | integer | Must be `1` |
 | `id` | string | Stable UUID or durable identifier |
 | `title` | string | Non-empty |
-| `source` | object | For this workspace use `{"kind":"devotional","id":"<DEVOTIONAL_ID>"}` |
+| `source` | object | For this workspace use `{"kind":"writing","id":"<DEVOTIONAL_ID>"}` (`devotional` is an older name for the same thing, still accepted) |
 | `aspectRatio` | string | `widescreen` or `standard` |
 | `theme` | object | See Theme |
 | `slides` | array | At least one slide |
