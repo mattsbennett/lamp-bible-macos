@@ -1080,12 +1080,15 @@ struct DevotionalsView: View {
     /// they differ.
     @MainActor
     private func monitorOtherFiles(of writingID: String) async {
-        let workspace = DevotionalAgentWorkspaceFiles.workspaceURL(
-            libraryRootURL: model.library.rootURL, devotionalID: writingID
-        )
+        let rootURL = model.library.rootURL
         while !Task.isCancelled {
+            // Found off the main thread too: finding the workspace may move
+            // an earlier library's folder first.
             let files = await Task.detached(priority: .utility) {
-                (try? DevotionalAgentWorkspaceFiles.companions(in: workspace)) ?? []
+                let workspace = DevotionalAgentWorkspaceFiles.workspaceURL(
+                    libraryRootURL: rootURL, devotionalID: writingID
+                )
+                return (try? DevotionalAgentWorkspaceFiles.companions(in: workspace)) ?? []
             }.value
             guard !Task.isCancelled else { return }
             if otherFiles?.writingID != writingID || otherFiles?.files != files {
@@ -1097,7 +1100,8 @@ struct DevotionalsView: View {
 
     @ViewBuilder
     private func emptyDraftState(_ devotional: LampDevotional) -> some View {
-        let hasOtherFiles = !otherFiles(of: devotional).isEmpty
+        // Work in them, not only files: an empty outline is not work so far.
+        let hasOtherFiles = otherFiles(of: devotional).contains { !Self.isBlank($0.contents) }
         ContentUnavailableView {
             Label(hasOtherFiles ? "No Prose Yet" : "Nothing Written Yet", systemImage: "text.alignleft")
         } description: {
