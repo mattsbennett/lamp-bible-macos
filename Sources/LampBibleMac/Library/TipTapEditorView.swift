@@ -271,6 +271,14 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     /// the writing's own label for the note, not the number a reader sees.
     var onFootnoteNotInPage: ((String) -> Void)?
     var onFindStatusChanged: ((WritingFindStatus) -> Void)?
+    /// The writer cleared marks from the page, by its ✓ button: the writing's
+    /// Markdown with a marker at each edge of what was cleared
+    /// (`LampWritingReview.markedRange(in:of:)` reads it).
+    var onReviewClear: ((String) -> Void)?
+    /// The review marks shown, as the writing's Markdown with markers, kept
+    /// so every load puts them back: a document loaded into the page starts
+    /// with none.
+    private var reviewMarks: String?
     var usesCompactLayout = false
     /// Set before the first text, since it decides how that text is read.
     var usesLineBreaks = false
@@ -603,6 +611,10 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         case "searchChanged":
             onFindStatusChanged?(Self.findStatus(from: body))
 
+        case "reviewClear":
+            guard let marked = body["markdown"] as? String else { return }
+            onReviewClear?(portableMarkdown(from: marked))
+
         default:
             break
         }
@@ -665,6 +677,7 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
             self.markdownAsLoaded = self.portableMarkdown(from: editorMarkdown)
             self.hasLoadedContent = true
             self.loadAttempts = 0
+            self.applyReviewMarks()
             self.updateVisibility()
         }
     }
@@ -821,6 +834,34 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         evaluate("window.editorAPI.insertFootnote(\(Self.javascriptString(id)), \(Self.javascriptString(content)))")
     }
 
+    // MARK: - Review marks
+
+    /// Shows the writing's review marks: its Markdown with a marker at each
+    /// edge of what is still marked (`LampWritingReview.markedMarkdown`), or
+    /// nil for none. Kept, and put back after each load.
+    func setReviewMarks(_ marked: String?) {
+        guard marked != reviewMarks else { return }
+        reviewMarks = marked
+        applyReviewMarks()
+    }
+
+    private func applyReviewMarks() {
+        guard isReady, hasLoadedContent else { return }
+        let argument = reviewMarks.map { Self.javascriptString(editorMarkdown(from: $0)) } ?? "null"
+        evaluate("window.editorAPI.setReviewMarks && window.editorAPI.setReviewMarks(\(argument))")
+    }
+
+    /// The selection as the writing's Markdown with markers at its edges,
+    /// for clearing what of the marks it covers; nil outside the visual
+    /// page or before it is ready.
+    func reviewMarkdownForSelection(completion: @escaping (String?) -> Void) {
+        guard isReady else { return completion(nil) }
+        evaluate("window.editorAPI.reviewMarkdownForSelection ? window.editorAPI.reviewMarkdownForSelection() : null") { [weak self] result in
+            guard let self, let marked = result as? String else { return completion(nil) }
+            completion(self.portableMarkdown(from: marked))
+        }
+    }
+
     func insertHorizontalRule() {
         guard isReady else { return }
         evaluate("window.editorAPI.insertHorizontalRule()")
@@ -964,7 +1005,20 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         'html .tiptap h2 { font-size: 1.5em; line-height: 1.25; margin-top: 1.3em; margin-bottom: 0.45em; }',
         'html .tiptap h3 { font-size: 1.22em; margin-top: 1.15em; }',
         'html .tiptap > :first-child { margin-top: 0; }',
-        'html .tiptap blockquote { padding: 10px 16px; border-left-width: 3px; }'
+        'html .tiptap blockquote { padding: 10px 16px; border-left-width: 3px; }',
+        // What the writing assistant changed that the writer has not yet
+        // read (the bundle's review-marks.js): a wash and a dotted rule,
+        // a check in the margin to clear a paragraph, none while presenting.
+        'html .review-mark { background: rgba(232, 176, 44, 0.22); border-bottom: 1px dotted rgba(178, 120, 0, 0.7); }',
+        'html .review-point { display: inline-block; width: 0; height: 1.1em; vertical-align: text-bottom; border-left: 2px solid rgba(178, 120, 0, 0.7); margin: 0 1px; }',
+        'html .ProseMirror .review-clear { display: inline-block; vertical-align: baseline; width: 22px; height: 22px; margin: 0 8px 0 -30px; padding: 0; border: none; border-radius: 11px; background: transparent; color: rgba(178, 120, 0, 0.8); font: inherit; cursor: pointer; user-select: none; }',
+        'html .ProseMirror .review-clear::before { content: "\\u2713"; font-size: 14px; line-height: 22px; }',
+        'html .ProseMirror .review-clear:hover { background: rgba(232, 176, 44, 0.22); }',
+        'html body.dark .review-mark { background: rgba(240, 190, 70, 0.2); border-bottom-color: rgba(240, 190, 70, 0.75); }',
+        'html body.dark .review-point { border-left-color: rgba(240, 190, 70, 0.75); }',
+        'html body.dark .ProseMirror .review-clear { color: rgba(240, 190, 70, 0.85); }',
+        'html body.mode-present .review-mark { background: none; border-bottom: none; }',
+        'html body.mode-present .review-point, html body.mode-present .review-clear { display: none; }'
       ].join('\\n');
       (document.head || document.documentElement).appendChild(style);
     })();

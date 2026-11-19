@@ -752,6 +752,10 @@ struct DevotionalEditorView: View {
     /// left alone is open while it holds something and folded while empty.
     @State private var foldedOpen: [String: Bool] = [:]
     @State private var tipTapCoordinator: TipTapEditorCoordinator?
+    /// What the assistant changed that the writer has not yet read, where
+    /// they keep marks (`WritingReviewMarks`).
+    @StateObject private var reviewSession = WritingReviewSession()
+    @AppStorage(WritingReviewMarks.key) private var reviewMarksEnabled = LampPreferenceDefaults.writingReviewMarksEnabled
     @State private var tipTapSelection = TipTapSelectionState()
     /// The text selected in the visual editor, read from the page a moment
     /// after the selection settles, while the agent pane is open to be told.
@@ -1122,6 +1126,15 @@ struct DevotionalEditorView: View {
                 assistantPaneHasRoom = true
             }
         }
+        // The writing's review marks, followed while it is open and marks
+        // are shown; another writing, or marks turned off, starts again.
+        .task(id: ReviewFollowing(writingID: identifier, isShown: showsReviewMarks)) {
+            await reviewSession.follow(
+                writingID: identifier, text: content,
+                libraryRootURL: model.library.rootURL, isShown: showsReviewMarks
+            )
+        }
+        .onChange(of: content) { _, text in reviewSession.textChanged(text) }
         // Turned off while the agent's pane is open: it closes, and the
         // details take its place as they would on closing it by hand.
         .onChange(of: aiFeaturesEnabled) { _, enabled in
@@ -1494,6 +1507,7 @@ struct DevotionalEditorView: View {
                 onCoordinatorReady: { coordinator in
                     tipTapCoordinator = coordinator
                     visualEditorIsReady = true
+                    connectReviewMarks(to: coordinator)
                     coordinator.onFootnoteNotInPage = { label in
                         revealFootnote(label)
                     }
@@ -1742,7 +1756,9 @@ struct DevotionalEditorView: View {
                 selection: activeSelectionBinding,
                 fontSize: editorFontSize,
                 finder: markdownFinder,
-                measure: 76
+                measure: 76,
+                reviewRanges: isEditingPrimaryDocument ? reviewSession.ranges : [],
+                onMarkAsReviewed: isEditingPrimaryDocument ? { reviewSession.clear(range: $0) } : nil
             )
             // The text view draws no background of its own, so without this it
             // shows whatever happens to be behind the window — which is close to
@@ -2115,6 +2131,12 @@ struct DevotionalEditorView: View {
             .tint(Color.primary.opacity(0.55))
         }
 
+        if showsReviewMarks, reviewSession.count > 0, isEditingPrimaryDocument {
+            ToolbarItem {
+                reviewToolbarControl
+            }
+        }
+
         ToolbarItem {
             presentationToolbarControl
         }
@@ -2123,6 +2145,57 @@ struct DevotionalEditorView: View {
         // Edit's (⇧⌘E: ⌘↩ is the editor's, ⌘E is Use Selection for Find).
         if let done {
             WritingDoneToolbarItem(done: done)
+        }
+    }
+
+    // MARK: - Review marks
+
+    /// Whether the assistant's changes are marked here: the writer asked for
+    /// it, and AI is on.
+    private var showsReviewMarks: Bool {
+        aiFeaturesEnabled && reviewMarksEnabled
+    }
+
+    private struct ReviewFollowing: Equatable {
+        let writingID: String
+        let isShown: Bool
+    }
+
+    /// The visual page shows the session's marks and sends its clears back.
+    private func connectReviewMarks(to coordinator: TipTapEditorCoordinator) {
+        coordinator.setReviewMarks(reviewSession.markedMarkdown)
+        reviewSession.onMarksChanged = { [weak coordinator] marked in
+            coordinator?.setReviewMarks(marked)
+        }
+        coordinator.onReviewClear = { [weak reviewSession] marked in
+            reviewSession?.clear(markedMarkdown: marked)
+        }
+    }
+
+    /// How much is still to read, and the clears that do not need a
+    /// paragraph: the selection, or everything.
+    private var reviewToolbarControl: some View {
+        Menu {
+            Button("Mark Selection as Reviewed") { markSelectionAsReviewed() }
+            Button("Mark All as Reviewed") { reviewSession.clearAll() }
+        } label: {
+            Label(
+                reviewSession.count == 1 ? "1 to Review" : "\(reviewSession.count) to Review",
+                systemImage: "checkmark.circle"
+            )
+        }
+        .fittingToolbarLabel()
+        .help("Passages the assistant changed that you have not read yet")
+    }
+
+    private func markSelectionAsReviewed() {
+        if activeEditorMode == .visual, let tipTapCoordinator {
+            tipTapCoordinator.reviewMarkdownForSelection { marked in
+                guard let marked else { return }
+                reviewSession.clear(markedMarkdown: marked)
+            }
+        } else {
+            reviewSession.clear(range: contentSelection)
         }
     }
 

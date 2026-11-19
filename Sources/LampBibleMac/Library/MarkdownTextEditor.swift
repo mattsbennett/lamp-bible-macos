@@ -26,6 +26,14 @@ struct MarkdownTextEditor: NSViewRepresentable {
     /// Set in the system's text face rather than monospaced, for a field of
     /// notes beside prose rather than a source to edit.
     var monospaced = true
+    /// What the writing assistant changed that the writer has not yet read
+    /// (`LampWritingReview.highlightedRanges`), drawn with a dotted rule
+    /// beneath. A rule rather than a tint: the find bar clears every tint
+    /// in the text each time it draws its matches.
+    var reviewRanges: [NSRange] = []
+    /// Offered on the context menu as "Mark as Reviewed", with the selected
+    /// range, while there is anything marked. Nil offers nothing.
+    var onMarkAsReviewed: ((NSRange) -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -97,6 +105,12 @@ struct MarkdownTextEditor: NSViewRepresentable {
             finder?.textDidChange()
         }
 
+        // Drawn only when they changed: this runs on every host update.
+        if context.coordinator.drawnReviewRanges != reviewRanges {
+            context.coordinator.drawnReviewRanges = reviewRanges
+            Self.drawReviewRanges(reviewRanges, in: textView)
+        }
+
         // A formatting command moves the selection out from under the text view;
         // adopt it, but never fight the user's own caret movements.
         let current = textView.selectedRange()
@@ -132,6 +146,23 @@ struct MarkdownTextEditor: NSViewRepresentable {
         var pendingSelection: NSRange?
         /// The last reveal this view has answered.
         var revealedToken = 0
+        /// The review marks last drawn.
+        var drawnReviewRanges: [NSRange] = []
+
+        func textView(_ view: NSTextView, menu: NSMenu, for event: NSEvent, at charIndex: Int) -> NSMenu? {
+            guard parent.onMarkAsReviewed != nil, !parent.reviewRanges.isEmpty else { return menu }
+            let item = NSMenuItem(title: "Mark as Reviewed", action: #selector(markAsReviewed(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = view
+            menu.insertItem(item, at: 0)
+            menu.insertItem(.separator(), at: 1)
+            return menu
+        }
+
+        @objc private func markAsReviewed(_ item: NSMenuItem) {
+            guard let view = item.representedObject as? NSTextView else { return }
+            parent.onMarkAsReviewed?(view.selectedRange())
+        }
 
         init(_ parent: MarkdownTextEditor) {
             self.parent = parent
@@ -327,6 +358,27 @@ final class MarkdownTextFinder: WritingReplaceTarget {
             } else {
                 layoutManager.addTemporaryAttribute(.backgroundColor, value: others, forCharacterRange: match)
             }
+        }
+    }
+}
+
+extension MarkdownTextEditor {
+    static func drawReviewRanges(_ ranges: [NSRange], in textView: NSTextView) {
+        guard let layoutManager = textView.layoutManager else { return }
+        let length = (textView.string as NSString).length
+        let whole = NSRange(location: 0, length: length)
+        layoutManager.removeTemporaryAttribute(.underlineStyle, forCharacterRange: whole)
+        layoutManager.removeTemporaryAttribute(.underlineColor, forCharacterRange: whole)
+        let rule: [NSAttributedString.Key: Any] = [
+            .underlineStyle: NSUnderlineStyle([.single, .patternDot]).rawValue,
+            .underlineColor: NSColor.systemOrange,
+        ]
+        for range in ranges {
+            // A place words were taken out is ruled under the character
+            // after it, the nearest there is to rule.
+            let ruled = range.length > 0 ? range : NSRange(location: range.location, length: 1)
+            guard NSMaxRange(ruled) <= length else { continue }
+            layoutManager.addTemporaryAttributes(rule, forCharacterRange: ruled)
         }
     }
 }

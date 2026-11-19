@@ -242,6 +242,7 @@ private struct ReaderSettingsView: View {
     @EnvironmentObject private var syncController: LibrarySyncController
     @EnvironmentObject private var softwareUpdater: SoftwareUpdater
     @AppStorage(AIFeatures.key) private var aiFeaturesEnabled = AIFeatures.defaultValue
+    @AppStorage(WritingReviewMarks.key) private var reviewMarksEnabled = LampPreferenceDefaults.writingReviewMarksEnabled
     @AppStorage("reader.fontSize") private var fontSize = LampTextScale.readerText.defaultValue
     @AppStorage("reader.lineSpacing") private var lineSpacing = LampTextScale.readerLineSpacing.defaultValue
     @AppStorage("reader.typeface") private var typeface = ProseTypeface.readerDefault
@@ -707,6 +708,23 @@ private struct ReaderSettingsView: View {
                     .onChange(of: aiFeaturesEnabled) { _, _ in publishAgentAccess() }
 
                     if aiFeaturesEnabled {
+                    Section {
+                        Toggle("Mark the assistant’s changes for review", isOn: $reviewMarksEnabled)
+                    } header: {
+                        Text("Writing")
+                    } footer: {
+                        Text(
+                            """
+                            Every passage the writing assistant changes stays \
+                            marked until you read it and clear it, by \
+                            paragraph or selection. A later change marks it \
+                            again. Kept the same on all your devices.
+                            """
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+
                     Section("AI Provider Accounts") {
                         AIProviderAccountsSettingsView()
                         Divider()
