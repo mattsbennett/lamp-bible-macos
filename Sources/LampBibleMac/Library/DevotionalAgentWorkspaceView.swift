@@ -1014,6 +1014,10 @@ struct DevotionalAgentWorkspaceView: View {
             if let workspaceURL { loadChoices(in: workspaceURL) }
         }
         .task(id: "\(libraryRootURL.path)|\(devotionalID)") {
+            // A phone's turn on this writing leaves its draft to this pane
+            // while it is open (`WritingChatTurns.watch`).
+            let watch = WritingChatTurns.watch(writingID: devotionalID)
+            defer { watch.end() }
             await prepareWorkspace()
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(400))

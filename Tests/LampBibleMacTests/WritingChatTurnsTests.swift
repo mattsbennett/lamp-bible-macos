@@ -48,4 +48,16 @@ struct WritingChatTurnsTests {
         #expect(note.components(separatedBy: "\n- \"").count - 1 == WritingChatTurns.reviewPassageLimit)
         #expect(note.contains("and 10 more"))
     }
+
+    @Test func aWritingIsWatchedForAsLongAsAnyWindowHasIt() {
+        let id = "watched-\(UUID().uuidString)"
+        #expect(!WritingChatTurns.isWatched(id))
+        let first = WritingChatTurns.watch(writingID: id)
+        let second = WritingChatTurns.watch(writingID: id)
+        first.end()
+        first.end()
+        #expect(WritingChatTurns.isWatched(id), "the other window still has it, and a second end does nothing")
+        second.end()
+        #expect(!WritingChatTurns.isWatched(id))
+    }
 }

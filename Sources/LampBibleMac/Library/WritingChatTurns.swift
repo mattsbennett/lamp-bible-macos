@@ -160,6 +160,35 @@ enum WritingChatTurns {
 
     // MARK: - Taking a turn in
 
+    // MARK: - Whether a window has the writing
+
+    /// The writings a window is open on, and how many.
+    private static var watchers: [String: Int] = [:]
+
+    /// Says a window is open on the writing, for as long as the watch lasts.
+    ///
+    /// A window keeps its draft level with the editor's live text, which the
+    /// library holds only once the autosave lands, a second and a half
+    /// later. Run against the library's copy meanwhile, `begin` would put
+    /// the older text back into the draft and the window would take it,
+    /// losing what was just typed; `collect` would read the window's typing
+    /// as the writing moving and file the agent's work away. The window's
+    /// own preparation and poll do this work against its live text, so
+    /// while one is open both leave it to the window.
+    static func watch(writingID: String) -> WritingWatch {
+        watchers[writingID, default: 0] += 1
+        return WritingWatch(writingID: writingID)
+    }
+
+    static func isWatched(_ writingID: String) -> Bool {
+        (watchers[writingID] ?? 0) > 0
+    }
+
+    fileprivate static func unwatch(_ writingID: String) {
+        guard let count = watchers[writingID] else { return }
+        watchers[writingID] = count > 1 ? count - 1 : nil
+    }
+
     /// Brings the writing's draft level with the writing before a turn no
     /// window is watching, as a window does when it opens: the writing may
     /// have moved since — edited on the phone and synced here — and an agent
@@ -172,6 +201,7 @@ enum WritingChatTurns {
     static func begin(
         writingID: String, turnID: UUID?, libraryModel: LibraryModel
     ) async throws -> DevotionalAgentDraftReconciler.Outcome {
+        guard !isWatched(writingID) else { return .unchanged }
         let (writing, workspace, root) = try located(writingID, in: libraryModel)
         let current = writing.displayMarkdown
         let outcome = try reconciler(writingID: writingID, workspace: workspace, libraryRootURL: root)
@@ -203,6 +233,7 @@ enum WritingChatTurns {
     static func collect(
         writingID: String, turnID: UUID?, libraryModel: LibraryModel
     ) async throws -> DevotionalAgentDraftReconciler.Outcome {
+        guard !isWatched(writingID) else { return .unchanged }
         let (writing, workspace, root) = try located(writingID, in: libraryModel)
         let current = writing.displayMarkdown
         let outcome = try reconciler(writingID: writingID, workspace: workspace, libraryRootURL: root)
@@ -321,6 +352,24 @@ enum WritingChatTurns {
                 plainContent: LampPortableDevotionalContent.plainText(from: json) ?? ""
             )
         }.value
+    }
+}
+
+/// A window's claim on a writing (`WritingChatTurns.watch`), ended when the
+/// window goes. Ended once; a second end does nothing.
+@MainActor
+final class WritingWatch {
+    let writingID: String
+    private var ended = false
+
+    fileprivate init(writingID: String) {
+        self.writingID = writingID
+    }
+
+    func end() {
+        guard !ended else { return }
+        ended = true
+        WritingChatTurns.unwatch(writingID)
     }
 }
 
