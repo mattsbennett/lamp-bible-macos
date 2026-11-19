@@ -269,8 +269,20 @@ extension LampSyncLocalFiles {
         )
         return tree(under: root, fileManager: fileManager).compactMap { relative, url in
             let path = "\(LampPortableBackupLayout.workspacesDirectory)/\(relative)"
-            guard LampSyncFolderLayout.kind(of: path) == .workspaceFile else { return nil }
-            return Candidate(path: path, kind: .workspaceFile, url: url)
+            switch LampSyncFolderLayout.kind(of: path) {
+            case .workspaceFile:
+                return Candidate(path: path, kind: .workspaceFile, url: url)
+            case .writingDocument:
+                // Published under its name in NFC, as the phone names it: a
+                // name macOS hands back decomposed is the same document.
+                guard let document = LampWritingWorkspaceLayout.document(ofPath: path),
+                      let published = try? LampWritingWorkspaceLayout.documentPath(
+                          folder: document.folder, name: document.name
+                      ) else { return nil }
+                return Candidate(path: published, kind: .writingDocument, url: url)
+            default:
+                return nil
+            }
         }
     }
 

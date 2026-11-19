@@ -21,12 +21,6 @@ public enum LampWorkspaceSync {
         case backup = "Devotionals"
         case perFile = "Writing"
     }
-    private static let supportedDocumentExtensions: Set<String> = [
-        "md", "markdown", "txt", "text",
-    ]
-    private static let generatedDocumentNames: Set<String> = [
-        "agents.md", "claude.md", "devotional_context.md", "draft.md",
-    ]
     private static var bundledSkillNames: Set<String> { WorkspaceSkillStore.bundledSkillNames }
 
     /// The writing workspaces this Mac keeps, each a directory of its own.
@@ -140,8 +134,9 @@ public enum LampWorkspaceSync {
             )
 
             var fileLedger = WorkspaceFileLedger.load(in: workspace)
-            fileLedger.noteChanges(present: try workspaceFiles(in: workspace, fileManager: fileManager)
+            let deleted = fileLedger.noteChanges(present: try workspaceFiles(in: workspace, fileManager: fileManager)
                 .mapValues(\.modified))
+            try recordDocumentDeletions(deleted, inWorkspace: workspace, libraryRoot: libraryRoot, fileManager: fileManager)
             try fileLedger.save(in: workspace)
             if !fileLedger.isEmpty {
                 // Possibly all that's left of the workspace to send.
@@ -190,8 +185,9 @@ public enum LampWorkspaceSync {
             // Deletions made here since the last sync are noted before anything
             // arrives, or the incoming copies would simply put the files back.
             var fileLedger = WorkspaceFileLedger.load(in: workspace)
-            fileLedger.noteChanges(present: try workspaceFiles(in: workspace, fileManager: fileManager)
+            let deleted = fileLedger.noteChanges(present: try workspaceFiles(in: workspace, fileManager: fileManager)
                 .mapValues(\.modified))
+            try recordDocumentDeletions(deleted, inWorkspace: workspace, libraryRoot: libraryRoot, fileManager: fileManager)
             fileLedger.merge(WorkspaceFileLedger.portable(
                 in: portableWorkspace.appendingPathComponent(WorkspaceFileLedger.portableFilename)
             ))
@@ -378,9 +374,33 @@ public enum LampWorkspaceSync {
         }
     }
 
+    /// Writes down the documents the ledger has just found gone from a
+    /// workspace, for the next pass to tombstone (`LampSyncRemovedModules`),
+    /// so the phone and other Macs delete theirs. A document is deleted
+    /// everywhere by the manifest, as a deck is; the ledger's own record
+    /// goes on serving the workspace's other files. Recorded once, as the
+    /// deletion is first noticed, and dated then.
+    static func recordDocumentDeletions(
+        _ keys: [String], inWorkspace workspace: URL, libraryRoot: URL, fileManager: FileManager
+    ) throws {
+        let prefix = WorkspaceFileLedger.documentKey("")
+        let paths = keys.compactMap { key -> String? in
+            guard key.hasPrefix(prefix) else { return nil }
+            let name = String(key.dropFirst(prefix.count))
+            // Never one still there, however its name is spelled.
+            guard !fileManager.fileExists(atPath: workspace.appendingPathComponent(name).path) else { return nil }
+            return try? LampWritingWorkspaceLayout.documentPath(folder: workspace.lastPathComponent, name: name)
+        }
+        guard !paths.isEmpty else { return }
+        var removed = LampSyncRemovedModules.load(fromLibraryAt: libraryRoot, fileManager: fileManager)
+        let now = WorkspaceFileLedger.milliseconds(Date())
+        for path in paths { removed.record(path, at: now) }
+        try removed.save(toLibraryAt: libraryRoot, fileManager: fileManager)
+    }
+
+    /// Core's rule, which the phone keeps to as well.
     private static func isPortableDocument(_ url: URL) -> Bool {
-        supportedDocumentExtensions.contains(url.pathExtension.lowercased())
-            && !generatedDocumentNames.contains(url.lastPathComponent.lowercased())
+        LampWritingWorkspaceLayout.isDocumentName(url.lastPathComponent)
     }
 
     private static func appending(_ components: [String], to root: URL) -> URL {
@@ -681,7 +701,17 @@ struct WorkspaceFileLedger: Codable, Equatable {
         }
     }
 
-    static func documentKey(_ filename: String) -> String { "Documents/" + filename }
+    /// In NFC, as core names a document: macOS can hand a name back
+    /// decomposed, and one name spelled two ways is one file.
+    static func documentKey(_ filename: String) -> String {
+        "Documents/" + filename.precomposedStringWithCanonicalMapping
+    }
+
+    /// A key as `documentKey` now spells it. A ledger written before that
+    /// can hold a document's key decomposed.
+    static func normalized(_ key: String) -> String {
+        key.hasPrefix("Documents/") ? documentKey(String(key.dropFirst("Documents/".count))) : key
+    }
     static func contextKey(_ relativePath: String) -> String { "Context/" + relativePath }
     static func isContextKey(_ key: String) -> Bool { key.hasPrefix("Context/") }
 
@@ -719,24 +749,38 @@ struct WorkspaceFileLedger: Codable, Equatable {
         AgentChatTranscriptStore.directory(in: workspace).appendingPathComponent(localFilename)
     }
 
-    /// Compares the files present now with those at the last sync.
-    mutating func noteChanges(present: [String: Int64], now: Date = Date()) {
-        guard let synced else {
+    /// Compares the files present now with those at the last sync, and
+    /// returns the keys found deleted since.
+    @discardableResult
+    mutating func noteChanges(present: [String: Int64], now: Date = Date()) -> [String] {
+        let present = Dictionary(present.map { (Self.normalized($0.key), $0.value) }, uniquingKeysWith: max)
+        guard let recorded = self.synced else {
             self.synced = present
-            return
+            return []
         }
+        let synced = Dictionary(recorded.map { (Self.normalized($0.key), $0.value) }, uniquingKeysWith: max)
+        var deleted: [String] = []
         let time = Self.milliseconds(now)
         for (key, modified) in synced where present[key] == nil {
             // A document's deletion covers the last version this Mac had, so a
             // later edit made elsewhere survives it. Context files' times aren't
             // comparable across Macs, so theirs is when it was noticed.
-            let deleted = Self.isContextKey(key) ? time : modified
-            deletedAt[key] = max(deletedAt[key] ?? .min, deleted)
+            deletedAt[key] = max(deletedAt[key] ?? .min, Self.isContextKey(key) ? time : modified)
+            deleted.append(key)
         }
         for key in present.keys where synced[key] == nil && Self.isContextKey(key) {
             presentSince[key] = max(presentSince[key] ?? .min, time)
         }
         self.synced = present
+        return deleted
+    }
+
+    /// A document a pass put here or removed, as the last sync's: a removal
+    /// a pass carried out is not this Mac's own deletion, and a document a
+    /// pass brought is one whose removal later is.
+    mutating func noteSynced(_ key: String, modified: Int64?) {
+        guard synced != nil else { return }
+        synced?[key] = modified
     }
 
     mutating func recordSynced(_ present: [String: Int64]) {

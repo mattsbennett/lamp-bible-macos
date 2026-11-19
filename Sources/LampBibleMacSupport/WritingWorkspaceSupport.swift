@@ -1,4 +1,5 @@
 import Foundation
+import LampModuleKit
 
 /// Where a writing's agent workspace lives, and what is in it.
 ///
@@ -86,25 +87,11 @@ public enum LampWritingWorkspace {
         _ = old.withUnsafeFileSystemRepresentation { $0.map { rmdir($0) } }
     }
 
-    /// A folder name from an identifier: as much of it as reads as a name,
-    /// then a hash of the whole so two writings never collide.
-    ///
-    /// Every existing workspace on every device is named by this function, so
-    /// its output is a stored format in all but name. Changing it orphans
-    /// them, which is why `aknownIdentifierKeepsItsFolderName` pins one.
+    /// A folder name from an identifier, by core's rule, which the phone
+    /// names a writing's documents' folder by too. A stored format: see
+    /// `LampWritingWorkspaceLayout.directoryName(for:)`.
     public static func directoryName(for identifier: String) -> String {
-        let readable = identifier.unicodeScalars.map { scalar -> Character in
-            CharacterSet.alphanumerics.contains(scalar) || scalar == "-" || scalar == "_"
-                ? Character(String(scalar)) : "_"
-        }
-        var hash: UInt64 = 14_695_981_039_346_656_037
-        for byte in identifier.utf8 {
-            hash ^= UInt64(byte)
-            hash &*= 1_099_511_628_211
-        }
-        let prefix = String(readable.prefix(48))
-            .trimmingCharacters(in: CharacterSet(charactersIn: "_"))
-        return "\(prefix.isEmpty ? "devotional" : prefix)-\(String(hash, radix: 16))"
+        LampWritingWorkspaceLayout.directoryName(for: identifier)
     }
 
     /// Whether this writing has a workspace at all.

@@ -240,8 +240,10 @@ struct LampSyncLocalFilesTests {
             inLibraryAt: library, stagingIn: scratch
         )
 
-        #expect(found.allSatisfy { $0.kind == .workspaceFile })
-        #expect(found.contains { $0.path == "Workspaces/Writing/talk-123/Documents/outline.md" })
+        #expect(found.allSatisfy { $0.kind == .workspaceFile || $0.kind == .writingDocument })
+        #expect(found.contains {
+            $0.path == "Workspaces/Writing/talk-123/Documents/outline.md" && $0.kind == .writingDocument
+        })
         #expect(found.contains { $0.path == "Workspaces/Writing/talk-123/Context/fact.md" })
         #expect(
             !found.contains { $0.path.hasPrefix("Workspaces/Presentations/") },
@@ -401,6 +403,7 @@ struct LampSyncLocalFilesTests {
             at: "AgentWorkspaces/Writing/advent/context/isaiah.md",
             in: library
         )
+        try write("An outline.", at: "AgentWorkspaces/Writing/advent/outline.md", in: library)
 
         let staging = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: staging) }
@@ -420,7 +423,7 @@ struct LampSyncLocalFilesTests {
         let found = Set(gathered.map(\.kind))
         let kinds: [LampSyncFileKind] =
             LampSyncContentKind.allCases.map { .module($0) }
-                + [.devotionalMedia, .bookMedia, .deck, .deckAsset, .workspaceFile]
+                + [.devotionalMedia, .bookMedia, .deck, .deckAsset, .workspaceFile, .writingDocument]
         for kind in kinds {
             #expect(found.contains(kind), "nothing here gathers \(kind)")
         }

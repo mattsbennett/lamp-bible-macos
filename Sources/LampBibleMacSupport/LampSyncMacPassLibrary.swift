@@ -173,6 +173,11 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             }
             try reviewStore.takeIn(downloaded: try Data(contentsOf: url), writingID: writingID)
             return nil
+        case .writingDocument:
+            // Asked without knowing what was last agreed: an edit held here
+            // is kept as a copy, which loses nothing.
+            try takeInDocument(path, from: url, agreedDigest: nil)
+            return nil
         case .workspaceFile:
             // Staged, not installed: a workspace is a tree with one importer,
             // so what arrives is gathered and taken in by `finishInstalling`.
@@ -398,7 +403,15 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
 
         for path in downloaded.keys.sorted() {
             guard let url = downloaded[path] else { continue }
-            try await install(path, from: url)
+            if LampSyncFolderLayout.kind(of: path) == .writingDocument {
+                // Both sides changed it: the server's copy under its name,
+                // this Mac's edits kept beside it, which the next pass sends.
+                // Nothing goes back up at this path, which now holds what
+                // was downloaded.
+                try takeInDocument(path, from: url, agreedDigest: nil)
+            } else {
+                try await install(path, from: url)
+            }
         }
 
         for path in downloaded.keys.sorted() {
@@ -565,6 +578,10 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             try removeFile(named: filename, from: deckStore.assetsDirectoryURL)
         case .writingReview(let writingID):
             try reviewStore.remove(writingID: writingID)
+        case .writingDocument:
+            // Asked without knowing what was last agreed: kept as a copy if
+            // it is there at all, which loses nothing.
+            try await deleteLocally(path, agreedDigest: nil)
         case .module(let moduleID):
             // A highlight module is an installed module on the phone and a
             // *set* here, so the one allowed deletion that needs translating
@@ -579,6 +596,62 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
                 try await library.remove(moduleID: moduleID)
             }
         }
+    }
+
+    /// A deletion made on another device, told what this Mac last agreed
+    /// with the server on: a document edited here since is kept as a copy
+    /// rather than removed (`LampWritingDocumentStore.remove`).
+    public func deleteLocally(_ path: String, agreedDigest: String?) async throws {
+        guard case .writingDocument = LampSyncLocalDeletion.target(of: path) else {
+            return try await deleteLocally(path)
+        }
+        try documentStore.remove(path: path, agreedDigest: agreedDigest, localDevice: Self.deviceName)
+        noteSynced(path)
+    }
+
+    /// A file taken from the server, told what this Mac last agreed with
+    /// the server on there: a document edited here since is kept as a copy
+    /// beside the server's (`LampWritingDocumentMerge`).
+    public func install(_ path: String, from url: URL, agreedDigest: String?) async throws -> String? {
+        guard LampSyncFolderLayout.kind(of: path) == .writingDocument else {
+            return try await install(path, from: url)
+        }
+        try takeInDocument(path, from: url, agreedDigest: agreedDigest)
+        return nil
+    }
+
+    /// One of a writing's documents, taken in by core's rule, and noted in
+    /// the workspace's ledger as synced, so that removing it here later is
+    /// seen as this Mac's own deletion.
+    private func takeInDocument(_ path: String, from url: URL, agreedDigest: String?) throws {
+        try documentStore.takeIn(
+            downloaded: try Data(contentsOf: url), path: path, agreedDigest: agreedDigest, localDevice: Self.deviceName
+        )
+        noteSynced(path)
+    }
+
+    /// Notes a document as the workspace now has it, present or not, as the
+    /// last sync's: what a pass put here or took away is not a change this
+    /// Mac made. Best effort: a ledger that cannot be written leaves the next
+    /// comparison to find it.
+    private func noteSynced(_ path: String) {
+        guard let document = LampWritingWorkspaceLayout.document(ofPath: path) else { return }
+        let workspace = documentStore.rootURL.appendingPathComponent(document.folder, isDirectory: true)
+        let file = workspace.appendingPathComponent(document.name)
+        var ledger = WorkspaceFileLedger.load(in: workspace)
+        ledger.noteSynced(
+            WorkspaceFileLedger.documentKey(document.name),
+            modified: LampFileModification.date(of: file).map(WorkspaceFileLedger.milliseconds)
+        )
+        try? ledger.save(in: workspace)
+    }
+
+    /// What this Mac's edits are kept under when another device changed or
+    /// deleted the same document.
+    static var deviceName: String { Host.current().localizedName ?? "Mac" }
+
+    private var documentStore: LampWritingDocumentStore {
+        LampWritingDocumentStore(rootURL: LampWritingWorkspace.root(libraryRootURL: library.rootURL, fileManager: fileManager))
     }
 
     private func removeFile(named filename: String, from directory: URL) throws {

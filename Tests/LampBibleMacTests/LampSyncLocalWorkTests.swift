@@ -306,9 +306,10 @@ struct LampSyncLocalWorkTests {
             return ["Presentations/Assets"]
         case .writingReview:
             return ["WritingReview/advent.json"]
+        case .writingDocument:
+            return ["Workspaces/Advent/Documents/notes.md"]
         case .workspaceFile:
             return [
-                "Workspaces/Advent/Documents/notes.md",
                 "Workspaces/Advent/Context/isaiah.md",
                 "AgentSkills/write-a-devotional/SKILL.md",
             ]
@@ -321,7 +322,7 @@ struct LampSyncLocalWorkTests {
         let marks = marks(library)
         let kinds: [LampSyncFileKind] =
             LampSyncContentKind.allCases.map { .module($0) }
-                + [.devotionalMedia, .bookMedia, .deck, .deckAsset, .workspaceFile, .writingReview]
+                + [.devotionalMedia, .bookMedia, .deck, .deckAsset, .workspaceFile, .writingReview, .writingDocument]
 
         for kind in kinds {
             for home in homes(of: kind) {

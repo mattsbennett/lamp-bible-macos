@@ -346,6 +346,7 @@ struct MergedCollectionKindsMatchInstallTests {
         .bookMedia,
         .workspaceFile,
         .writingReview,
+        .writingDocument,
     ])
     func akindKeptAsAFileIsNotClaimedAsMerged(kind: LampSyncFileKind) throws {
         #expect(!LampSyncMacPassLibrary.mergedIntoTheLibrary.contains(kind))
@@ -396,6 +397,61 @@ extension LampSyncMacPassLibraryTests {
         #expect(sent != (try store.url(writingID: "w")))
         #expect(try Data(contentsOf: sent) == Data(contentsOf: store.url(writingID: "w")))
         #expect(try store.review(writingID: "w").isEmpty)
+    }
+
+    // MARK: - A writing's documents
+
+    private func documentFile(_ text: String, in directory: URL) throws -> URL {
+        let url = directory.appendingPathComponent("\(UUID().uuidString).md")
+        try Data(text.utf8).write(to: url)
+        return url
+    }
+
+    /// A document arrives into the writing's workspace, where the editor's
+    /// tabs read it; both changed, this Mac's edits are kept beside the
+    /// server's copy and nothing goes back up at the path.
+    @Test func aDocumentIsTakenInAndBothSidesEditsAreKept() async throws {
+        let (library, root, workspace) = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let pass = passLibrary(library, workspace: workspace)
+        let path = try LampWritingWorkspaceLayout.documentPath(writingID: "w", name: "outline.md")
+        let folder = LampWritingWorkspace.url(libraryRootURL: root, writingID: "w")
+        let outline = folder.appendingPathComponent("outline.md")
+
+        _ = try await pass.install(path, from: try documentFile("theirs, first", in: workspace), agreedDigest: nil)
+        #expect(try String(contentsOf: outline, encoding: .utf8) == "theirs, first")
+        // Unedited since: taken over it.
+        let first = LampSyncContentRevision.digest(for: Data("theirs, first".utf8))
+        _ = try await pass.install(path, from: try documentFile("theirs, second", in: workspace), agreedDigest: first)
+        #expect(try String(contentsOf: outline, encoding: .utf8) == "theirs, second")
+
+        try Data("mine".utf8).write(to: outline)
+        #expect(try await pass.reconcile([path: try documentFile("theirs, again", in: workspace)]).isEmpty)
+        let documents = try LampWritingDocumentStore(rootURL: LampWritingWorkspace.root(libraryRootURL: root))
+            .documents(writingID: "w")
+        #expect(documents.first { $0.name == "outline.md" }?.text == "theirs, again")
+        #expect(documents.contains { $0.isKeptCopy && $0.text == "mine" })
+    }
+
+    /// Deleted on another device: removed here, unless edited here since
+    /// this Mac last agreed with the server, when it is kept as a copy.
+    @Test func aDocumentDeletedElsewhereKeepsAnEditMadeHere() async throws {
+        let (library, root, workspace) = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let pass = passLibrary(library, workspace: workspace)
+        let path = try LampWritingWorkspaceLayout.documentPath(writingID: "w", name: "outline.md")
+        let outline = LampWritingWorkspace.url(libraryRootURL: root, writingID: "w").appendingPathComponent("outline.md")
+        let store = LampWritingDocumentStore(rootURL: LampWritingWorkspace.root(libraryRootURL: root))
+
+        _ = try await pass.install(path, from: try documentFile("agreed", in: workspace), agreedDigest: nil)
+        try await pass.deleteLocally(path, agreedDigest: LampSyncContentRevision.digest(for: Data("agreed".utf8)))
+        #expect(try store.documents(writingID: "w").isEmpty)
+
+        _ = try await pass.install(path, from: try documentFile("agreed", in: workspace), agreedDigest: nil)
+        try Data("edited here".utf8).write(to: outline)
+        try await pass.deleteLocally(path, agreedDigest: LampSyncContentRevision.digest(for: Data("agreed".utf8)))
+        let kept = try store.documents(writingID: "w")
+        #expect(kept.count == 1 && kept[0].isKeptCopy && kept[0].text == "edited here")
     }
 
     @Test func aReviewDeletedElsewhereIsRemovedHere() async throws {

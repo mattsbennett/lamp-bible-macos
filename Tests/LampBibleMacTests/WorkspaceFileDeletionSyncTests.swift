@@ -71,6 +71,38 @@ struct WorkspaceFileDeletionSyncTests {
 
     // MARK: - Documents
 
+    /// A document deleted on this Mac is written down for the next pass to
+    /// tombstone, under its name in NFC, so the phone deletes its copy too;
+    /// one a pass removed, as another device's deletion, is not.
+    @Test func aDocumentDeletedHereIsRecordedForEveryDevice() throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let decomposed = "Ro\u{308}mer.md"
+        try write("outline", to: workspace(macs.a).appendingPathComponent("outline.md"), at: 0)
+        try write("notes", to: workspace(macs.a).appendingPathComponent(decomposed), at: 0)
+        try write("kept", to: workspace(macs.a).appendingPathComponent("kept.md"), at: 0)
+        let outgoing = macs.root.appendingPathComponent("out", isDirectory: true)
+        try LampWorkspaceSync.exportPortableWorkspaces(from: macs.a, to: outgoing, installID: "mac")
+        #expect(LampSyncRemovedModules.load(fromLibraryAt: macs.a).removedAt.isEmpty)
+
+        try FileManager.default.removeItem(at: workspace(macs.a).appendingPathComponent("outline.md"))
+        try FileManager.default.removeItem(at: workspace(macs.a).appendingPathComponent(decomposed))
+        // Removed by a pass carrying out another device's deletion.
+        try FileManager.default.removeItem(at: workspace(macs.a).appendingPathComponent("kept.md"))
+        var ledger = WorkspaceFileLedger.load(in: workspace(macs.a))
+        ledger.noteSynced(WorkspaceFileLedger.documentKey("kept.md"), modified: nil)
+        try ledger.save(in: workspace(macs.a))
+
+        try LampWorkspaceSync.exportPortableWorkspaces(
+            from: macs.a, to: macs.root.appendingPathComponent("out2", isDirectory: true), installID: "mac"
+        )
+        let recorded = Set(LampSyncRemovedModules.load(fromLibraryAt: macs.a).removedAt.keys)
+        #expect(recorded == [
+            try LampWritingWorkspaceLayout.documentPath(folder: devotional, name: "outline.md"),
+            try LampWritingWorkspaceLayout.documentPath(folder: devotional, name: "R\u{F6}mer.md"),
+        ])
+    }
+
     @Test func aDocumentDeletedOnOneMacIsRemovedFromTheOther() throws {
         let macs = try Macs(devotional: devotional)
         defer { macs.remove() }
