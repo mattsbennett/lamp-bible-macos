@@ -884,19 +884,20 @@ final class AgentRemoteHost: ObservableObject {
     private func isCurrent(_ id: String, revision: Int?, digest: String?, requestID: UUID?, peer: Peer) async -> Bool {
         let chatID = LampAgentRemoteHosting.Chat.writing(id).id
         // A copy here that was never dated cannot be compared, and goes on
-        // as a turn always has.
-        func behind() -> Bool {
+        // as a turn always has. Only an older copy refuses; one that holds
+        // something else in the same second is fetched for, and goes on.
+        func behind(fetching: Bool) -> Bool {
             guard let held = writing(id) else { return revision != nil }
-            return held.lastModified.map {
-                LampAgentRemoteWritingRevision.hostIsBehind(
-                    host: $0,
-                    hostDigest: LampAgentRemoteWritingRevision.digest(content: held.content, contentJSON: held.contentJSON),
+            guard let saved = held.lastModified else { return false }
+            return fetching
+                ? LampAgentRemoteWritingRevision.hostShouldFetch(
+                    host: saved, hostDigest: LampAgentRemoteWritingRevision.digest(of: held),
                     device: revision, deviceDigest: digest
                 )
-            } ?? false
+                : LampAgentRemoteWritingRevision.hostIsBehind(host: saved, device: revision)
         }
-        if behind(), let pull { await pull() }
-        if behind() {
+        if behind(fetching: true), let pull { await pull() }
+        if behind(fetching: false) {
             send(.failed(
                 LampAgentRemoteFailure.writingBehind,
                 "This Mac doesn't have your latest edits to this writing yet.",
@@ -906,6 +907,18 @@ final class AgentRemoteHost: ObservableObject {
         }
         guard writing(id) != nil else {
             send(.failed(LampAgentRemoteFailure.notFound, "That writing isn't on this Mac.", requestID: requestID, chatID: chatID), to: peer)
+            return false
+        }
+        // A window open on the writing keeps the copy it loaded or last
+        // saved, whatever sync brings in since, and the turn would run on
+        // that copy and the window save it back over the phone's edits.
+        if let open = WritingChatTurns.watchedRevision(id),
+           LampAgentRemoteWritingRevision.hostIsBehind(host: open, device: revision) {
+            send(.failed(
+                LampAgentRemoteFailure.writingBehind,
+                "This writing is open on the Mac with an older copy. Close it there, then try again.",
+                requestID: requestID, chatID: chatID
+            ), to: peer)
             return false
         }
         return true
