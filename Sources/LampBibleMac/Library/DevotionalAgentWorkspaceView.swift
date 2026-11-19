@@ -423,6 +423,7 @@ enum DevotionalAgentWorkspaceStore {
         try String(contentsOf: workspace.appendingPathComponent(draftFilename), encoding: .utf8)
     }
 
+    @WritingWorkspaceFiles
     static func changedPresentationData(in workspace: URL) throws -> Data? {
         let artifactURL = workspace.appendingPathComponent(presentationFilename)
         guard FileManager.default.fileExists(atPath: artifactURL.path) else { return nil }
@@ -432,6 +433,7 @@ enum DevotionalAgentWorkspaceStore {
         return imported == artifact ? nil : artifact
     }
 
+    @WritingWorkspaceFiles
     static func markPresentationImported(_ data: Data, in workspace: URL) throws {
         let markerURL = presentationImportMarkerURL(in: workspace)
         try createDirectory(markerURL.deletingLastPathComponent())
@@ -723,6 +725,7 @@ enum DevotionalAgentWorkspaceStore {
             .appendingPathComponent("presentation-imported.lampdeck")
     }
 
+    @WritingWorkspaceFiles
     private static func createDirectory(_ url: URL) throws {
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     }
@@ -1847,7 +1850,7 @@ struct DevotionalAgentWorkspaceView: View {
         defer { isImportingPresentation = false }
         let store = LampPresentationDeckStore(rootURL: libraryRootURL)
         do {
-            guard let data = try DevotionalAgentWorkspaceStore.changedPresentationData(
+            guard let data = try await DevotionalAgentWorkspaceStore.changedPresentationData(
                 in: workspace
             ) else {
                 // Nothing to take. Say so once rather than on every poll, so an
@@ -1894,7 +1897,7 @@ struct DevotionalAgentWorkspaceView: View {
             )
             let destination = try store.save(imported)
             SlideStudioInbox.shared.deckFilesChanged()
-            try DevotionalAgentWorkspaceStore.markPresentationImported(data, in: workspace)
+            try await DevotionalAgentWorkspaceStore.markPresentationImported(data, in: workspace)
             // What went into the library, not what came out of the workspace:
             // the two differ by everything Lamp derives, so only this can tell
             // a later edit in Slide Studio from Lamp's own work.
