@@ -139,14 +139,16 @@ public enum LampAgentRemoteHosting {
         arriving: String,
         activity: AgentChatActivity?,
         isRunning: Bool,
-        failure: String?
+        failure: String?,
+        askedBy: [UUID: UUID] = [:]
     ) -> LampAgentRemoteChatState {
         LampAgentRemoteChatState(
             messages: messages.map(message),
             arriving: arriving,
             activity: Self.activity(activity),
             isRunning: isRunning,
-            failure: failure
+            failure: failure,
+            askedBy: askedBy
         )
     }
 }

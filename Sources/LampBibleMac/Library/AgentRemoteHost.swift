@@ -68,6 +68,12 @@ final class AgentRemoteHost: ObservableObject {
     /// sleep closes while the turn runs on, so forgetting the device or
     /// turning the host off still stops them — and only them.
     private var runs: [String: [(model: NativeAgentChatModel, turn: UUID)]] = [:]
+    /// The request each question a device sent came with, by the question's
+    /// id, so the events that carry it name it (`LampAgentRemoteChatState
+    /// .askedBy`). The last few only: a question is told moments after it is
+    /// asked, and a device that missed it is sent a snapshot instead.
+    private var askedBy: [UUID: UUID] = [:]
+    private var askedOrder: [UUID] = []
     private weak var libraryModel: LibraryModel?
 
     private var settingsObserver: AnyCancellable?
@@ -515,23 +521,23 @@ final class AgentRemoteHost: ObservableObject {
     /// Makes a chat the one this peer has open: a snapshot first, then what
     /// changes in it.
     private func follow(_ open: OpenChat, summary: LampAgentRemoteChatSummary, for peer: Peer, requestID: UUID?) -> OpenChat {
-        open.told = Self.state(of: open.model)
+        open.told = Self.state(of: open.model, askedBy: askedBy)
         peer.open = open
         send(.snapshot(LampAgentRemoteChatUpdates.snapshot(summary: summary, state: open.told), requestID: requestID), to: peer)
         watch(open, for: peer)
         return open
     }
 
-    private static func state(of model: NativeAgentChatModel) -> LampAgentRemoteChatState {
+    private static func state(of model: NativeAgentChatModel, askedBy: [UUID: UUID]) -> LampAgentRemoteChatState {
         state(
             messages: model.messages, arriving: model.arrivingReply, activity: model.activity,
-            isRunning: model.isRunning, failure: model.errorMessage
+            isRunning: model.isRunning, failure: model.errorMessage, askedBy: askedBy
         )
     }
 
     private static func state(
         messages: [NativeAgentChatMessage], arriving: String, activity: AgentChatActivity?,
-        isRunning: Bool, failure: String?
+        isRunning: Bool, failure: String?, askedBy: [UUID: UUID]
     ) -> LampAgentRemoteChatState {
         LampAgentRemoteHosting.state(
             // As the transcript is written: what has words, the arriving
@@ -546,7 +552,8 @@ final class AgentRemoteHost: ObservableObject {
             arriving: arriving,
             activity: activity,
             isRunning: isRunning,
-            failure: failure
+            failure: failure,
+            askedBy: askedBy
         )
     }
 
@@ -569,7 +576,8 @@ final class AgentRemoteHost: ObservableObject {
             MainActor.assumeIsolated {
                 guard let self, let peer, let open, peer.open === open, self.isConnected(peer) else { return }
                 let next = Self.state(
-                    messages: messages, arriving: rest.0, activity: activity, isRunning: isRunning, failure: rest.1
+                    messages: messages, arriving: rest.0, activity: activity, isRunning: isRunning, failure: rest.1,
+                    askedBy: self.askedBy
                 )
                 if LampAgentRemoteChatUpdates.needsSnapshot(from: open.told, to: next),
                    let summary = self.summary(of: open.id) ?? Optional(LampAgentRemoteHosting.untitled(
@@ -659,12 +667,19 @@ final class AgentRemoteHost: ObservableObject {
         // device's for as long as it runs, and no longer.
         let turn = UUID()
         runs[device, default: []].append((open.model, turn))
+        if let requestID { remember(requestID, asked: turn) }
         let taken = await open.model.send(text, contextualPrompt: prompt, messageID: turn, inConversation: conversation)
         runs[device]?.removeAll { $0.turn == turn }
         if runs[device]?.isEmpty == true { runs[device] = nil }
         if !taken, isConnected(peer), peer.open === open {
             send(.failed(LampAgentRemoteFailure.busy, "This chat changed on the Mac before the message could go.", requestID: requestID, chatID: open.id.uuidString), to: peer)
         }
+    }
+
+    private func remember(_ requestID: UUID, asked question: UUID) {
+        askedBy[question] = requestID
+        askedOrder.append(question)
+        while askedOrder.count > 64 { askedBy[askedOrder.removeFirst()] = nil }
     }
 
     /// The question with the passage it was asked over, by ids the phone
