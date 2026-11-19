@@ -1700,8 +1700,21 @@ final class LibraryModel: ObservableObject {
         // finished, and a carry left behind would leave the new body with
         // the old marks.
         LampPendingWrites.shared.begin()
-        reviewCarryTask = Task.detached(priority: .utility) {
+        reviewCarryTask = Task.detached(priority: .utility) { [weak self] in
             await waitFor?.value
+            // Overtaken: a newer save of this writing is in, and its carry
+            // takes each mark from its own text. Carried now, from this
+            // save's older pair, a mark a turn made since would be taken
+            // back to a text the writing has already left.
+            let overtaken = await MainActor.run {
+                self?.devotionals.first { $0.id == saved.id }.map {
+                    $0.lastModified != saved.lastModified || $0.content != saved.content || $0.contentJSON != saved.contentJSON
+                } ?? true
+            }
+            guard !overtaken else {
+                await MainActor.run { LampPendingWrites.shared.end() }
+                return
+            }
             let previous = carry.previous.displayMarkdown
             let current = saved.displayMarkdown
             if previous != current {
