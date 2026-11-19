@@ -26,6 +26,15 @@ enum WritingChatTurns {
     /// the skills and the instructions — 25 to 33 ms on a fresh workspace,
     /// measured in Debug — and a phone can start a turn while the writer is
     /// typing at the Mac.
+    ///
+    /// **One at a time**, every preparation in the app. The main actor used
+    /// to make sure of that, and nothing about the work is safe to overlap:
+    /// it copies the skills catalogue, rewrites the instructions and the
+    /// provider configurations whole, and moves context files about. The
+    /// same writing can be open in its own window and in the library pane at
+    /// once, and a phone's turn is a third caller on its own schedule; two
+    /// preparations of one workspace interleaving could leave a half-written
+    /// instructions file, or a skill with files from both.
     static func prepare(
         writingID: String,
         draft: String,
@@ -34,15 +43,13 @@ enum WritingChatTurns {
         libraryRootURL: URL,
         bundledModulesArchiveURL: URL?
     ) async throws -> URL {
-        try await Task.detached(priority: .userInitiated) {
-            try prepareNow(
-                writingID: writingID, draft: draft, context: context, policy: policy,
-                libraryRootURL: libraryRootURL, bundledModulesArchiveURL: bundledModulesArchiveURL
-            )
-        }.value
+        try await WritingWorkspacePreparation.shared.prepare(
+            writingID: writingID, draft: draft, context: context, policy: policy,
+            libraryRootURL: libraryRootURL, bundledModulesArchiveURL: bundledModulesArchiveURL
+        )
     }
 
-    private nonisolated static func prepareNow(
+    fileprivate nonisolated static func prepareNow(
         writingID: String,
         draft: String,
         context: String,
@@ -276,6 +283,23 @@ enum WritingChatTurns {
                 plainContent: LampPortableDevotionalContent.plainText(from: json) ?? ""
             )
         }.value
+    }
+}
+
+/// Where every writing workspace is prepared, one preparation at a time.
+/// An actor's work runs in turn, and this one's never suspends partway, so
+/// no two preparations overlap.
+private actor WritingWorkspacePreparation {
+    static let shared = WritingWorkspacePreparation()
+
+    func prepare(
+        writingID: String, draft: String, context: String, policy: LampAgentAccessPolicy,
+        libraryRootURL: URL, bundledModulesArchiveURL: URL?
+    ) throws -> URL {
+        try WritingChatTurns.prepareNow(
+            writingID: writingID, draft: draft, context: context, policy: policy,
+            libraryRootURL: libraryRootURL, bundledModulesArchiveURL: bundledModulesArchiveURL
+        )
     }
 }
 
