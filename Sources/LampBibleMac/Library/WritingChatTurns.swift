@@ -5,24 +5,6 @@ import LampModuleKit
 import LampBibleMacSupport
 #endif
 
-/// The one owner of a writing's workspace files.
-///
-/// Preparing a workspace writes the policy, the helper's configuration, the
-/// skills and the instructions, and the pane's own actions write the context,
-/// the brief and a skill beside them. One writing can be open in two panes
-/// and a phone's turn is a third caller, so those writers need one owner or
-/// they interleave and tear each other's files.
-///
-/// That owner used to be the main actor, which served only as the lock: the
-/// work is files, not drawing, and holding it there made every preparation a
-/// run of frames the window could not draw — the assistant's pane could not
-/// be built in the same turn it was revealed without the reveal stopping.
-/// The serialisation is what mattered, not which actor provided it.
-@globalActor
-actor WritingWorkspaceFiles {
-    static let shared = WritingWorkspaceFiles()
-}
-
 /// One writing turn, the same wherever it is asked from: the writing's own
 /// window, or a paired phone (`AgentRemoteHost`). How the writing's
 /// workspace is made ready, what each message is sent with, and how what the

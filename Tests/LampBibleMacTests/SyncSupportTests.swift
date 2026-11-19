@@ -101,7 +101,7 @@ import Testing
     /// The per-file sync publishes writing workspaces under
     /// `Workspaces/Writing`, and takes them in from there; a backup keeps
     /// `Workspaces/Devotionals`, which every backup already made holds.
-    @Test func aWorkspaceTravelsUnderEachLayoutsOwnFolder() throws {
+    @Test func aWorkspaceTravelsUnderEachLayoutsOwnFolder() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("lamp-workspace-folders-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -111,22 +111,22 @@ import Testing
         try Data("Outline".utf8).write(to: workspace.appendingPathComponent("outline.md"))
 
         let perFile = root.appendingPathComponent("PerFile", isDirectory: true)
-        try LampWorkspaceSync.exportPortableWorkspaces(from: source, to: perFile, writingFolder: .perFile)
+        try await LampWorkspaceSync.exportPortableWorkspaces(from: source, to: perFile, writingFolder: .perFile)
         #expect(FileManager.default.fileExists(atPath: perFile.appendingPathComponent("Workspaces/Writing/talk/Documents/outline.md").path))
         #expect(!FileManager.default.fileExists(atPath: perFile.appendingPathComponent("Workspaces/Devotionals").path))
 
         let backup = root.appendingPathComponent("Backup", isDirectory: true)
-        try LampWorkspaceSync.exportPortableWorkspaces(from: source, to: backup)
+        try await LampWorkspaceSync.exportPortableWorkspaces(from: source, to: backup)
         #expect(FileManager.default.fileExists(atPath: backup.appendingPathComponent("Workspaces/Devotionals/talk/Documents/outline.md").path))
 
         let destination = root.appendingPathComponent("Destination", isDirectory: true)
-        try LampWorkspaceSync.importPortableWorkspaces(from: perFile, into: destination, writingFolder: .perFile)
+        try await LampWorkspaceSync.importPortableWorkspaces(from: perFile, into: destination, writingFolder: .perFile)
         #expect(try String(
             contentsOf: destination.appendingPathComponent("AgentWorkspaces/Writing/talk/outline.md"), encoding: .utf8
         ) == "Outline")
     }
 
-    @Test func exportsAndImportsPortableWorkspaceContent() throws {
+    @Test func exportsAndImportsPortableWorkspaceContent() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("lamp-workspace-sync-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -167,8 +167,8 @@ import Testing
         )
 
         let backup = root.appendingPathComponent("Backup", isDirectory: true)
-        try LampWorkspaceSync.prepareLibraryForSync(at: sourceLibrary)
-        try LampWorkspaceSync.exportPortableWorkspaces(from: sourceLibrary, to: backup)
+        try await LampWorkspaceSync.prepareLibraryForSync(at: sourceLibrary)
+        try await LampWorkspaceSync.exportPortableWorkspaces(from: sourceLibrary, to: backup)
         let portableWorkspace = backup.appendingPathComponent(
             "Workspaces/Devotionals/talk-123",
             isDirectory: true
@@ -216,7 +216,7 @@ import Testing
 
         let destinationLibrary = root.appendingPathComponent("Destination Library", isDirectory: true)
         try FileManager.default.createDirectory(at: destinationLibrary, withIntermediateDirectories: true)
-        try LampWorkspaceSync.importPortableWorkspaces(from: backup, into: destinationLibrary)
+        try await LampWorkspaceSync.importPortableWorkspaces(from: backup, into: destinationLibrary)
         let importedWorkspace = destinationLibrary.appendingPathComponent(
             "AgentWorkspaces/Writing/talk-123",
             isDirectory: true
@@ -256,7 +256,7 @@ import Testing
         ) == "Skill")
     }
 
-    @Test func workspaceImportUsesNewestFileAndConvergesEqualTimestamps() throws {
+    @Test func workspaceImportUsesNewestFileAndConvergesEqualTimestamps() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("lamp-workspace-merge-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -293,7 +293,7 @@ import Testing
         try FileManager.default.setAttributes([.modificationDate: new], ofItemAtPath: tied.path)
         try FileManager.default.setAttributes([.modificationDate: new], ofItemAtPath: localTied.path)
 
-        try LampWorkspaceSync.importPortableWorkspaces(
+        try await LampWorkspaceSync.importPortableWorkspaces(
             from: root.appendingPathComponent("Backup", isDirectory: true),
             into: root.appendingPathComponent("Library", isDirectory: true)
         )
@@ -302,7 +302,7 @@ import Testing
         #expect(try String(contentsOf: localTied, encoding: .utf8) == "zeta")
     }
 
-    @Test func importsLegacyPerWorkspaceSkillsIntoTheSharedCatalog() throws {
+    @Test func importsLegacyPerWorkspaceSkillsIntoTheSharedCatalog() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("lamp-legacy-skills-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -325,7 +325,7 @@ import Testing
         )
 
         let library = root.appendingPathComponent("Library", isDirectory: true)
-        try LampWorkspaceSync.importPortableWorkspaces(
+        try await LampWorkspaceSync.importPortableWorkspaces(
             from: root.appendingPathComponent("Backup", isDirectory: true),
             into: library
         )
@@ -342,7 +342,7 @@ import Testing
                 ".agents/skills/lesson-builder/SKILL.md"
             ).path
         ))
-        #expect(try WorkspaceSkillStore.enabledSkillNames(
+        #expect(try await WorkspaceSkillStore.enabledSkillNames(
             in: workspace,
             libraryRootURL: library
         ) == Set(["lesson-builder"]))
@@ -490,7 +490,7 @@ struct WorkspaceConversationAndHistorySyncTests {
         return workspace
     }
 
-    @Test func conversationsTravelAndTheirSessionsStayWithTheirMac() throws {
+    @Test func conversationsTravelAndTheirSessionsStayWithTheirMac() async throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let macA = root.appendingPathComponent("Mac A", isDirectory: true)
@@ -504,14 +504,14 @@ struct WorkspaceConversationAndHistorySyncTests {
         )
         try AgentChatTranscriptStore.save(transcript, providerID: "claude", in: try workspace(in: macA))
 
-        try LampWorkspaceSync.exportPortableWorkspaces(from: macA, to: backup, installID: "mac-a")
+        try await LampWorkspaceSync.exportPortableWorkspaces(from: macA, to: backup, installID: "mac-a")
         // The sync archive leaves out hidden paths; the transcript has to be
         // under a visible name to reach the other Mac at all.
         let archived = try LampSyncArchive.create(from: backup).entries.map(\.path)
         #expect(archived.contains("Workspaces/Devotionals/talk-123/Conversations/native-chat-claude.json"))
 
         _ = try workspace(in: macB)
-        try LampWorkspaceSync.importPortableWorkspaces(from: backup, into: macB)
+        try await LampWorkspaceSync.importPortableWorkspaces(from: backup, into: macB)
 
         let arrived = AgentChatTranscriptStore.load(providerID: "claude", in: try workspace(in: macB))
         #expect(arrived.messages.map(\.text) == ["Tighten the opening"])
@@ -520,7 +520,7 @@ struct WorkspaceConversationAndHistorySyncTests {
         #expect(arrived.resumableSessionID(forInstall: "mac-a") == "claude-session")
     }
 
-    @Test func conversationsContinuedOnBothMacsAreReconciledNotOverwritten() throws {
+    @Test func conversationsContinuedOnBothMacsAreReconciledNotOverwritten() async throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let macA = root.appendingPathComponent("Mac A", isDirectory: true)
@@ -546,15 +546,15 @@ struct WorkspaceConversationAndHistorySyncTests {
             in: try workspace(in: macB)
         )
 
-        try LampWorkspaceSync.exportPortableWorkspaces(from: macA, to: backup, installID: "mac-a")
-        try LampWorkspaceSync.importPortableWorkspaces(from: backup, into: macB)
+        try await LampWorkspaceSync.exportPortableWorkspaces(from: macA, to: backup, installID: "mac-a")
+        try await LampWorkspaceSync.importPortableWorkspaces(from: backup, into: macB)
 
         let merged = AgentChatTranscriptStore.load(providerID: "codex", in: try workspace(in: macB))
         #expect(merged.messages.map(\.text) == ["shared", "from b", "from a"])
         #expect(merged.sessionID == nil)
     }
 
-    @Test func compactedHistoryStaysCompactedOnBothMacs() throws {
+    @Test func compactedHistoryStaysCompactedOnBothMacs() async throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let macA = root.appendingPathComponent("Mac A", isDirectory: true)
@@ -587,9 +587,9 @@ struct WorkspaceConversationAndHistorySyncTests {
 
         // Mac A compacts and publishes; Mac B pulls. The union merge hands Mac B
         // the merged revision on top of its own thirty originals.
-        try LampWorkspaceSync.prepareLibraryForSync(at: macA)
-        try LampWorkspaceSync.exportPortableWorkspaces(from: macA, to: backup, installID: "mac-a")
-        try LampWorkspaceSync.importPortableWorkspaces(from: backup, into: macB)
+        try await LampWorkspaceSync.prepareLibraryForSync(at: macA)
+        try await LampWorkspaceSync.exportPortableWorkspaces(from: macA, to: backup, installID: "mac-a")
+        try await LampWorkspaceSync.importPortableWorkspaces(from: backup, into: macB)
 
         func revisionFiles(_ library: URL) throws -> [URL] {
             try FileManager.default.contentsOfDirectory(

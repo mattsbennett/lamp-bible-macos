@@ -2,135 +2,198 @@ import Foundation
 import Testing
 
 /// Every writer of a writing workspace's files belongs to one owner,
-/// `WritingWorkspaceFiles`, so preparing a workspace cannot interleave with a
-/// skill edit, a context write, or a second pane preparing the same writing.
-/// The owner used to be the main actor, which served only as the lock and made
-/// each of those writes a run of frames the window could not draw.
+/// `WritingWorkspaceFiles`, so a preparation, a pane's own writes and a sync
+/// pass taking a whole workspace in cannot interleave and tear each other's
+/// work. The owner used to be the main actor, which served only as the lock and
+/// made each of those writes a run of frames the window could not draw.
 ///
 /// Nothing in the language holds that rule here. This project builds in Swift 5
-/// mode, where calling an actor-isolated function from a synchronous context is
-/// a **warning**, not an error — and the call then runs inline on the caller's
-/// thread. A writer added without the annotation therefore compiles, runs on
-/// whichever thread called it, and races the others, while the build still says
-/// it succeeded. That is how the first version of this work shipped nine call
-/// sites still on the main thread through a green build.
+/// mode, where calling an actor-isolated function from a synchronous main-actor
+/// context is a **warning**, not an error — and the call then runs inline on the
+/// caller's thread. A writer added without the annotation therefore compiles,
+/// runs on whoever called it, races the others, and the build still says it
+/// succeeded. That is how nine call sites stayed on the main thread through a
+/// green build while this work was being done, and how the sync pass wrote live
+/// workspaces outside the owner for as long as it has existed.
 ///
-/// So the rule is held here instead: every `static func` on the store carries
-/// the annotation unless it is named below, and each name says why. Adding a
-/// function forces that choice rather than letting it pass quietly.
+/// So the rule is held here instead: every function on these surfaces carries
+/// the annotation unless it is named below with a reason. Adding one forces that
+/// choice rather than letting it pass quietly.
 ///
 /// This reads the source, as `SessionPaneMountingTests` does, because an actor
 /// annotation leaves no seam to test through.
 struct WorkspaceFileOwnershipTests {
-    /// Functions deliberately outside the owner.
-    ///
-    /// `workspaceURL`, `isValidSkillName`, `parseSkill` and the directory
-    /// helpers only compute paths or parse text, touching nothing.
-    /// `librarySkills` reads the library's own skills, which are not a
-    /// workspace's files.
-    ///
-    /// `writeDraftContent` and `readDraft` are the draft pair, left for their
-    /// own change: the reconciler writes the draft from four places around turn
-    /// ordering and undo. Their one point of contact with preparation is its
-    /// create-if-missing on `draft.md`, which can only race while the draft does
-    /// not yet exist, and the reconciler reads the draft before writing it.
-    /// Moving them is where that gets re-examined.
-    static let outsideTheOwner: Set<String> = [
-        "workspaceURL",
-        "isValidSkillName",
-        "parseSkill",
-        "contextDirectory",
-        "codexSkillsDirectory",
-        "claudeSkillsDirectory",
-        "presentationImportMarkerURL",
-        "librarySkills",
-        "writeDraftContent",
-        "readDraft",
-    ]
-
-    private var storeSource: String {
-        get throws {
-            let url = URL(fileURLWithPath: #filePath)
-                .deletingLastPathComponent()
-                .deletingLastPathComponent()
-                .deletingLastPathComponent()
-                .appendingPathComponent(
-                    "Sources/LampBibleMac/Library/DevotionalAgentWorkspaceView.swift"
-                )
-            let source = try String(contentsOf: url, encoding: .utf8)
-            let start = try #require(source.range(of: "enum DevotionalAgentWorkspaceStore"))
-            let end = try #require(
-                source.range(of: "\n}\n", range: start.upperBound..<source.endIndex)
-            )
-            return String(source[start.upperBound..<end.lowerBound])
-        }
+    /// A body of code the rule covers.
+    private struct Surface {
+        let label: String
+        let file: String
+        /// The text that opens the type's block.
+        let declaration: String
+        /// Support's stores keep their helpers private and reachable only
+        /// through the public API, so there the public surface is the rule;
+        /// the editor's own store is checked whole.
+        let publicOnly: Bool
+        /// Name to the reason it is outside the owner.
+        let outsideTheOwner: [String: String]
     }
 
-    /// Each `static func` in the store, with the line above it.
-    private func declarations(in store: String) -> [(name: String, isOwned: Bool)] {
-        let lines = store.components(separatedBy: "\n")
+    private static let surfaces: [Surface] = [
+        Surface(
+            label: "DevotionalAgentWorkspaceStore",
+            file: "Sources/LampBibleMac/Library/DevotionalAgentWorkspaceView.swift",
+            declaration: "enum DevotionalAgentWorkspaceStore",
+            publicOnly: false,
+            outsideTheOwner: [
+                "workspaceURL": "builds a path, touching nothing",
+                "isValidSkillName": "checks a name, touching nothing",
+                "parseSkill": "parses text it is handed",
+                "contextDirectory": "builds a path",
+                "codexSkillsDirectory": "builds a path",
+                "claudeSkillsDirectory": "builds a path",
+                "presentationImportMarkerURL": "builds a path",
+                "writeDraftContent": Self.draftPairReason,
+                "readDraft": Self.draftPairReason,
+            ]
+        ),
+        Surface(
+            label: "WorkspaceSkillStore",
+            file: "Sources/LampBibleMacSupport/WorkspaceSkillSupport.swift",
+            declaration: "enum WorkspaceSkillStore",
+            publicOnly: true,
+            outsideTheOwner: [
+                "catalogDirectory": "builds a path",
+                "selectionURL": "builds a path",
+                "isValidSkillName": "checks a name, touching nothing",
+                "codexSkillsDirectory": "builds a path",
+                "claudeSkillsDirectory": "builds a path",
+                "installBundledSkills": """
+                    installs into whatever skills directories it is given, and \
+                    the reader's chat workspaces are its other caller. The \
+                    writing-workspace paths that reach it are on the owner \
+                    themselves.
+                    """,
+            ]
+        ),
+        Surface(
+            label: "WorkspaceContextFileStore",
+            file: "Sources/LampBibleMacSupport/WorkspaceTextFileSupport.swift",
+            declaration: "enum WorkspaceContextFileStore",
+            publicOnly: true,
+            outsideTheOwner: [:]
+        ),
+        Surface(
+            label: "LampWorkspaceSync",
+            file: "Sources/LampBibleMacSupport/SyncSupport.swift",
+            declaration: "enum LampWorkspaceSync",
+            publicOnly: true,
+            outsideTheOwner: [:]
+        ),
+    ]
+
+    /// Why the draft is not on the owner yet.
+    private static let draftPairReason = """
+        the draft pair, left for its own change: the reconciler writes the draft \
+        from four places around turn ordering and undo, and preparation's one \
+        point of contact is its create-if-missing on draft.md, which can only \
+        race while the draft does not yet exist — and the reconciler reads the \
+        draft before it writes.
+        """
+
+    private static func source(_ relativePath: String) throws -> String {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent(relativePath)
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    /// The functions declared on a surface, each with whether the line above it
+    /// puts it on the owner.
+    private func declarations(on surface: Surface) throws -> [(name: String, isOwned: Bool)] {
+        let source = try Self.source(surface.file)
+        let start = try #require(source.range(of: surface.declaration))
+        let end = try #require(source.range(of: "\n}\n", range: start.upperBound..<source.endIndex))
+        let lines = source[start.upperBound..<end.lowerBound].components(separatedBy: "\n")
+        let prefixes = surface.publicOnly
+            ? ["public static func "]
+            : ["static func ", "private static func ", "fileprivate static func ",
+               "public static func "]
         var found: [(String, Bool)] = []
         for (index, line) in lines.enumerated() {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            for prefix in ["static func ", "private static func ", "fileprivate static func "]
-            where trimmed.hasPrefix(prefix) {
-                let name = trimmed.dropFirst(prefix.count).prefix { $0.isLetter || $0.isNumber }
-                let previous = index > 0 ? lines[index - 1] : ""
-                found.append((String(name), previous.contains("@WritingWorkspaceFiles")))
-                break
-            }
+            guard let prefix = prefixes.first(where: { trimmed.hasPrefix($0) }) else { continue }
+            let name = trimmed.dropFirst(prefix.count).prefix { $0.isLetter || $0.isNumber }
+            let previous = index > 0 ? lines[index - 1] : ""
+            found.append((String(name), previous.contains("@WritingWorkspaceFiles")))
         }
         return found
     }
 
     @Test func everyWorkspaceFileFunctionHasOneOwner() throws {
-        let unowned = declarations(in: try storeSource)
-            .filter { !$0.isOwned && !Self.outsideTheOwner.contains($0.name) }
-            .map(\.name)
-        #expect(
-            unowned.isEmpty,
-            """
-            These functions on DevotionalAgentWorkspaceStore are not marked \
-            @WritingWorkspaceFiles: \(unowned.joined(separator: ", ")). A writer \
-            of a workspace's files belongs to that actor, so it cannot interleave \
-            with preparation or another pane; in Swift 5 mode leaving it off is \
-            only a warning, and the work then runs on whoever called it — which \
-            for a view is the thread that draws. Annotate it, or, if it genuinely \
-            touches none of the workspace's files, name it in `outsideTheOwner` \
-            with the reason.
-            """
-        )
+        for surface in Self.surfaces {
+            let unowned = try declarations(on: surface)
+                .filter { !$0.isOwned && surface.outsideTheOwner[$0.name] == nil }
+                .map(\.name)
+            #expect(
+                unowned.isEmpty,
+                """
+                On \(surface.label), these are not marked @WritingWorkspaceFiles: \
+                \(unowned.joined(separator: ", ")). A writer of a workspace's files \
+                belongs to that actor, so it cannot interleave with a preparation, \
+                another pane, or a sync pass taking the workspace in; in Swift 5 mode \
+                leaving it off is only a warning, and the work then runs on whoever \
+                called it. Annotate it, or name it in `outsideTheOwner` with the reason.
+                """
+            )
+        }
     }
 
-    /// The allowlist is only honest while every name in it still exists: a
+    /// The exemptions are only honest while every name in them still exists: a
     /// renamed function would otherwise leave its exemption behind, quietly
     /// covering whatever took the name.
     @Test func nothingIsExemptedThatIsNotThere() throws {
-        let declared = Set(declarations(in: try storeSource).map(\.name))
-        let missing = Self.outsideTheOwner.subtracting(declared).sorted()
+        for surface in Self.surfaces {
+            let declared = Set(try declarations(on: surface).map(\.name))
+            let missing = Set(surface.outsideTheOwner.keys).subtracting(declared).sorted()
+            #expect(
+                missing.isEmpty,
+                "Exempted on \(surface.label) but no longer there: \(missing.joined(separator: ", "))"
+            )
+        }
+    }
+
+    /// The export a sync pass gathers reads the live library, so it is on the
+    /// owner too — it is reached through a type declared elsewhere, so it is
+    /// named rather than swept up with a surface.
+    @Test func theSyncPassGathersOnTheOwner() throws {
+        let source = try Self.source("Sources/LampBibleMacSupport/LampSyncLocalFiles.swift")
+        let declaration = try #require(
+            source.range(of: "public static func workspaceFiles(\n        inLibraryAt")
+        )
         #expect(
-            missing.isEmpty,
-            "Named in `outsideTheOwner` but no longer on the store: \(missing.joined(separator: ", "))"
+            source[..<declaration.lowerBound].hasSuffix("@WritingWorkspaceFiles\n    "),
+            """
+            `workspaceFiles(inLibraryAt:stagingIn:)` exports the live library into \
+            the pass's scratch directory, so it reads workspaces a pane may be \
+            part-way through writing.
+            """
         )
     }
 
-    /// The owner itself has to exist, and be an actor rather than the main one
-    /// wearing a new name.
+    /// The owner has to exist, be its own actor rather than the main one wearing
+    /// a new name, and live where the sync pass can see it.
     @Test func theOwnerIsItsOwnActor() throws {
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("Sources/LampBibleMac/Library/WritingChatTurns.swift")
-        let source = try String(contentsOf: url, encoding: .utf8)
+        let source = try Self.source(
+            "Sources/LampBibleMacSupport/WorkspaceTextFileSupport.swift"
+        )
         #expect(source.contains("@globalActor"))
-        #expect(source.contains("actor WritingWorkspaceFiles"))
+        #expect(source.contains("public actor WritingWorkspaceFiles"))
         let declaration = try #require(
-            source.range(of: "actor WritingWorkspaceFiles")
-                .map { source[..<$0.lowerBound] }
+            source.range(of: "actor WritingWorkspaceFiles").map { source[..<$0.lowerBound] }
         )
         #expect(
-            !declaration.hasSuffix("@MainActor\n"),
+            !declaration.hasSuffix("@MainActor\npublic "),
             "The owner serialises file work; on the main actor it would serialise drawing with it."
         )
     }

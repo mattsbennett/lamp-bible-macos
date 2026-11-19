@@ -3,27 +3,27 @@ import Testing
 @testable import LampBibleMacSupport
 
 struct WorkspaceSkillStoreTests {
-    @Test func reusesAndUpdatesOneLibrarySkillAcrossWorkspaces() throws {
+    @Test func reusesAndUpdatesOneLibrarySkillAcrossWorkspaces() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
         try fixture.prepareWorkspaces()
 
-        try WorkspaceSkillStore.migrateWorkspaceSkills(
+        try await WorkspaceSkillStore.migrateWorkspaceSkills(
             in: fixture.firstWorkspace,
             libraryRootURL: fixture.libraryRoot
         )
-        try WorkspaceSkillStore.migrateWorkspaceSkills(
+        try await WorkspaceSkillStore.migrateWorkspaceSkills(
             in: fixture.secondWorkspace,
             libraryRootURL: fixture.libraryRoot
         )
-        try WorkspaceSkillStore.saveSkill(
+        try await WorkspaceSkillStore.saveSkill(
             name: "series-planner",
             description: "Plans a connected teaching series",
             instructions: "Create the series outline.",
             in: fixture.libraryRoot
         )
 
-        try WorkspaceSkillStore.enableSkill(
+        try await WorkspaceSkillStore.enableSkill(
             named: "series-planner",
             in: fixture.firstWorkspace,
             libraryRootURL: fixture.libraryRoot
@@ -42,12 +42,12 @@ struct WorkspaceSkillStoreTests {
             ).path
         ))
 
-        try WorkspaceSkillStore.enableSkill(
+        try await WorkspaceSkillStore.enableSkill(
             named: "series-planner",
             in: fixture.secondWorkspace,
             libraryRootURL: fixture.libraryRoot
         )
-        try WorkspaceSkillStore.saveSkill(
+        try await WorkspaceSkillStore.saveSkill(
             name: "series-planner",
             description: "Updated description",
             instructions: "Create a revised series outline.",
@@ -65,7 +65,7 @@ struct WorkspaceSkillStoreTests {
             #expect(document.contains("Create a revised series outline."))
         }
 
-        try WorkspaceSkillStore.disableSkill(
+        try await WorkspaceSkillStore.disableSkill(
             named: "series-planner",
             in: fixture.firstWorkspace,
             libraryRootURL: fixture.libraryRoot
@@ -78,13 +78,13 @@ struct WorkspaceSkillStoreTests {
                 "AgentSkills/series-planner/SKILL.md"
             ).path
         ))
-        #expect(try WorkspaceSkillStore.enabledSkillNames(
+        #expect(try await WorkspaceSkillStore.enabledSkillNames(
             in: fixture.secondWorkspace,
             libraryRootURL: fixture.libraryRoot
         ) == Set(["series-planner"]))
     }
 
-    @Test func migratesLegacyWorkspaceSkillsWithoutLosingNameConflicts() throws {
+    @Test func migratesLegacyWorkspaceSkillsWithoutLosingNameConflicts() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
         try fixture.prepareWorkspaces()
@@ -100,23 +100,23 @@ struct WorkspaceSkillStoreTests {
             to: fixture.secondWorkspace
         )
 
-        try WorkspaceSkillStore.migrateWorkspaceSkills(
+        try await WorkspaceSkillStore.migrateWorkspaceSkills(
             in: fixture.firstWorkspace,
             libraryRootURL: fixture.libraryRoot
         )
-        try WorkspaceSkillStore.migrateWorkspaceSkills(
+        try await WorkspaceSkillStore.migrateWorkspaceSkills(
             in: fixture.secondWorkspace,
             libraryRootURL: fixture.libraryRoot
         )
 
-        #expect(try WorkspaceSkillStore.catalogSkills(in: fixture.libraryRoot).map(\.name) == [
+        #expect(try await WorkspaceSkillStore.catalogSkills(in: fixture.libraryRoot).map(\.name) == [
             "talk-helper", "talk-helper-2",
         ])
-        #expect(try WorkspaceSkillStore.enabledSkillNames(
+        #expect(try await WorkspaceSkillStore.enabledSkillNames(
             in: fixture.firstWorkspace,
             libraryRootURL: fixture.libraryRoot
         ) == Set(["talk-helper"]))
-        #expect(try WorkspaceSkillStore.enabledSkillNames(
+        #expect(try await WorkspaceSkillStore.enabledSkillNames(
             in: fixture.secondWorkspace,
             libraryRootURL: fixture.libraryRoot
         ) == Set(["talk-helper-2"]))

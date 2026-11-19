@@ -1,6 +1,30 @@
 import CryptoKit
 import Foundation
 
+/// The one owner of a writing workspace's files.
+///
+/// Preparing a workspace writes the policy, the helper's configuration, the
+/// skills and the instructions; the assistant pane writes the context, the
+/// brief and a skill beside them; and a sync pass takes a whole workspace in,
+/// merging its documents and context and rewriting its skills selection. Those
+/// are the same files, and one writing can be open in two panes while a phone's
+/// turn is a third caller, so they need one owner or they tear each other's
+/// work.
+///
+/// That owner is deliberately not the main actor. The work is files, not
+/// drawing, and holding it on the thread that draws made every preparation a
+/// run of frames the window could not paint. The serialisation is what matters,
+/// not which actor provides it.
+///
+/// It lives here, in Support, because the sync pass writes live workspaces too
+/// and cannot see into LampBibleMac. `WorkspaceFileOwnershipTests` holds every
+/// writer to it, since in this project's Swift 5 mode an unannotated writer is
+/// only a warning — and then runs on whoever called it.
+@globalActor
+public actor WritingWorkspaceFiles {
+    public static let shared = WritingWorkspaceFiles()
+}
+
 /// A UTF-8 Markdown or text document stored directly inside an agent workspace.
 public struct WorkspaceTextFileSnapshot: Equatable, Identifiable, Sendable {
     public let url: URL
@@ -267,6 +291,7 @@ public enum WorkspaceContextFileStore {
     /// anything unreadable — are reported through `reportingSkipped` by their
     /// path relative to the folder rather than failing the whole add.
     @discardableResult
+    @WritingWorkspaceFiles
     public static func addContextItem(
         from sourceURL: URL,
         to workspaceURL: URL,
@@ -343,6 +368,7 @@ public enum WorkspaceContextFileStore {
 
     /// Removes a direct child of a workspace's context and prunes shared objects
     /// after their final workspace link disappears.
+    @WritingWorkspaceFiles
     public static func removeContextItem(
         at itemURL: URL,
         from workspaceURL: URL,
@@ -381,6 +407,7 @@ public enum WorkspaceContextFileStore {
 
     /// Replaces standalone context files (for example, files restored from sync)
     /// with links to the library-wide content-addressed object store.
+    @WritingWorkspaceFiles
     public static func consolidate(
         in workspaceURL: URL,
         libraryRootURL: URL,

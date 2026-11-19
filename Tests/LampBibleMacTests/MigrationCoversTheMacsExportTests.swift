@@ -32,7 +32,7 @@ struct MigrationCoversTheMacsExportTests {
         try write("", at: "Media/.DS_Store", in: libraryRoot)
 
         _ = try await library.exportPortableBackup(to: outgoing)
-        try LampWorkspaceSync.exportPortableWorkspaces(from: libraryRoot, to: outgoing)
+        try await LampWorkspaceSync.exportPortableWorkspaces(from: libraryRoot, to: outgoing)
         try writeSettingsAndPreferences(to: outgoing)
         try writeCompatibilityFiles(to: outgoing)
 

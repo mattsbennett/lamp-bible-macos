@@ -38,6 +38,11 @@ public enum LampWorkspaceSync {
 
     /// Run legacy workspace migration during the local pull transaction so
     /// exporting the prepared library does not change the live workspace.
+    /// Migrates and compacts a library's workspaces before they are published.
+    ///
+    /// On the owner: the import below calls this with the live library root,
+    /// and `migrateAllWorkspaces` rewrites every workspace's skills there.
+    @WritingWorkspaceFiles
     public static func prepareLibraryForSync(
         at libraryRoot: URL,
         fileManager: FileManager = .default
@@ -56,6 +61,12 @@ public enum LampWorkspaceSync {
         }
     }
 
+    /// Writes a portable copy of every workspace for a sync pass to publish.
+    ///
+    /// On the owner because it reads the live library: a workspace read while
+    /// a pane was part-way through rewriting its skills or context would be
+    /// published half-written.
+    @WritingWorkspaceFiles
     public static func exportPortableWorkspaces(
         from libraryRoot: URL,
         to backupRoot: URL,
@@ -148,6 +159,15 @@ public enum LampWorkspaceSync {
         }
     }
 
+    /// Takes a synced copy of every workspace into the live library.
+    ///
+    /// On `WritingWorkspaceFiles` because `libraryRoot` here is the library
+    /// itself, not a staged copy: this merges each workspace's documents and
+    /// context, consolidates and removes context files, and rewrites the
+    /// skills selection — the same files a pane's writes and a preparation
+    /// rewrite whole. A pane preparing while a pass lands simply waits for it,
+    /// which is file work either way.
+    @WritingWorkspaceFiles
     public static func importPortableWorkspaces(
         from backupRoot: URL,
         into libraryRoot: URL,

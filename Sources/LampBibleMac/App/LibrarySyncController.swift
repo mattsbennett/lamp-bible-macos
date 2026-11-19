@@ -1169,7 +1169,7 @@ extension LibrarySyncController {
         let libraryRoot = library.rootURL
         let fileManager = self.fileManager
         let described = try await Task.detached {
-            let workspaces = try LampSyncLocalFiles.workspaceFiles(
+            let workspaces = try await LampSyncLocalFiles.workspaceFiles(
                 inLibraryAt: libraryRoot,
                 stagingIn: exports,
                 fileManager: fileManager

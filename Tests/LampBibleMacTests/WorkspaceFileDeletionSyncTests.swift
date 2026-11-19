@@ -29,15 +29,15 @@ struct WorkspaceFileDeletionSyncTests {
 
         func remove() { try? FileManager.default.removeItem(at: root) }
 
-        func sync(from source: URL, to destination: URL) throws {
+        func sync(from source: URL, to destination: URL) async throws {
             let outgoing = root.appendingPathComponent("outgoing-\(UUID().uuidString)", isDirectory: true)
-            try LampWorkspaceSync.exportPortableWorkspaces(from: source, to: outgoing, installID: "mac")
+            try await LampWorkspaceSync.exportPortableWorkspaces(from: source, to: outgoing, installID: "mac")
             let archive = try LampSyncArchive.decode(
                 compressedData: LampSyncArchive.create(from: outgoing).compressedData()
             )
             let incoming = root.appendingPathComponent("incoming-\(UUID().uuidString)", isDirectory: true)
             try archive.extract(to: incoming)
-            try LampWorkspaceSync.importPortableWorkspaces(from: incoming, into: destination)
+            try await LampWorkspaceSync.importPortableWorkspaces(from: incoming, into: destination)
         }
     }
 
@@ -63,7 +63,7 @@ struct WorkspaceFileDeletionSyncTests {
             .sorted()
     }
 
-    private func contextFiles(_ library: URL) -> [String] {
+    private func contextFiles(_ library: URL) async -> [String] {
         let context = workspace(library).appendingPathComponent("context").path
         let all = FileManager.default.enumerator(atPath: context)?.allObjects as? [String] ?? []
         return all.filter { !$0.hasPrefix(".") && $0.contains(".") }.sorted()
@@ -74,7 +74,7 @@ struct WorkspaceFileDeletionSyncTests {
     /// A document deleted on this Mac is written down for the next pass to
     /// tombstone, under its name in NFC, so the phone deletes its copy too;
     /// one a pass removed, as another device's deletion, is not.
-    @Test func aDocumentDeletedHereIsRecordedForEveryDevice() throws {
+    @Test func aDocumentDeletedHereIsRecordedForEveryDevice() async throws {
         let macs = try Macs(devotional: devotional)
         defer { macs.remove() }
         let decomposed = "Ro\u{308}mer.md"
@@ -82,7 +82,7 @@ struct WorkspaceFileDeletionSyncTests {
         try write("notes", to: workspace(macs.a).appendingPathComponent(decomposed), at: 0)
         try write("kept", to: workspace(macs.a).appendingPathComponent("kept.md"), at: 0)
         let outgoing = macs.root.appendingPathComponent("out", isDirectory: true)
-        try LampWorkspaceSync.exportPortableWorkspaces(from: macs.a, to: outgoing, installID: "mac")
+        try await LampWorkspaceSync.exportPortableWorkspaces(from: macs.a, to: outgoing, installID: "mac")
         #expect(LampSyncRemovedModules.load(fromLibraryAt: macs.a).removedAt.isEmpty)
 
         try FileManager.default.removeItem(at: workspace(macs.a).appendingPathComponent("outline.md"))
@@ -93,7 +93,7 @@ struct WorkspaceFileDeletionSyncTests {
         ledger.noteSynced(WorkspaceFileLedger.documentKey("kept.md"), modified: nil)
         try ledger.save(in: workspace(macs.a))
 
-        try LampWorkspaceSync.exportPortableWorkspaces(
+        try await LampWorkspaceSync.exportPortableWorkspaces(
             from: macs.a, to: macs.root.appendingPathComponent("out2", isDirectory: true), installID: "mac"
         )
         let recorded = Set(LampSyncRemovedModules.load(fromLibraryAt: macs.a).removedAt.keys)
@@ -103,108 +103,108 @@ struct WorkspaceFileDeletionSyncTests {
         ])
     }
 
-    @Test func aDocumentDeletedOnOneMacIsRemovedFromTheOther() throws {
+    @Test func aDocumentDeletedOnOneMacIsRemovedFromTheOther() async throws {
         let macs = try Macs(devotional: devotional)
         defer { macs.remove() }
         try write("Outline", to: workspace(macs.a).appendingPathComponent("outline.md"), at: 0)
         try write("Notes", to: workspace(macs.a).appendingPathComponent("notes.md"), at: 0)
-        try macs.sync(from: macs.a, to: macs.b)
-        try macs.sync(from: macs.b, to: macs.a)
-        #expect(try documents(macs.b) == ["notes.md", "outline.md"])
+        try await macs.sync(from: macs.a, to: macs.b)
+        try await macs.sync(from: macs.b, to: macs.a)
+        #expect(try await documents(macs.b) == ["notes.md", "outline.md"])
 
         // An agent or Finder removes it: Lamp only sees that it's gone.
         try FileManager.default.removeItem(at: workspace(macs.a).appendingPathComponent("notes.md"))
         // B, which still has it, publishes first.
-        try macs.sync(from: macs.b, to: macs.a)
-        #expect(try documents(macs.a) == ["outline.md"])
-        try macs.sync(from: macs.a, to: macs.b)
-        #expect(try documents(macs.b) == ["outline.md"])
+        try await macs.sync(from: macs.b, to: macs.a)
+        #expect(try await documents(macs.a) == ["outline.md"])
+        try await macs.sync(from: macs.a, to: macs.b)
+        #expect(try await documents(macs.b) == ["outline.md"])
     }
 
-    @Test func aDocumentEditedElsewhereAfterItsDeletionIsKept() throws {
+    @Test func aDocumentEditedElsewhereAfterItsDeletionIsKept() async throws {
         let macs = try Macs(devotional: devotional)
         defer { macs.remove() }
         try write("Draft", to: workspace(macs.a).appendingPathComponent("notes.md"), at: 0)
-        try macs.sync(from: macs.a, to: macs.b)
-        try macs.sync(from: macs.b, to: macs.a)
+        try await macs.sync(from: macs.a, to: macs.b)
+        try await macs.sync(from: macs.b, to: macs.a)
 
         try FileManager.default.removeItem(at: workspace(macs.a).appendingPathComponent("notes.md"))
         try write("Still wanted", to: workspace(macs.b).appendingPathComponent("notes.md"), at: 60)
 
-        try macs.sync(from: macs.a, to: macs.b)
-        try macs.sync(from: macs.b, to: macs.a)
+        try await macs.sync(from: macs.a, to: macs.b)
+        try await macs.sync(from: macs.b, to: macs.a)
         #expect(try String(contentsOf: workspace(macs.a).appendingPathComponent("notes.md"), encoding: .utf8)
             == "Still wanted")
-        #expect(try documents(macs.b) == ["notes.md"])
+        #expect(try await documents(macs.b) == ["notes.md"])
     }
 
-    @Test func aMacSyncingForTheFirstTimeSinceUpgradingCannotUndoADeletion() throws {
+    @Test func aMacSyncingForTheFirstTimeSinceUpgradingCannotUndoADeletion() async throws {
         let macs = try Macs(devotional: devotional)
         defer { macs.remove() }
         try write("Notes", to: workspace(macs.a).appendingPathComponent("notes.md"), at: 0)
         try write("Notes", to: workspace(macs.b).appendingPathComponent("notes.md"), at: 0)
         // A already tracks the file; B has never synced with this version.
-        try macs.sync(from: macs.b, to: macs.a)
+        try await macs.sync(from: macs.b, to: macs.a)
 
         try FileManager.default.removeItem(at: workspace(macs.a).appendingPathComponent("notes.md"))
-        try macs.sync(from: macs.b, to: macs.a)
-        try macs.sync(from: macs.a, to: macs.b)
+        try await macs.sync(from: macs.b, to: macs.a)
+        try await macs.sync(from: macs.a, to: macs.b)
 
-        #expect(try documents(macs.a).isEmpty)
-        #expect(try documents(macs.b).isEmpty)
+        #expect(try await documents(macs.a).isEmpty)
+        #expect(try await documents(macs.b).isEmpty)
     }
 
     // MARK: - Context
 
-    @Test func aRemovedContextFileIsRemovedFromTheOtherMac() throws {
+    @Test func aRemovedContextFileIsRemovedFromTheOtherMac() async throws {
         let macs = try Macs(devotional: devotional)
         defer { macs.remove() }
         let context = workspace(macs.a).appendingPathComponent("context")
         try write("Commentary", to: context.appendingPathComponent("sources/commentary.txt"), at: 0)
         try write("Map", to: context.appendingPathComponent("map.txt"), at: 0)
-        try macs.sync(from: macs.a, to: macs.b)
-        try macs.sync(from: macs.b, to: macs.a)
-        #expect(contextFiles(macs.b) == ["map.txt", "sources/commentary.txt"])
+        try await macs.sync(from: macs.a, to: macs.b)
+        try await macs.sync(from: macs.b, to: macs.a)
+        #expect(await contextFiles(macs.b) == ["map.txt", "sources/commentary.txt"])
 
         try FileManager.default.removeItem(at: context.appendingPathComponent("sources"))
-        try macs.sync(from: macs.b, to: macs.a)
-        #expect(contextFiles(macs.a) == ["map.txt"])
-        try macs.sync(from: macs.a, to: macs.b)
-        #expect(contextFiles(macs.b) == ["map.txt"])
+        try await macs.sync(from: macs.b, to: macs.a)
+        #expect(await contextFiles(macs.a) == ["map.txt"])
+        try await macs.sync(from: macs.a, to: macs.b)
+        #expect(await contextFiles(macs.b) == ["map.txt"])
     }
 
-    @Test func aContextFileAddedAgainAfterRemovalStays() throws {
+    @Test func aContextFileAddedAgainAfterRemovalStays() async throws {
         let macs = try Macs(devotional: devotional)
         defer { macs.remove() }
         let contextA = workspace(macs.a).appendingPathComponent("context")
         try write("Map", to: contextA.appendingPathComponent("map.txt"), at: 0)
-        try macs.sync(from: macs.a, to: macs.b)
-        try macs.sync(from: macs.b, to: macs.a)
+        try await macs.sync(from: macs.a, to: macs.b)
+        try await macs.sync(from: macs.b, to: macs.a)
 
         try FileManager.default.removeItem(at: contextA.appendingPathComponent("map.txt"))
-        try macs.sync(from: macs.a, to: macs.b)
-        #expect(contextFiles(macs.b).isEmpty)
+        try await macs.sync(from: macs.a, to: macs.b)
+        #expect(await contextFiles(macs.b).isEmpty)
 
         // The same file, added again: still carrying its original, older date.
         try write("Map", to: workspace(macs.b).appendingPathComponent("context/map.txt"), at: 0)
-        try macs.sync(from: macs.b, to: macs.a)
-        try macs.sync(from: macs.a, to: macs.b)
-        try macs.sync(from: macs.b, to: macs.a)
-        #expect(contextFiles(macs.a) == ["map.txt"])
-        #expect(contextFiles(macs.b) == ["map.txt"])
+        try await macs.sync(from: macs.b, to: macs.a)
+        try await macs.sync(from: macs.a, to: macs.b)
+        try await macs.sync(from: macs.b, to: macs.a)
+        #expect(await contextFiles(macs.a) == ["map.txt"])
+        #expect(await contextFiles(macs.b) == ["map.txt"])
     }
 
     // MARK: - Format
 
-    @Test func deletionsTravelBesideTheWorkspaceRatherThanAsAFile() throws {
+    @Test func deletionsTravelBesideTheWorkspaceRatherThanAsAFile() async throws {
         let macs = try Macs(devotional: devotional)
         defer { macs.remove() }
         try write("Notes", to: workspace(macs.a).appendingPathComponent("notes.md"), at: 0)
-        try macs.sync(from: macs.a, to: macs.b)
+        try await macs.sync(from: macs.a, to: macs.b)
         try FileManager.default.removeItem(at: workspace(macs.a).appendingPathComponent("notes.md"))
 
         let outgoing = macs.root.appendingPathComponent("outgoing", isDirectory: true)
-        try LampWorkspaceSync.exportPortableWorkspaces(from: macs.a, to: outgoing, installID: "mac")
+        try await LampWorkspaceSync.exportPortableWorkspaces(from: macs.a, to: outgoing, installID: "mac")
         let paths = try LampSyncArchive.create(from: outgoing).entries.map(\.path)
         #expect(paths.contains("Workspaces/Devotionals/\(devotional)/DeletedFiles.json"))
         // Earlier versions import only Documents and Context as files.

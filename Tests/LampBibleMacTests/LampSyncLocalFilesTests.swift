@@ -211,7 +211,7 @@ struct LampSyncLocalFilesTests {
     /// because the published shape is not the stored one — a document moves
     /// into `Documents/`, context into `Context/`, and so on. Decks come out
     /// of the same exporter and are skipped here: they are their own kind.
-    @Test func workspaceFilesComeOutInTheShapeTheyArePublishedIn() throws {
+    @Test func workspaceFilesComeOutInTheShapeTheyArePublishedIn() async throws {
         let library = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: library) }
         let scratch = try makeDirectory()
@@ -236,7 +236,7 @@ struct LampSyncLocalFilesTests {
             to: store.decksDirectoryURL.appendingPathComponent("sunday.lampdeck")
         )
 
-        let found = try LampSyncLocalFiles.workspaceFiles(
+        let found = try await LampSyncLocalFiles.workspaceFiles(
             inLibraryAt: library, stagingIn: scratch
         )
 
@@ -371,7 +371,7 @@ struct LampSyncLocalFilesTests {
     /// `LibrarySyncController.gather()` is where these are called, and the
     /// one thing this cannot check is that it still calls them all. What it
     /// does check is that nothing in the layout is without a home.
-    @Test func everyKindOfSyncedFileIsGatheredFromSomewhere() throws {
+    @Test func everyKindOfSyncedFileIsGatheredFromSomewhere() async throws {
         let library = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: library) }
 
@@ -418,7 +418,7 @@ struct LampSyncLocalFilesTests {
                 forBookModuleIDs: ["atonement"], inLibraryAt: library
             ).candidates
             + LampSyncLocalFiles.decks(inLibraryAt: library).candidates
-            + (try LampSyncLocalFiles.workspaceFiles(inLibraryAt: library, stagingIn: staging))
+            + (try await LampSyncLocalFiles.workspaceFiles(inLibraryAt: library, stagingIn: staging))
 
         let found = Set(gathered.map(\.kind))
         let kinds: [LampSyncFileKind] =

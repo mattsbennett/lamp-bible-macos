@@ -216,7 +216,7 @@ struct BundledSkillInstallTests {
 
     /// A built-in stays out of the custom catalog however it got there, so a
     /// reader cannot edit or delete the copy their build ships.
-    @Test func aninstalledBuiltInIsStillNotAcustomSkill() throws {
+    @Test func aninstalledBuiltInIsStillNotAcustomSkill() async throws {
         let library = FileManager.default.temporaryDirectory
             .appendingPathComponent("library-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: library) }
@@ -228,7 +228,7 @@ struct BundledSkillInstallTests {
                 .write(to: skill.appendingPathComponent("SKILL.md"))
         }
 
-        let catalogued = try WorkspaceSkillStore.catalogSkills(in: library).map(\.name)
+        let catalogued = try await WorkspaceSkillStore.catalogSkills(in: library).map(\.name)
 
         #expect(catalogued == ["series-planner"])
     }

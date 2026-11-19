@@ -3,7 +3,7 @@ import Testing
 @testable import LampBibleMacSupport
 
 struct WorkspaceContextFileStoreTests {
-    @Test func reusesIdenticalFilesWithinAndAcrossWorkspaces() throws {
+    @Test func reusesIdenticalFilesWithinAndAcrossWorkspaces() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
 
@@ -12,17 +12,17 @@ struct WorkspaceContextFileStoreTests {
         try Data("shared context".utf8).write(to: firstSource)
         try Data("shared context".utf8).write(to: secondSource)
 
-        let first = try #require(try WorkspaceContextFileStore.addContextItem(
+        let first = try await #require(try WorkspaceContextFileStore.addContextItem(
             from: firstSource,
             to: fixture.firstWorkspace,
             libraryRootURL: fixture.libraryRoot
         ))
-        let repeated = try #require(try WorkspaceContextFileStore.addContextItem(
+        let repeated = try await #require(try WorkspaceContextFileStore.addContextItem(
             from: secondSource,
             to: fixture.firstWorkspace,
             libraryRootURL: fixture.libraryRoot
         ))
-        let second = try #require(try WorkspaceContextFileStore.addContextItem(
+        let second = try await #require(try WorkspaceContextFileStore.addContextItem(
             from: secondSource,
             to: fixture.secondWorkspace,
             libraryRootURL: fixture.libraryRoot
@@ -41,14 +41,14 @@ struct WorkspaceContextFileStoreTests {
             as? NSNumber
         #expect((permissions?.intValue ?? 0) & 0o222 == 0)
 
-        try WorkspaceContextFileStore.removeContextItem(
+        try await WorkspaceContextFileStore.removeContextItem(
             at: first,
             from: fixture.firstWorkspace,
             libraryRootURL: fixture.libraryRoot
         )
         #expect(try FileManager.default.contentsOfDirectory(atPath: objects.path).count == 1)
 
-        try WorkspaceContextFileStore.removeContextItem(
+        try await WorkspaceContextFileStore.removeContextItem(
             at: second,
             from: fixture.secondWorkspace,
             libraryRootURL: fixture.libraryRoot
@@ -56,7 +56,7 @@ struct WorkspaceContextFileStoreTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: objects.path).isEmpty)
     }
 
-    @Test func preservesDirectoryLayoutWhileSharingIdenticalLeaves() throws {
+    @Test func preservesDirectoryLayoutWhileSharingIdenticalLeaves() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
 
@@ -68,7 +68,7 @@ struct WorkspaceContextFileStoreTests {
         try Data("one reading".utf8).write(to: firstSource)
         try Data("one reading".utf8).write(to: nestedSource)
 
-        let addedFolder = try #require(try WorkspaceContextFileStore.addContextItem(
+        let addedFolder = try await #require(try WorkspaceContextFileStore.addContextItem(
             from: sourceFolder,
             to: fixture.firstWorkspace,
             libraryRootURL: fixture.libraryRoot
@@ -84,7 +84,7 @@ struct WorkspaceContextFileStoreTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: objects.path).count == 1)
     }
 
-    @Test func addsFolderAroundEntriesThatCannotBecomeContext() throws {
+    @Test func addsFolderAroundEntriesThatCannotBecomeContext() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
 
@@ -104,7 +104,7 @@ struct WorkspaceContextFileStoreTests {
         )
 
         var skipped: [String] = []
-        let addedFolder = try #require(try WorkspaceContextFileStore.addContextItem(
+        let addedFolder = try await #require(try WorkspaceContextFileStore.addContextItem(
             from: sourceFolder,
             to: fixture.firstWorkspace,
             libraryRootURL: fixture.libraryRoot,
@@ -125,13 +125,13 @@ struct WorkspaceContextFileStoreTests {
         #expect(skipped.sorted() == ["Handouts/linked", "elsewhere.md"])
     }
 
-    @Test func consolidatesStandaloneFilesRestoredBySync() throws {
+    @Test func consolidatesStandaloneFilesRestoredBySync() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
 
         let source = fixture.sourceDirectory.appendingPathComponent("source.pdf")
         try Data("restored bytes".utf8).write(to: source)
-        let first = try #require(try WorkspaceContextFileStore.addContextItem(
+        let first = try await #require(try WorkspaceContextFileStore.addContextItem(
             from: source,
             to: fixture.firstWorkspace,
             libraryRootURL: fixture.libraryRoot
@@ -142,7 +142,7 @@ struct WorkspaceContextFileStoreTests {
         let restored = secondContext.appendingPathComponent("restored.pdf")
         try Data("restored bytes".utf8).write(to: restored)
 
-        try WorkspaceContextFileStore.consolidate(
+        try await WorkspaceContextFileStore.consolidate(
             in: fixture.secondWorkspace,
             libraryRootURL: fixture.libraryRoot
         )

@@ -255,6 +255,9 @@ extension LampSyncLocalFiles {
     /// the same reason it is everywhere — it travels in the bundle. Both fall
     /// out of asking the layout what each path is, rather than being listed
     /// by hand.
+    /// On `WritingWorkspaceFiles`: this exports the live library into the
+    /// scratch directory, so it reads workspaces a pane may be writing.
+    @WritingWorkspaceFiles
     public static func workspaceFiles(
         inLibraryAt libraryRoot: URL,
         stagingIn scratch: URL,

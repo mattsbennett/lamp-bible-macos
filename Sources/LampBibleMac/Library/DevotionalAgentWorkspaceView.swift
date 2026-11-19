@@ -519,6 +519,7 @@ enum DevotionalAgentWorkspaceStore {
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
+    @WritingWorkspaceFiles
     fileprivate static func librarySkills(libraryRootURL: URL) throws -> [DevotionalAgentSkill] {
         try WorkspaceSkillStore.catalogSkills(in: libraryRootURL).map { skill in
             DevotionalAgentSkill(
@@ -1801,7 +1802,7 @@ struct DevotionalAgentWorkspaceView: View {
            workspaceSkills != skills {
             skills = workspaceSkills
         }
-        if let catalogue = try? DevotionalAgentWorkspaceStore.librarySkills(
+        if let catalogue = try? await DevotionalAgentWorkspaceStore.librarySkills(
             libraryRootURL: libraryRootURL
         ), catalogue != librarySkills {
             librarySkills = catalogue

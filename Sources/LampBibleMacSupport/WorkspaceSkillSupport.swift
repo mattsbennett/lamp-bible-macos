@@ -74,6 +74,12 @@ public enum WorkspaceSkillStore {
     /// reader's. A skill already identical is left alone, since copying it
     /// would change its modification date for nothing.
     @discardableResult
+    /// Outside `WritingWorkspaceFiles`, deliberately: this installs bundled
+    /// skills into whatever skills directories it is given, and the reader's
+    /// chat workspaces — which are not a writing's — are its other caller.
+    /// The writing-workspace paths that reach it (`migrateWorkspaceSkills`,
+    /// `synchronizeWorkspace`) are on the owner themselves, so the work is
+    /// serialised where it touches a writing.
     public static func installBundledSkills(
         named names: Set<String>,
         from catalog: URL?,
@@ -153,6 +159,7 @@ public enum WorkspaceSkillStore {
         ) != nil
     }
 
+    @WritingWorkspaceFiles
     public static func catalogSkills(
         in libraryRootURL: URL,
         fileManager: FileManager = .default
@@ -168,6 +175,7 @@ public enum WorkspaceSkillStore {
         }
     }
 
+    @WritingWorkspaceFiles
     public static func enabledSkillNames(
         in workspaceURL: URL,
         libraryRootURL: URL,
@@ -199,6 +207,7 @@ public enum WorkspaceSkillStore {
 
     /// Migrates custom skills from the former workspace-owned layout on first
     /// use. Conflicting definitions are retained under a unique skill name.
+    @WritingWorkspaceFiles
     public static func migrateWorkspaceSkills(
         in workspaceURL: URL,
         libraryRootURL: URL,
@@ -241,6 +250,7 @@ public enum WorkspaceSkillStore {
         )
     }
 
+    @WritingWorkspaceFiles
     public static func migrateAllWorkspaces(
         in libraryRootURL: URL,
         fileManager: FileManager = .default
@@ -257,6 +267,7 @@ public enum WorkspaceSkillStore {
     }
 
     @discardableResult
+    @WritingWorkspaceFiles
     public static func saveSkill(
         name: String,
         description: String,
@@ -296,6 +307,7 @@ public enum WorkspaceSkillStore {
         )
     }
 
+    @WritingWorkspaceFiles
     public static func enableSkill(
         named name: String,
         in workspaceURL: URL,
@@ -326,6 +338,7 @@ public enum WorkspaceSkillStore {
         )
     }
 
+    @WritingWorkspaceFiles
     public static func disableSkill(
         named name: String,
         in workspaceURL: URL,
@@ -347,6 +360,7 @@ public enum WorkspaceSkillStore {
         )
     }
 
+    @WritingWorkspaceFiles
     public static func synchronizeWorkspace(
         _ workspaceURL: URL,
         libraryRootURL: URL,
@@ -393,6 +407,7 @@ public enum WorkspaceSkillStore {
         }
     }
 
+    @WritingWorkspaceFiles
     public static func synchronizeAllEnabledWorkspaces(
         in libraryRootURL: URL,
         fileManager: FileManager = .default
@@ -409,6 +424,7 @@ public enum WorkspaceSkillStore {
         }
     }
 
+    @WritingWorkspaceFiles
     public static func applySelectionData(
         _ data: Data,
         to workspaceURL: URL,
@@ -437,6 +453,7 @@ public enum WorkspaceSkillStore {
     }
 
     @discardableResult
+    @WritingWorkspaceFiles
     public static func importLegacySkill(
         from sourceURL: URL,
         libraryRootURL: URL,

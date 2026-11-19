@@ -476,7 +476,7 @@ extension LampSyncMacPassLibraryTests {
         #expect(!FileManager.default.fileExists(atPath: outline.path))
 
         let exports = workspace.appendingPathComponent("exports-\(UUID().uuidString)", isDirectory: true)
-        try LampWorkspaceSync.exportPortableWorkspaces(from: root, to: exports, writingFolder: .perFile)
+        try await LampWorkspaceSync.exportPortableWorkspaces(from: root, to: exports, writingFolder: .perFile)
         #expect(LampSyncRemovedModules.load(fromLibraryAt: root).removedAt.keys.contains(path))
     }
 
