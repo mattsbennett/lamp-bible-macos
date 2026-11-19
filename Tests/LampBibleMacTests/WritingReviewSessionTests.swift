@@ -55,6 +55,55 @@ struct WritingReviewSessionTests {
         }
     }
 
+    /// Codex's case: the ✓ is pressed on text the page holds but has not
+    /// reported yet. The clear waits for that text, and then lands.
+    @Test func aClearAheadOfItsTextLandsWhenTheTextDoes() async throws {
+        let root = try library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LampWritingReviewStore(rootURL: root)
+        let new = "One alpha three.\n\nFour beta six."
+        try store.save(LampWritingReview(writingID: "w").markingAssistantChange(
+            from: "One two three.\n\nFour five six.", to: new
+        ))
+        let session = WritingReviewSession()
+        let following = Task { await session.follow(writingID: "w", text: new, libraryRootURL: root, isShown: true) }
+        defer { following.cancel() }
+        try await waitUntil { session.count == 2 }
+
+        let typed = "One alpha three.\n\nFour beta six. More."
+        let marked = typed.replacingOccurrences(
+            of: "beta", with: "\(LampWritingReview.markStart)beta\(LampWritingReview.markEnd)"
+        )
+        session.clear(markedMarkdown: marked)
+        #expect(try store.review(writingID: "w").highlightedRanges(in: new).count == 2)
+        session.textChanged(typed)
+        try await waitUntil {
+            let review = try? store.review(writingID: "w")
+            return review?.highlightedRanges(in: typed).map { (typed as NSString).substring(with: $0) } == ["alpha"]
+        }
+    }
+
+    /// Codex's case: typing into a marked passage, not yet saved, splits it.
+    /// Both halves are still counted and drawn, not nothing.
+    @Test func unsavedTypingIntoAMarkKeepsItCounted() async throws {
+        let root = try library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LampWritingReviewStore(rootURL: root)
+        let new = "One alpha beta gamma three."
+        try store.save(LampWritingReview(writingID: "w").markingAssistantChange(from: "One two three.", to: new))
+        let session = WritingReviewSession()
+        let following = Task { await session.follow(writingID: "w", text: new, libraryRootURL: root, isShown: true) }
+        defer { following.cancel() }
+        try await waitUntil { session.count == 1 }
+
+        let typed = "One alpha mine beta gamma three."
+        session.textChanged(typed)
+        try await waitUntil {
+            session.ranges.map { (typed as NSString).substring(with: $0) } == ["alpha", "beta gamma"]
+        }
+        #expect(session.count > 0)
+    }
+
     @Test func turnedOffNothingIsShown() async throws {
         let root = try library()
         defer { try? FileManager.default.removeItem(at: root) }

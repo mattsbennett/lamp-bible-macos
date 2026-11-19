@@ -148,6 +148,10 @@ final class WritingReviewSession: ObservableObject {
     /// again for the same text, they wait for the text to change rather
     /// than going round every few hundred milliseconds.
     private var resentFor: String?
+    /// A clear the page sent from text a moment ahead of this one's (typed
+    /// within the settle before the editor reports it): tried again as the
+    /// text arrives.
+    private var pendingClear: String?
 
     static let checkInterval: Duration = .seconds(1)
     static let settleDelay: Duration = .milliseconds(300)
@@ -166,6 +170,7 @@ final class WritingReviewSession: ObservableObject {
         fileDate = nil
         needsResend = false
         resentFor = nil
+        pendingClear = nil
         store = isShown ? LampWritingReviewStore(rootURL: libraryRootURL) : nil
         publish(ranges: [], count: 0, marked: nil, sendsMarks: true)
         guard isShown else { return }
@@ -181,6 +186,10 @@ final class WritingReviewSession: ObservableObject {
     func textChanged(_ text: String) {
         guard text != self.text else { return }
         self.text = text
+        if let marked = pendingClear, let range = LampWritingReview.markedRange(in: marked, of: text) {
+            pendingClear = nil
+            clear(range: range)
+        }
         guard review != nil else { return }
         scheduleDraw()
     }
@@ -214,7 +223,13 @@ final class WritingReviewSession: ObservableObject {
     /// nothing, where that is not the writing as held here, since its range
     /// would then fall on other words.
     func clear(markedMarkdown marked: String) {
-        guard let range = LampWritingReview.markedRange(in: marked, of: text) else { return }
+        guard let range = LampWritingReview.markedRange(in: marked, of: text) else {
+            // Perhaps typed into a moment ago: tried again once the text the
+            // page holds arrives. Another clear replaces it.
+            pendingClear = marked
+            return
+        }
+        pendingClear = nil
         clear(range: range)
     }
 
@@ -268,7 +283,11 @@ final class WritingReviewSession: ObservableObject {
             try? await Task.sleep(for: Self.settleDelay)
             guard !Task.isCancelled, let self else { return }
             if let writingID = self.writingID { WritingReviewTexts.shared.remember(self.text, for: writingID) }
-            self.draw(sendsMarks: self.needsResend)
+            // Sent too while none are shown but some stand: marks that placed
+            // nowhere in the text before (a newer body arrived) may place in
+            // this one.
+            let unplaced = self.markedMarkdown == nil && !(self.review?.isEmpty ?? true)
+            self.draw(sendsMarks: self.needsResend || unplaced)
         }
     }
 
@@ -281,12 +300,18 @@ final class WritingReviewSession: ObservableObject {
             return
         }
         let text = self.text
+        // Drawn from the marks carried into the text as it is now, each from
+        // the text it is anchored in: typed into since they were saved, a
+        // marked passage would otherwise be found nowhere, and not counted,
+        // until the next save carries it.
+        let known = writingID.map { WritingReviewTexts.shared.known(for: $0) } ?? []
         Task { [weak self] in
             let drawn = await Task.detached(priority: .userInitiated) {
-                (
-                    review.highlightedRanges(in: text),
-                    review.located(in: text).count,
-                    sendsMarks ? review.markedMarkdown(in: text) : nil
+                let live = review.carryingToText(text, from: known)
+                return (
+                    live.highlightedRanges(in: text),
+                    live.located(in: text).count,
+                    sendsMarks ? live.markedMarkdown(in: text) : nil
                 )
             }.value
             guard let self, self.drawGeneration == generation else { return }

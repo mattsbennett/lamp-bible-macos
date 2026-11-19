@@ -1698,10 +1698,14 @@ final class LibraryModel: ObservableObject {
         return (WritingReviewWork.shared.reserve(), generation)
     }
 
-    /// How many saves of each writing have asked for a carry. A carry runs
-    /// only while its save is the latest: dates cannot say, since a save is
-    /// stamped to the fraction of a second and stored to the second.
+    /// How many saves of each writing have asked for a carry, counted as
+    /// each takes its place in line: dates cannot order them, since a save
+    /// is stamped to the fraction of a second and stored to the second.
     private var reviewSaveGeneration: [String: Int] = [:]
+    /// The latest of those saves that went through. A carry runs only while
+    /// no later save did: one that failed or was refused carries nothing,
+    /// and supersedes nothing.
+    private var reviewSavedGeneration: [String: Int] = [:]
 
     /// Carries the writing's review marks across an edit, so the rest of a
     /// marked passage the writer typed into stays marked and their own words
@@ -1720,19 +1724,28 @@ final class LibraryModel: ObservableObject {
         // is carried from the text it is anchored in.
         let known = WritingReviewTexts.shared.known(for: saved.id)
         let generation = slot.generation
+        let library = library
+        reviewSavedGeneration[saved.id] = max(reviewSavedGeneration[saved.id] ?? 0, generation)
         slot.reservation.fill { [weak self] in
-            // Overtaken: a newer save of this writing is in, and its carry
-            // takes each mark from its own text.
-            let overtaken = await MainActor.run { self?.reviewSaveGeneration[saved.id] != generation }
+            // Overtaken: a newer save of this writing went through, and its
+            // carry takes each mark from its own text.
+            let overtaken = await MainActor.run { (self?.reviewSavedGeneration[saved.id] ?? 0) > generation }
             guard !overtaken,
                   let url = try? carry.store.url(writingID: saved.id),
                   FileManager.default.fileExists(atPath: url.path)
             else { return }
-            let previous = carry.previous.displayMarkdown
             let current = saved.displayMarkdown
-            if previous != current {
-                _ = try? carry.store.update(writingID: saved.id) { $0.carryingToText(current, from: known + [previous]) }
-            }
+            // A body sync brought since is newer than this save's, and its
+            // marks are not this save's to carry to the older text.
+            guard let stored = try? await library.personalDevotional(id: saved.id),
+                  stored.displayMarkdown == current
+            else { return }
+            // Carried even when this save's body did not move (its details
+            // did): it may have overtaken a carry still in line for a text
+            // save, whose marks then come from the texts known. A carry that
+            // moves nothing writes nothing.
+            let previous = carry.previous.displayMarkdown
+            _ = try? carry.store.update(writingID: saved.id) { $0.carryingToText(current, from: known + [previous]) }
             await MainActor.run { WritingReviewTexts.shared.remember(current, for: saved.id) }
         }
     }
