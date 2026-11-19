@@ -151,6 +151,9 @@ struct DevotionalsView: View {
     @State private var previewFind = WritingFindController()
     @State private var previewFinder = WritingPreviewFinder()
     @State private var exportedURL: URL?
+    /// The open writing's other files, beside its prose, with the writing
+    /// they were read for, so another writing's are never shown under it.
+    @State private var otherFiles: (writingID: String, files: [WorkspaceTextFileSnapshot])?
     @State private var presentationDecksByDevotionalID: [String: [LampPresentationDeck]] = [:]
     private let rowSummaries = WritingRowSummaries.shared
 
@@ -979,6 +982,15 @@ struct DevotionalsView: View {
                     .foregroundStyle(.secondary)
                 }
 
+                let files = otherFiles(of: devotional)
+                if !files.isEmpty {
+                    Divider()
+                    otherFilesSection(files, of: devotional)
+                        // Each writing's files open folded, whatever was
+                        // open in the one before.
+                        .id(devotional.id)
+                }
+
                 if !devotional.tags.isEmpty {
                     Text(devotional.tags.map { "#\($0)" }.joined(separator: "  "))
                         .font(.caption)
@@ -995,6 +1007,7 @@ struct DevotionalsView: View {
             .padding(.bottom, 48)
             .frame(maxWidth: .infinity, alignment: .top)
         }
+        .task(id: devotional.id) { await monitorOtherFiles(of: devotional.id) }
     }
 
     /// The column a writing is read in, in points, for a text size.
@@ -1002,14 +1015,99 @@ struct DevotionalsView: View {
         CGFloat(min(max(fontSize * 33, 500), 880))
     }
 
+    /// The writing's other files, each folded under its name: the outline,
+    /// notes and the like the writer or the assistant keeps beside the prose.
+    private func otherFilesSection(_ files: [WorkspaceTextFileSnapshot], of devotional: LampDevotional) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Other Files")
+                .font(.headline)
+            ForEach(files) { file in
+                DisclosureGroup {
+                    otherFileText(file, of: devotional)
+                        .padding(.top, 8)
+                        .padding(.leading, LampDisclosureStyle.chevronWidth + LampDisclosureStyle.gap)
+                } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(file.url.lastPathComponent)
+                        if Self.isBlank(file.contents) {
+                            Text("Empty")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .disclosureGroupStyle(LampDisclosureStyle())
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func otherFileText(_ file: WorkspaceTextFileSnapshot, of devotional: LampDevotional) -> some View {
+        if Self.isBlank(file.contents) {
+            Text("Nothing in this file yet.")
+                .foregroundStyle(.secondary)
+        } else if WorkspaceTextFileStore.isMarkdown(file.url) {
+            DevotionalContentView(
+                markdown: file.contents,
+                libraryRootURL: model.library.rootURL,
+                devotionalID: devotional.id,
+                mediaReferences: devotional.mediaReferences,
+                fontSize: devotionalFontSize,
+                lineSpacing: devotionalLineSpacing,
+                typeface: devotionalTypeface
+            )
+        } else {
+            Text(file.contents)
+                .font(.system(size: devotionalFontSize, design: devotionalTypeface.design))
+                .lineSpacing(devotionalLineSpacing)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private static func isBlank(_ text: String) -> Bool {
+        text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// The other files read for this writing, and none while another's are
+    /// still the ones held.
+    private func otherFiles(of devotional: LampDevotional) -> [WorkspaceTextFileSnapshot] {
+        otherFiles?.writingID == devotional.id ? otherFiles?.files ?? [] : []
+    }
+
+    /// Keeps the open writing's other files current, as the assistant or the
+    /// editor changes them. Read off the main thread, and published only when
+    /// they differ.
+    @MainActor
+    private func monitorOtherFiles(of writingID: String) async {
+        let workspace = DevotionalAgentWorkspaceFiles.workspaceURL(
+            libraryRootURL: model.library.rootURL, devotionalID: writingID
+        )
+        while !Task.isCancelled {
+            let files = await Task.detached(priority: .utility) {
+                (try? DevotionalAgentWorkspaceFiles.companions(in: workspace)) ?? []
+            }.value
+            guard !Task.isCancelled else { return }
+            if otherFiles?.writingID != writingID || otherFiles?.files != files {
+                otherFiles = (writingID, files)
+            }
+            try? await Task.sleep(for: .seconds(2))
+        }
+    }
+
     @ViewBuilder
     private func emptyDraftState(_ devotional: LampDevotional) -> some View {
+        let hasOtherFiles = !otherFiles(of: devotional).isEmpty
         ContentUnavailableView {
-            Label("Nothing Written Yet", systemImage: "text.alignleft")
+            Label(hasOtherFiles ? "No Prose Yet" : "Nothing Written Yet", systemImage: "text.alignleft")
         } description: {
-            Text(devotional.isEditable
-                ? "Open this draft in the editor to start writing."
-                : "This entry has no body text.")
+            if hasOtherFiles {
+                Text("The work so far is in this writing’s other files, below.")
+            } else {
+                Text(devotional.isEditable
+                    ? "Open this draft in the editor to start writing."
+                    : "This entry has no body text.")
+            }
         } actions: {
             if devotional.isEditable {
                 Button("Edit") { beginEditing(devotional) }

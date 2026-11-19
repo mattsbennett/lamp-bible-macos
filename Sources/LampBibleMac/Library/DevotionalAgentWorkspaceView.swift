@@ -729,6 +729,16 @@ enum DevotionalAgentWorkspaceFiles {
             devotionalID: devotionalID
         )
     }
+
+    /// The workspace's own files, which are not the writing's: the draft is
+    /// the writing itself, and the rest are Lamp's to the agent.
+    static let notCompanionFilenames: Set<String> = [draftFilename, contextFilename, "AGENTS.md", "CLAUDE.md"]
+
+    /// The writing's other files, beside its draft, as the editor's tabs and
+    /// the reading view list them.
+    static func companions(in workspaceURL: URL) throws -> [WorkspaceTextFileSnapshot] {
+        try WorkspaceTextFileStore.snapshots(in: workspaceURL, excludingFilenames: notCompanionFilenames)
+    }
 }
 
 /// What the Terminal pane knows about capturing the running session's turns.

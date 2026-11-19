@@ -3126,15 +3126,7 @@ struct DevotionalEditorView: View {
         do {
             let available = FileManager.default.fileExists(atPath: workspaceURL.path)
             if workspaceIsAvailable != available { workspaceIsAvailable = available }
-            let snapshots = try WorkspaceTextFileStore.snapshots(
-                in: workspaceURL,
-                excludingFilenames: [
-                    DevotionalAgentWorkspaceFiles.draftFilename,
-                    DevotionalAgentWorkspaceFiles.contextFilename,
-                    "AGENTS.md",
-                    "CLAUDE.md",
-                ]
-            )
+            let snapshots = try DevotionalAgentWorkspaceFiles.companions(in: workspaceURL)
             // A hand-opened file is not in the listing, so it brings its own
             // snapshot; without one the loop below would call it deleted.
             let listedPaths = Set(snapshots.compactMap { workspaceRelativePath(of: $0.url) })
