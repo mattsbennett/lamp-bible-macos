@@ -5,6 +5,24 @@ import LampModuleKit
 import LampBibleMacSupport
 #endif
 
+/// The one owner of a writing's workspace files.
+///
+/// Preparing a workspace writes the policy, the helper's configuration, the
+/// skills and the instructions, and the pane's own actions write the context,
+/// the brief and a skill beside them. One writing can be open in two panes
+/// and a phone's turn is a third caller, so those writers need one owner or
+/// they interleave and tear each other's files.
+///
+/// That owner used to be the main actor, which served only as the lock: the
+/// work is files, not drawing, and holding it there made every preparation a
+/// run of frames the window could not draw — the assistant's pane could not
+/// be built in the same turn it was revealed without the reveal stopping.
+/// The serialisation is what mattered, not which actor provided it.
+@globalActor
+actor WritingWorkspaceFiles {
+    static let shared = WritingWorkspaceFiles()
+}
+
 /// One writing turn, the same wherever it is asked from: the writing's own
 /// window, or a paired phone (`AgentRemoteHost`). How the writing's
 /// workspace is made ready, what each message is sent with, and how what the
@@ -22,19 +40,14 @@ enum WritingChatTurns {
     /// as it is now: its draft, its brief, and the helper that gives the
     /// agent Lamp's modules under `policy`.
     ///
-    /// On the main actor, for now, which is what keeps it from overlapping
-    /// anything else that writes the same files. It writes the policy, the
-    /// helper's configuration, the skills and the instructions — 25 to 33 ms
-    /// on a fresh workspace, measured in Debug — and nothing about that work
-    /// is safe to interleave: the skills catalogue is copied, the
-    /// instructions and provider configurations rewritten whole, and the
-    /// context, the brief and a skill edit write the same files from the
-    /// pane's own actions. One writing can be open in two panes, and a
-    /// phone's turn is a third caller.
-    ///
-    /// Asynchronous so that moving it off the main actor changes no caller:
-    /// that wants one actor owning every writer of a workspace's files, not
-    /// just this one, or the race comes back through the others.
+    /// On `WritingWorkspaceFiles`, which owns every writer of these files,
+    /// so this cannot overlap a skill edit, a context write or a second
+    /// pane's preparation. It writes the policy, the helper's configuration,
+    /// the skills and the instructions — 25 to 33 ms on a fresh workspace,
+    /// measured in Debug — and none of that is safe to interleave: the
+    /// skills catalogue is copied, and the instructions and provider
+    /// configurations are rewritten whole.
+    @WritingWorkspaceFiles
     static func prepare(
         writingID: String,
         draft: String,
@@ -49,6 +62,7 @@ enum WritingChatTurns {
         )
     }
 
+    @WritingWorkspaceFiles
     private static func prepareNow(
         writingID: String,
         draft: String,

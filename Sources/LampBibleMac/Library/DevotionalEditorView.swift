@@ -678,9 +678,6 @@ struct DevotionalEditorView: View {
     @AppStorage("agent.moduleAccess.scope") private var agentModuleAccessScope = AgentModuleAccessScope.enabledModules.rawValue
     @AppStorage("agent.moduleAccess.personal") private var agentPersonalContentEnabled = false
     @State private var showingAgentWorkspace = false
-    /// Whether the assistant's pane is open far enough to be worth building.
-    /// Set a reveal after the pane is asked for; see the `onChange` below.
-    @State private var assistantPaneHasRoom = false
     /// The chat turn running in the agent pane, where one is open.
     ///
     /// Held here rather than in that pane because the agent writes to the
@@ -1004,7 +1001,7 @@ struct DevotionalEditorView: View {
                     )
                 }
                 ZStack {
-                    if showingAgentWorkspace, assistantPaneHasRoom {
+                    if showingAgentWorkspace {
                         DevotionalAgentWorkspaceView(
                             libraryRootURL: model.library.rootURL,
                             bundledModulesArchiveURL: Bundle.main.url(
@@ -1156,24 +1153,8 @@ struct DevotionalEditorView: View {
         }
         // What is selected when the agent pane opens, or another document is
         // shown, has had no change of selection to report it.
-        .onChange(of: showingAgentWorkspace) { _, showing in
+        .onChange(of: showingAgentWorkspace) { _, _ in
             readVisualSelectionSoon()
-            // The pane is mounted one reveal later than it is asked for.
-            // Building it loads the chat's transcript and checks its
-            // provider on the main thread, and doing that in the same turn
-            // as the reveal's first frame meant there was no reveal: the
-            // side of the window stood still for about half a second and
-            // then held the pane. It now slides out at its own width,
-            // empty, and fills as it settles.
-            guard showing else {
-                assistantPaneHasRoom = false
-                return
-            }
-            Task { @MainActor in
-                try? await Task.sleep(for: .seconds(LampMotion.paneReveal))
-                guard showingAgentWorkspace else { return }
-                assistantPaneHasRoom = true
-            }
         }
         // The writing's review marks, followed while it is open and marks
         // are shown; another writing, or marks turned off, starts again.

@@ -351,6 +351,7 @@ enum DevotionalAgentWorkspaceStore {
     }
 
     @discardableResult
+    @WritingWorkspaceFiles
     static func prepare(
         libraryRootURL: URL,
         devotionalID: String,
@@ -408,6 +409,7 @@ enum DevotionalAgentWorkspaceStore {
         )
     }
 
+    @WritingWorkspaceFiles
     static func writeContext(_ contextDocument: String, to workspace: URL) throws {
         try contextDocument.write(
             to: workspace.appendingPathComponent(contextFilename),
@@ -436,6 +438,7 @@ enum DevotionalAgentWorkspaceStore {
         try data.write(to: markerURL, options: [.atomic])
     }
 
+    @WritingWorkspaceFiles
     fileprivate static func contextFiles(in workspace: URL) throws -> [DevotionalAgentContextFile] {
         let keys: Set<URLResourceKey> = [.isDirectoryKey, .fileSizeKey]
         return try FileManager.default.contentsOfDirectory(
@@ -455,6 +458,7 @@ enum DevotionalAgentWorkspaceStore {
     /// Returns the entries that could not be copied, named relative to the item
     /// they came from, so the pane can say what was left out.
     @discardableResult
+    @WritingWorkspaceFiles
     static func addContextFiles(
         _ sources: [URL],
         to workspace: URL,
@@ -476,6 +480,7 @@ enum DevotionalAgentWorkspaceStore {
         return skipped
     }
 
+    @WritingWorkspaceFiles
     fileprivate static func removeContextFile(
         _ file: DevotionalAgentContextFile,
         from workspace: URL,
@@ -489,6 +494,7 @@ enum DevotionalAgentWorkspaceStore {
         try updateInstructions(in: workspace)
     }
 
+    @WritingWorkspaceFiles
     fileprivate static func skills(in workspace: URL) throws -> [DevotionalAgentSkill] {
         let root = codexSkillsDirectory(in: workspace)
         guard FileManager.default.fileExists(atPath: root.path) else { return [] }
@@ -522,6 +528,7 @@ enum DevotionalAgentWorkspaceStore {
         }
     }
 
+    @WritingWorkspaceFiles
     static func writeSkill(
         name: String,
         description: String,
@@ -547,6 +554,7 @@ enum DevotionalAgentWorkspaceStore {
         )
     }
 
+    @WritingWorkspaceFiles
     static func addSkill(named name: String, to workspace: URL, libraryRootURL: URL) throws {
         try WorkspaceSkillStore.enableSkill(
             named: name,
@@ -555,6 +563,7 @@ enum DevotionalAgentWorkspaceStore {
         )
     }
 
+    @WritingWorkspaceFiles
     static func removeSkill(
         named name: String,
         from workspace: URL,
@@ -577,6 +586,7 @@ enum DevotionalAgentWorkspaceStore {
         WorkspaceSkillStore.isValidSkillName(name)
     }
 
+    @WritingWorkspaceFiles
     private static func updateInstructions(in workspace: URL) throws {
         let files = (try? contextFiles(in: workspace)) ?? []
         let inventory = files.isEmpty
@@ -618,6 +628,7 @@ enum DevotionalAgentWorkspaceStore {
         )
     }
 
+    @WritingWorkspaceFiles
     private static func synchronizeClaudeSkills(in workspace: URL) throws {
         let canonicalRoot = codexSkillsDirectory(in: workspace)
         let claudeRoot = claudeSkillsDirectory(in: workspace)
@@ -641,6 +652,7 @@ enum DevotionalAgentWorkspaceStore {
         }
     }
 
+    @WritingWorkspaceFiles
     private static func installBundledSkillsIfNeeded(in workspace: URL) throws {
         try WorkspaceSkillStore.installBundledSkills(
             named: WorkspaceSkillStore.bundledSkillNames,
@@ -859,6 +871,17 @@ struct DevotionalAgentWorkspaceView: View {
     @AppStorage("devotional.agent.workspaceHeight") private var workspaceSectionHeight = 310.0
     @AppStorage("devotional.agent.showsSetup") private var showsSetup = false
     /// The chosen provider's state, as the chat found it.
+    /// Whether the session's own view may be built yet.
+    ///
+    /// The pane, its header and the session's placeholder are drawn the
+    /// moment the pane is asked for. The session itself — the chat, which
+    /// loads a transcript and checks its provider, or the terminal — is the
+    /// heavy part, and building it in the same turn as the reveal puts that
+    /// work on the frames the reveal needs: the title bar validated its
+    /// items mid-animation and every button greyed for a moment (measured:
+    /// a 5.9 dip in its brightness, against 0.00 with this). It follows one
+    /// reveal later instead, with the placeholder in its place.
+    @State private var sessionCanMount = false
     @State private var providerConnection = AIProviderConnectionState.checking
     /// The setup was opened because the provider needed it,
     /// so it folds again once the provider is connected.
@@ -1023,6 +1046,10 @@ struct DevotionalAgentWorkspaceView: View {
         .onChange(of: selectedProvider) { _, _ in
             if let workspaceURL { loadChoices(in: workspaceURL) }
         }
+        .task {
+            try? await Task.sleep(for: .seconds(LampMotion.paneReveal))
+            sessionCanMount = true
+        }
         .task(id: "\(libraryRootURL.path)|\(devotionalID)") {
             // A phone's turn on this writing leaves its draft to this pane
             // while it is open (`WritingChatTurns.watch`).
@@ -1038,7 +1065,7 @@ struct DevotionalAgentWorkspaceView: View {
             synchronizeEditorDraft(draft)
         }
         .onChange(of: contextDocument) { _, document in
-            synchronizeContext(document)
+            Task { await synchronizeContext(document) }
         }
         .onChange(of: agentAccessPolicy) { _, policy in
             synchronizeAccessPolicy(policy)
@@ -1056,7 +1083,7 @@ struct DevotionalAgentWorkspaceView: View {
         }
         .sheet(item: $skillEditorRequest) { request in
             DevotionalAgentSkillEditor(request: request) { name, description, instructions in
-                saveSkill(name: name, description: description, instructions: instructions)
+                await saveSkill(name: name, description: description, instructions: instructions)
             }
         }
         .confirmationDialog(
@@ -1067,7 +1094,7 @@ struct DevotionalAgentWorkspaceView: View {
             )
         ) {
             Button("Remove Skill", role: .destructive) {
-                if let skillPendingDeletion { deleteSkill(skillPendingDeletion) }
+                if let skillPendingDeletion { Task { await deleteSkill(skillPendingDeletion) } }
                 skillPendingDeletion = nil
             }
         } message: {
@@ -1185,7 +1212,7 @@ struct DevotionalAgentWorkspaceView: View {
 
         if sessionMode == .terminal {
             Button(activeProvider == nil ? "Launch" : "Restart", systemImage: "play.fill") {
-                launch(selectedProvider)
+                Task { await launch(selectedProvider) }
             }
             .buttonStyle(.borderedProminent)
             .disabled(workspaceURL == nil)
@@ -1277,7 +1304,7 @@ struct DevotionalAgentWorkspaceView: View {
             in: RoundedRectangle(cornerRadius: 9)
         )
         .dropDestination(for: URL.self) { urls, _ in
-            addContextFiles(urls)
+            Task { await addContextFiles(urls) }
             return !urls.isEmpty
         } isTargeted: { isDropTargeted = $0 }
     }
@@ -1296,7 +1323,7 @@ struct DevotionalAgentWorkspaceView: View {
                     } else {
                         ForEach(addableSkills) { skill in
                             Button {
-                                addLibrarySkill(skill)
+                                Task { await addLibrarySkill(skill) }
                             } label: {
                                 Label(skill.name, systemImage: "wand.and.stars")
                             }
@@ -1371,14 +1398,14 @@ struct DevotionalAgentWorkspaceView: View {
     /// getting on was what ended it.
     private var sessionPane: some View {
         ZStack {
-            if activeProvider != nil || sessionMode == .terminal {
+            if activeProvider != nil || sessionMode == .terminal, sessionCanMount || activeProvider != nil {
                 terminalPane
                     .opacity(sessionMode == .terminal ? 1 : 0)
                     .allowsHitTesting(sessionMode == .terminal)
                     .accessibilityHidden(sessionMode != .terminal)
                     .disabled(sessionMode != .terminal)
             }
-            if sessionMode == .native || chatIsReplying, let workspaceURL {
+            if sessionMode == .native || chatIsReplying, sessionCanMount || chatIsReplying, let workspaceURL {
                 NativeAgentChatView(
                     provider: selectedProvider,
                     workspace: workspaceURL,
@@ -1422,7 +1449,41 @@ struct DevotionalAgentWorkspaceView: View {
                 .accessibilityHidden(sessionMode != .native)
                 .disabled(sessionMode != .native)
             }
+            // The pane is drawn as soon as it is asked for, and its session
+            // waits here while the workspace is made ready. Holding the
+            // whole pane back instead — which is what it did — slid an
+            // empty frame out and filled it a moment later.
+            if !sessionIsMounted, errorMessage == nil {
+                sessionPreparing
+            }
         }
+    }
+
+    /// Whether the session's own view is in the tree. While it is not, the
+    /// placeholder stands in its place.
+    ///
+    /// A live session counts whatever the settle says: a running terminal or
+    /// a reply in flight is mounted at once, because taking it out even for
+    /// one reveal kills the provider's process and stops the reply — the
+    /// rule `SessionPaneMountingTests` holds this pane to.
+    private var sessionIsMounted: Bool {
+        guard workspaceURL != nil else { return false }
+        return sessionCanMount || chatIsReplying || activeProvider != nil
+    }
+
+    /// The session's place while the workspace is being prepared.
+    private var sessionPreparing: some View {
+        VStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+            Text("Opening this writing's workspace…")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(SwiftUI.Color(nsColor: .windowBackgroundColor))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Opening this writing's workspace")
     }
 
     @ViewBuilder
@@ -1485,7 +1546,7 @@ struct DevotionalAgentWorkspaceView: View {
             .labelStyle(.iconOnly)
             .buttonStyle(.borderless)
             Button("Remove", systemImage: "xmark.circle", role: .destructive) {
-                removeContextFile(file)
+                Task { await removeContextFile(file) }
             }
             .labelStyle(.iconOnly)
             .buttonStyle(.borderless)
@@ -1528,7 +1589,7 @@ struct DevotionalAgentWorkspaceView: View {
                         provider: selectedProvider, workspace: workspace
                     )?.currentTurn
             ), in: workspace)
-            refreshWorkspaceMetadata(in: workspace)
+            await refreshWorkspaceMetadata(in: workspace)
             Task { await importPresentationArtifactIfNeeded(in: workspace) }
         } catch {
             errorMessage = error.localizedDescription
@@ -1553,7 +1614,7 @@ struct DevotionalAgentWorkspaceView: View {
                 ),
                 in: workspaceURL
             )
-            refreshWorkspaceMetadata(in: workspaceURL)
+            Task { await refreshWorkspaceMetadata(in: workspaceURL) }
             Task { await importPresentationArtifactIfNeeded(in: workspaceURL) }
             collectTerminalTurns(in: workspaceURL)
             refreshErrorMessage = nil
@@ -1618,10 +1679,10 @@ struct DevotionalAgentWorkspaceView: View {
         }
     }
 
-    private func synchronizeContext(_ document: String) {
+    private func synchronizeContext(_ document: String) async {
         guard let workspaceURL else { return }
         do {
-            try DevotionalAgentWorkspaceStore.writeContext(document, to: workspaceURL)
+            try await DevotionalAgentWorkspaceStore.writeContext(document, to: workspaceURL)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -1728,12 +1789,12 @@ struct DevotionalAgentWorkspaceView: View {
     /// Runs several times a second, so everything here is assigned only on a real
     /// change — an assignment alone redraws the pane — and the history, which is
     /// the one expensive read, is reloaded only when the folder says so.
-    private func refreshWorkspaceMetadata(in workspace: URL) {
-        if let files = try? DevotionalAgentWorkspaceStore.contextFiles(in: workspace),
+    private func refreshWorkspaceMetadata(in workspace: URL) async {
+        if let files = try? await DevotionalAgentWorkspaceStore.contextFiles(in: workspace),
            files != contextFiles {
             contextFiles = files
         }
-        if let workspaceSkills = try? DevotionalAgentWorkspaceStore.skills(in: workspace),
+        if let workspaceSkills = try? await DevotionalAgentWorkspaceStore.skills(in: workspace),
            workspaceSkills != skills {
             skills = workspaceSkills
         }
@@ -1971,10 +2032,10 @@ struct DevotionalAgentWorkspaceView: View {
         panel.canChooseFiles = true
         panel.canChooseDirectories = true
         guard panel.runModal() == .OK else { return }
-        addContextFiles(panel.urls)
+        Task { await addContextFiles(panel.urls) }
     }
 
-    private func addContextFiles(_ urls: [URL]) {
+    private func addContextFiles(_ urls: [URL]) async {
         guard !urls.isEmpty else { return }
         guard let workspaceURL else {
             errorMessage = "The agent workspace is still being prepared. Try again in a moment."
@@ -1983,7 +2044,7 @@ struct DevotionalAgentWorkspaceView: View {
         errorMessage = nil
         contextNote = nil
         do {
-            let skipped = try DevotionalAgentWorkspaceStore.addContextFiles(
+            let skipped = try await DevotionalAgentWorkspaceStore.addContextFiles(
                 urls,
                 to: workspaceURL,
                 libraryRootURL: libraryRootURL
@@ -2000,12 +2061,12 @@ struct DevotionalAgentWorkspaceView: View {
         }
     }
 
-    private func removeContextFile(_ file: DevotionalAgentContextFile) {
+    private func removeContextFile(_ file: DevotionalAgentContextFile) async {
         guard let workspaceURL else { return }
         errorMessage = nil
         contextNote = nil
         do {
-            try DevotionalAgentWorkspaceStore.removeContextFile(
+            try await DevotionalAgentWorkspaceStore.removeContextFile(
                 file,
                 from: workspaceURL,
                 libraryRootURL: libraryRootURL
@@ -2016,10 +2077,10 @@ struct DevotionalAgentWorkspaceView: View {
         }
     }
 
-    private func saveSkill(name: String, description: String, instructions: String) -> String? {
+    private func saveSkill(name: String, description: String, instructions: String) async -> String? {
         guard let workspaceURL else { return "The workspace is not ready." }
         do {
-            try DevotionalAgentWorkspaceStore.writeSkill(
+            try await DevotionalAgentWorkspaceStore.writeSkill(
                 name: name,
                 description: description,
                 instructions: instructions,
@@ -2033,10 +2094,10 @@ struct DevotionalAgentWorkspaceView: View {
         }
     }
 
-    private func deleteSkill(_ skill: DevotionalAgentSkill) {
+    private func deleteSkill(_ skill: DevotionalAgentSkill) async {
         guard let workspaceURL else { return }
         do {
-            try DevotionalAgentWorkspaceStore.removeSkill(
+            try await DevotionalAgentWorkspaceStore.removeSkill(
                 named: skill.name,
                 from: workspaceURL,
                 libraryRootURL: libraryRootURL
@@ -2047,10 +2108,10 @@ struct DevotionalAgentWorkspaceView: View {
         }
     }
 
-    private func addLibrarySkill(_ skill: DevotionalAgentSkill) {
+    private func addLibrarySkill(_ skill: DevotionalAgentSkill) async {
         guard let workspaceURL else { return }
         do {
-            try DevotionalAgentWorkspaceStore.addSkill(
+            try await DevotionalAgentWorkspaceStore.addSkill(
                 named: skill.name,
                 to: workspaceURL,
                 libraryRootURL: libraryRootURL
@@ -2061,9 +2122,9 @@ struct DevotionalAgentWorkspaceView: View {
         }
     }
 
-    private func launch(_ provider: AIProviderCLI) {
+    private func launch(_ provider: AIProviderCLI) async {
         guard let workspaceURL else { return }
-        try? DevotionalAgentWorkspaceStore.writeContext(contextDocument, to: workspaceURL)
+        try? await DevotionalAgentWorkspaceStore.writeContext(contextDocument, to: workspaceURL)
         synchronizeEditorDraft(draftMarkdown)
         do {
             terminalCommand = try prepareTerminalLaunch(of: provider, in: workspaceURL)
@@ -2162,7 +2223,7 @@ struct DevotionalAgentWorkspaceView: View {
             errorMessage = "Couldn’t start over from a recap: \(error.localizedDescription)"
             return
         }
-        launch(provider)
+        Task { await launch(provider) }
         terminalCapture.continuityNotice = "The earlier \(provider.shortName) session is no longer available, so this one continues from a recap of the conversation."
     }
 
@@ -2335,7 +2396,7 @@ private struct DevotionalAgentSkillEditorRequest: Identifiable {
 
 private struct DevotionalAgentSkillEditor: View {
     let request: DevotionalAgentSkillEditorRequest
-    let save: (String, String, String) -> String?
+    let save: (String, String, String) async -> String?
 
     @Environment(\.dismiss) private var dismiss
     @State private var name: String
@@ -2345,7 +2406,7 @@ private struct DevotionalAgentSkillEditor: View {
 
     init(
         request: DevotionalAgentSkillEditorRequest,
-        save: @escaping (String, String, String) -> String?
+        save: @escaping (String, String, String) async -> String?
     ) {
         self.request = request
         self.save = save
@@ -2426,14 +2487,19 @@ private struct DevotionalAgentSkillEditor: View {
                     Button("Cancel", role: .cancel) { dismiss() }
                         .keyboardShortcut(.cancelAction)
                     Button("Save Skill") {
-                        if let error = save(
-                            name.trimmingCharacters(in: .whitespacesAndNewlines),
-                            description.trimmingCharacters(in: .whitespacesAndNewlines),
-                            instructions
-                        ) {
-                            errorMessage = error
-                        } else {
-                            dismiss()
+                        // Writing the skill takes its turn on
+                        // `WritingWorkspaceFiles`, so the sheet waits for the
+                        // answer rather than the window waiting for the write.
+                        Task {
+                            if let error = await save(
+                                name.trimmingCharacters(in: .whitespacesAndNewlines),
+                                description.trimmingCharacters(in: .whitespacesAndNewlines),
+                                instructions
+                            ) {
+                                errorMessage = error
+                            } else {
+                                dismiss()
+                            }
                         }
                     }
                     .keyboardShortcut(.defaultAction)
