@@ -684,7 +684,7 @@ final class AgentRemoteHost: ObservableObject {
         guard let open else { return }
         await run(
             text, reading: message.reading, selection: message.selection, writingRevision: message.writingRevision,
-            in: open, requestID: message.requestID, peer: peer
+            writingDigest: message.writingDigest, in: open, requestID: message.requestID, peer: peer
         )
     }
 
@@ -703,7 +703,10 @@ final class AgentRemoteHost: ObservableObject {
         let chat: LampAgentRemoteHosting.Chat
         if newChat.kind == LampAgentRemoteChatSummary.writing {
             guard let writingID = newChat.writingID,
-                  await isCurrent(writingID, revision: newChat.writingRevision, requestID: message.requestID, peer: peer)
+                  await isCurrent(
+                      writingID, revision: newChat.writingRevision, digest: newChat.writingDigest,
+                      requestID: message.requestID, peer: peer
+                  )
             else {
                 if newChat.writingID == nil {
                     send(.failed(LampAgentRemoteFailure.notFound, "That writing isn't on this Mac.", requestID: message.requestID), to: peer)
@@ -718,7 +721,7 @@ final class AgentRemoteHost: ObservableObject {
         if let open = peer.open, open.chat == chat {
             await run(
                 first, reading: newChat.reading, selection: newChat.selection, writingRevision: newChat.writingRevision,
-                in: open, requestID: message.requestID, peer: peer
+                writingDigest: newChat.writingDigest, in: open, requestID: message.requestID, peer: peer
             )
             return
         }
@@ -727,7 +730,10 @@ final class AgentRemoteHost: ObservableObject {
             if case .writing(let id) = chat {
                 // The workspace made before anything is chosen in it, as the
                 // writing's pane makes it on opening.
-                guard try await prepareWriting(id, revision: newChat.writingRevision, requestID: message.requestID, peer: peer) else { return }
+                guard try await prepareWriting(
+                    id, revision: newChat.writingRevision, digest: newChat.writingDigest,
+                    requestID: message.requestID, peer: peer
+                ) else { return }
             }
             guard !Task.isCancelled, mayAct(peer) else { return }
             // The provider chosen is the chat's own, pinned as the pane pins
@@ -753,7 +759,7 @@ final class AgentRemoteHost: ObservableObject {
             let open = follow(OpenChat(chat: chat, workspace: workspace, model: model), summary: summary, for: peer, requestID: message.requestID)
             await run(
                 first, reading: newChat.reading, selection: newChat.selection, writingRevision: newChat.writingRevision,
-                in: open, requestID: message.requestID, peer: peer
+                writingDigest: newChat.writingDigest, in: open, requestID: message.requestID, peer: peer
             )
         } catch {
             send(.failed(LampAgentRemoteFailure.needsSetup, error.localizedDescription, requestID: message.requestID), to: peer)
@@ -767,7 +773,7 @@ final class AgentRemoteHost: ObservableObject {
     /// forgotten or the host turned off meanwhile.
     private func run(
         _ text: String, reading: LampAgentRemoteReading?, selection: String?, writingRevision: Int?,
-        in open: OpenChat, requestID: UUID?, peer: Peer
+        writingDigest: String?, in open: OpenChat, requestID: UUID?, peer: Peer
     ) async {
         guard !open.model.isRunning else {
             send(.failed(LampAgentRemoteFailure.busy, "A reply is still arriving in this chat.", requestID: requestID, chatID: open.id), to: peer)
@@ -789,7 +795,8 @@ final class AgentRemoteHost: ObservableObject {
             prompt = await contextualPrompt(text, reading: reading)
         case .writing(let id):
             guard let written = await writingPrompt(
-                text, selection: selection, writingID: id, revision: writingRevision, in: open, requestID: requestID, peer: peer
+                text, selection: selection, writingID: id, revision: writingRevision, digest: writingDigest,
+                in: open, requestID: requestID, peer: peer
             ) else { return }
             prompt = written
         }
@@ -829,10 +836,12 @@ final class AgentRemoteHost: ObservableObject {
     ///
     /// Never while a turn runs: levelling the draft then would take that
     /// turn's work in under no turn, and an undo of it would leave it behind.
-    private func prepareWriting(_ id: String, revision: Int?, requestID: UUID?, peer: Peer) async throws -> Bool {
+    private func prepareWriting(
+        _ id: String, revision: Int?, digest: String?, requestID: UUID?, peer: Peer
+    ) async throws -> Bool {
         let chatID = LampAgentRemoteHosting.Chat.writing(id).id
         guard !Task.isCancelled, mayAct(peer),
-              await isCurrent(id, revision: revision, requestID: requestID, peer: peer),
+              await isCurrent(id, revision: revision, digest: digest, requestID: requestID, peer: peer),
               !Task.isCancelled, mayAct(peer)
         else { return false }
         guard let libraryModel, let writing = writing(id) else {
@@ -872,14 +881,18 @@ final class AgentRemoteHost: ObservableObject {
     /// turn is refused rather than run on a text the writer has since
     /// changed, whose result would sync back over their edits. False,
     /// having said why, where it is behind or not here.
-    private func isCurrent(_ id: String, revision: Int?, requestID: UUID?, peer: Peer) async -> Bool {
+    private func isCurrent(_ id: String, revision: Int?, digest: String?, requestID: UUID?, peer: Peer) async -> Bool {
         let chatID = LampAgentRemoteHosting.Chat.writing(id).id
         // A copy here that was never dated cannot be compared, and goes on
         // as a turn always has.
         func behind() -> Bool {
             guard let held = writing(id) else { return revision != nil }
             return held.lastModified.map {
-                LampAgentRemoteWritingRevision.hostIsBehind(host: $0, device: revision)
+                LampAgentRemoteWritingRevision.hostIsBehind(
+                    host: $0,
+                    hostDigest: LampAgentRemoteWritingRevision.digest(content: held.content, contentJSON: held.contentJSON),
+                    device: revision, deviceDigest: digest
+                )
             } ?? false
         }
         if behind(), let pull { await pull() }
@@ -902,10 +915,12 @@ final class AgentRemoteHost: ObservableObject {
     /// selected on the phone, as the visual editor would show them, and what
     /// is still marked for the writer to read.
     private func writingPrompt(
-        _ text: String, selection: String?, writingID: String, revision: Int?, in open: OpenChat, requestID: UUID?, peer: Peer
+        _ text: String, selection: String?, writingID: String, revision: Int?, digest: String?,
+        in open: OpenChat, requestID: UUID?, peer: Peer
     ) async -> String? {
         do {
-            guard try await prepareWriting(writingID, revision: revision, requestID: requestID, peer: peer) else { return nil }
+            guard try await prepareWriting(writingID, revision: revision, digest: digest, requestID: requestID, peer: peer)
+            else { return nil }
         } catch {
             send(.failed(LampAgentRemoteFailure.needsSetup, error.localizedDescription, requestID: requestID, chatID: open.id), to: peer)
             return nil
