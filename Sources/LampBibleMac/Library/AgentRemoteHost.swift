@@ -715,11 +715,15 @@ final class AgentRemoteHost: ObservableObject {
                 // writing's pane makes it on opening.
                 guard try await prepareWriting(id, requestID: message.requestID, peer: peer) else { return }
             }
+            guard !Task.isCancelled, mayAct(peer) else { return }
             // The provider chosen is the chat's own, pinned as the pane pins
-            // it, so the chat opens on it in a window too. A writing that
-            // has a chat already keeps the provider it has.
-            if summary(of: chat) == nil {
-                let provider = newChat.provider.flatMap(AIProviderCLI.init(rawValue:))
+            // it, so the chat opens on it in a window too. A writing keeps
+            // the provider it has unless the phone names one for a chat
+            // nothing was said in yet: its pane may have pinned one already.
+            let chosen = newChat.provider.flatMap(AIProviderCLI.init(rawValue:))
+            let isWriting = if case .writing = chat { true } else { false }
+            if summary(of: chat) == nil, chosen != nil || !isWriting {
+                let provider = chosen
                     ?? AIProviderCLI(rawValue: Self.appProviderID(for: chat)) ?? .codex
                 var choices = AgentChatChoicesStore.load(in: workspace)
                 choices.set(provider.rawValue, for: AgentChatChoices.providerKey)
@@ -779,7 +783,10 @@ final class AgentRemoteHost: ObservableObject {
         if let requestID { remember(requestID, asked: turn) }
         let collecting = collectWhileRunning(open)
         let taken = await open.model.send(text, contextualPrompt: prompt, messageID: turn, inConversation: conversation)
+        // A poll part way through saving finishes before the last one looks,
+        // or the last would read the writing from before that save.
         collecting?.cancel()
+        await collecting?.value
         if case .writing(let id) = open.chat, let libraryModel {
             // Once more as it ends: a run's last write lands just before it
             // exits, after the last poll.
@@ -797,16 +804,33 @@ final class AgentRemoteHost: ObservableObject {
     /// Makes a writing's workspace ready for a turn, as its pane does on
     /// opening: under the policy as it is now, and holding the writing as it
     /// is now, which may have moved since the last turn, by sync or in a
-    /// window. False, having said why, where there is nothing to do it on.
+    /// window. False, having said why, where there is nothing to do it on or
+    /// a turn is running in it; false and silent where the device may no
+    /// longer act, checked before each change, since the request may have
+    /// been cancelled while it waited.
+    ///
+    /// Never while a turn runs: levelling the draft then would take that
+    /// turn's work in under no turn, and an undo of it would leave it behind.
     private func prepareWriting(_ id: String, requestID: UUID?, peer: Peer) async throws -> Bool {
+        let chatID = LampAgentRemoteHosting.Chat.writing(id).id
+        guard !Task.isCancelled, mayAct(peer) else { return false }
         guard let libraryModel, let writing = writing(id) else {
-            send(.failed(LampAgentRemoteFailure.notFound, "That writing isn't on this Mac.", requestID: requestID, chatID: LampAgentRemoteHosting.Chat.writing(id).id), to: peer)
+            send(.failed(LampAgentRemoteFailure.notFound, "That writing isn't on this Mac.", requestID: requestID, chatID: chatID), to: peer)
             return false
         }
         guard writing.isEditable else {
-            send(.failed(LampAgentRemoteFailure.notAllowed, "This writing came with a module, so the assistant can't change it.", requestID: requestID, chatID: LampAgentRemoteHosting.Chat.writing(id).id), to: peer)
+            send(.failed(LampAgentRemoteFailure.notAllowed, "This writing came with a module, so the assistant can't change it.", requestID: requestID, chatID: chatID), to: peer)
             return false
         }
+        let workspace = LampWritingWorkspace.url(libraryRootURL: libraryModel.library.rootURL, writingID: id)
+        func idle() -> Bool {
+            guard !KeptAgentChats.isRunning(in: workspace) else {
+                send(.failed(LampAgentRemoteFailure.busy, "A reply is still arriving in this chat.", requestID: requestID, chatID: chatID), to: peer)
+                return false
+            }
+            return true
+        }
+        guard idle() else { return false }
         _ = try await WritingChatTurns.prepare(
             writingID: id,
             draft: writing.displayMarkdown,
@@ -815,8 +839,9 @@ final class AgentRemoteHost: ObservableObject {
             libraryRootURL: libraryModel.library.rootURL,
             bundledModulesArchiveURL: Bundle.main.url(forResource: "bundled_modules.db", withExtension: "zlib")
         )
+        guard !Task.isCancelled, mayAct(peer), idle() else { return false }
         try await WritingChatTurns.begin(writingID: id, turnID: nil, libraryModel: libraryModel)
-        return true
+        return !Task.isCancelled && mayAct(peer)
     }
 
     /// A writing turn's message as the provider is sent it: with the words
