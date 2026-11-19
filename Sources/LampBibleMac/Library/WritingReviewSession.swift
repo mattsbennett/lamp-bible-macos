@@ -148,10 +148,6 @@ final class WritingReviewSession: ObservableObject {
     /// again for the same text, they wait for the text to change rather
     /// than going round every few hundred milliseconds.
     private var resentFor: String?
-    /// A clear the page sent from text a moment ahead of this one's (typed
-    /// within the settle before the editor reports it): tried again as the
-    /// text arrives.
-    private var pendingClear: String?
 
     static let checkInterval: Duration = .seconds(1)
     static let settleDelay: Duration = .milliseconds(300)
@@ -170,7 +166,6 @@ final class WritingReviewSession: ObservableObject {
         fileDate = nil
         needsResend = false
         resentFor = nil
-        pendingClear = nil
         store = isShown ? LampWritingReviewStore(rootURL: libraryRootURL) : nil
         publish(ranges: [], count: 0, marked: nil, sendsMarks: true)
         guard isShown else { return }
@@ -186,10 +181,6 @@ final class WritingReviewSession: ObservableObject {
     func textChanged(_ text: String) {
         guard text != self.text else { return }
         self.text = text
-        if let marked = pendingClear, let range = LampWritingReview.markedRange(in: marked, of: text) {
-            pendingClear = nil
-            clear(range: range)
-        }
         guard review != nil else { return }
         scheduleDraw()
     }
@@ -212,25 +203,39 @@ final class WritingReviewSession: ObservableObject {
     /// since they were read, a marked passage would otherwise not be found
     /// and the clear would do nothing.
     func clear(range: NSRange) {
+        clear(range: range, in: text)
+    }
+
+    private func clear(range: NSRange, in text: String) {
         guard let writingID else { return }
-        let text = self.text
         WritingReviewTexts.shared.remember(text, for: writingID)
         let known = WritingReviewTexts.shared.known(for: writingID)
         change { $0.carryingToText(text, from: known).clearing(range, in: text) }
     }
 
-    /// Clears the range the visual page marked in the Markdown it sent:
-    /// nothing, where that is not the writing as held here, since its range
-    /// would then fall on other words.
+    /// Clears the range the visual page marked in the Markdown it sent.
+    ///
+    /// Where that is the writing as held here, give or take spelling, the
+    /// clear is made in it. Otherwise the page was ahead (typed into within
+    /// the settle before its text is reported), and the clear is made in
+    /// the text the page sent, the marks carried there first: that text is
+    /// then known, so the next draw and save carry the clear on from it.
+    /// Never held back for a text that typing may already have passed.
     func clear(markedMarkdown marked: String) {
-        guard let range = LampWritingReview.markedRange(in: marked, of: text) else {
-            // Perhaps typed into a moment ago: tried again once the text the
-            // page holds arrives. Another clear replaces it.
-            pendingClear = marked
+        if let range = LampWritingReview.markedRange(in: marked, of: text) {
+            clear(range: range, in: text)
             return
         }
-        pendingClear = nil
-        clear(range: range)
+        let sent = Self.withoutMarkers(marked)
+        guard let range = LampWritingReview.markedRange(in: marked, of: sent) else { return }
+        clear(range: range, in: sent)
+    }
+
+    private static func withoutMarkers(_ marked: String) -> String {
+        let markers: Set<Character> = [
+            LampWritingReview.markStart, LampWritingReview.markEnd, LampWritingReview.markPoint,
+        ]
+        return String(marked.filter { !markers.contains($0) })
     }
 
     func clearAll() {

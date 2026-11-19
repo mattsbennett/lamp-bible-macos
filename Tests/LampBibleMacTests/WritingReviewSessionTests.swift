@@ -56,31 +56,39 @@ struct WritingReviewSessionTests {
     }
 
     /// Codex's case: the ✓ is pressed on text the page holds but has not
-    /// reported yet. The clear waits for that text, and then lands.
-    @Test func aClearAheadOfItsTextLandsWhenTheTextDoes() async throws {
+    /// reported yet, twice, and typing goes on past both before the text is
+    /// reported. Each clear lands, in the text it was made in.
+    @Test func clearsAheadOfTheirTextLandAsTypingGoesOn() async throws {
         let root = try library()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = LampWritingReviewStore(rootURL: root)
-        let new = "One alpha three.\n\nFour beta six."
+        let new = "One alpha three.\n\nFour beta six.\n\nSeven gamma nine."
         try store.save(LampWritingReview(writingID: "w").markingAssistantChange(
-            from: "One two three.\n\nFour five six.", to: new
+            from: "One two three.\n\nFour five six.\n\nSeven eight nine.", to: new
         ))
         let session = WritingReviewSession()
         let following = Task { await session.follow(writingID: "w", text: new, libraryRootURL: root, isShown: true) }
         defer { following.cancel() }
-        try await waitUntil { session.count == 2 }
+        try await waitUntil { session.count == 3 }
 
-        let typed = "One alpha three.\n\nFour beta six. More."
-        let marked = typed.replacingOccurrences(
-            of: "beta", with: "\(LampWritingReview.markStart)beta\(LampWritingReview.markEnd)"
-        )
-        session.clear(markedMarkdown: marked)
-        #expect(try store.review(writingID: "w").highlightedRanges(in: new).count == 2)
-        session.textChanged(typed)
+        func marking(_ word: String, in text: String) -> String {
+            text.replacingOccurrences(
+                of: word, with: "\(LampWritingReview.markStart)\(word)\(LampWritingReview.markEnd)"
+            )
+        }
+        let first = "One alpha three.\n\nFour beta six. More."
+        session.clear(markedMarkdown: marking("beta", in: first))
+        let second = "One alpha three.\n\nFour beta six. More.\n\nSeven gamma nine. And"
+        session.clear(markedMarkdown: marking("alpha", in: second))
+        let reported = "One alpha three.\n\nFour beta six. More.\n\nSeven gamma nine. And more."
+        session.textChanged(reported)
         try await waitUntil {
             let review = try? store.review(writingID: "w")
-            return review?.highlightedRanges(in: typed).map { (typed as NSString).substring(with: $0) } == ["alpha"]
+            let known = WritingReviewTexts.shared.known(for: "w")
+            return review?.carryingToText(reported, from: known).highlightedRanges(in: reported)
+                .map { (reported as NSString).substring(with: $0) } == ["gamma"]
         }
+        try await waitUntil { session.count == 1 }
     }
 
     /// Codex's case: typing into a marked passage, not yet saved, splits it.
