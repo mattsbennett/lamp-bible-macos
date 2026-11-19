@@ -833,6 +833,11 @@ extension LibrarySyncController {
         // it runs. Inverted for the pass: a tombstone names a module path and
         // deleting the set behind it needs the set's own ID.
         let highlightModuleIDs = records.highlightModuleIDs(in: source)
+        // The revision this Mac last had of each writing's document, copied
+        // out for the same reason: what dates a deletion made here.
+        let documentRevisions = (records.sources[source]?.files ?? [:]).compactMapValues { record in
+            record.effectiveRevision
+        }.filter { LampSyncFolderLayout.kind(of: $0.key) == .writingDocument }
         // Built from the sets that *exist*, not from the whole mapping.
         //
         // `forget(path:)` clears a file's record and leaves the set mapping
@@ -902,6 +907,7 @@ extension LibrarySyncController {
                     library: library, store: store, source: source,
                     exports: exports, staging: staging,
                     highlightModuleIDs: highlightModuleIDs, manifest: manifest,
+                    documentRevisions: documentRevisions,
                     passLibrary: passLibrary, learned: learned
                 )
                 gaps = gathered.gaps
@@ -1001,6 +1007,7 @@ extension LibrarySyncController {
         staging: URL,
         highlightModuleIDs: [String: String],
         manifest: LampSyncLibraryManifest,
+        documentRevisions: [String: String],
         passLibrary: LampSyncMacPassLibrary,
         learned: LampSyncMacPassLibrary.Learned
     ) async throws -> GatheredLibrary {
@@ -1190,10 +1197,31 @@ extension LibrarySyncController {
         // Modules removed here. Nothing else records them: a note, a writing
         // and a highlight set each leave a trace in the personal ledger as
         // they go, and a deck in its own, but removing a module leaves none.
-        for (path, removedAt) in LampSyncRemovedModules.load(
-            fromLibraryAt: library.rootURL, fileManager: fileManager
-        ).removedAt {
-            result.gathered.deletedLocally[path] = removedAt
+        // A writing's documents deleted here are written down the same way.
+        // One that is here again, restored or brought back by a newer write
+        // elsewhere, is no longer deleted, and is forgotten. One still gone
+        // is dated never before the server's write of the copy this Mac
+        // deleted, by core's rule, or a slow clock here would lose the
+        // deletion to that write; but only while that copy is still the
+        // server's, since a later write elsewhere is an edit the deletion
+        // never saw, and comes back.
+        let heldDocuments = Set((try? LampWritingDocumentStore(
+            rootURL: LampWritingWorkspace.root(libraryRootURL: library.rootURL, fileManager: fileManager)
+        ).held().keys).map(Array.init) ?? [])
+        let removals = LampSyncRemovedModules.load(fromLibraryAt: library.rootURL, fileManager: fileManager).removedAt
+        let restored = removals.keys.filter { heldDocuments.contains($0) }
+        if !restored.isEmpty {
+            try LampSyncRemovedModules.forget(restored, inLibraryAt: library.rootURL, fileManager: fileManager)
+        }
+        var deletedCopyWrites: [String: Int64] = [:]
+        for member in manifest.members
+        where LampSyncConditionalWrite.namesSameRevision(member.revision, documentRevisions[member.path]) {
+            deletedCopyWrites[member.path] = max(deletedCopyWrites[member.path] ?? 0, member.presentSince ?? 0)
+        }
+        for (path, removedAt) in removals where !heldDocuments.contains(path) {
+            result.gathered.deletedLocally[path] = LampSyncFolderLayout.kind(of: path) == .writingDocument
+                ? LampWritingDocumentStore.deletionTime(of: path, members: deletedCopyWrites, now: removedAt)
+                : removedAt
         }
         // A highlight set's deletion is recorded per item; the file that
         // carried it is the module this source published it under.

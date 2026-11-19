@@ -217,9 +217,14 @@ public enum LampWorkspaceSync {
                 libraryRootURL: libraryRoot,
                 fileManager: fileManager
             )
-            // Deleted elsewhere since this Mac's copy was saved.
+            // Deleted elsewhere since this Mac's copy was saved. In a sync, a
+            // document's deletion is the manifest's, carried out through
+            // `LampWritingDocumentStore`, which keeps an edit made here; the
+            // ledger judges by dates, and a slow clock dates a later edit
+            // before the deletion it would then lose to.
             for (key, file) in try workspaceFiles(in: workspace, fileManager: fileManager)
             where fileLedger.isDeleted(key, modified: file.modified) {
+                if writingFolder == .perFile, !WorkspaceFileLedger.isContextKey(key) { continue }
                 if WorkspaceFileLedger.isContextKey(key) {
                     try WorkspaceContextFileStore.removeSyncedContextFile(
                         at: file.url, libraryRootURL: libraryRoot, fileManager: fileManager

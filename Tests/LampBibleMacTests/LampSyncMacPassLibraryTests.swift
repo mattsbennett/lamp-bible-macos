@@ -454,6 +454,30 @@ extension LampSyncMacPassLibraryTests {
         #expect(kept.count == 1 && kept[0].isKeptCopy && kept[0].text == "edited here")
     }
 
+    /// A document deleted here after the pass gathered is not brought back
+    /// by that pass's download; and one a pass brings into a workspace with
+    /// no ledger yet is one whose removal the next export notices.
+    @Test func aDocumentDeletedHereDuringAPassStaysDeleted() async throws {
+        let (library, root, workspace) = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let pass = passLibrary(library, workspace: workspace)
+        let path = try LampWritingWorkspaceLayout.documentPath(writingID: "w", name: "outline.md")
+        let folder = LampWritingWorkspace.url(libraryRootURL: root, writingID: "w")
+        let outline = folder.appendingPathComponent("outline.md")
+
+        _ = try await pass.install(path, from: try documentFile("first", in: workspace), agreedDigest: nil)
+        try FileManager.default.removeItem(at: outline)
+        _ = try await pass.install(
+            path, from: try documentFile("second", in: workspace),
+            agreedDigest: LampSyncContentRevision.digest(for: Data("first".utf8))
+        )
+        #expect(!FileManager.default.fileExists(atPath: outline.path))
+
+        let exports = workspace.appendingPathComponent("exports-\(UUID().uuidString)", isDirectory: true)
+        try LampWorkspaceSync.exportPortableWorkspaces(from: root, to: exports, writingFolder: .perFile)
+        #expect(LampSyncRemovedModules.load(fromLibraryAt: root).removedAt.keys.contains(path))
+    }
+
     @Test func aReviewDeletedElsewhereIsRemovedHere() async throws {
         let (library, root, workspace) = try makeLibrary()
         defer { try? FileManager.default.removeItem(at: root) }

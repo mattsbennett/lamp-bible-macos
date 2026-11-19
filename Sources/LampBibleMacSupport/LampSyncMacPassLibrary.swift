@@ -624,6 +624,19 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
     /// the workspace's ledger as synced, so that removing it here later is
     /// seen as this Mac's own deletion.
     private func takeInDocument(_ path: String, from url: URL, agreedDigest: String?) throws {
+        // Here at the last sync and gone now: deleted on this Mac since the
+        // pass gathered, which the next pass records. Taken in, it would come
+        // back, and the ledger would forget it was ever deleted.
+        if let document = LampWritingWorkspaceLayout.document(ofPath: path) {
+            let workspace = documentStore.rootURL.appendingPathComponent(document.folder, isDirectory: true)
+            let key = WorkspaceFileLedger.documentKey(document.name)
+            if !fileManager.fileExists(atPath: workspace.appendingPathComponent(document.name).path),
+               WorkspaceFileLedger.load(in: workspace).synced.map({ synced in
+                   synced.keys.contains { WorkspaceFileLedger.normalized($0) == key }
+               }) == true {
+                return
+            }
+        }
         try documentStore.takeIn(
             downloaded: try Data(contentsOf: url), path: path, agreedDigest: agreedDigest, localDevice: Self.deviceName
         )
@@ -639,6 +652,12 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
         let workspace = documentStore.rootURL.appendingPathComponent(document.folder, isDirectory: true)
         let file = workspace.appendingPathComponent(document.name)
         var ledger = WorkspaceFileLedger.load(in: workspace)
+        // A workspace a pass has just made has no baseline yet, and with
+        // none a document removed before the next export would never be
+        // seen to go: the first comparison only records what is there.
+        if ledger.synced == nil, let files = try? LampWorkspaceSync.workspaceFiles(in: workspace, fileManager: fileManager) {
+            ledger.noteChanges(present: files.mapValues(\.modified))
+        }
         ledger.noteSynced(
             WorkspaceFileLedger.documentKey(document.name),
             modified: LampFileModification.date(of: file).map(WorkspaceFileLedger.milliseconds)
