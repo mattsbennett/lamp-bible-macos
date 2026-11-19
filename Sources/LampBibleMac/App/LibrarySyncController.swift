@@ -1137,7 +1137,7 @@ extension LibrarySyncController {
         // also offered for upload.
         let personalLedger = try await library.personalDeletionLedger()
         let reviewDeletions = try LampWritingReviewStore(rootURL: library.rootURL).deletions(
-            deleted: Set((personalLedger.entries[.devotional] ?? [:]).filter { $0.value.deletedAt != nil }.keys),
+            deleted: LampWritingReviewStore.deletedWritings(in: personalLedger),
             held: Set(writings.map(\.id)),
             members: Dictionary(manifest.members.map { ($0.path, $0.presentSince ?? 0) }, uniquingKeysWith: max),
             now: Int64(Date().timeIntervalSince1970 * 1_000)
