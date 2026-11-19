@@ -1654,29 +1654,52 @@ final class LibraryModel: ObservableObject {
 
     @discardableResult
     func savePersonalDevotional(_ devotional: LampDevotional) async throws -> LampDevotional {
-        let previous = devotionals.first { $0.id == devotional.id }?.displayMarkdown
+        let carry = reviewCarry(for: devotional.id)
         let saved = try await library.savePersonalDevotional(devotional)
-        carryReviewMarks(writingID: saved.id, from: previous, to: saved.displayMarkdown)
+        if let carry { carryReviewMarks(carry, to: saved) }
         devotionals = try await library.devotionals()
         await refreshManuscriptNotes(for: saved)
         return saved
     }
 
+    /// What a save needs to carry the writing's review marks across its
+    /// edit, or nil where there is nothing to carry: marks are off, or this
+    /// writing has none. Asked before anything is rendered, so a save with
+    /// no marks does no more work than it did before marks existed.
+    private func reviewCarry(for writingID: String) -> (store: LampWritingReviewStore, previous: LampDevotional)? {
+        guard let store = WritingReviewMarks.store(libraryRootURL: library.rootURL),
+              let url = try? store.url(writingID: writingID),
+              FileManager.default.fileExists(atPath: url.path),
+              let previous = devotionals.first(where: { $0.id == writingID })
+        else { return nil }
+        return (store, previous)
+    }
+
+    /// The last carry asked for, which the next one waits on: carried out of
+    /// order, a later edit would be carried from text the marks had not yet
+    /// reached, and they would be left where they were.
+    private var reviewCarryTask: Task<Void, Never>?
+
     /// Carries the writing's review marks across an edit, so the rest of a
     /// marked passage the writer typed into stays marked and their own words
-    /// do not. Most saves touch no mark, and then nothing is written.
+    /// do not. Off the main actor — both bodies are rendered and the whole
+    /// manuscript compared — and in the order the saves were made. Most
+    /// saves touch no mark, and then nothing is written.
     ///
     /// Every save comes through here, an assistant's draft taken in among
-    /// them; its marks were made as it was taken, in the text it brought,
-    /// and carrying them again across the same change finds them where they
-    /// already are.
-    private func carryReviewMarks(writingID: String, from previous: String?, to current: String) {
-        guard let previous, previous != current,
-              let store = WritingReviewMarks.store(libraryRootURL: library.rootURL),
-              let url = try? store.url(writingID: writingID),
-              FileManager.default.fileExists(atPath: url.path)
-        else { return }
-        _ = try? store.update(writingID: writingID) { $0.carryingWriterEdit(from: previous, to: current) }
+    /// them; its marks were made as it was taken in, and the carry leaves a
+    /// mark already standing where it was made.
+    private func carryReviewMarks(
+        _ carry: (store: LampWritingReviewStore, previous: LampDevotional), to saved: LampDevotional
+    ) {
+        let waitFor = reviewCarryTask
+        reviewCarryTask = Task.detached(priority: .utility) {
+            await waitFor?.value
+            let previous = carry.previous.displayMarkdown
+            let current = saved.displayMarkdown
+            guard previous != current else { return }
+            _ = try? carry.store.update(writingID: saved.id) { $0.carryingWriterEdit(from: previous, to: current) }
+        }
     }
 
     /// Re-splits the writing across any deck whose notes follow it, and reports
