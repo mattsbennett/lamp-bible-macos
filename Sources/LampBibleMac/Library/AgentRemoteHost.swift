@@ -80,6 +80,7 @@ final class AgentRemoteHost: ObservableObject {
     private weak var libraryModel: LibraryModel?
 
     private var settingsObserver: AnyCancellable?
+    private var pull: (@MainActor () async -> Void)?
 
     private var isAllowed: Bool {
         AIFeatures.isEnabledNow && UserDefaults.standard.bool(forKey: Self.enabledKey)
@@ -87,8 +88,11 @@ final class AgentRemoteHost: ObservableObject {
 
     /// Given the library at launch, and from then on follows the settings:
     /// on exactly while the AI switch and this host's own are both on.
-    func attach(_ libraryModel: LibraryModel) {
+    /// `pull` takes in what sync has and reads the library again, for a
+    /// writing turn asked about a copy newer than this Mac's.
+    func attach(_ libraryModel: LibraryModel, pull: @escaping @MainActor () async -> Void) {
         self.libraryModel = libraryModel
+        self.pull = pull
         guard settingsObserver == nil else { return }
         settingsObserver = NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
             .receive(on: DispatchQueue.main)
@@ -678,7 +682,10 @@ final class AgentRemoteHost: ObservableObject {
         }
         let open = peer.open?.chat == chat ? peer.open : open(chatID, for: peer, requestID: nil)
         guard let open else { return }
-        await run(text, reading: message.reading, selection: message.selection, in: open, requestID: message.requestID, peer: peer)
+        await run(
+            text, reading: message.reading, selection: message.selection, writingRevision: message.writingRevision,
+            in: open, requestID: message.requestID, peer: peer
+        )
     }
 
     private func startChat(_ message: LampAgentRemoteMessage, from peer: Peer) async {
@@ -695,8 +702,12 @@ final class AgentRemoteHost: ObservableObject {
         guard let root = libraryRootURL else { return }
         let chat: LampAgentRemoteHosting.Chat
         if newChat.kind == LampAgentRemoteChatSummary.writing {
-            guard let writingID = newChat.writingID, writing(writingID) != nil else {
-                send(.failed(LampAgentRemoteFailure.notFound, "That writing isn't on this Mac.", requestID: message.requestID), to: peer)
+            guard let writingID = newChat.writingID,
+                  await isCurrent(writingID, revision: newChat.writingRevision, requestID: message.requestID, peer: peer)
+            else {
+                if newChat.writingID == nil {
+                    send(.failed(LampAgentRemoteFailure.notFound, "That writing isn't on this Mac.", requestID: message.requestID), to: peer)
+                }
                 return
             }
             chat = .writing(writingID)
@@ -705,7 +716,10 @@ final class AgentRemoteHost: ObservableObject {
         }
         // A writing has one chat: asking again goes on in it.
         if let open = peer.open, open.chat == chat {
-            await run(first, reading: newChat.reading, selection: newChat.selection, in: open, requestID: message.requestID, peer: peer)
+            await run(
+                first, reading: newChat.reading, selection: newChat.selection, writingRevision: newChat.writingRevision,
+                in: open, requestID: message.requestID, peer: peer
+            )
             return
         }
         let workspace = workspace(of: chat, root: root)
@@ -713,7 +727,7 @@ final class AgentRemoteHost: ObservableObject {
             if case .writing(let id) = chat {
                 // The workspace made before anything is chosen in it, as the
                 // writing's pane makes it on opening.
-                guard try await prepareWriting(id, requestID: message.requestID, peer: peer) else { return }
+                guard try await prepareWriting(id, revision: newChat.writingRevision, requestID: message.requestID, peer: peer) else { return }
             }
             guard !Task.isCancelled, mayAct(peer) else { return }
             // The provider chosen is the chat's own, pinned as the pane pins
@@ -737,7 +751,10 @@ final class AgentRemoteHost: ObservableObject {
             // The snapshot before anything streams, so every event after it
             // is for a chat the phone already holds.
             let open = follow(OpenChat(chat: chat, workspace: workspace, model: model), summary: summary, for: peer, requestID: message.requestID)
-            await run(first, reading: newChat.reading, selection: newChat.selection, in: open, requestID: message.requestID, peer: peer)
+            await run(
+                first, reading: newChat.reading, selection: newChat.selection, writingRevision: newChat.writingRevision,
+                in: open, requestID: message.requestID, peer: peer
+            )
         } catch {
             send(.failed(LampAgentRemoteFailure.needsSetup, error.localizedDescription, requestID: message.requestID), to: peer)
         }
@@ -749,7 +766,7 @@ final class AgentRemoteHost: ObservableObject {
     /// before it goes, since preparing it waits, and the device may have been
     /// forgotten or the host turned off meanwhile.
     private func run(
-        _ text: String, reading: LampAgentRemoteReading?, selection: String?,
+        _ text: String, reading: LampAgentRemoteReading?, selection: String?, writingRevision: Int?,
         in open: OpenChat, requestID: UUID?, peer: Peer
     ) async {
         guard !open.model.isRunning else {
@@ -771,8 +788,9 @@ final class AgentRemoteHost: ObservableObject {
             }
             prompt = await contextualPrompt(text, reading: reading)
         case .writing(let id):
-            guard let written = await writingPrompt(text, selection: selection, writingID: id, in: open, requestID: requestID, peer: peer)
-            else { return }
+            guard let written = await writingPrompt(
+                text, selection: selection, writingID: id, revision: writingRevision, in: open, requestID: requestID, peer: peer
+            ) else { return }
             prompt = written
         }
         guard !Task.isCancelled, mayAct(peer), let device = peer.deviceID else { return }
@@ -811,9 +829,12 @@ final class AgentRemoteHost: ObservableObject {
     ///
     /// Never while a turn runs: levelling the draft then would take that
     /// turn's work in under no turn, and an undo of it would leave it behind.
-    private func prepareWriting(_ id: String, requestID: UUID?, peer: Peer) async throws -> Bool {
+    private func prepareWriting(_ id: String, revision: Int?, requestID: UUID?, peer: Peer) async throws -> Bool {
         let chatID = LampAgentRemoteHosting.Chat.writing(id).id
-        guard !Task.isCancelled, mayAct(peer) else { return false }
+        guard !Task.isCancelled, mayAct(peer),
+              await isCurrent(id, revision: revision, requestID: requestID, peer: peer),
+              !Task.isCancelled, mayAct(peer)
+        else { return false }
         guard let libraryModel, let writing = writing(id) else {
             send(.failed(LampAgentRemoteFailure.notFound, "That writing isn't on this Mac.", requestID: requestID, chatID: chatID), to: peer)
             return false
@@ -844,14 +865,47 @@ final class AgentRemoteHost: ObservableObject {
         return !Task.isCancelled && mayAct(peer)
     }
 
+    /// Whether this Mac holds the writing at least as new as the copy the
+    /// phone asked about. Where it is older or missing, what sync has is
+    /// taken in first: the phone saves and syncs before it asks, but this
+    /// Mac only sees that at its own next pass. Still behind after that, the
+    /// turn is refused rather than run on a text the writer has since
+    /// changed, whose result would sync back over their edits. False,
+    /// having said why, where it is behind or not here.
+    private func isCurrent(_ id: String, revision: Int?, requestID: UUID?, peer: Peer) async -> Bool {
+        let chatID = LampAgentRemoteHosting.Chat.writing(id).id
+        // A copy here that was never dated cannot be compared, and goes on
+        // as a turn always has.
+        func behind() -> Bool {
+            guard let held = writing(id) else { return revision != nil }
+            return held.lastModified.map {
+                LampAgentRemoteWritingRevision.hostIsBehind(host: $0, device: revision)
+            } ?? false
+        }
+        if behind(), let pull { await pull() }
+        if behind() {
+            send(.failed(
+                LampAgentRemoteFailure.writingBehind,
+                "This Mac doesn't have your latest edits to this writing yet.",
+                requestID: requestID, chatID: chatID
+            ), to: peer)
+            return false
+        }
+        guard writing(id) != nil else {
+            send(.failed(LampAgentRemoteFailure.notFound, "That writing isn't on this Mac.", requestID: requestID, chatID: chatID), to: peer)
+            return false
+        }
+        return true
+    }
+
     /// A writing turn's message as the provider is sent it: with the words
     /// selected on the phone, as the visual editor would show them, and what
     /// is still marked for the writer to read.
     private func writingPrompt(
-        _ text: String, selection: String?, writingID: String, in open: OpenChat, requestID: UUID?, peer: Peer
+        _ text: String, selection: String?, writingID: String, revision: Int?, in open: OpenChat, requestID: UUID?, peer: Peer
     ) async -> String? {
         do {
-            guard try await prepareWriting(writingID, requestID: requestID, peer: peer) else { return nil }
+            guard try await prepareWriting(writingID, revision: revision, requestID: requestID, peer: peer) else { return nil }
         } catch {
             send(.failed(LampAgentRemoteFailure.needsSetup, error.localizedDescription, requestID: requestID, chatID: open.id), to: peer)
             return nil

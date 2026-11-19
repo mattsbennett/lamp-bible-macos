@@ -385,6 +385,12 @@ final class LibraryModel: ObservableObject {
         Task { await refreshLibrary() }
     }
 
+    /// `refresh`, for a caller that goes on only once the library is read
+    /// again: a paired phone's turn on a writing sync has just brought in.
+    func refreshNow() async {
+        await refreshLibrary()
+    }
+
     /// Whether the AI features are shown, working it out where nothing is
     /// stored (`AIFeatures`), so a value an older Lamp dropped from the
     /// shared preferences is worked out again rather than read as off.

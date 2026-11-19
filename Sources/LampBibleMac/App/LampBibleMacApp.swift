@@ -86,7 +86,19 @@ struct LampBibleMacApp: App {
                 .modifier(WritingImportReviewOpener())
                 // Chats from a paired phone, once there is a library to
                 // serve them from.
-                .onAppear { agentRemoteHost.attach(libraryModel) }
+                .onAppear {
+                    agentRemoteHost.attach(libraryModel) { [syncController, libraryModel] in
+                        // A pass already running is let finish, then one
+                        // run for this, so what it brings in is sure to be
+                        // what the phone saved.
+                        let started = Date()
+                        while syncController.isSyncing, Date().timeIntervalSince(started) < 60 {
+                            try? await Task.sleep(for: .milliseconds(250))
+                        }
+                        await syncController.sync(library: libraryModel.library)
+                        await libraryModel.refreshNow()
+                    }
+                }
                 .environmentObject(libraryModel)
                 .environmentObject(syncController)
                 .environmentObject(scrollLink)
