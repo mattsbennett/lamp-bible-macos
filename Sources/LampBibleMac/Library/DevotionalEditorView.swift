@@ -1091,6 +1091,13 @@ struct DevotionalEditorView: View {
             LampPendingWrites.shared.unregister(pendingWritesID)
         }
         .focusedSceneValue(\.writingFind, find)
+        // ⌘S lives in the File menu now, not on a toolbar button: see
+        // `WritingSaveKey`. What it saves is whatever is open here — the
+        // writing, or the workspace file in front of it.
+        .focusedSceneValue(
+            \.writingSave,
+            WritingSave(canSave: activeDocumentCanSave, save: saveActiveDocument)
+        )
         .onChange(of: activeFindTarget.map(ObjectIdentifier.init), initial: true) {
             find.attach(activeFindTarget)
         }
@@ -2014,23 +2021,12 @@ struct DevotionalEditorView: View {
 
     @ToolbarContentBuilder
     private var editorToolbar: some ToolbarContent {
-        ToolbarItem(placement: .navigation) {
-            // Named, as the side pane's buttons are: four unlabelled icons
-            // on the left were guessed at.
-            Button(action: saveActiveDocument) {
-                Label {
-                    Text("Save")
-                } icon: {
-                    Image(nsImage: Self.saveIcon)
-                }
-            }
-            .fittingToolbarLabel()
-            .accessibilityLabel("Save")
-            .disabled(!activeDocumentCanSave)
-            .keyboardShortcut("s", modifiers: .command)
-            .help(activeSaveHelp)
-        }
-
+        // No Save button. The writing saves itself 1.5 seconds after a
+        // change, a workspace file 900ms after one, and everything on the
+        // way out; the status bar under the writing says which of those
+        // states it is in, and the conflict buttons live there too. ⌘S is
+        // kept as a File menu command (`writingSave`), because the shortcut
+        // is a reflex and one that beeps reads as work not saved.
         ToolbarItem(placement: .navigation) {
             Button {
                 showActiveRevisionHistory()
@@ -2198,15 +2194,6 @@ struct DevotionalEditorView: View {
             ?? WorkspaceDocumentTitle.formatted(document.relativePath)
     }
 
-    private var activeSaveHelp: String {
-        if let document = activeWorkspaceDocument {
-            if document.hasExternalConflict { return "Resolve this file conflict before saving" }
-            return document.isDirty ? "Save \(title(of: document))" : "This file is up to date"
-        }
-        return hasSavableContent
-            ? "Save this writing"
-            : "Add content before saving"
-    }
 
     private var agentContextDocument: String {
         WritingChatTurns.contextDocument(
@@ -3419,39 +3406,6 @@ struct DevotionalEditorView: View {
         LampWritingCategory.kindToStore(shown: category, held: originalCategory)
     }
 
-    private static let saveIcon: NSImage = {
-        let image = NSImage(size: NSSize(width: 16, height: 16), flipped: false) { rect in
-            NSColor.labelColor.setStroke()
-
-            let outline = NSBezierPath(
-                roundedRect: rect.insetBy(dx: 1, dy: 1),
-                xRadius: 2,
-                yRadius: 2
-            )
-            outline.lineWidth = 1.5
-            outline.stroke()
-
-            let label = NSBezierPath(
-                roundedRect: NSRect(x: 3, y: 2.5, width: 10, height: 5),
-                xRadius: 1,
-                yRadius: 1
-            )
-            label.lineWidth = 1.25
-            label.stroke()
-
-            let shutter = NSBezierPath(
-                roundedRect: NSRect(x: 4, y: 9, width: 8, height: 4.5),
-                xRadius: 0.75,
-                yRadius: 0.75
-            )
-            shutter.lineWidth = 1.25
-            shutter.stroke()
-            return true
-        }
-        image.isTemplate = true
-        image.accessibilityDescription = "Save"
-        return image
-    }()
 }
 
 /// Restarts the autosave countdown whenever the document changes, so the save lands

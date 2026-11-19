@@ -11,6 +11,23 @@ private struct WritingFindKey: FocusedValueKey {
     typealias Value = WritingFindController
 }
 
+/// ⌘S in the writing editor.
+///
+/// The writing saves itself — 1.5 seconds after a change, 900ms for a
+/// workspace file, and everything on the way out — so this is not how a
+/// writing is kept. It is here because ⌘S is a reflex, and a shortcut that
+/// beeps reads as a writing that was not saved. The editor's status bar is
+/// what actually answers the question.
+struct WritingSaveKey: FocusedValueKey {
+    typealias Value = WritingSave
+}
+
+/// What ⌘S does in the editor, and whether there is anything for it to do.
+struct WritingSave {
+    let canSave: Bool
+    let save: () -> Void
+}
+
 private struct ImportStudyDataActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
@@ -84,6 +101,11 @@ extension FocusedValues {
         get { self[WritingFindKey.self] }
         set { self[WritingFindKey.self] = newValue }
     }
+
+    var writingSave: WritingSave? {
+        get { self[WritingSaveKey.self] }
+        set { self[WritingSaveKey.self] = newValue }
+    }
 }
 
 struct LampBibleCommands: Commands {
@@ -95,6 +117,7 @@ struct LampBibleCommands: Commands {
     @FocusedValue(\.goToPassageAction) private var goToPassage
     @FocusedValue(\.newWritingAction) private var newWriting
     @FocusedValue(\.writingFind) private var writingFind
+    @FocusedValue(\.writingSave) private var writingSave
     @FocusedObject private var scrollLink: ReaderScrollLink?
 
     let softwareUpdater: SoftwareUpdater
@@ -153,6 +176,21 @@ struct LampBibleCommands: Commands {
                 openWindow(id: "add-to-library")
             }
             .keyboardShortcut("m", modifiers: [.command, .shift])
+
+            Divider()
+
+            // Writing saves itself — 1.5 seconds after a change, 900ms for a
+            // workspace file, and everything on the way out — so this is not
+            // how a writing is kept; the editor's status bar is what says so.
+            // It is here because ⌘S is a reflex, and a shortcut that beeps
+            // reads as work not saved.
+            //
+            // In this group rather than `CommandGroup(replacing: .saveItem)`:
+            // that placement rendered nothing at all in a running copy, since
+            // the app is not document-based and has no save item to replace.
+            Button("Save") { writingSave?.save() }
+                .keyboardShortcut("s", modifiers: .command)
+                .disabled(writingSave?.canSave != true)
         }
 
         // Only a writing window has a find bar, so elsewhere these stay off.
