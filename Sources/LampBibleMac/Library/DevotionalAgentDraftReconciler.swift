@@ -448,7 +448,12 @@ struct DevotionalAgentDraftReconciler {
     }
 
     private func markAssistantChange(from writing: String, to draft: String, turnID: UUID?) {
-        updateReview { $0.markingAssistantChange(from: writing, to: draft, turnID: turnID) }
+        // What is anchored in another version the editor has seen — the last
+        // save, say, while the writer had typed on — is carried to the text
+        // the agent changed first, and the agent's change carries it on.
+        let known = WritingReviewTexts.shared.known(for: writingID)
+        updateReview { $0.carryingToText(writing, from: known).markingAssistantChange(from: writing, to: draft, turnID: turnID) }
+        WritingReviewTexts.shared.remember(draft, for: writingID)
     }
 
     /// Changes the writing's marks, if they are kept. Never in the way of

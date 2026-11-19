@@ -4,6 +4,33 @@ import LampCore
 import LampBibleMacSupport
 #endif
 
+/// The versions of each writing this Mac has lately seen, by
+/// `LampWritingReview.digest(of:)`: the editor's text as it settles, and
+/// each body saved. A mark is anchored in a text and can only be carried
+/// from that text; a clear made while the editor holds text not yet saved
+/// anchors what is left there, and the save that follows carries from the
+/// last saved body. Kept here, every carry can take each mark from its own.
+@MainActor
+final class WritingReviewTexts {
+    static let shared = WritingReviewTexts()
+    /// How many versions of a writing are kept: enough to span a clear and
+    /// the saves after it, few enough that a long manuscript costs little.
+    static let kept = 24
+
+    private var texts: [String: [(digest: String, text: String)]] = [:]
+
+    func remember(_ text: String, for writingID: String) {
+        let digest = LampWritingReview.digest(of: text)
+        var kept = texts[writingID, default: []].filter { $0.digest != digest }
+        kept.append((digest, text))
+        texts[writingID] = Array(kept.suffix(Self.kept))
+    }
+
+    func known(for writingID: String) -> [String: String] {
+        Dictionary(texts[writingID, default: []].map { ($0.digest, $0.text) }, uniquingKeysWith: { _, last in last })
+    }
+}
+
 /// The review marks of the writing an editor has open (`LampWritingReview`):
 /// what is drawn, how many passages are still to read, and the writer's
 /// clears. One per editor, held apart from the editor's view so that none of
@@ -33,10 +60,6 @@ final class WritingReviewSession: ObservableObject {
     private var store: LampWritingReviewStore?
     private var review: LampWritingReview?
     private var text = ""
-    /// The text the marks were last read against, which a clear first
-    /// carries them from: the writer may have typed into a marked passage
-    /// since, before the save that would carry it.
-    private var basis = ""
     private var fileDate: Date?
     private var settleTask: Task<Void, Never>?
     private var drawGeneration = 0
@@ -60,7 +83,7 @@ final class WritingReviewSession: ObservableObject {
         drawGeneration += 1
         self.writingID = writingID
         self.text = text
-        basis = text
+        WritingReviewTexts.shared.remember(text, for: writingID)
         review = nil
         fileDate = nil
         needsResend = false
@@ -102,8 +125,11 @@ final class WritingReviewSession: ObservableObject {
     /// since they were read, a marked passage would otherwise not be found
     /// and the clear would do nothing.
     func clear(range: NSRange) {
-        let text = self.text, basis = self.basis
-        change { $0.carryingWriterEdit(from: basis, to: text).clearing(range, in: text) }
+        guard let writingID else { return }
+        let text = self.text
+        WritingReviewTexts.shared.remember(text, for: writingID)
+        let known = WritingReviewTexts.shared.known(for: writingID)
+        change { $0.carryingToText(text, from: known).clearing(range, in: text) }
     }
 
     /// Clears the range the visual page marked in the Markdown it sent:
@@ -122,48 +148,39 @@ final class WritingReviewSession: ObservableObject {
 
     /// Changes the marks file off the main actor — another writer can hold
     /// its lock for as long as a long manuscript takes to compare — and
-    /// takes up what was written.
+    /// takes up what was written, with the file's date read under the same
+    /// lock. Counted as a pending write, so quitting waits for a clear.
     private func change(_ edit: @escaping @Sendable (LampWritingReview) -> LampWritingReview) {
         guard let store, let writingID else { return }
-        let generation = drawGeneration
+        LampPendingWrites.shared.begin()
         Task { [weak self] in
-            let written = await Task.detached(priority: .userInitiated) { () -> (LampWritingReview, Date?)? in
-                guard let review = try? store.update(writingID: writingID, edit) else { return nil }
-                return (review, Self.modified(store, writingID))
+            let written = await Task.detached(priority: .userInitiated) {
+                try? store.updating(writingID: writingID, edit)
             }.value
+            LampPendingWrites.shared.end()
             // Not for a writing left since, nor once marks were turned off.
-            guard let self, let written, self.drawGeneration >= generation,
-                  self.writingID == writingID, self.store != nil else { return }
-            self.apply(written.0, date: written.1)
+            guard let self, let written, self.writingID == writingID, self.store != nil else { return }
+            self.apply(written.review, date: written.modified)
         }
     }
 
     /// Reads the marks file again if its date has moved since it was last
-    /// read. Off the main actor, for the same reason as `change`. The date
-    /// is taken before the read, so a write landing between the two is
-    /// read on the next check rather than taken for the one just read.
+    /// read: the record and its date together, under the file's lock, so a
+    /// write can never be taken for the one before it. Off the main actor,
+    /// for the same reason as `change`.
     private func reloadIfMoved() async {
         guard let store, let writingID else { return }
-        let known = fileDate
-        let read = await Task.detached(priority: .utility) { () -> (LampWritingReview?, Date?)? in
-            let date = Self.modified(store, writingID)
-            guard date != known else { return nil }
-            return (try? store.review(writingID: writingID), date)
+        let read = await Task.detached(priority: .utility) {
+            try? store.snapshot(writingID: writingID)
         }.value
-        guard let read, self.writingID == writingID, !Task.isCancelled else { return }
-        apply(read.0, date: read.1)
-    }
-
-    private nonisolated static func modified(_ store: LampWritingReviewStore, _ writingID: String) -> Date? {
-        guard let url = try? store.url(writingID: writingID) else { return nil }
-        return (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        guard let read, read.modified != fileDate, self.writingID == writingID, !Task.isCancelled else { return }
+        apply(read.modified == nil ? nil : read.review, date: read.modified)
     }
 
     private func apply(_ review: LampWritingReview?, date: Date?) {
         fileDate = date
         guard review != self.review else { return }
         self.review = review
-        basis = text
         draw(sendsMarks: true)
     }
 
@@ -172,6 +189,7 @@ final class WritingReviewSession: ObservableObject {
         settleTask = Task { [weak self] in
             try? await Task.sleep(for: Self.settleDelay)
             guard !Task.isCancelled, let self else { return }
+            if let writingID = self.writingID { WritingReviewTexts.shared.remember(self.text, for: writingID) }
             self.draw(sendsMarks: self.needsResend)
         }
     }

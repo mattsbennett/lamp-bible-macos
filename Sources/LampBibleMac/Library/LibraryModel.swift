@@ -1693,6 +1693,9 @@ final class LibraryModel: ObservableObject {
         _ carry: (store: LampWritingReviewStore, previous: LampDevotional), to saved: LampDevotional
     ) {
         let waitFor = reviewCarryTask
+        // The versions the editor has seen, a clear's among them: each mark
+        // is carried from the text it is anchored in.
+        let known = WritingReviewTexts.shared.known(for: saved.id)
         // Counted as a write, so quitting waits for it: the save has
         // finished, and a carry left behind would leave the new body with
         // the old marks.
@@ -1702,9 +1705,14 @@ final class LibraryModel: ObservableObject {
             let previous = carry.previous.displayMarkdown
             let current = saved.displayMarkdown
             if previous != current {
-                _ = try? carry.store.update(writingID: saved.id) { $0.carryingWriterEdit(from: previous, to: current) }
+                var texts = known
+                texts[LampWritingReview.digest(of: previous)] = previous
+                _ = try? carry.store.update(writingID: saved.id) { $0.carryingToText(current, from: texts) }
             }
-            await MainActor.run { LampPendingWrites.shared.end() }
+            await MainActor.run {
+                WritingReviewTexts.shared.remember(current, for: saved.id)
+                LampPendingWrites.shared.end()
+            }
         }
     }
 
