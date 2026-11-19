@@ -68,4 +68,20 @@ struct WritingReviewSessionTests {
         #expect(session.count == 0)
         #expect(sent == [nil])
     }
+
+    @Test func aPlaceInLineIsFilledInOrderAndGivingUpMovesTheLineOn() async {
+        let log = Log()
+        let first = WritingReviewWork.shared.reserve()
+        WritingReviewWork.shared.run { await log.add("second") }
+        let third = WritingReviewWork.shared.reserve()
+        third.giveUp()
+        first.fill { await log.add("first") }
+        await WritingReviewWork.shared.drained()
+        #expect(await log.entries == ["first", "second"])
+    }
+
+    private actor Log {
+        var entries: [String] = []
+        func add(_ entry: String) { entries.append(entry) }
+    }
 }

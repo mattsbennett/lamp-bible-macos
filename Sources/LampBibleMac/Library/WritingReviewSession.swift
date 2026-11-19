@@ -72,13 +72,29 @@ final class WritingReviewWork {
         }
     }
 
+    /// How long a place in line waits to be filled before the line moves
+    /// on without it: far past any save, and short of a queue stopped for
+    /// good by a place nobody fills.
+    static let reservationPatience: Duration = .seconds(120)
+
     func reserve() -> Reservation {
         let (stream, continuation) = AsyncStream<@Sendable () async -> Void>.makeStream()
         run {
-            for await work in stream {
-                await work()
-                break
+            let work = await withTaskGroup(of: (@Sendable () async -> Void)?.self) { group in
+                group.addTask {
+                    for await work in stream { return work }
+                    return nil
+                }
+                group.addTask {
+                    try? await Task.sleep(for: Self.reservationPatience)
+                    return nil
+                }
+                let first = await group.next() ?? nil
+                group.cancelAll()
+                continuation.finish()
+                return first
             }
+            await work?()
         }
         return Reservation(continuation: continuation)
     }
