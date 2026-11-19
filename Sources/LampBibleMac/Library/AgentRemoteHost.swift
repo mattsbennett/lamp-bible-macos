@@ -944,11 +944,16 @@ final class AgentRemoteHost: ObservableObject {
             documentPath: "draft.md", documentName: writing.title, isVisual: false,
             selectedText: selection?.trimmingCharacters(in: .whitespacesAndNewlines)
         )
+        // Read off the main actor: the review file's lock can be held by a
+        // carry or a marking comparing whole drafts, and waiting for it here
+        // would hold up the Mac's own windows.
+        let store = WritingReviewMarks.store(libraryRootURL: root)
+        let workspace = open.workspace
+        let (review, draft) = await Task.detached(priority: .userInitiated) {
+            (try? store?.review(writingID: writingID), try? DevotionalAgentWorkspaceStore.readDraft(from: workspace))
+        }.value
         return WritingChatTurns.prompt(
-            for: text,
-            focus: focus,
-            review: try? WritingReviewMarks.store(libraryRootURL: root)?.review(writingID: writingID),
-            writing: (try? DevotionalAgentWorkspaceStore.readDraft(from: open.workspace)) ?? writing.displayMarkdown
+            for: text, focus: focus, review: review ?? nil, writing: draft ?? writing.displayMarkdown
         )
     }
 
