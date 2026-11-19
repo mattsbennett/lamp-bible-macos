@@ -467,10 +467,12 @@ extension LampSyncMacPassLibraryTests {
 
         _ = try await pass.install(path, from: try documentFile("first", in: workspace), agreedDigest: nil)
         try FileManager.default.removeItem(at: outline)
-        _ = try await pass.install(
-            path, from: try documentFile("second", in: workspace),
-            agreedDigest: LampSyncContentRevision.digest(for: Data("first".utf8))
-        )
+        let second = try documentFile("second", in: workspace)
+        await #expect(throws: LampSyncMacPassLibrary.PassError.deletedHereDuringThePass(path)) {
+            _ = try await pass.install(
+                path, from: second, agreedDigest: LampSyncContentRevision.digest(for: Data("first".utf8))
+            )
+        }
         #expect(!FileManager.default.fileExists(atPath: outline.path))
 
         let exports = workspace.appendingPathComponent("exports-\(UUID().uuidString)", isDirectory: true)

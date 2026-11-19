@@ -38,6 +38,7 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
         case unsupported(String)
         case refusedToDeleteACollection(String)
         case missingRemoteFile(String)
+        case deletedHereDuringThePass(String)
 
         public var errorDescription: String? {
             switch self {
@@ -47,6 +48,8 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
                 "\(path) holds your own writing, so sync will not delete it here."
             case .missingRemoteFile(let path):
                 "\(path) is named by the library but is not on the server."
+            case .deletedHereDuringThePass(let path):
+                "\(path) was deleted on this Mac while sync was running, so it was left deleted."
             }
         }
     }
@@ -626,7 +629,9 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
     private func takeInDocument(_ path: String, from url: URL, agreedDigest: String?) throws {
         // Here at the last sync and gone now: deleted on this Mac since the
         // pass gathered, which the next pass records. Taken in, it would come
-        // back, and the ledger would forget it was ever deleted.
+        // back, and the ledger would forget it was ever deleted. Thrown, not
+        // passed over: the pass would record the server's revision as taken,
+        // and the deletion would then be dated after a write it never saw.
         if let document = LampWritingWorkspaceLayout.document(ofPath: path) {
             let workspace = documentStore.rootURL.appendingPathComponent(document.folder, isDirectory: true)
             let key = WorkspaceFileLedger.documentKey(document.name)
@@ -634,7 +639,7 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
                WorkspaceFileLedger.load(in: workspace).synced.map({ synced in
                    synced.keys.contains { WorkspaceFileLedger.normalized($0) == key }
                }) == true {
-                return
+                throw PassError.deletedHereDuringThePass(path)
             }
         }
         try documentStore.takeIn(
