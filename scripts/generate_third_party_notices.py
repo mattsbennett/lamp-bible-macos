@@ -112,10 +112,10 @@ ACCEPTED_GAPS: dict[str, str] = {
 # A rebuild of the iOS editor that adds, removes or upgrades no package then passes with no fresh
 # review, because rebuilt bytes cannot leave a package unlicensed. A package that does move stops
 # the run, which is exactly when EDITOR_NOTICE_FILES needs a file.
-MAC_EDITOR_SHA256 = "8c6504f149a86e4064a332b04306d6529dd202f1ff1ff34ff4fc13ae74b37a95"
-MAC_EDITOR_FROM = "fbb2a7f"
+MAC_EDITOR_SHA256 = "f059c205f1ca3ae3e89b762f3fccafe36f65c6beda0a33bf0bcbfa0023de422c"
+MAC_EDITOR_FROM = "ca60d74"
 MAC_EDITOR_REVIEW = (
-    "2026-11-19: the Mac's copy is the iOS editor's script built at fbb2a7f — which sends a "
+    "2026-11-19: the Mac's copy is the iOS editor's script built at ca60d74 — which sends a "
     "review clear's unmarked page text beside the marked, keeps its markers out of links, gives "
     "each marker the formatting under which the page's writing of what is round it is unchanged, "
     "and sets a page's mode without reporting an edit — inside the "
@@ -125,7 +125,7 @@ MAC_EDITOR_REVIEW = (
     "nothing here. The difference between the two bundles is the stylesheet alone: the Mac does "
     "not take the redesign's CSS, nor the phone's placing of a mark's clear button (eeae228), and "
     "draws the review marks from its own injected writing-page sheet. No package moved between "
-    "c98d4f3 and fbb2a7f."
+    "c98d4f3 and ca60d74."
 )
 
 # Resolved but not linked into anything that ships.
