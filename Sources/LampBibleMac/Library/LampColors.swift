@@ -216,6 +216,13 @@ enum LampMetrics {
     static let listCaptionSize: CGFloat = 11.5
 }
 
+/// How long the app's own movements take, where something else has to be
+/// timed against one of them.
+enum LampMotion {
+    /// A column or pane beside a page arriving or leaving.
+    static let paneReveal = 0.2
+}
+
 extension Animation {
     /// A column or pane beside a page arriving or leaving: a writing list, a
     /// details inspector, an assistant.
@@ -227,7 +234,51 @@ extension Animation {
     /// footnote snapped them open where pressing the button for them had not.
     /// A pane that moves in one place and jumps in another reads as a glitch
     /// rather than a style, so the toggles name one animation.
-    static let lampPaneReveal = Animation.easeInOut(duration: 0.2)
+    ///
+    /// **Attach it to the value, not only to the change.** These panes are
+    /// shown by flags kept in `@AppStorage`, and a defaults change is
+    /// published on its own turn of the run loop rather than inside the
+    /// `withAnimation` that made it — so the writing list went on appearing
+    /// from nowhere with the animation written right there around the
+    /// toggle. `.animation(.lampPaneReveal, value:)` on the column that
+    /// moves animates it whatever wrote the flag.
+    static let lampPaneReveal = Animation.easeInOut(duration: LampMotion.paneReveal)
+}
+
+/// A column beside a page, revealed and hidden by its own width.
+///
+/// `Animatable`, so SwiftUI interpolates the width and lays the row out again
+/// on each frame — the page beside it then moves with the column, which is
+/// what reads as a sidebar sliding.
+///
+/// **A column put into and taken out of the hierarchy does not slide**, even
+/// inside `withAnimation`. Measured in the app on 2026-11-18: the transaction
+/// interpolated 29 times while the page's content moved in exactly one step,
+/// because the conditional column animates only its own fade and a
+/// `GeometryReader` in the page beside it is handed the final size at once.
+/// What the eye saw was the page jumping and the list blinking out — the
+/// owner's "the writing list sidebar still doesn't animate".
+struct LampPaneWidth: ViewModifier, Animatable {
+    var width: Double
+
+    var animatableData: Double {
+        get { width }
+        set { width = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .frame(width: max(width, 0))
+            .clipped()
+    }
+}
+
+extension View {
+    /// Reveals or hides this column by animating its width, inside an
+    /// animated transaction. See `LampPaneWidth`.
+    func lampPaneWidth(_ width: Double) -> some View {
+        modifier(LampPaneWidth(width: width))
+    }
 }
 
 extension Color {

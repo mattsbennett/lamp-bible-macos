@@ -508,11 +508,14 @@ struct WritingEditorWindow: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            if showsLibrary {
+            // By width, so the editor beside it moves with it rather than
+            // jumping once the list has gone (see `LampPaneWidth`).
+            HStack(spacing: 0) {
                 library
                     .frame(width: 304)
                 Divider()
             }
+            .lampPaneWidth(showsLibrary ? 305 : 0)
             // A new editor for each writing: the one going saves what it has
             // as it goes (`flushPendingSaves`), and nothing of it is carried
             // into the next.
@@ -524,6 +527,11 @@ struct WritingEditorWindow: View {
                     dismissWindow()
                 })
         }
+        // Attached to the value, not left to the toggle's `withAnimation`:
+        // `showsLibrary` lives in defaults, whose change is published on its
+        // own turn of the run loop, outside that transaction. See
+        // `Animation.lampPaneReveal`.
+        .animation(.lampPaneReveal, value: showsLibrary)
         .toolbar {
             ToolbarItem(placement: .navigation) {
                 Button(showsLibrary ? "Hide Writing List" : "Show Writing List", systemImage: "sidebar.left") {
@@ -675,6 +683,9 @@ struct DevotionalEditorView: View {
     @AppStorage("agent.moduleAccess.scope") private var agentModuleAccessScope = AgentModuleAccessScope.enabledModules.rawValue
     @AppStorage("agent.moduleAccess.personal") private var agentPersonalContentEnabled = false
     @State private var showingAgentWorkspace = false
+    /// Whether the assistant's pane is open far enough to be worth building.
+    /// Set a reveal after the pane is asked for; see the `onChange` below.
+    @State private var assistantPaneHasRoom = false
     /// The chat turn running in the agent pane, where one is open.
     ///
     /// Held here rather than in that pane because the agent writes to the
@@ -965,7 +976,7 @@ struct DevotionalEditorView: View {
                         maximumSize: maximumSidebarWidth
                     )
                     Group {
-                        if showingAgentWorkspace {
+                        if showingAgentWorkspace, assistantPaneHasRoom {
                             DevotionalAgentWorkspaceView(
                                 libraryRootURL: model.library.rootURL,
                                 bundledModulesArchiveURL: Bundle.main.url(
@@ -1010,7 +1021,7 @@ struct DevotionalEditorView: View {
                                 )
                             )
                             .id(identifier)
-                        } else {
+                        } else if !showingAgentWorkspace {
                             detailsPane
                         }
                     }
@@ -1019,6 +1030,12 @@ struct DevotionalEditorView: View {
                 }
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .leading)
+            // The side pane's flags: `showsDetails` is kept in defaults, so
+            // the reveal is animated from the value rather than left to the
+            // toggle's transaction (see `Animation.lampPaneReveal`). The
+            // width itself is not in the list, so dragging the divider still
+            // follows the pointer exactly.
+            .animation(.lampPaneReveal, value: [showsDetails, showingAgentWorkspace])
             .preference(key: WritingAssistantOpenKey.self, value: showingAgentWorkspace)
             .clipped()
         }
@@ -1084,7 +1101,25 @@ struct DevotionalEditorView: View {
         }
         // What is selected when the agent pane opens, or another document is
         // shown, has had no change of selection to report it.
-        .onChange(of: showingAgentWorkspace) { readVisualSelectionSoon() }
+        .onChange(of: showingAgentWorkspace) { _, showing in
+            readVisualSelectionSoon()
+            // The pane is mounted one reveal later than it is asked for.
+            // Building it loads the chat's transcript and checks its
+            // provider on the main thread, and doing that in the same turn
+            // as the reveal's first frame meant there was no reveal: the
+            // side of the window stood still for about half a second and
+            // then held the pane. It now slides out at its own width,
+            // empty, and fills as it settles.
+            guard showing else {
+                assistantPaneHasRoom = false
+                return
+            }
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(LampMotion.paneReveal))
+                guard showingAgentWorkspace else { return }
+                assistantPaneHasRoom = true
+            }
+        }
         // Turned off while the agent's pane is open: it closes, and the
         // details take its place as they would on closing it by hand.
         .onChange(of: aiFeaturesEnabled) { _, enabled in

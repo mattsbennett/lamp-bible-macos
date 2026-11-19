@@ -224,7 +224,10 @@ struct DevotionalsView: View {
                 // shrank when a click on its empty space cleared the
                 // selection and the page beside it changed.
                 HStack(spacing: 0) {
-                    if layout.showsList(readingShowsList: showsWritingList) {
+                    // The list and its divider leave together, by width, so
+                    // the page beside them moves rather than jumping: see
+                    // `LampPaneWidth`. The divider is the one point.
+                    HStack(spacing: 0) {
                         writingList(listSections)
                             .frame(width: writingListWidth)
                         LampColumnResizeHandle(
@@ -235,6 +238,11 @@ struct DevotionalsView: View {
                             label: "Resize Writing List"
                         )
                     }
+                    .lampPaneWidth(
+                        layout.showsList(readingShowsList: showsWritingList)
+                            ? Double(writingListWidth) + 1
+                            : 0
+                    )
 
                     if let request = editing {
                         DevotionalEditorView(request: request)
@@ -265,6 +273,15 @@ struct DevotionalsView: View {
                         .layoutPriority(2)
                     }
                 }
+                // `showsWritingList` is kept in defaults, and a defaults
+                // change is published outside the `withAnimation` that made
+                // it — so the list appeared and vanished without moving,
+                // however the toggle was written. See
+                // `Animation.lampPaneReveal`.
+                .animation(
+                    .lampPaneReveal,
+                    value: layout.showsList(readingShowsList: showsWritingList)
+                )
             }
         }
         .navigationTitle("Writing")
