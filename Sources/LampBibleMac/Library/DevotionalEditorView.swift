@@ -995,6 +995,12 @@ struct DevotionalEditorView: View {
                                 contextDocument: agentContextDocument,
                                 editorFocus: editorFocus,
                                 importDraft: { importedDraft in
+                                    // Held before anything else runs: the
+                                    // turn's marks are anchored in it, and
+                                    // typing before the next settle would
+                                    // otherwise keep it from this editor's
+                                    // carries and clears.
+                                    reviewSession.holds(importedDraft)
                                     content = importedDraft
                                     // Saved now rather than on the next
                                     // autosave. A crash in between left

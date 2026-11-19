@@ -164,9 +164,12 @@ final class WritingReviewSession: ObservableObject {
         // Nothing drawn for the writing before may land now.
         settleTask?.cancel()
         drawGeneration += 1
+        // The texts held are kept while the writing stays the same (marks
+        // turned off and on again): an edit made meanwhile is carried from
+        // them back to the marks.
+        if self.writingID != writingID { texts = [] }
         self.writingID = writingID
         self.text = text
-        texts = []
         remember(text)
         review = nil
         fileDate = nil
@@ -253,6 +256,13 @@ final class WritingReviewSession: ObservableObject {
     }
 
     // MARK: - Internals
+
+    /// A text the editor is about to hold, an assistant's draft it takes
+    /// in: remembered at once rather than as the text settles, since the
+    /// writer may type into it first.
+    func holds(_ text: String) {
+        remember(text)
+    }
 
     /// Remembers a text this editor holds, here and among every window's.
     private func remember(_ text: String) {

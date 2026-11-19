@@ -170,6 +170,53 @@ struct WritingReviewSessionTests {
         }
     }
 
+    /// Codex's case: the window takes an assistant's draft in and the
+    /// writer types into it before the text settles. The draft is held at
+    /// once, so a clear still carries its mark from it.
+    @Test func aDraftTakenInIsHeldBeforeTypingIntoIt() async throws {
+        let root = try library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LampWritingReviewStore(rootURL: root)
+        let id = "draft-held-\(UUID().uuidString)"
+        let before = "One two three."
+        let draft = "One alpha beta gamma three."
+        try store.save(LampWritingReview(writingID: id).markingAssistantChange(from: before, to: draft))
+        let session = WritingReviewSession()
+        let following = Task { await session.follow(writingID: id, text: before, libraryRootURL: root, isShown: true) }
+        defer { following.cancel() }
+        try await waitUntil { session.texts == [before] }
+        try await Task.sleep(for: .milliseconds(100))
+
+        session.holds(draft)
+        let typed = "One alpha mine beta gamma three."
+        session.textChanged(typed)
+        session.clear(range: (typed as NSString).range(of: "gamma"))
+        try await waitUntil {
+            let review = try? store.review(writingID: id)
+            return review?.highlightedRanges(in: typed).map { (typed as NSString).substring(with: $0) } == ["alpha", "beta"]
+        }
+    }
+
+    /// Codex's case: marks turned off and on again, with an edit between.
+    /// The texts the editor held before are kept, to carry from.
+    @Test func turningMarksOffAndOnKeepsTheTextsHeld() async throws {
+        let root = try library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let id = "off-and-on-\(UUID().uuidString)"
+        let session = WritingReviewSession()
+        let first = Task { await session.follow(writingID: id, text: "One alpha three.", libraryRootURL: root, isShown: true) }
+        try await waitUntil { session.texts == ["One alpha three."] }
+        first.cancel()
+        await session.follow(writingID: id, text: "One alpha three. More.", libraryRootURL: root, isShown: false)
+        let again = Task { await session.follow(writingID: id, text: "One alpha three. More.", libraryRootURL: root, isShown: true) }
+        defer { again.cancel() }
+        #expect(session.texts == ["One alpha three.", "One alpha three. More."])
+
+        let other = Task { await session.follow(writingID: "another-\(id)", text: "Else.", libraryRootURL: root, isShown: true) }
+        defer { other.cancel() }
+        try await waitUntil { session.texts == ["Else."] }
+    }
+
     @Test func turnedOffNothingIsShown() async throws {
         let root = try library()
         defer { try? FileManager.default.removeItem(at: root) }
