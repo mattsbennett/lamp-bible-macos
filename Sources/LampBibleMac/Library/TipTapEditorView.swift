@@ -274,7 +274,10 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     /// The writer cleared marks from the page, by its ✓ button: the writing's
     /// Markdown with a marker at each edge of what was cleared
     /// (`LampWritingReview.markedRange(in:of:)` reads it).
-    var onReviewClear: ((String) -> Void)?
+    /// The ✓ pressed: the writing's Markdown with markers round what to
+    /// clear, and the page's own Markdown of the same document, unmarked,
+    /// where the page sends it.
+    var onReviewClear: ((TipTapReviewClear) -> Void)?
     /// The page could not place the marks it was sent — its text was a
     /// moment ahead of the host's — so the host sends them again.
     var onReviewMarksRejected: (() -> Void)?
@@ -615,8 +618,8 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
             onFindStatusChanged?(Self.findStatus(from: body))
 
         case "reviewClear":
-            guard let marked = body["markdown"] as? String else { return }
-            onReviewClear?(portableMarkdown(from: marked))
+            guard let clear = reviewClear(from: body) else { return }
+            onReviewClear?(clear)
 
         default:
             break
@@ -859,12 +862,26 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     /// The selection as the writing's Markdown with markers at its edges,
     /// for clearing what of the marks it covers; nil outside the visual
     /// page or before it is ready.
-    func reviewMarkdownForSelection(completion: @escaping (String?) -> Void) {
+    func reviewMarkdownForSelection(completion: @escaping (TipTapReviewClear?) -> Void) {
         guard isReady else { return completion(nil) }
         evaluate("window.editorAPI.reviewMarkdownForSelection ? window.editorAPI.reviewMarkdownForSelection() : null") { [weak self] result in
-            guard let self, let marked = result as? String else { return completion(nil) }
-            completion(self.portableMarkdown(from: marked))
+            guard let self else { return completion(nil) }
+            if let marked = result as? String {
+                return completion(TipTapReviewClear(marked: self.portableMarkdown(from: marked), pageText: nil))
+            }
+            completion((result as? [String: Any]).flatMap(self.reviewClear(from:)))
         }
+    }
+
+    /// A clear as the page sends it: `markdown`, marked, and `plain`, the
+    /// same document unmarked, both made portable as the page's reported
+    /// text is. A page from before `plain` sends the marked text alone.
+    private func reviewClear(from body: [String: Any]) -> TipTapReviewClear? {
+        guard let marked = body["markdown"] as? String else { return nil }
+        return TipTapReviewClear(
+            marked: portableMarkdown(from: marked),
+            pageText: (body["plain"] as? String).map(portableMarkdown(from:))
+        )
     }
 
     func insertHorizontalRule() {
@@ -1375,4 +1392,13 @@ final class TipTapEditorPool {
         }
         return page
     }
+}
+
+/// A review clear from the visual editor's page: the writing's Markdown
+/// with markers round what to clear, and the page's Markdown of the same
+/// document without them, which is the text it was made in. Nil from a
+/// page that does not send it.
+struct TipTapReviewClear: Sendable {
+    let marked: String
+    let pageText: String?
 }

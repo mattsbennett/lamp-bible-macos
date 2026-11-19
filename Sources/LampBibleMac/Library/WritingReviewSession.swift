@@ -212,36 +212,40 @@ final class WritingReviewSession: ObservableObject {
         clear(range: range, in: text)
     }
 
+    /// Made in `text` with the marks carried there, changing only the marks
+    /// it touches: `text` can be a moment behind the latest marks (the
+    /// page's, pressed before a turn's draft reached it), and carried whole
+    /// into it, a mark with no words there would be retired by a clear of
+    /// some other passage.
     private func clear(range: NSRange, in text: String) {
         guard writingID != nil else { return }
         remember(text)
         let known = texts
-        change { $0.carryingToText(text, from: known).clearing(range, in: text) }
+        change { $0.clearing(range, in: text, carryingFrom: known) }
     }
 
     /// Clears the range the visual page marked in the Markdown it sent.
     ///
     /// Where that is the writing as held here, give or take spelling, the
-    /// clear is made in it. Otherwise the page was ahead (typed into within
-    /// the settle before its text is reported), and the clear is made in
-    /// the text the page sent, the marks carried there first: that text is
-    /// then known, so the next draw and save carry the clear on from it.
-    /// Never held back for a text that typing may already have passed.
-    func clear(markedMarkdown marked: String) {
+    /// clear is made in it. Otherwise the page was ahead or behind (typed
+    /// into within the settle before its text is reported, or pressed
+    /// before a turn's draft reached it), and the clear is made in the
+    /// page's own text, `pageText`, which it sends unmarked beside the
+    /// marked: that text is then known, so the next draw and save carry the
+    /// clear on from it. Never held back for a text typing may already have
+    /// passed.
+    ///
+    /// Never made in the marked Markdown with its markers taken out: a
+    /// marker can change how the page writes what is round it (inside an
+    /// autolink, `<url>` becomes `[url](url)`), so that is text the page
+    /// never held. A page that sends no text of its own clears only where
+    /// it matches the writing here.
+    func clear(markedMarkdown marked: String, pageText: String? = nil) {
         if let range = LampWritingReview.markedRange(in: marked, of: text) {
             clear(range: range, in: text)
-            return
+        } else if let pageText, let range = LampWritingReview.markedRange(in: marked, of: pageText) {
+            clear(range: range, in: pageText)
         }
-        let sent = Self.withoutMarkers(marked)
-        guard let range = LampWritingReview.markedRange(in: marked, of: sent) else { return }
-        clear(range: range, in: sent)
-    }
-
-    private static func withoutMarkers(_ marked: String) -> String {
-        let markers: Set<Character> = [
-            LampWritingReview.markStart, LampWritingReview.markEnd, LampWritingReview.markPoint,
-        ]
-        return String(marked.filter { !markers.contains($0) })
     }
 
     func clearAll() {

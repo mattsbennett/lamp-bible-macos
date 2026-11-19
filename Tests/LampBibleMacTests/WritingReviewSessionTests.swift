@@ -77,9 +77,9 @@ struct WritingReviewSessionTests {
             )
         }
         let first = "One alpha three.\n\nFour beta six. More."
-        session.clear(markedMarkdown: marking("beta", in: first))
+        session.clear(markedMarkdown: marking("beta", in: first), pageText: first)
         let second = "One alpha three.\n\nFour beta six. More.\n\nSeven gamma nine. And"
-        session.clear(markedMarkdown: marking("alpha", in: second))
+        session.clear(markedMarkdown: marking("alpha", in: second), pageText: second)
         let reported = "One alpha three.\n\nFour beta six. More.\n\nSeven gamma nine. And more."
         session.textChanged(reported)
         try await waitUntil {
@@ -89,6 +89,35 @@ struct WritingReviewSessionTests {
                 .map { (reported as NSString).substring(with: $0) } == ["gamma"]
         }
         try await waitUntil { session.count == 1 }
+    }
+
+    /// Codex's case: markers can change how the page writes what is round
+    /// them, so the marked Markdown with its markers taken out is text the
+    /// page never held. A page that sends no text of its own clears only
+    /// where its marked Markdown matches the writing here, and nothing is
+    /// remembered from it.
+    @Test func aClearWithNoPageTextIsMadeOnlyInTheWritingHere() async throws {
+        let root = try library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LampWritingReviewStore(rootURL: root)
+        let id = "no-page-text-\(UUID().uuidString)"
+        let new = "One alpha three.\n\nFour beta six."
+        try store.save(LampWritingReview(writingID: id).markingAssistantChange(
+            from: "One two three.\n\nFour five six.", to: new
+        ))
+        let before = try store.review(writingID: id)
+        let session = WritingReviewSession()
+        let following = Task { await session.follow(writingID: id, text: new, libraryRootURL: root, isShown: true) }
+        defer { following.cancel() }
+        try await waitUntil { session.count == 2 }
+
+        let ahead = "One alpha three.\n\nFour beta six. More."
+        session.clear(markedMarkdown: ahead.replacingOccurrences(
+            of: "beta", with: "\(LampWritingReview.markStart)beta\(LampWritingReview.markEnd)"
+        ))
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(try store.review(writingID: id) == before)
+        #expect(!session.texts.contains(ahead))
     }
 
     /// Codex's case: typing into a marked passage, not yet saved, splits it.
