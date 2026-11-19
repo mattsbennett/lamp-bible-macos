@@ -1014,7 +1014,7 @@ struct DevotionalAgentWorkspaceView: View {
             if let workspaceURL { loadChoices(in: workspaceURL) }
         }
         .task(id: "\(libraryRootURL.path)|\(devotionalID)") {
-            prepareWorkspace()
+            await prepareWorkspace()
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(400))
                 refreshWorkspace()
@@ -1368,7 +1368,17 @@ struct DevotionalAgentWorkspaceView: View {
                 NativeAgentChatView(
                     provider: selectedProvider,
                     workspace: workspaceURL,
-                    preparePrompt: { [editorFocus] message in editorFocus.prompt(for: message) },
+                    preparePrompt: { [editorFocus, libraryRootURL, devotionalID] message in
+                        // The draft as the agent will read it, which is
+                        // where the marks are found.
+                        let draft = (try? DevotionalAgentWorkspaceStore.readDraft(from: workspaceURL)) ?? ""
+                        return WritingChatTurns.prompt(
+                            for: message, focus: editorFocus,
+                            review: try? WritingReviewMarks.store(libraryRootURL: libraryRootURL)?
+                                .review(writingID: devotionalID),
+                            writing: draft
+                        )
+                    },
                     onRunningChanged: { chatIsReplying = $0 },
                     revertTurn: { undoTurn($0) },
                     onTurnChanged: { turn in
@@ -1466,42 +1476,24 @@ struct DevotionalAgentWorkspaceView: View {
         .font(.callout)
     }
 
-    private func prepareWorkspace() {
+    private func prepareWorkspace() async {
         do {
-            guard let helperExecutableURL = AgentModuleAccessPreferences.mcpHelperExecutableURL else {
-                throw CocoaError(.fileNoSuchFile, userInfo: [
-                    NSLocalizedDescriptionKey: "The bundled Lamp module helper is unavailable.",
-                ])
-            }
-            let policyURL = try AgentModuleAccessPreferences.writePolicy(
-                agentAccessPolicy,
-                libraryRootURL: libraryRootURL
-            )
-            let mcpConfiguration = LampAgentMCPConfiguration(
-                helperExecutableURL: helperExecutableURL,
+            let workspace = try await WritingChatTurns.prepare(
+                writingID: devotionalID,
+                draft: draftMarkdown,
+                context: contextDocument,
+                policy: agentAccessPolicy,
                 libraryRootURL: libraryRootURL,
-                bundledModulesArchiveURL: bundledModulesArchiveURL,
-                policyURL: policyURL,
-                // So the agent can read what changed in the writing rather than
-                // keeping copies of `draft.md` to compare for itself. The path
-                // is derived the same way `prepare` derives it, below.
-                workspaceURL: DevotionalAgentWorkspaceStore.workspaceURL(
-                    libraryRootURL: libraryRootURL,
-                    devotionalID: devotionalID
-                )
+                bundledModulesArchiveURL: bundledModulesArchiveURL
             )
-            let workspace = try DevotionalAgentWorkspaceStore.prepare(
-                libraryRootURL: libraryRootURL,
-                devotionalID: devotionalID,
-                initialDraft: draftMarkdown,
-                contextDocument: contextDocument,
-                mcpConfiguration: mcpConfiguration
-            )
+            // Prepared off the main actor, so the pane may have moved to
+            // another writing meanwhile; that one's own preparation is the
+            // one to keep.
+            guard !Task.isCancelled else { return }
             // Before the chat pane is given a workspace to mount with, so it
             // is never built against a provider this writing is not on.
             loadChoices(in: workspace)
             workspaceURL = workspace
-            try DevotionalAgentWorkspaceStore.writeContext(contextDocument, to: workspace)
             writeEditorFocus(editorFocus)
 
             apply(try reconciler(for: workspace).prepare(
@@ -1557,12 +1549,7 @@ struct DevotionalAgentWorkspaceView: View {
     /// The deciding, which lives in `DevotionalAgentDraftReconciler` so a
     /// test can run it. Everything here is what to do with its answer.
     private func reconciler(for workspace: URL) -> DevotionalAgentDraftReconciler {
-        DevotionalAgentDraftReconciler(
-            workspace: workspace,
-            writingID: devotionalID,
-            applicationSupportURL: LampAgentDescriptorStore.defaultApplicationSupportURL(),
-            reviewStore: WritingReviewMarks.store(libraryRootURL: libraryRootURL)
-        )
+        WritingChatTurns.reconciler(writingID: devotionalID, workspace: workspace, libraryRootURL: libraryRootURL)
     }
 
     private func apply(

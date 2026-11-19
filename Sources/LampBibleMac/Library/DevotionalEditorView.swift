@@ -133,11 +133,6 @@ private struct DevotionalWorkspaceEditorDocument: Identifiable, Equatable {
 }
 
 /// What a save writes as a devotional's body.
-private struct StoredDevotionalBody: Sendable {
-    let contentJSON: String?
-    let plainContent: String
-}
-
 /// A transition waiting to be written to a document's revision history.
 ///
 /// Recording walks the whole revision folder, so it happens off the main actor
@@ -2214,33 +2209,11 @@ struct DevotionalEditorView: View {
     }
 
     private var agentContextDocument: String {
-        let scriptureList = keyScriptures.isEmpty
-            ? "- None selected"
-            : keyScriptures.map { "- \($0.displayDescription)" }.joined(separator: "\n")
-        let tagList = tags.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "None" : tags
-        return """
-        # Devotional brief
-
-        - Title: \(title.isEmpty ? "Untitled" : title)
-        - Subtitle: \(subtitle.isEmpty ? "None" : subtitle)
-        - Author: \(author.isEmpty ? "Unknown" : author)
-        - Date: \(date)
-        - Category: \(LampWritingCategory.displayName(category) ?? "None")
-        - Tags: \(tagList)
-        - Series: \(seriesName.isEmpty ? "None" : "\(seriesName), item \(seriesOrder)")
-
-        ## Key scripture
-
-        \(scriptureList)
-
-        ## Summary or intent
-
-        \(summary.isEmpty ? "No summary has been written yet." : summary)
-
-        ## Existing footnotes
-
-        \(footnotes.isEmpty ? "No footnotes have been written yet." : footnotes)
-        """ + "\n"
+        WritingChatTurns.contextDocument(
+            title: title, subtitle: subtitle, author: author, date: date, category: category,
+            tags: tags, seriesName: seriesName, seriesOrder: seriesOrder, keyScriptures: keyScriptures,
+            summary: summary, footnotes: footnotes
+        )
     }
 
     private var agentAccessPolicy: LampAgentAccessPolicy {
@@ -3224,9 +3197,9 @@ struct DevotionalEditorView: View {
             LampPendingWrites.shared.begin()
             defer { LampPendingWrites.shared.end() }
             let markdown = content
-            let body: StoredDevotionalBody
+            let body: StoredWritingBody
             do {
-                body = try await Self.storedBody(
+                body = try await WritingChatTurns.storedBody(
                     markdown: markdown,
                     originalJSON: originalContentJSON,
                     originalPlainContent: originalPlainContent,
@@ -3297,48 +3270,6 @@ struct DevotionalEditorView: View {
                 saveState = .failed(error.localizedDescription)
             }
         }
-    }
-
-    /// A devotional's body as it will be stored: the Markdown projected back
-    /// into the rich JSON it came from, where there is any, and the plain text
-    /// the library searches.
-    ///
-    /// Worked out off the main actor. Projecting a talk-length manuscript back
-    /// into its JSON costs about twenty milliseconds on a Release build —
-    /// measured on nine thousand words — and it used to run on the keystroke
-    /// thread every time the autosave landed, which is what the writer felt as
-    /// the editor hesitating. `Task { }` on its own is no help here: `View` is
-    /// main-isolated, so everything a view starts stays on the main thread
-    /// unless it is detached.
-    private static func storedBody(
-        markdown: String,
-        originalJSON: String?,
-        originalPlainContent: String,
-        bodyChanged: Bool
-    ) async throws -> StoredDevotionalBody {
-        guard bodyChanged else {
-            return StoredDevotionalBody(
-                contentJSON: originalJSON,
-                plainContent: originalJSON == nil ? markdown : originalPlainContent
-            )
-        }
-        guard let originalJSON else {
-            return StoredDevotionalBody(contentJSON: nil, plainContent: markdown)
-        }
-        return try await Task.detached(priority: .userInitiated) {
-            // JSON that is only a carrier for Markdown has nothing structured
-            // to keep, so the writing itself is the body.
-            guard LampPortableDevotionalMedia.plainMarkdown(from: originalJSON) == nil else {
-                return StoredDevotionalBody(contentJSON: nil, plainContent: markdown)
-            }
-            let json = try LampPortableDevotionalContent.replacingMarkdown(
-                markdown, in: originalJSON
-            )
-            return StoredDevotionalBody(
-                contentJSON: json,
-                plainContent: LampPortableDevotionalContent.plainText(from: json) ?? ""
-            )
-        }.value
     }
 
     /// Adds a footnote where the caret is: its marker in the prose, and an
