@@ -758,6 +758,28 @@ struct DevotionalEditorView: View {
     /// Gone from screen: a save finishing after that does not take a hold
     /// it would never give up.
     @State private var editorIsGone = false
+    /// When the stored copy this editor holds was saved: the one it loaded,
+    /// or its own last save. Every save is made only over that copy, so a
+    /// newer one sync brings in while the writing is open is never written
+    /// over by the editor's older text. Nil for a writing not stored yet.
+    @State private var heldRevision: Date?
+    /// A newer stored copy than the one held, arrived while this editor had
+    /// edits of its own, and those edits not yet kept elsewhere. Nothing is
+    /// saved while it is here.
+    @State private var newerCopy: LampDevotional?
+    /// Why the edits could not be kept as a copy, when they could not.
+    @State private var keepingFailed: String?
+    /// The copy this conflict's edits are kept in, once one is stored, so
+    /// another pass or a retry writes to it rather than making a second.
+    @State private var keptCopyID: String?
+    /// When that copy was last written by this editor: later passes write
+    /// over it only if it is still that copy, not one edited elsewhere.
+    @State private var keptCopyRevision: Date?
+    /// A newer copy is being weighed against the page, which is read first.
+    @State private var isWeighingNewerCopy = false
+    /// The writer's edits, kept as a writing of their own when a newer
+    /// version came in over them, for the status bar to say so.
+    @State private var keptEdits: LampDevotional?
     /// What the assistant changed that the writer has not yet read, where
     /// they keep marks (`WritingReviewMarks`).
     @StateObject private var reviewSession = WritingReviewSession()
@@ -1064,8 +1086,8 @@ struct DevotionalEditorView: View {
         .task(id: identifier) { await monitorWorkspaceDocuments() }
         // Autosave starts after any authored field has content. A newly opened,
         // untouched editor still never leaves an empty devotional behind.
-        .task(id: AutosaveTrigger(fields: editedFields, canSave: hasSavableContent)) {
-            guard isDirty, hasSavableContent else { return }
+        .task(id: AutosaveTrigger(fields: editedFields, canSave: hasSavableContent && newerCopy == nil)) {
+            guard isDirty, hasSavableContent, newerCopy == nil else { return }
             try? await Task.sleep(for: .milliseconds(1_500))
             guard !Task.isCancelled else { return }
             save()
@@ -1150,6 +1172,10 @@ struct DevotionalEditorView: View {
             )
         }
         .onChange(of: content) { _, text in reviewSession.textChanged(text) }
+        // Published only when the writings change, so this is not asked on
+        // every keystroke. The new value is passed in: read off the model
+        // here, it would still be the old one.
+        .onReceive(model.$devotionals) { devotionals in lookForNewerCopy(in: devotionals) }
         // Turned off while the agent's pane is open: it closes, and the
         // details take its place as they would on closing it by hand.
         .onChange(of: aiFeaturesEnabled) { _, enabled in
@@ -1788,6 +1814,16 @@ struct DevotionalEditorView: View {
             Text(activeSaveStateDescription)
                 .foregroundStyle(activeSaveStateIsProblem ? AnyShapeStyle(.red) : AnyShapeStyle(Color.lampSecondaryText))
 
+            if activeWorkspaceDocument == nil, keepingFailed != nil, let newer = newerCopy {
+                Button("Try Again") { keepEdits(over: newer) }
+                    .controlSize(.mini)
+            } else if activeWorkspaceDocument == nil, let keptEdits, !isDirty {
+                Button("Open Your Edits") {
+                    openWindow(id: "devotional-editor", value: DevotionalEditorRequest(devotionalID: keptEdits.id))
+                }
+                .controlSize(.mini)
+            }
+
             if let document = activeWorkspaceDocument, document.hasExternalConflict {
                 Button(document.wasRemovedExternally ? "Close Tab" : "Use Agent Version") {
                     acceptExternalWorkspaceDocument(document.id)
@@ -1819,6 +1855,7 @@ struct DevotionalEditorView: View {
         if let document = activeWorkspaceDocument {
             return document.errorMessage != nil || document.hasExternalConflict
         }
+        if keepingFailed != nil { return true }
         if case .failed = saveState { return true }
         return false
     }
@@ -2243,6 +2280,13 @@ struct DevotionalEditorView: View {
     }
 
     private var saveStateDescription: String {
+        if let keepingFailed {
+            return "Not saved — a newer version arrived, and your edits couldn’t be kept: \(keepingFailed)"
+        }
+        if newerCopy != nil { return "A newer version arrived — keeping your edits…" }
+        if let keptEdits, !isDirty {
+            return "A newer version arrived from another device. Your edits are kept as “\(keptEdits.title)”."
+        }
         if case .failed(let message) = saveState { return "Not saved — \(message)" }
         if saveState == .saving { return "Saving…" }
         if isDirty { return hasSavableContent ? "Unsaved changes" : "Add content to save" }
@@ -2270,7 +2314,7 @@ struct DevotionalEditorView: View {
         if let document = activeWorkspaceDocument {
             return document.isDirty && !document.hasExternalConflict
         }
-        return hasSavableContent && isDirty && saveState != .saving
+        return hasSavableContent && isDirty && saveState != .saving && newerCopy == nil
     }
 
     /// Tab labels for the open companions, read the way "Main Prose" reads
@@ -3223,6 +3267,19 @@ struct DevotionalEditorView: View {
         }
         if request.opensAgentPane, aiFeaturesEnabled { showingAgentWorkspace = true }
         identifier = devotional.id
+        keptEdits = nil
+        keptCopyID = nil
+        show(devotional)
+        writingHold?.release()
+        writingHold = WritingChatTurns.hold(
+            devotional.id, revision: devotional.lastModified ?? .distantPast,
+            digest: LampAgentRemoteWritingRevision.digest(of: devotional)
+        )
+    }
+
+    /// Puts a stored copy of the writing in the editor as it stands: on
+    /// opening, and when a newer one comes in.
+    private func show(_ devotional: LampDevotional) {
         createdDate = devotional.created
         title = devotional.title
         subtitle = devotional.subtitle ?? ""
@@ -3245,12 +3302,267 @@ struct DevotionalEditorView: View {
         keyScriptures = devotional.keyScriptures
         saveState = .idle
         savedFields = editedFields
+        heldRevision = devotional.lastModified
+        newerCopy = nil
+        keepingFailed = nil
         hasLoaded = true
-        writingHold?.release()
-        writingHold = WritingChatTurns.hold(
-            devotional.id, revision: devotional.lastModified ?? .distantPast,
-            digest: LampAgentRemoteWritingRevision.digest(of: devotional)
+    }
+
+    /// Looks for a stored copy saved after the one this editor holds: one
+    /// sync brought in from another device. With nothing typed since, it is
+    /// simply shown; over edits of the writer's own, those are kept first.
+    /// Asked as the writings change, and again as a save finishes, since a
+    /// copy that lands while a save is working is seen only then.
+    private func lookForNewerCopy(in devotionals: [LampDevotional]) {
+        guard hasLoaded, saveState != .saving, newerCopy == nil, !isWeighingNewerCopy,
+              newerStoredCopy(in: devotionals) != nil
+        else { return }
+        isWeighingNewerCopy = true
+        Task {
+            defer { isWeighingNewerCopy = false }
+            // What the visual page holds now: it reports typing only after a
+            // pause, and an editor that looks clean may not be.
+            await readPage()
+            guard saveState != .saving, newerCopy == nil,
+                  let stored = newerStoredCopy(in: model.devotionals)
+            else { return }
+            if !isDirty || editedFields == fields(of: stored) {
+                // Nothing typed, or typed exactly what arrived.
+                takeIn(stored)
+            } else {
+                keepEdits(over: stored)
+            }
+        }
+    }
+
+    /// Takes the visual page's text into the editor now, rather than after
+    /// the page's own pause.
+    ///
+    /// Only while the writing has no companion files open: one page shows
+    /// whichever document is in front, swapping between them, so while any
+    /// are open a read cannot be sure whose text it has, and a companion
+    /// file's text must not become the writing's. Only what was typed: a page that only spelled the Markdown
+    /// its own way (`*` lists as `-`) reports nothing, so an untouched
+    /// writing is not made to look edited.
+    private func readPage() async {
+        guard editorMode == .visual, workspaceDocuments.isEmpty,
+              let coordinator = tipTapCoordinator else { return }
+        let markdown = await withCheckedContinuation { continuation in
+            coordinator.getEditedContent { continuation.resume(returning: $0) }
+        }
+        guard let markdown, editorMode == .visual, workspaceDocuments.isEmpty,
+              tipTapCoordinator === coordinator, markdown != content
+        else { return }
+        content = markdown
+    }
+
+    /// A stored copy's fields as `editedFields` would hold them once shown.
+    private func fields(of devotional: LampDevotional) -> [String] {
+        [
+            devotional.title, devotional.subtitle ?? "", devotional.author ?? "",
+            devotional.date ?? Self.today, devotional.tags.joined(separator: ", "),
+            LampWritingCategory.displayName(devotional.category) ?? "",
+            devotional.seriesName ?? "", String(devotional.seriesOrder ?? 0), devotional.summary ?? "",
+            devotional.displayMarkdown, devotional.footnotes ?? "",
+            devotional.keyScriptures.map(\.id).joined(separator: "|"), devotional.mediaJSON ?? "",
+        ]
+    }
+
+    private func newerStoredCopy(in devotionals: [LampDevotional]) -> LampDevotional? {
+        guard let heldRevision,
+              let stored = devotionals.first(where: { $0.id == identifier }),
+              let storedRevision = stored.lastModified,
+              LampAgentRemoteWritingRevision.of(lastModified: storedRevision)
+                > LampAgentRemoteWritingRevision.of(lastModified: heldRevision)
+        else { return nil }
+        return stored
+    }
+
+    /// Shows a newer stored copy in place of what the editor held.
+    private func takeIn(_ stored: LampDevotional) {
+        // Held before the text changes, as a draft taken in is: the marks a
+        // turn on the other device made are anchored in this text, and this
+        // window's clears and carries take marks only from texts it held.
+        reviewSession.holds(stored.displayMarkdown)
+        show(stored)
+        writingHold?.update(
+            revision: stored.lastModified ?? .distantPast,
+            digest: LampAgentRemoteWritingRevision.digest(of: stored)
         )
+    }
+
+    /// Keeps the writer's edits as a writing of their own, then shows the
+    /// newer version that came in over them: as the phone does. Nothing is
+    /// saved over the newer version, and nothing typed is lost, the title,
+    /// details and pictures included. Quitting waits for it.
+    private func keepEdits(over stored: LampDevotional) {
+        newerCopy = stored
+        keepingFailed = nil
+        LampPendingWrites.shared.begin()
+        Task {
+            defer { LampPendingWrites.shared.end() }
+            await keepEditsNow()
+        }
+    }
+
+    /// The same, from inside a task that already counts as a pending write.
+    private func keepEditsNow() async {
+        do {
+            // Saved again, under the same id, while typing goes on during the
+            // save, so the copy holds everything the writer typed before the
+            // newer version is shown. Each pass saves one snapshot taken
+            // before it waits, and the editor is compared with that snapshot.
+            var snapshot: EditsSnapshot
+            var kept: LampDevotional?
+            repeat {
+                await readPage()
+                snapshot = editsSnapshot()
+                // The copy's id is chosen before it is written, so a retry
+                // after any failure writes to the same copy.
+                let id = keptCopyID ?? UUID().uuidString
+                keptCopyID = id
+                if let written = try await saveEditsAsCopy(snapshot, as: id, over: keptCopyRevision) {
+                    kept = written
+                    // Recorded before the marks are written, so a failure
+                    // there leaves a retry writing to this copy.
+                    keptCopyRevision = written.lastModified
+                    try await carryReviewMarks(of: snapshot, to: id)
+                    // Typed while this pass was saving: another pass.
+                    await readPage()
+                } else {
+                    // The copy was edited somewhere else since this editor
+                    // wrote it: those edits stay, and a new copy is made.
+                    kept = nil
+                    keptCopyID = nil
+                    keptCopyRevision = nil
+                }
+            } while kept == nil || editedFields != snapshot.fields
+            keptEdits = kept
+            keptCopyID = nil
+            keptCopyRevision = nil
+            // The newest stored copy now, which may be later than the one
+            // that set this off.
+            let latest = model.devotionals.first(where: { $0.id == identifier }) ?? newerCopy
+            newerCopy = nil
+            if let latest { takeIn(latest) }
+        } catch {
+            keepingFailed = error.localizedDescription
+        }
+    }
+
+    /// The writing's marks, carried into the text kept and filed under the
+    /// copy, so its unread passages are still marked there. Whether or not
+    /// marks are shown now: turned on again, the copy has them as the
+    /// writing does.
+    private func carryReviewMarks(of snapshot: EditsSnapshot, to copyID: String) async throws {
+        let originalID = identifier
+        let store = LampWritingReviewStore(rootURL: model.library.rootURL)
+        let known = snapshot.reviewTexts
+        let text = snapshot.markdown.replacingOccurrences(
+            of: "lamp-media://\(originalID)/", with: "lamp-media://\(copyID)/"
+        )
+        try await Task.detached(priority: .userInitiated) {
+            var carried = try store.review(writingID: originalID).carryingToText(text, from: known)
+            guard !carried.marks.isEmpty else { return }
+            carried.writingID = copyID
+            try store.update(writingID: copyID) { _ in carried }
+        }.value
+    }
+
+    /// Everything a copy of the edits is made from, taken at once.
+    private struct EditsSnapshot {
+        let fields: [String]
+        let devotional: LampDevotional
+        let markdown: String
+        let originalJSON: String?
+        let originalPlainContent: String
+        let originalProjectedMarkdown: String
+        let reviewTexts: [String]
+    }
+
+    private func editsSnapshot() -> EditsSnapshot {
+        let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return EditsSnapshot(
+            fields: editedFields,
+            devotional: LampDevotional(
+                id: identifier,
+                moduleID: "personal-devotionals",
+                moduleName: "My Writing",
+                title: "\(name.isEmpty ? "Untitled" : name) (your edits)",
+                subtitle: subtitle,
+                author: author,
+                date: date,
+                tags: tags.split(separator: ",").map {
+                    String($0).trimmingCharacters(in: .whitespacesAndNewlines)
+                }.filter { !$0.isEmpty },
+                category: categoryToSave,
+                seriesName: seriesName,
+                seriesOrder: seriesName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? nil : seriesOrder,
+                keyScriptures: keyScriptures,
+                summary: summary,
+                content: "",
+                footnotes: footnotes,
+                mediaJSON: mediaJSON,
+                created: Date(),
+                lastModified: Date(),
+                isEditable: true
+            ),
+            markdown: content,
+            originalJSON: originalContentJSON,
+            originalPlainContent: originalPlainContent,
+            originalProjectedMarkdown: originalProjectedMarkdown,
+            reviewTexts: reviewSession.texts
+        )
+    }
+
+    /// The snapshot saved under `copyID`, with the pictures and recordings
+    /// it uses copied for it, links that name this writing pointed at the
+    /// copy, and the passages still marked for review marked there too.
+    private func saveEditsAsCopy(
+        _ snapshot: EditsSnapshot, as copyID: String, over revision: Date?
+    ) async throws -> LampDevotional? {
+        let originalID = identifier
+        let root = model.library.rootURL
+        // Every pass, so a picture added while the copy was being saved is
+        // in its folder too. Files already there are left as they are.
+        if let from = LampPortableDevotionalMedia.folderURL(rootURL: root, scope: .devotional, ownerID: originalID),
+           let to = LampPortableDevotionalMedia.folderURL(rootURL: root, scope: .devotional, ownerID: copyID) {
+            try await Task.detached(priority: .userInitiated) {
+                let files = FileManager.default
+                guard files.fileExists(atPath: from.path) else { return }
+                try files.createDirectory(at: to, withIntermediateDirectories: true)
+                for name in try files.contentsOfDirectory(atPath: from.path)
+                where !files.fileExists(atPath: to.appendingPathComponent(name).path) {
+                    try files.copyItem(at: from.appendingPathComponent(name), to: to.appendingPathComponent(name))
+                }
+            }.value
+        }
+        // A link that names its writing (`lamp-media://<id>/…`) names the copy.
+        // In the rich body's JSON its slashes may be escaped.
+        func relinked(_ text: String) -> String {
+            text.replacingOccurrences(of: "lamp-media://\(originalID)/", with: "lamp-media://\(copyID)/")
+                .replacingOccurrences(of: #"lamp-media:\/\/\#(originalID)\/"#, with: #"lamp-media:\/\/\#(copyID)\/"#)
+        }
+        let markdown = relinked(snapshot.markdown)
+        let body = try await WritingChatTurns.storedBody(
+            markdown: markdown,
+            originalJSON: snapshot.originalJSON.map(relinked),
+            originalPlainContent: relinked(snapshot.originalPlainContent),
+            bodyChanged: snapshot.markdown != snapshot.originalProjectedMarkdown
+        )
+        let d = snapshot.devotional
+        guard let saved = try await model.savePersonalDevotional(LampDevotional(
+            id: copyID, moduleID: d.moduleID, moduleName: d.moduleName, title: d.title,
+            subtitle: d.subtitle, author: d.author, date: d.date, tags: d.tags, category: d.category,
+            seriesName: d.seriesName, seriesOrder: d.seriesOrder, keyScriptures: d.keyScriptures,
+            summary: d.summary, content: body.plainContent, contentJSON: body.contentJSON,
+            footnotes: d.footnotes, mediaJSON: d.mediaJSON, created: d.created,
+            lastModified: d.lastModified, isEditable: true
+        ), ifNotNewerThan: revision ?? .distantPast) else { return nil }
+        // The writing's marks, carried into the text kept and filed under the
+        // copy, so its unread passages are still marked there.
+        return saved
     }
 
     /// Writes what is waiting, on the way out.
@@ -3265,19 +3577,27 @@ struct DevotionalEditorView: View {
     /// `save()` finishes on a task of its own, and the process does not wait
     /// for it. That wants an application-level hook rather than a view's.
     private func flushPendingSaves() {
-        if isDirty, hasSavableContent { save() }
+        if let newer = newerCopy {
+            // Their edits are being kept, or could not be: try once more on
+            // the way out, rather than leave them only in this window.
+            if keepingFailed != nil { keepEdits(over: newer) }
+        } else if isDirty, hasSavableContent {
+            save()
+        }
         if workspaceDocuments.contains(where: { $0.isDirty && !$0.hasExternalConflict }) {
             saveDirtyWorkspaceDocuments()
         }
     }
 
     private func save() {
-        guard hasSavableContent, saveState != .saving else { return }
+        guard hasSavableContent, saveState != .saving, newerCopy == nil else { return }
         saveState = .saving
+        // Quitting waits on this count, so it is taken before the task is,
+        // and has to come down on every way out of it, the failures too:
+        // counted inside, a save started on the way out was not yet counted
+        // when quitting looked.
+        LampPendingWrites.shared.begin()
         Task {
-            // Quitting waits on this count, so it has to come down on every
-            // way out of this task, including the failures.
-            LampPendingWrites.shared.begin()
             defer { LampPendingWrites.shared.end() }
             let markdown = content
             let body: StoredWritingBody
@@ -3328,7 +3648,35 @@ struct DevotionalEditorView: View {
                 isEditable: true
             )
             do {
-                let saved = try await model.savePersonalDevotional(devotional, reviewTexts: reviewSession.texts)
+                let written = if let heldRevision {
+                    try await model.savePersonalDevotional(
+                        devotional, reviewTexts: reviewSession.texts, ifNotNewerThan: heldRevision
+                    )
+                } else {
+                    try await model.savePersonalDevotional(devotional, reviewTexts: reviewSession.texts)
+                }
+                guard let saved = written else {
+                    // A newer copy is stored; nothing was written over it.
+                    // The edits are kept inside this task, which quitting and
+                    // closing already wait for. Still saving until it has
+                    // chosen, so the check made as the writings change stands
+                    // back rather than start a second copy of the same edits.
+                    if let stored = model.devotionals.first(where: { $0.id == identifier }) {
+                        await readPage()
+                        if !isDirty || editedFields == fields(of: stored) {
+                            // Nothing typed since, or typed what arrived.
+                            takeIn(stored)
+                        } else {
+                            newerCopy = stored
+                            keepingFailed = nil
+                            saveState = .idle
+                            await keepEditsNow()
+                        }
+                    }
+                    saveState = .idle
+                    return
+                }
+                heldRevision = saved.lastModified
                 if writingHold == nil, !editorIsGone {
                     writingHold = WritingChatTurns.hold(
                         saved.id, revision: saved.lastModified ?? Date(),
@@ -3356,6 +3704,7 @@ struct DevotionalEditorView: View {
                 persistedFields[0] = saved.title
                 savedFields = persistedFields
                 saveState = .saved
+                lookForNewerCopy(in: model.devotionals)
                 await recordPrimaryUserRevision(
                     before: previouslySavedContent,
                     after: submitted[9]

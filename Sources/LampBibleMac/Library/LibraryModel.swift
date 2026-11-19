@@ -1664,17 +1664,44 @@ final class LibraryModel: ObservableObject {
     /// `WritingReviewTexts`.
     @discardableResult
     func savePersonalDevotional(_ devotional: LampDevotional, reviewTexts: [String] = []) async throws -> LampDevotional {
+        try await savingPersonalDevotional(devotional, reviewTexts: reviewTexts) {
+            try await self.library.savePersonalDevotional(devotional)
+        }!
+    }
+
+    /// The same, unless the stored copy was saved after `revision`, the one
+    /// the editor began from: a copy from another device, brought in by sync
+    /// while the editor was open. Nil then, having written nothing, and the
+    /// writings read again so the editor can see the newer one.
+    func savePersonalDevotional(
+        _ devotional: LampDevotional, reviewTexts: [String] = [], ifNotNewerThan revision: Date
+    ) async throws -> LampDevotional? {
+        try await savingPersonalDevotional(devotional, reviewTexts: reviewTexts) {
+            try await self.library.savePersonalDevotional(devotional, ifNotNewerThan: revision)
+        }
+    }
+
+    private func savingPersonalDevotional(
+        _ devotional: LampDevotional, reviewTexts: [String], write: () async throws -> LampDevotional?
+    ) async throws -> LampDevotional? {
         // The carry's place in line, and its generation, taken before the
         // save waits on the database: a turn's draft taken in meanwhile is
         // then marked after this carry, which cannot take its marks back.
         let carry = reviewCarry(for: devotional.id)
         let slot = carry.map { _ in reserveReviewCarry(for: devotional.id) }
-        let saved: LampDevotional
+        let written: LampDevotional?
         do {
-            saved = try await library.savePersonalDevotional(devotional)
+            written = try await write()
         } catch {
             slot?.reservation.giveUp()
             throw error
+        }
+        guard let saved = written else {
+            // Refused: nothing was written, so nothing is carried, and the
+            // place in line is given up rather than left to time out.
+            slot?.reservation.giveUp()
+            devotionals = try await library.devotionals()
+            return nil
         }
         if let carry, let slot { carryReviewMarks(carry, to: saved, from: reviewTexts, in: slot) }
         devotionals = try await library.devotionals()
