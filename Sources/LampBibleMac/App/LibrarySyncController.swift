@@ -1143,6 +1143,16 @@ extension LibrarySyncController {
             now: Int64(Date().timeIntervalSince1970 * 1_000)
         )
         candidates += LampSyncLocalFiles.writingReviews(inLibraryAt: library.rootURL, fileManager: fileManager)
+        // And its documents, the outline and notes beside it, swept before
+        // the workspaces are gathered below for the same reason.
+        let documentDeletions = try LampWritingDocumentStore(
+            rootURL: LampWritingWorkspace.root(libraryRootURL: library.rootURL, fileManager: fileManager)
+        ).deletions(
+            deleted: LampWritingReviewStore.deletedWritings(in: personalLedger),
+            held: Set(writings.map(\.id)),
+            members: Dictionary(manifest.members.map { ($0.path, $0.presentSince ?? 0) }, uniquingKeysWith: max),
+            now: Int64(Date().timeIntervalSince1970 * 1_000)
+        )
 
         // Off the main thread, which this controller otherwise holds. Hashing
         // every file is most of a pass's own work, a second and a half on a
@@ -1189,6 +1199,7 @@ extension LibrarySyncController {
         // carried it is the module this source published it under.
         let personal = personalLedger
         result.gathered.deletedLocally.merge(reviewDeletions) { max($0, $1) }
+        result.gathered.deletedLocally.merge(documentDeletions) { max($0, $1) }
         for (setID, entry) in personal.entries[.highlightSet] ?? [:] {
             guard let deletedAt = entry.deletedAt,
                   let moduleID = moduleIDs[setID],
