@@ -448,11 +448,11 @@ struct DevotionalAgentDraftReconciler {
     }
 
     private func markAssistantChange(from writing: String, to draft: String, turnID: UUID?) {
-        // What is anchored in another version the editor has seen — the last
-        // save, say, while the writer had typed on — is carried to the text
-        // the agent changed first, and the agent's change carries it on.
-        let known = WritingReviewTexts.shared.known(for: writingID)
-        updateReview { $0.carryingToText(writing, from: known).markingAssistantChange(from: writing, to: draft, turnID: turnID) }
+        // Carried from the text the agent changed, and from there only: two
+        // texts hashed, not every version the editor has seen. A mark
+        // anchored in another of those is found in it where it stands once,
+        // or is carried by the next save, which knows them all.
+        updateReview { $0.markingAssistantChange(from: writing, to: draft, turnID: turnID) }
         WritingReviewTexts.shared.remember(draft, for: writingID)
     }
 

@@ -1679,6 +1679,10 @@ final class LibraryModel: ObservableObject {
     /// order, a later edit would be carried from text the marks had not yet
     /// reached, and they would be left where they were.
     private var reviewCarryTask: Task<Void, Never>?
+    /// How many saves of each writing have asked for a carry. A carry runs
+    /// only while its save is the latest: dates cannot say, since a save is
+    /// stamped to the fraction of a second and stored to the second.
+    private var reviewSaveGeneration: [String: Int] = [:]
 
     /// Carries the writing's review marks across an edit, so the rest of a
     /// marked passage the writer typed into stays marked and their own words
@@ -1693,6 +1697,8 @@ final class LibraryModel: ObservableObject {
         _ carry: (store: LampWritingReviewStore, previous: LampDevotional), to saved: LampDevotional
     ) {
         let waitFor = reviewCarryTask
+        let generation = (reviewSaveGeneration[saved.id] ?? 0) + 1
+        reviewSaveGeneration[saved.id] = generation
         // The versions the editor has seen, a clear's among them: each mark
         // is carried from the text it is anchored in.
         let known = WritingReviewTexts.shared.known(for: saved.id)
@@ -1706,11 +1712,7 @@ final class LibraryModel: ObservableObject {
             // takes each mark from its own text. Carried now, from this
             // save's older pair, a mark a turn made since would be taken
             // back to a text the writing has already left.
-            let overtaken = await MainActor.run {
-                self?.devotionals.first { $0.id == saved.id }.map {
-                    $0.lastModified != saved.lastModified || $0.content != saved.content || $0.contentJSON != saved.contentJSON
-                } ?? true
-            }
+            let overtaken = await MainActor.run { self?.reviewSaveGeneration[saved.id] != generation }
             guard !overtaken else {
                 await MainActor.run { LampPendingWrites.shared.end() }
                 return
