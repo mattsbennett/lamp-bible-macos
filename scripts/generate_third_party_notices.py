@@ -112,19 +112,20 @@ ACCEPTED_GAPS: dict[str, str] = {
 # A rebuild of the iOS editor that adds, removes or upgrades no package then passes with no fresh
 # review, because rebuilt bytes cannot leave a package unlicensed. A package that does move stops
 # the run, which is exactly when EDITOR_NOTICE_FILES needs a file.
-MAC_EDITOR_SHA256 = "d930bd3b801c88b07f3651f89cce3af38b87b5518c551b5c3aeb86448577bc0d"
-MAC_EDITOR_FROM = "a70d4db"
+MAC_EDITOR_SHA256 = "bd4520fa9c153e2fd3d7ce8dd69a3e503505918203af7a73fc3693e2573f344a"
+MAC_EDITOR_FROM = "f114273"
 MAC_EDITOR_REVIEW = (
-    "2026-11-19: the Mac's copy is the iOS editor's script built at a70d4db — which sends a "
-    "review clear's unmarked page text beside the marked, keeps its markers out of links and "
-    "their writing unchanged, and sets a page's mode without reporting an edit — inside the "
+    "2026-11-19: the Mac's copy is the iOS editor's script built at f114273 — which sends a "
+    "review clear's unmarked page text beside the marked, keeps its markers out of links, gives "
+    "each marker the formatting under which the page's writing of what is round it is unchanged, "
+    "and sets a page's mode without reporting an edit — inside the "
     "Mac's own page and styles, kept from its earlier copy (iOS c98d4f3, with Mac 450e42f's link "
     "blue). The script is the iOS build's byte for byte, the `light` class toggle from the "
     "iPhone redesign (7c13d54) included; nothing on the Mac styles that class, so it changes "
     "nothing here. The difference between the two bundles is the stylesheet alone: the Mac does "
     "not take the redesign's CSS, nor the phone's placing of a mark's clear button (eeae228), and "
     "draws the review marks from its own injected writing-page sheet. No package moved between "
-    "c98d4f3 and a70d4db."
+    "c98d4f3 and f114273."
 )
 
 # Resolved but not linked into anything that ships.
