@@ -1486,9 +1486,8 @@ struct DevotionalAgentWorkspaceView: View {
                 libraryRootURL: libraryRootURL,
                 bundledModulesArchiveURL: bundledModulesArchiveURL
             )
-            // Prepared off the main actor, so the pane may have moved to
-            // another writing meanwhile; that one's own preparation is the
-            // one to keep.
+            // Awaited, so the pane may have moved to another writing
+            // meanwhile; that one's own preparation is the one to keep.
             guard !Task.isCancelled else { return }
             // Before the chat pane is given a workspace to mount with, so it
             // is never built against a provider this writing is not on.

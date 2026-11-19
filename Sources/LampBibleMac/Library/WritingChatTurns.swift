@@ -22,19 +22,19 @@ enum WritingChatTurns {
     /// as it is now: its draft, its brief, and the helper that gives the
     /// agent Lamp's modules under `policy`.
     ///
-    /// Off the main actor. It writes the policy, the helper's configuration,
-    /// the skills and the instructions — 25 to 33 ms on a fresh workspace,
-    /// measured in Debug — and a phone can start a turn while the writer is
-    /// typing at the Mac.
+    /// On the main actor, for now, which is what keeps it from overlapping
+    /// anything else that writes the same files. It writes the policy, the
+    /// helper's configuration, the skills and the instructions — 25 to 33 ms
+    /// on a fresh workspace, measured in Debug — and nothing about that work
+    /// is safe to interleave: the skills catalogue is copied, the
+    /// instructions and provider configurations rewritten whole, and the
+    /// context, the brief and a skill edit write the same files from the
+    /// pane's own actions. One writing can be open in two panes, and a
+    /// phone's turn is a third caller.
     ///
-    /// **One at a time**, every preparation in the app. The main actor used
-    /// to make sure of that, and nothing about the work is safe to overlap:
-    /// it copies the skills catalogue, rewrites the instructions and the
-    /// provider configurations whole, and moves context files about. The
-    /// same writing can be open in its own window and in the library pane at
-    /// once, and a phone's turn is a third caller on its own schedule; two
-    /// preparations of one workspace interleaving could leave a half-written
-    /// instructions file, or a skill with files from both.
+    /// Asynchronous so that moving it off the main actor changes no caller:
+    /// that wants one actor owning every writer of a workspace's files, not
+    /// just this one, or the race comes back through the others.
     static func prepare(
         writingID: String,
         draft: String,
@@ -43,13 +43,13 @@ enum WritingChatTurns {
         libraryRootURL: URL,
         bundledModulesArchiveURL: URL?
     ) async throws -> URL {
-        try await WritingWorkspacePreparation.shared.prepare(
+        try prepareNow(
             writingID: writingID, draft: draft, context: context, policy: policy,
             libraryRootURL: libraryRootURL, bundledModulesArchiveURL: bundledModulesArchiveURL
         )
     }
 
-    fileprivate nonisolated static func prepareNow(
+    private static func prepareNow(
         writingID: String,
         draft: String,
         context: String,
@@ -283,23 +283,6 @@ enum WritingChatTurns {
                 plainContent: LampPortableDevotionalContent.plainText(from: json) ?? ""
             )
         }.value
-    }
-}
-
-/// Where every writing workspace is prepared, one preparation at a time.
-/// An actor's work runs in turn, and this one's never suspends partway, so
-/// no two preparations overlap.
-private actor WritingWorkspacePreparation {
-    static let shared = WritingWorkspacePreparation()
-
-    func prepare(
-        writingID: String, draft: String, context: String, policy: LampAgentAccessPolicy,
-        libraryRootURL: URL, bundledModulesArchiveURL: URL?
-    ) throws -> URL {
-        try WritingChatTurns.prepareNow(
-            writingID: writingID, draft: draft, context: context, policy: policy,
-            libraryRootURL: libraryRootURL, bundledModulesArchiveURL: bundledModulesArchiveURL
-        )
     }
 }
 
