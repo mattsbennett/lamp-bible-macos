@@ -752,6 +752,12 @@ struct DevotionalEditorView: View {
     /// left alone is open while it holds something and folded while empty.
     @State private var foldedOpen: [String: Bool] = [:]
     @State private var tipTapCoordinator: TipTapEditorCoordinator?
+    /// The copy of the writing this editor holds, said to a phone's turn
+    /// (`WritingChatTurns.watched`).
+    @State private var writingHold: WritingHold?
+    /// Gone from screen: a save finishing after that does not take a hold
+    /// it would never give up.
+    @State private var editorIsGone = false
     /// What the assistant changed that the writer has not yet read, where
     /// they keep marks (`WritingReviewMarks`).
     @StateObject private var reviewSession = WritingReviewSession()
@@ -1093,6 +1099,9 @@ struct DevotionalEditorView: View {
         .onDisappear {
             flushPendingSaves()
             LampPendingWrites.shared.unregister(pendingWritesID)
+            editorIsGone = true
+            writingHold?.release()
+            writingHold = nil
         }
         .focusedSceneValue(\.writingFind, find)
         // ⌘S lives in the File menu now, not on a toolbar button: see
@@ -3231,7 +3240,11 @@ struct DevotionalEditorView: View {
         saveState = .idle
         savedFields = editedFields
         hasLoaded = true
-        WritingChatTurns.noteRevision(devotional.lastModified, of: devotional.id)
+        writingHold?.release()
+        writingHold = WritingChatTurns.hold(
+            devotional.id, revision: devotional.lastModified ?? .distantPast,
+            digest: LampAgentRemoteWritingRevision.digest(of: devotional)
+        )
     }
 
     /// Writes what is waiting, on the way out.
@@ -3310,7 +3323,17 @@ struct DevotionalEditorView: View {
             )
             do {
                 let saved = try await model.savePersonalDevotional(devotional)
-                WritingChatTurns.noteRevision(saved.lastModified, of: saved.id)
+                if writingHold == nil, !editorIsGone {
+                    writingHold = WritingChatTurns.hold(
+                        saved.id, revision: saved.lastModified ?? Date(),
+                        digest: LampAgentRemoteWritingRevision.digest(of: saved)
+                    )
+                } else {
+                    writingHold?.update(
+                        revision: saved.lastModified ?? Date(),
+                        digest: LampAgentRemoteWritingRevision.digest(of: saved)
+                    )
+                }
                 createdDate = saved.created
                 originalContentJSON = saved.contentJSON
                 originalPlainContent = saved.content

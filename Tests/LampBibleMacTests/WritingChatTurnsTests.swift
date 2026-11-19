@@ -61,14 +61,20 @@ struct WritingChatTurnsTests {
         #expect(!WritingChatTurns.isWatched(id))
     }
 
-    @Test func theRevisionAWindowHoldsIsSaidOnlyWhileItWatches() {
+    @Test func theOldestCopyAnyEditorHoldsIsTheOneSaid() {
         let id = "revision-\(UUID().uuidString)"
-        let revision = Date(timeIntervalSince1970: 1_700_000_000)
-        WritingChatTurns.noteRevision(revision, of: id)
-        #expect(WritingChatTurns.watchedRevision(id) == nil)
-        let watch = WritingChatTurns.watch(writingID: id)
-        #expect(WritingChatTurns.watchedRevision(id) == revision)
-        watch.end()
-        #expect(WritingChatTurns.watchedRevision(id) == nil)
+        let older = Date(timeIntervalSince1970: 1_700_000_000)
+        let newer = Date(timeIntervalSince1970: 1_700_000_500)
+        #expect(WritingChatTurns.watched(id) == nil)
+        let first = WritingChatTurns.hold(id, revision: older, digest: "a")
+        let second = WritingChatTurns.hold(id, revision: newer, digest: "b")
+        #expect(WritingChatTurns.watched(id)?.revision == older)
+        #expect(WritingChatTurns.watched(id)?.digest == "a")
+        first.release()
+        #expect(WritingChatTurns.watchedRevision(id) == newer)
+        second.update(revision: older, digest: "c")
+        #expect(WritingChatTurns.watched(id)?.digest == "c")
+        second.release()
+        #expect(WritingChatTurns.watched(id) == nil)
     }
 }

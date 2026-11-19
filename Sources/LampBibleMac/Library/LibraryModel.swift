@@ -1660,9 +1660,19 @@ final class LibraryModel: ObservableObject {
 
     @discardableResult
     func savePersonalDevotional(_ devotional: LampDevotional) async throws -> LampDevotional {
+        // The carry's place in line, and its generation, taken before the
+        // save waits on the database: a turn's draft taken in meanwhile is
+        // then marked after this carry, which cannot take its marks back.
         let carry = reviewCarry(for: devotional.id)
-        let saved = try await library.savePersonalDevotional(devotional)
-        if let carry { carryReviewMarks(carry, to: saved) }
+        let slot = carry.map { _ in reserveReviewCarry(for: devotional.id) }
+        let saved: LampDevotional
+        do {
+            saved = try await library.savePersonalDevotional(devotional)
+        } catch {
+            slot?.reservation.giveUp()
+            throw error
+        }
+        if let carry, let slot { carryReviewMarks(carry, to: saved, in: slot) }
         devotionals = try await library.devotionals()
         await refreshManuscriptNotes(for: saved)
         return saved
@@ -1673,12 +1683,19 @@ final class LibraryModel: ObservableObject {
     /// writing has none. Asked before anything is rendered, so a save with
     /// no marks does no more work than it did before marks existed.
     private func reviewCarry(for writingID: String) -> (store: LampWritingReviewStore, previous: LampDevotional)? {
+        // Whether the writing has marks is asked when the carry runs, not
+        // now: a turn's first marks may still be in line, and a save that
+        // looked now would carry nothing and leave them behind.
         guard let store = WritingReviewMarks.store(libraryRootURL: library.rootURL),
-              let url = try? store.url(writingID: writingID),
-              FileManager.default.fileExists(atPath: url.path),
               let previous = devotionals.first(where: { $0.id == writingID })
         else { return nil }
         return (store, previous)
+    }
+
+    private func reserveReviewCarry(for writingID: String) -> (reservation: WritingReviewWork.Reservation, generation: Int) {
+        let generation = (reviewSaveGeneration[writingID] ?? 0) + 1
+        reviewSaveGeneration[writingID] = generation
+        return (WritingReviewWork.shared.reserve(), generation)
     }
 
     /// How many saves of each writing have asked for a carry. A carry runs
@@ -1696,22 +1713,21 @@ final class LibraryModel: ObservableObject {
     /// them; its marks were made as it was taken in, and the carry leaves a
     /// mark already standing where it was made.
     private func carryReviewMarks(
-        _ carry: (store: LampWritingReviewStore, previous: LampDevotional), to saved: LampDevotional
+        _ carry: (store: LampWritingReviewStore, previous: LampDevotional), to saved: LampDevotional,
+        in slot: (reservation: WritingReviewWork.Reservation, generation: Int)
     ) {
-        let generation = (reviewSaveGeneration[saved.id] ?? 0) + 1
-        reviewSaveGeneration[saved.id] = generation
         // The versions the editor has seen, a clear's among them: each mark
         // is carried from the text it is anchored in.
         let known = WritingReviewTexts.shared.known(for: saved.id)
-        // In line with the assistant's drafts taken in, and counted as a
-        // write, so quitting waits for it (`WritingReviewWork`).
-        WritingReviewWork.shared.run { [weak self] in
+        let generation = slot.generation
+        slot.reservation.fill { [weak self] in
             // Overtaken: a newer save of this writing is in, and its carry
-            // takes each mark from its own text. Carried now, from this
-            // save's older pair, a mark a turn made since would be taken
-            // back to a text the writing has already left.
+            // takes each mark from its own text.
             let overtaken = await MainActor.run { self?.reviewSaveGeneration[saved.id] != generation }
-            guard !overtaken else { return }
+            guard !overtaken,
+                  let url = try? carry.store.url(writingID: saved.id),
+                  FileManager.default.fileExists(atPath: url.path)
+            else { return }
             let previous = carry.previous.displayMarkdown
             let current = saved.displayMarkdown
             if previous != current {
@@ -1720,6 +1736,7 @@ final class LibraryModel: ObservableObject {
             await MainActor.run { WritingReviewTexts.shared.remember(current, for: saved.id) }
         }
     }
+
 
 
     /// Re-splits the writing across any deck whose notes follow it, and reports

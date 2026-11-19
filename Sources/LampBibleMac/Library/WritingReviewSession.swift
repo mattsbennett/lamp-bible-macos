@@ -55,6 +55,34 @@ final class WritingReviewWork {
         }
     }
 
+    /// A place in line taken now, for work only known later: a save takes
+    /// its place before it waits on the database, so a turn's draft taken in
+    /// meanwhile is marked after its carry, never before. Filled with the
+    /// work once known, or given up, and either way the line moves on.
+    struct Reservation: Sendable {
+        fileprivate let continuation: AsyncStream<@Sendable () async -> Void>.Continuation
+
+        func fill(_ work: @escaping @Sendable () async -> Void) {
+            continuation.yield(work)
+            continuation.finish()
+        }
+
+        func giveUp() {
+            continuation.finish()
+        }
+    }
+
+    func reserve() -> Reservation {
+        let (stream, continuation) = AsyncStream<@Sendable () async -> Void>.makeStream()
+        run {
+            for await work in stream {
+                await work()
+                break
+            }
+        }
+        return Reservation(continuation: continuation)
+    }
+
     /// Returns once everything asked for so far is done.
     func drained() async {
         await last?.value

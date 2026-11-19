@@ -1374,14 +1374,17 @@ struct DevotionalAgentWorkspaceView: View {
                     workspace: workspaceURL,
                     preparePrompt: { [editorFocus, libraryRootURL, devotionalID] message in
                         // The draft as the agent will read it, which is
-                        // where the marks are found.
-                        let draft = (try? DevotionalAgentWorkspaceStore.readDraft(from: workspaceURL)) ?? ""
-                        return WritingChatTurns.prompt(
-                            for: message, focus: editorFocus,
-                            review: try? WritingReviewMarks.store(libraryRootURL: libraryRootURL)?
-                                .review(writingID: devotionalID),
-                            writing: draft
-                        )
+                        // where the marks are found; read off the main
+                        // actor, since another writer can hold the marks
+                        // file's lock for as long as a long draft takes.
+                        let store = WritingReviewMarks.store(libraryRootURL: libraryRootURL)
+                        let (draft, review) = await Task.detached(priority: .userInitiated) {
+                            (
+                                (try? DevotionalAgentWorkspaceStore.readDraft(from: workspaceURL)) ?? "",
+                                try? store?.review(writingID: devotionalID)
+                            )
+                        }.value
+                        return WritingChatTurns.prompt(for: message, focus: editorFocus, review: review, writing: draft)
                     },
                     onRunningChanged: { chatIsReplying = $0 },
                     revertTurn: { undoTurn($0) },

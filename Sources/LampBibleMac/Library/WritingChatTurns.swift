@@ -184,22 +184,41 @@ enum WritingChatTurns {
         (watchers[writingID] ?? 0) > 0
     }
 
-    /// The stored version of each writing an editor last loaded or saved.
-    private static var revisions: [String: Date] = [:]
+    /// The copy each open editor holds of each writing, one hold per editor.
+    private static var holds: [ObjectIdentifier: (writingID: String, revision: Date, digest: String?)] = [:]
 
-    /// Said by the editor as it loads a writing and after each save: the
-    /// `lastModified` of the copy it now holds.
-    static func noteRevision(_ revision: Date?, of writingID: String) {
-        revisions[writingID] = revision
+    /// Said by an editor for as long as it holds a copy of a writing, and
+    /// said again after each save: the copy's `lastModified`, and its
+    /// digest (`LampAgentRemoteWritingRevision.digest(of:)`).
+    static func hold(_ writingID: String, revision: Date, digest: String?) -> WritingHold {
+        let hold = WritingHold()
+        holds[ObjectIdentifier(hold)] = (writingID, revision, digest)
+        return hold
     }
 
-    /// The stored version the window watching a writing holds, or nil if no
-    /// window watches it or none was said. A turn asked on a newer copy than
-    /// this would have the agent edit the window's older draft, which the
-    /// window then saves over the newer. Stored dates are whole seconds,
-    /// while a save says its own to the fraction, so compare to the second.
+    fileprivate static func update(_ hold: WritingHold, revision: Date, digest: String?) {
+        guard let held = holds[ObjectIdentifier(hold)] else { return }
+        holds[ObjectIdentifier(hold)] = (held.writingID, revision, digest)
+    }
+
+    fileprivate static func release(_ hold: WritingHold) {
+        holds[ObjectIdentifier(hold)] = nil
+    }
+
+    /// The oldest copy of a writing any open editor holds, or nil where none
+    /// does. A turn asked on a newer copy than this would have the agent edit
+    /// an older draft, which that editor then saves over the newer. Stored
+    /// dates are whole seconds, while a save says its own to the fraction, so
+    /// compare to the second, and by digest where the seconds agree.
+    static func watched(_ writingID: String) -> (revision: Date, digest: String?)? {
+        holds.values.filter { $0.writingID == writingID }
+            .min { $0.revision < $1.revision }
+            .map { ($0.revision, $0.digest) }
+    }
+
+    /// The oldest revision any open editor holds of a writing.
     static func watchedRevision(_ writingID: String) -> Date? {
-        isWatched(writingID) ? revisions[writingID] : nil
+        watched(writingID)?.revision
     }
 
     fileprivate static func unwatch(_ writingID: String) {
@@ -388,6 +407,19 @@ final class WritingWatch {
         guard !ended else { return }
         ended = true
         WritingChatTurns.unwatch(writingID)
+    }
+}
+
+/// An editor's claim on the copy of a writing it holds
+/// (`WritingChatTurns.hold`), updated as it saves and given up as it goes.
+@MainActor
+final class WritingHold {
+    func update(revision: Date, digest: String?) {
+        WritingChatTurns.update(self, revision: revision, digest: digest)
+    }
+
+    func release() {
+        WritingChatTurns.release(self)
     }
 }
 
