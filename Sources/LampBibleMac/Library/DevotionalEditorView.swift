@@ -3457,10 +3457,14 @@ struct DevotionalEditorView: View {
     private func carryReviewMarks(of snapshot: EditsSnapshot, to copyID: String) async throws {
         let originalID = identifier
         let store = LampWritingReviewStore(rootURL: model.library.rootURL)
-        let known = snapshot.reviewTexts
-        let text = snapshot.markdown.replacingOccurrences(
-            of: "lamp-media://\(originalID)/", with: "lamp-media://\(copyID)/"
-        )
+        // Relinked alike in the texts the marks are carried from and the one
+        // they are carried to, or every picture's link reads as a change and
+        // a mark over a picture is lost.
+        func relinked(_ text: String) -> String {
+            text.replacingOccurrences(of: "lamp-media://\(originalID)/", with: "lamp-media://\(copyID)/")
+        }
+        let known = snapshot.reviewTexts.map(relinked)
+        let text = relinked(snapshot.markdown)
         try await Task.detached(priority: .userInitiated) {
             var carried = try store.review(writingID: originalID).carryingToText(text, from: known)
             guard !carried.marks.isEmpty else { return }
@@ -3560,8 +3564,6 @@ struct DevotionalEditorView: View {
             footnotes: d.footnotes, mediaJSON: d.mediaJSON, created: d.created,
             lastModified: d.lastModified, isEditable: true
         ), ifNotNewerThan: revision ?? .distantPast) else { return nil }
-        // The writing's marks, carried into the text kept and filed under the
-        // copy, so its unread passages are still marked there.
         return saved
     }
 
@@ -3573,9 +3575,8 @@ struct DevotionalEditorView: View {
     /// editor inside that window therefore threw the last edit away, and
     /// nothing else caught it.
     ///
-    /// This covers leaving while the app runs. Quitting is still unguarded:
-    /// `save()` finishes on a task of its own, and the process does not wait
-    /// for it. That wants an application-level hook rather than a view's.
+    /// Quitting runs this too (`LampPendingWrites`), and waits for what it
+    /// starts: each write is counted before its task begins.
     private func flushPendingSaves() {
         if let newer = newerCopy {
             // Their edits are being kept, or could not be: try once more on
