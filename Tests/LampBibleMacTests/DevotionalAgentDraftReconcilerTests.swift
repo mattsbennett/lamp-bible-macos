@@ -389,6 +389,43 @@ struct DevotionalAgentDraftReconcilerTests {
         #expect(try store.review(writingID: "writing-1").isEmpty)
     }
 
+    // MARK: - A turn no window is watching
+
+    @Test func unwatchedAnAgentsWriteIsTaken() throws {
+        let workspace = try workspace()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        try writeDraft("Mine", to: workspace)
+        try reconciler(workspace).synchronize(writing: "Mine")
+        try writeDraft("The agent's", to: workspace)
+        #expect(try reconciler(workspace).reconcileUnwatched(writing: "Mine") == .take("The agent's"))
+    }
+
+    @Test func unwatchedAnEditSyncedInUnderAnUntouchedDraftIsNotUndone() throws {
+        let workspace = try workspace()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        try writeDraft("Before", to: workspace)
+        try reconciler(workspace).synchronize(writing: "Before")
+        // Edited on the phone and synced here; the draft has not moved.
+        #expect(try reconciler(workspace).reconcileUnwatched(writing: "Edited on the phone") == .unchanged)
+        #expect(try draft(in: workspace) == "Before", "left for the next turn to level")
+        // And the next turn's prepare levels it.
+        _ = try reconciler(workspace).prepare(writing: "Edited on the phone")
+        #expect(try draft(in: workspace) == "Edited on the phone")
+    }
+
+    @Test func unwatchedBothMovingKeepsTheWritersWords() throws {
+        let workspace = try workspace()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        try writeDraft("Base", to: workspace)
+        try reconciler(workspace).synchronize(writing: "Base")
+        try writeDraft("The agent's, from the base", to: workspace)
+        guard case .keep = try reconciler(workspace).reconcileUnwatched(writing: "Mine, synced in since") else {
+            Issue.record("expected the writing to be kept")
+            return
+        }
+        #expect(try history(in: workspace).contains { $0.afterMarkdown == "The agent's, from the base" })
+    }
+
     @Test func theWorkspaceRemembersWhereThingsStand() throws {
         let workspace = try workspace()
         defer { try? FileManager.default.removeItem(at: workspace) }

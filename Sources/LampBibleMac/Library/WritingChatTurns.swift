@@ -160,6 +160,28 @@ enum WritingChatTurns {
 
     // MARK: - Taking a turn in
 
+    /// Brings the writing's draft level with the writing before a turn no
+    /// window is watching, as a window does when it opens: the writing may
+    /// have moved since — edited on the phone and synced here — and an agent
+    /// given the older draft would edit what is no longer there. Call it
+    /// after `prepare` and before sending.
+    ///
+    /// What a run that outlived its window left in the draft is taken in
+    /// here too, under `turnID`, and saved as the writing.
+    @discardableResult
+    static func begin(
+        writingID: String, turnID: UUID?, libraryModel: LibraryModel
+    ) async throws -> DevotionalAgentDraftReconciler.Outcome {
+        let (writing, workspace, root) = try located(writingID, in: libraryModel)
+        let current = writing.displayMarkdown
+        let outcome = try reconciler(writingID: writingID, workspace: workspace, libraryRootURL: root)
+            .prepare(writing: current, turnID: turnID)
+        if case .take(let draft) = outcome, draft != current {
+            try await save(draft, as: writing, in: libraryModel)
+        }
+        return outcome
+    }
+
     /// Takes in what a turn wrote to the writing's draft when no window is
     /// watching it, and saves it as the writing: recorded in the history
     /// under `turnID`, and marked for review where the writer keeps marks.
@@ -167,30 +189,46 @@ enum WritingChatTurns {
     /// The same reconciler a window asks, so a window opened on the writing
     /// meanwhile finds the work already accounted for, and one already open
     /// takes the text up rather than recording it a second time.
+    ///
+    /// Only the agent's own writing is saved. A window's `.adopt` — the
+    /// draft and its mark agree, the writing does not — means another
+    /// window wrote it, whose own save will follow; here, with none, it is
+    /// as likely the writing moved under a draft nobody touched, by an edit
+    /// synced in from the phone, and saving the draft would put that edit
+    /// back. So it is left, and the next `begin` levels the draft instead.
+    /// Where the writing moved and the agent wrote too, the writer's words
+    /// stay and the agent's draft goes to the history, as it does in a
+    /// window when both sides moved.
     @discardableResult
     static func collect(
         writingID: String, turnID: UUID?, libraryModel: LibraryModel
     ) async throws -> DevotionalAgentDraftReconciler.Outcome {
+        let (writing, workspace, root) = try located(writingID, in: libraryModel)
+        let current = writing.displayMarkdown
+        let outcome = try reconciler(writingID: writingID, workspace: workspace, libraryRootURL: root)
+            .reconcileUnwatched(writing: current, turnID: turnID)
+        if case .take(let draft) = outcome, draft != current {
+            try await save(draft, as: writing, in: libraryModel)
+        }
+        return outcome
+    }
+
+    private static func located(
+        _ writingID: String, in libraryModel: LibraryModel
+    ) throws -> (LampDevotional, URL, URL) {
         let root = libraryModel.library.rootURL
         guard let writing = libraryModel.devotionals.first(where: { $0.id == writingID }) else {
             throw CocoaError(.fileNoSuchFile, userInfo: [NSLocalizedDescriptionKey: "That writing isn't on this Mac."])
         }
-        let workspace = DevotionalAgentWorkspaceStore.workspaceURL(libraryRootURL: root, devotionalID: writingID)
-        let current = writing.displayMarkdown
-        let outcome = try reconciler(writingID: writingID, workspace: workspace, libraryRootURL: root)
-            .reconcile(writing: current, turnID: turnID)
-        switch outcome {
-        case .take(let draft), .adopt(let draft):
-            guard draft != current else { break }
-            let body = try await storedBody(
-                markdown: draft, originalJSON: writing.contentJSON,
-                originalPlainContent: writing.content, bodyChanged: true
-            )
-            try await libraryModel.savePersonalDevotional(writing.replacingBody(body))
-        case .unchanged, .keep:
-            break
-        }
-        return outcome
+        return (writing, DevotionalAgentWorkspaceStore.workspaceURL(libraryRootURL: root, devotionalID: writingID), root)
+    }
+
+    private static func save(_ draft: String, as writing: LampDevotional, in libraryModel: LibraryModel) async throws {
+        let body = try await storedBody(
+            markdown: draft, originalJSON: writing.contentJSON,
+            originalPlainContent: writing.content, bodyChanged: true
+        )
+        try await libraryModel.savePersonalDevotional(writing.replacingBody(body))
     }
 
     // MARK: - The writing's brief and body

@@ -121,6 +121,28 @@ struct DevotionalAgentDraftReconciler {
         )
     }
 
+    /// The same pass for a turn no window is watching (a paired phone's).
+    ///
+    /// A window reads "the draft and its mark agree, the writing does not"
+    /// as another window's work and adopts it; its own edits move the mark,
+    /// so that is the only way it can arise there. With no window, the
+    /// writing also moves by sync — an edit made on the phone — under a
+    /// draft nobody touched, and adopting the draft would put the edit back.
+    /// So nothing is taken then, and the next turn's `prepare` levels the
+    /// draft. Where the agent wrote as well, both moved: the writer's words
+    /// stay and the draft goes to the history.
+    func reconcileUnwatched(writing: String, provider: String? = nil, turnID: UUID? = nil) throws -> Outcome {
+        guard let marker = marker(), marker != writing else {
+            return try reconcile(writing: writing, provider: provider, turnID: turnID)
+        }
+        let diskDraft = try draftOnDisk()
+        guard diskDraft != marker else { return .unchanged }
+        return try takeOrKeep(
+            diskDraft: diskDraft, writing: writing, previous: marker,
+            provider: provider, turnID: turnID, writingMovedSince: true
+        )
+    }
+
     /// Opening the pane, where the two may have moved apart while it was
     /// closed — including by a run that outlived it.
     func prepare(
