@@ -4,14 +4,16 @@ import LampCore
 import LampBibleMacSupport
 #endif
 
-/// The versions of each writing this Mac has lately seen: the editor's text
-/// as it settles, each body saved, each draft taken in. A mark is anchored
-/// in a text, and is carried exactly from that text; a clear made while the
-/// editor holds text not yet saved anchors what is left there, and the save
-/// that follows carries from the last saved body. Kept here, a carry can
-/// take each mark from its own (`LampWritingReview.carryingToText`), which
-/// hashes them off the main actor. One that has gone is still found by its
-/// words and context, so this only makes carries exact more often.
+/// The versions of each writing this Mac has lately seen, in any window: the
+/// editor's text as it settles, each body saved, each draft taken in. A mark
+/// is anchored in a text, and is placed exactly from that text
+/// (`LampWritingReview.carryingToText`, which hashes them off the main
+/// actor). One that has gone is still found by its words and context.
+///
+/// For drawing only. What is written — a save's carry, a clear — carries
+/// from the texts its own window held (`WritingReviewSession.texts`): a
+/// draft another window took in, not yet saved, is not this one's to
+/// carry, and carried from here its new words would be retired for good.
 @MainActor
 final class WritingReviewTexts {
     static let shared = WritingReviewTexts()
@@ -148,6 +150,9 @@ final class WritingReviewSession: ObservableObject {
     /// again for the same text, they wait for the text to change rather
     /// than going round every few hundred milliseconds.
     private var resentFor: String?
+    /// The texts this editor has held, newest last: what its clears and its
+    /// saves' carries take marks from.
+    private(set) var texts: [String] = []
 
     static let checkInterval: Duration = .seconds(1)
     static let settleDelay: Duration = .milliseconds(300)
@@ -161,7 +166,8 @@ final class WritingReviewSession: ObservableObject {
         drawGeneration += 1
         self.writingID = writingID
         self.text = text
-        WritingReviewTexts.shared.remember(text, for: writingID)
+        texts = []
+        remember(text)
         review = nil
         fileDate = nil
         needsResend = false
@@ -207,9 +213,9 @@ final class WritingReviewSession: ObservableObject {
     }
 
     private func clear(range: NSRange, in text: String) {
-        guard let writingID else { return }
-        WritingReviewTexts.shared.remember(text, for: writingID)
-        let known = WritingReviewTexts.shared.known(for: writingID)
+        guard writingID != nil else { return }
+        remember(text)
+        let known = texts
         change { $0.carryingToText(text, from: known).clearing(range, in: text) }
     }
 
@@ -243,6 +249,15 @@ final class WritingReviewSession: ObservableObject {
     }
 
     // MARK: - Internals
+
+    /// Remembers a text this editor holds, here and among every window's.
+    private func remember(_ text: String) {
+        guard let writingID else { return }
+        WritingReviewTexts.shared.remember(text, for: writingID)
+        guard texts.last != text else { return }
+        texts.append(text)
+        texts = Array(texts.suffix(WritingReviewTexts.kept))
+    }
 
     /// Changes the marks file off the main actor — another writer can hold
     /// its lock for as long as a long manuscript takes to compare — and
@@ -287,7 +302,7 @@ final class WritingReviewSession: ObservableObject {
         settleTask = Task { [weak self] in
             try? await Task.sleep(for: Self.settleDelay)
             guard !Task.isCancelled, let self else { return }
-            if let writingID = self.writingID { WritingReviewTexts.shared.remember(self.text, for: writingID) }
+            self.remember(self.text)
             // Sent too while none are shown but some stand: marks that placed
             // nowhere in the text before (a newer body arrived) may place in
             // this one.

@@ -112,6 +112,35 @@ struct WritingReviewSessionTests {
         #expect(session.count > 0)
     }
 
+    /// Codex's case: another window took the assistant's draft in, and its
+    /// marks are made, but its save has not landed. A clear in a window that
+    /// still holds the text before carries nothing from the draft it never
+    /// held, so the draft's new words keep their mark.
+    @Test func aClearLeavesTheMarksOfADraftItsWindowNeverHeld() async throws {
+        let root = try library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LampWritingReviewStore(rootURL: root)
+        let id = "other-window-\(UUID().uuidString)"
+        let held = "One alpha three.\n\nFour five six."
+        let draft = "One alpha three.\n\nFour beta six."
+        try store.save(
+            LampWritingReview(writingID: id)
+                .markingAssistantChange(from: "One two three.\n\nFour five six.", to: held)
+                .markingAssistantChange(from: held, to: draft)
+        )
+        WritingReviewTexts.shared.remember(draft, for: id)
+        let session = WritingReviewSession()
+        let following = Task { await session.follow(writingID: id, text: held, libraryRootURL: root, isShown: true) }
+        defer { following.cancel() }
+        try await waitUntil { session.count == 1 }
+
+        session.clear(range: (held as NSString).range(of: "alpha"))
+        try await waitUntil {
+            let review = try? store.review(writingID: id)
+            return review?.highlightedRanges(in: draft).map { (draft as NSString).substring(with: $0) } == ["beta"]
+        }
+    }
+
     @Test func turnedOffNothingIsShown() async throws {
         let root = try library()
         defer { try? FileManager.default.removeItem(at: root) }

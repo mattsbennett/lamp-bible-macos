@@ -3322,7 +3322,7 @@ struct DevotionalEditorView: View {
                 isEditable: true
             )
             do {
-                let saved = try await model.savePersonalDevotional(devotional)
+                let saved = try await model.savePersonalDevotional(devotional, reviewTexts: reviewSession.texts)
                 if writingHold == nil, !editorIsGone {
                     writingHold = WritingChatTurns.hold(
                         saved.id, revision: saved.lastModified ?? Date(),

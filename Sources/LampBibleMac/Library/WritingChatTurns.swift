@@ -305,7 +305,8 @@ enum WritingChatTurns {
             markdown: draft, originalJSON: writing.contentJSON,
             originalPlainContent: writing.content, bodyChanged: true
         )
-        try await libraryModel.savePersonalDevotional(writing.replacingBody(body))
+        // Its marks are anchored in the draft, so they are carried from it.
+        try await libraryModel.savePersonalDevotional(writing.replacingBody(body), reviewTexts: [draft])
     }
 
     // MARK: - The writing's brief and body

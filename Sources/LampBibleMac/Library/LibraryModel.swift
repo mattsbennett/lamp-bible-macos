@@ -1658,8 +1658,12 @@ final class LibraryModel: ObservableObject {
         }
     }
 
+    /// `reviewTexts` are the texts the saver held of the writing (an
+    /// editor's, an assistant's draft), which its review marks are carried
+    /// from along with the body this replaces. Nobody else's: see
+    /// `WritingReviewTexts`.
     @discardableResult
-    func savePersonalDevotional(_ devotional: LampDevotional) async throws -> LampDevotional {
+    func savePersonalDevotional(_ devotional: LampDevotional, reviewTexts: [String] = []) async throws -> LampDevotional {
         // The carry's place in line, and its generation, taken before the
         // save waits on the database: a turn's draft taken in meanwhile is
         // then marked after this carry, which cannot take its marks back.
@@ -1672,7 +1676,7 @@ final class LibraryModel: ObservableObject {
             slot?.reservation.giveUp()
             throw error
         }
-        if let carry, let slot { carryReviewMarks(carry, to: saved, in: slot) }
+        if let carry, let slot { carryReviewMarks(carry, to: saved, from: reviewTexts, in: slot) }
         devotionals = try await library.devotionals()
         await refreshManuscriptNotes(for: saved)
         return saved
@@ -1718,11 +1722,13 @@ final class LibraryModel: ObservableObject {
     /// mark already standing where it was made.
     private func carryReviewMarks(
         _ carry: (store: LampWritingReviewStore, previous: LampDevotional), to saved: LampDevotional,
-        in slot: (reservation: WritingReviewWork.Reservation, generation: Int)
+        from known: [String], in slot: (reservation: WritingReviewWork.Reservation, generation: Int)
     ) {
-        // The versions the editor has seen, a clear's among them: each mark
-        // is carried from the text it is anchored in.
-        let known = WritingReviewTexts.shared.known(for: saved.id)
+        // The versions the saver held, a clear's among them: each mark is
+        // carried from the text it is anchored in. A mark anchored in a text
+        // the saver never held (another window's draft not yet saved, the
+        // phone's body) is left for that text's own save, unless its words
+        // stand once in one of these.
         let generation = slot.generation
         let library = library
         reviewSavedGeneration[saved.id] = max(reviewSavedGeneration[saved.id] ?? 0, generation)
