@@ -911,15 +911,16 @@ final class AgentRemoteHost: ObservableObject {
         }
         // An editor open on the writing keeps the copy it loaded or last
         // saved, whatever sync brings in since, and the turn would run on
-        // that copy and the editor save it back over the phone's edits. The
-        // oldest open copy is the one asked about: older than the phone's,
-        // or of the same second and holding something else. Unlike the
-        // library's copy, a different digest here is a different text, not
-        // a different spelling of one, since both came from rows.
-        if let open = WritingChatTurns.watched(id),
-           LampAgentRemoteWritingRevision.hostIsBehind(host: open.revision, device: revision)
-            || (revision == LampAgentRemoteWritingRevision.of(lastModified: open.revision)
-                && digest != nil && open.digest != nil && open.digest != digest) {
+        // that copy and the editor save it back over the phone's edits.
+        // Every open copy is asked about, since two of one second can hold
+        // different texts: none may be older than the phone's, or of the
+        // same second and holding something else.
+        let stale = WritingChatTurns.watchedCopies(id).contains { open in
+            LampAgentRemoteWritingRevision.hostIsBehind(host: open.revision, device: revision)
+                || (revision == LampAgentRemoteWritingRevision.of(lastModified: open.revision)
+                    && digest != nil && open.digest != nil && open.digest != digest)
+        }
+        if stale {
             send(.failed(
                 LampAgentRemoteFailure.writingBehind,
                 "This writing is open on the Mac with an older copy. Close it there, then try again.",
