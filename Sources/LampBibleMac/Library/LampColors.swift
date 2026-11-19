@@ -770,8 +770,11 @@ extension View {
 /// grows still gives way before a button does.
 enum ToolbarLabelFit {
     /// The writing editor's window, or Writing with its sections folded:
-    /// List, Save, History and Workspace on the left; the surface, Details,
-    /// Assistant, the deck and Done on the right. Overflowed below 1,120.
+    /// List, History and Workspace on the left; the surface, Details,
+    /// Assistant, the review marks, the deck and Done on the right.
+    /// Overflowed below 1,120 — measured while a Save button was still
+    /// among them, so with that button gone this is a floor rather than
+    /// the width a name gives way at.
     static let writingEditor: CGFloat = 1_120
     /// Writing while reading: List alone.
     static let writingList: CGFloat = 400

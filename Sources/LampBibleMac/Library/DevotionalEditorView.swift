@@ -1002,65 +1002,77 @@ struct DevotionalEditorView: View {
                         minimumSize: minimumSidebarWidth,
                         maximumSize: maximumSidebarWidth
                     )
-                    Group {
-                        if showingAgentWorkspace, assistantPaneHasRoom {
-                            DevotionalAgentWorkspaceView(
-                                libraryRootURL: model.library.rootURL,
-                                bundledModulesArchiveURL: Bundle.main.url(
-                                    forResource: "bundled_modules.db",
-                                    withExtension: "zlib"
-                                ),
-                                agentAccessPolicy: agentAccessPolicy,
-                                devotionalID: identifier,
-                                devotionalTitle: title,
-                                draftMarkdown: content,
-                                contextDocument: agentContextDocument,
-                                editorFocus: editorFocus,
-                                importDraft: { importedDraft in
-                                    // Held before anything else runs: the
-                                    // turn's marks are anchored in it, and
-                                    // typing before the next settle would
-                                    // otherwise keep it from this editor's
-                                    // carries and clears.
-                                    reviewSession.holds(importedDraft)
-                                    content = importedDraft
-                                    // Saved now rather than on the next
-                                    // autosave. A crash in between left
-                                    // the library holding the version the
-                                    // workspace had just moved away from,
-                                    // and the next open read that as the
-                                    // writer's newer text and put it back
-                                    // — undoing the undo.
-                                    save()
-                                },
-                                chatTurn: Binding(
-                                    get: { agentChatTurn },
-                                    set: { turn in
-                                        guard turn != agentChatTurn else { return }
-                                        // What the finishing turn wrote to
-                                        // the workspace's other documents,
-                                        // collected while it is still the
-                                        // turn in hand. These are polled on
-                                        // their own clock, and a run's last
-                                        // write lands just before it ends —
-                                        // so the change was regularly
-                                        // picked up under no turn at all,
-                                        // and an undo then put the draft
-                                        // back and left those files as the
-                                        // turn had made them.
-                                        refreshWorkspaceDocuments()
-                                        agentChatTurn = turn
-                                    }
-                                )
-                            )
-                            .id(identifier)
-                        } else if !showingAgentWorkspace {
-                            detailsPane
-                        }
-                    }
-                        .frame(width: sidebarWidth, height: geometry.size.height)
-                        .background(Color(nsColor: .windowBackgroundColor))
                 }
+                ZStack {
+                    if showingAgentWorkspace, assistantPaneHasRoom {
+                        DevotionalAgentWorkspaceView(
+                            libraryRootURL: model.library.rootURL,
+                            bundledModulesArchiveURL: Bundle.main.url(
+                                forResource: "bundled_modules.db",
+                                withExtension: "zlib"
+                            ),
+                            agentAccessPolicy: agentAccessPolicy,
+                            devotionalID: identifier,
+                            devotionalTitle: title,
+                            draftMarkdown: content,
+                            contextDocument: agentContextDocument,
+                            editorFocus: editorFocus,
+                            importDraft: { importedDraft in
+                                // Held before anything else runs: the
+                                // turn's marks are anchored in it, and
+                                // typing before the next settle would
+                                // otherwise keep it from this editor's
+                                // carries and clears.
+                                reviewSession.holds(importedDraft)
+                                content = importedDraft
+                                // Saved now rather than on the next
+                                // autosave. A crash in between left
+                                // the library holding the version the
+                                // workspace had just moved away from,
+                                // and the next open read that as the
+                                // writer's newer text and put it back
+                                // — undoing the undo.
+                                save()
+                            },
+                            chatTurn: Binding(
+                                get: { agentChatTurn },
+                                set: { turn in
+                                    guard turn != agentChatTurn else { return }
+                                    // What the finishing turn wrote to
+                                    // the workspace's other documents,
+                                    // collected while it is still the
+                                    // turn in hand. These are polled on
+                                    // their own clock, and a run's last
+                                    // write lands just before it ends —
+                                    // so the change was regularly
+                                    // picked up under no turn at all,
+                                    // and an undo then put the draft
+                                    // back and left those files as the
+                                    // turn had made them.
+                                    refreshWorkspaceDocuments()
+                                    agentChatTurn = turn
+                                }
+                            )
+                        )
+                        .id(identifier)
+                    }
+                    // Kept in the view tree whether it is shown or not.
+                    // Taking it out had AppKit validate the toolbar and draw
+                    // every button disabled for about 200ms: measured as a
+                    // 1.9 dip in the title bar's brightness on each close and
+                    // 5.4 where the assistant displaced it, against 0.01 for
+                    // putting it back. Zero width rather than removal also
+                    // lets the pane slide, as the writing list does
+                    // (`LampPaneWidth`).
+                    detailsPane
+                        .opacity(showingAgentWorkspace ? 0 : 1)
+                        .allowsHitTesting(!showingAgentWorkspace)
+                        .accessibilityHidden(showingAgentWorkspace)
+                }
+                .frame(width: sidebarWidth, height: geometry.size.height)
+                .clipped()
+                .background(Color(nsColor: .windowBackgroundColor))
+                .accessibilityHidden(!usesSidePane)
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .leading)
             // The side pane's flags: `showsDetails` is kept in defaults, so
