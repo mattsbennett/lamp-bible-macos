@@ -392,7 +392,9 @@ extension LampSyncMacPassLibraryTests {
             in: workspace
         )
         let republished = try await pass.reconcile([path: there])
-        #expect(republished[path] == (try store.url(writingID: "w")))
+        let sent = try #require(republished[path])
+        #expect(sent != (try store.url(writingID: "w")))
+        #expect(try Data(contentsOf: sent) == Data(contentsOf: store.url(writingID: "w")))
         #expect(try store.review(writingID: "w").isEmpty)
     }
 

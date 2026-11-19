@@ -424,10 +424,17 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
                 // `install` merged the two copies here. If this Mac had marks
                 // or clears the server's copy lacked, the merge is what goes
                 // back up; if not, the server already has it all.
+                //
+                // Sent from a copy in this pass's workspace, never from the
+                // file itself: the pass takes a URL it gathered as leave to
+                // reuse the digest it took then, before the merge, and would
+                // record the bytes it sent under the old one.
                 guard let writingID = LampSyncFolderLayout.writingID(ofReviewPath: path) else { continue }
                 let local = try reviewStore.url(writingID: writingID)
                 if let held = try? Data(contentsOf: local), let arrived = downloaded[path], held != (try Data(contentsOf: arrived)) {
-                    republish[path] = local
+                    let copy = workspace.appendingPathComponent("review-\(UUID().uuidString).json")
+                    try held.write(to: copy, options: .atomic)
+                    republish[path] = copy
                 }
             default:
                 // Nothing else is merged: a read-only module is replaced
