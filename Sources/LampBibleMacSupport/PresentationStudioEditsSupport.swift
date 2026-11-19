@@ -61,8 +61,7 @@ public enum LampPresentationStudioEdits {
               let library = try? store.deck(id: deckID)
         else { return nil }
         let url = store.deckFileURL(for: deckID)
-        let changedAt = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
-            .contentModificationDate
+        let changedAt = LampFileModification.date(of: url)
         return compare(library: library, against: written, changedAt: changedAt)
     }
 
@@ -135,9 +134,8 @@ public enum LampPresentationStudioEdits {
         deckID: String,
         store: LampPresentationDeckStore
     ) -> Stamp? {
-        let values = try? store.deckFileURL(for: deckID)
-            .resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-        guard let size = values?.fileSize, let modified = values?.contentModificationDate
+        let attributes = try? FileManager.default.attributesOfItem(atPath: store.deckFileURL(for: deckID).path)
+        guard let size = (attributes?[.size] as? NSNumber)?.intValue, let modified = attributes?[.modificationDate] as? Date
         else { return nil }
         return Stamp(size: size, modifiedAt: modified)
     }

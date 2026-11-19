@@ -164,9 +164,7 @@ public enum ReaderChatWritingCopy {
             providerID: providerID,
             in: ReaderChatWorkspaceStore.workspaceURL(libraryRootURL: libraryRootURL, chatID: id)
         )
-        guard let written = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
-            .contentModificationDate
-        else { return false }
+        guard let written = LampFileModification.date(of: url) else { return false }
         return written >= askedAt
     }
 

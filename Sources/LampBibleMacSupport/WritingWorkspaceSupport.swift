@@ -170,8 +170,7 @@ public enum LampWritingWorkspace {
                 hasContext: fileManager.fileExists(
                     atPath: folder.appendingPathComponent(contextFilename).path
                 ),
-                changedAt: (try? draft.resourceValues(forKeys: [.contentModificationDateKey]))?
-                    .contentModificationDate
+                changedAt: LampFileModification.date(of: draft)
             ))
         }
         return writings.sorted {
@@ -326,5 +325,18 @@ public struct WritingEditorFocus: Equatable, Sendable {
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true
         )
         try (contextText + "\n").write(to: url, atomically: true, encoding: .utf8)
+    }
+}
+
+/// When a file or folder last changed, read from the file system each time.
+///
+/// A URL's resource values are kept on the URL once read, so asking the same
+/// URL again answers from that, however the file has changed since: four
+/// thousand writes in a row read back one date. Every check of whether
+/// something moved reads through here, so a URL kept and asked again, now or
+/// after a later change, still sees the file as it is.
+public enum LampFileModification {
+    public static func date(of url: URL) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
     }
 }

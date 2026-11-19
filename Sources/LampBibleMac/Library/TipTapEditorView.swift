@@ -386,9 +386,7 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         let source = MediaSource(
             directory: directory,
             references: references,
-            changedAt: (try? directory.resourceValues(
-                forKeys: [.contentModificationDateKey]
-            ))?.contentModificationDate
+            changedAt: LampFileModification.date(of: directory)
         )
         if let listedMedia, listedMedia.source == source { return listedMedia.map }
 

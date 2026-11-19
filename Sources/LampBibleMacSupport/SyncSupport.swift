@@ -515,7 +515,7 @@ public enum LampWorkspaceSync {
         to destination: URL,
         fileManager: FileManager
     ) throws {
-        let values = try source.resourceValues(forKeys: [.contentModificationDateKey])
+        let modifiedAt = LampFileModification.date(of: source)
         try ensureSafeDestination(destination, fileManager: fileManager)
         try fileManager.createDirectory(
             at: destination.deletingLastPathComponent(),
@@ -525,7 +525,7 @@ public enum LampWorkspaceSync {
             try fileManager.removeItem(at: destination)
         }
         try fileManager.copyItem(at: source, to: destination)
-        if let modifiedAt = values.contentModificationDate {
+        if let modifiedAt {
             try fileManager.setAttributes([.modificationDate: modifiedAt], ofItemAtPath: destination.path)
         }
     }
@@ -602,8 +602,7 @@ public enum LampWorkspaceSync {
     }
 
     private static func modificationTime(of url: URL) -> Int64 {
-        let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
-        return WorkspaceFileLedger.milliseconds(date ?? .distantPast)
+        WorkspaceFileLedger.milliseconds(LampFileModification.date(of: url) ?? .distantPast)
     }
 
     /// The workspace's own files that sync carries: top-level documents and

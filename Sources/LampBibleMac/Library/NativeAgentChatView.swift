@@ -1237,7 +1237,7 @@ final class NativeAgentChatModel: ObservableObject {
 
     private func transcriptModificationDate() -> Date? {
         let url = AgentChatTranscriptStore.url(providerID: provider.rawValue, in: workspace)
-        return (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        return LampFileModification.date(of: url)
     }
 
     /// Sends a message, saying whether it was taken.

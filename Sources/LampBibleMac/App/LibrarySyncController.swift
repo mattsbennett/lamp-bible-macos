@@ -1209,9 +1209,7 @@ extension LibrarySyncController {
             highlightSets: sets.map { ($0.id, $0.lastModified) },
             highlightModuleIDs: moduleIDs,
             decks: decks.candidates.compactMap { candidate in
-                guard let modified = try? candidate.url.resourceValues(
-                    forKeys: [.contentModificationDateKey]
-                ).contentModificationDate else { return nil }
+                guard let modified = LampFileModification.date(of: candidate.url) else { return nil }
                 return (candidate.path, modified)
             }
         )

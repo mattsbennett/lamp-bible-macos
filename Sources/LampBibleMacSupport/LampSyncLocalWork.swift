@@ -194,8 +194,7 @@ public enum LampSyncLocalWork {
     }
 
     private static func modified(_ url: URL) -> Int64? {
-        guard let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
-            .contentModificationDate else { return nil }
+        guard let date = LampFileModification.date(of: url) else { return nil }
         return Int64(date.timeIntervalSince1970 * 1_000)
     }
 }
