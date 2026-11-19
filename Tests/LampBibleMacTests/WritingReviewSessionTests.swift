@@ -80,6 +80,21 @@ struct WritingReviewSessionTests {
         #expect(await log.entries == ["first", "second"])
     }
 
+    @Test func workFilledInAfterItsPlaceGaveUpIsDroppedNotRunLate() async throws {
+        let work = WritingReviewWork.shared
+        let saved = work.reservationPatience
+        defer { work.reservationPatience = saved }
+        work.reservationPatience = .milliseconds(100)
+        let log = Log()
+        let late = work.reserve()
+        work.run { await log.add("after") }
+        await work.drained()
+        late.fill { await log.add("late") }
+        try await Task.sleep(for: .milliseconds(200))
+        await work.drained()
+        #expect(await log.entries == ["after"])
+    }
+
     private actor Log {
         var entries: [String] = []
         func add(_ entry: String) { entries.append(entry) }

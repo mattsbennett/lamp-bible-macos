@@ -74,11 +74,15 @@ final class WritingReviewWork {
 
     /// How long a place in line waits to be filled before the line moves
     /// on without it: far past any save, and short of a queue stopped for
-    /// good by a place nobody fills.
-    static let reservationPatience: Duration = .seconds(120)
+    /// good by a place nobody fills. Work filled in after that is dropped,
+    /// not run late: behind what was queued after it, it would be the stale
+    /// writer the line exists to prevent. (The stream is finished as the
+    /// place gives up, and a finished stream discards what it is given.)
+    var reservationPatience: Duration = .seconds(120)
 
     func reserve() -> Reservation {
         let (stream, continuation) = AsyncStream<@Sendable () async -> Void>.makeStream()
+        let patience = reservationPatience
         run {
             let work = await withTaskGroup(of: (@Sendable () async -> Void)?.self) { group in
                 group.addTask {
@@ -86,7 +90,7 @@ final class WritingReviewWork {
                     return nil
                 }
                 group.addTask {
-                    try? await Task.sleep(for: Self.reservationPatience)
+                    try? await Task.sleep(for: patience)
                     return nil
                 }
                 let first = await group.next() ?? nil
