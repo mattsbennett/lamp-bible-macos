@@ -4,12 +4,14 @@ import LampCore
 import LampBibleMacSupport
 #endif
 
-/// The versions of each writing this Mac has lately seen, by
-/// `LampWritingReview.digest(of:)`: the editor's text as it settles, and
-/// each body saved. A mark is anchored in a text and can only be carried
-/// from that text; a clear made while the editor holds text not yet saved
-/// anchors what is left there, and the save that follows carries from the
-/// last saved body. Kept here, every carry can take each mark from its own.
+/// The versions of each writing this Mac has lately seen: the editor's text
+/// as it settles, each body saved, each draft taken in. A mark is anchored
+/// in a text, and is carried exactly from that text; a clear made while the
+/// editor holds text not yet saved anchors what is left there, and the save
+/// that follows carries from the last saved body. Kept here, a carry can
+/// take each mark from its own (`LampWritingReview.carryingToText`), which
+/// hashes them off the main actor. One that has gone is still found by its
+/// words and context, so this only makes carries exact more often.
 @MainActor
 final class WritingReviewTexts {
     static let shared = WritingReviewTexts()
@@ -17,17 +19,17 @@ final class WritingReviewTexts {
     /// the saves after it, few enough that a long manuscript costs little.
     static let kept = 24
 
-    private var texts: [String: [(digest: String, text: String)]] = [:]
+    private var texts: [String: [String]] = [:]
 
     func remember(_ text: String, for writingID: String) {
-        let digest = LampWritingReview.digest(of: text)
-        var kept = texts[writingID, default: []].filter { $0.digest != digest }
-        kept.append((digest, text))
+        var kept = texts[writingID, default: []]
+        guard kept.last != text else { return }
+        kept.append(text)
         texts[writingID] = Array(kept.suffix(Self.kept))
     }
 
-    func known(for writingID: String) -> [String: String] {
-        Dictionary(texts[writingID, default: []].map { ($0.digest, $0.text) }, uniquingKeysWith: { _, last in last })
+    func known(for writingID: String) -> [String] {
+        texts[writingID, default: []]
     }
 }
 

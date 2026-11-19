@@ -1705,9 +1705,7 @@ final class LibraryModel: ObservableObject {
             let previous = carry.previous.displayMarkdown
             let current = saved.displayMarkdown
             if previous != current {
-                var texts = known
-                texts[LampWritingReview.digest(of: previous)] = previous
-                _ = try? carry.store.update(writingID: saved.id) { $0.carryingToText(current, from: texts) }
+                _ = try? carry.store.update(writingID: saved.id) { $0.carryingToText(current, from: known + [previous]) }
             }
             await MainActor.run {
                 WritingReviewTexts.shared.remember(current, for: saved.id)
