@@ -112,18 +112,19 @@ ACCEPTED_GAPS: dict[str, str] = {
 # A rebuild of the iOS editor that adds, removes or upgrades no package then passes with no fresh
 # review, because rebuilt bytes cannot leave a package unlicensed. A package that does move stops
 # the run, which is exactly when EDITOR_NOTICE_FILES needs a file.
-MAC_EDITOR_SHA256 = "5dd66b9d2c51f8e225fa10a4e14a703dc5ef1eca21a1003f01d8ced3a9afd688"
-MAC_EDITOR_FROM = "3288866"
+MAC_EDITOR_SHA256 = "d930bd3b801c88b07f3651f89cce3af38b87b5518c551b5c3aeb86448577bc0d"
+MAC_EDITOR_FROM = "a70d4db"
 MAC_EDITOR_REVIEW = (
-    "2026-11-18: the Mac's copy is the iOS editor's script built at 3288866 — which adds the "
-    "writing assistant's review marks (review-marks.js), and keeps keys pressed on a mark's "
-    "clear button out of the editor — inside the Mac's own page and styles, "
-    "kept from its earlier copy (iOS c98d4f3, with Mac 450e42f's link blue). The script is the "
-    "iOS build's byte for byte, the `light` class toggle from the iPhone redesign (7c13d54) "
-    "included; nothing on the Mac styles that class, so it changes nothing here. The difference "
-    "between the two bundles is the stylesheet alone: the Mac does not take the redesign's CSS, "
-    "and draws the review marks from its own injected writing-page sheet. No package moved "
-    "between c98d4f3 and 3288866."
+    "2026-11-19: the Mac's copy is the iOS editor's script built at a70d4db — which sends a "
+    "review clear's unmarked page text beside the marked, keeps its markers out of links and "
+    "their writing unchanged, and sets a page's mode without reporting an edit — inside the "
+    "Mac's own page and styles, kept from its earlier copy (iOS c98d4f3, with Mac 450e42f's link "
+    "blue). The script is the iOS build's byte for byte, the `light` class toggle from the "
+    "iPhone redesign (7c13d54) included; nothing on the Mac styles that class, so it changes "
+    "nothing here. The difference between the two bundles is the stylesheet alone: the Mac does "
+    "not take the redesign's CSS, nor the phone's placing of a mark's clear button (eeae228), and "
+    "draws the review marks from its own injected writing-page sheet. No package moved between "
+    "c98d4f3 and a70d4db."
 )
 
 # Resolved but not linked into anything that ships.

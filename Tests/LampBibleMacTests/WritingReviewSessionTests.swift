@@ -120,6 +120,43 @@ struct WritingReviewSessionTests {
         #expect(!session.texts.contains(ahead))
     }
 
+    /// Codex's case: a selection inside an autolink. The page (iOS a70d4db,
+    /// its script in the Mac's copy) takes the whole link between its
+    /// markers and writes it as it always does, and sends its own text
+    /// beside it; the clear lands, from the writing here or from that text.
+    @Test func aSelectionInsideAnAutolinkClears() async throws {
+        let root = try library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LampWritingReviewStore(rootURL: root)
+        let id = "autolink-\(UUID().uuidString)"
+        let link = "<https://example.org>"
+        let new = "See \(link) now."
+        try store.save(LampWritingReview(writingID: id).markingAssistantChange(from: "See it now.", to: new))
+        let session = WritingReviewSession()
+        let following = Task { await session.follow(writingID: id, text: new, libraryRootURL: root, isShown: true) }
+        defer { following.cancel() }
+        try await waitUntil { session.count == 1 }
+
+        let marked = "See \(LampWritingReview.markStart)\(link)\(LampWritingReview.markEnd) now."
+        session.clear(markedMarkdown: marked, pageText: new)
+        try await waitUntil { (try? store.review(writingID: id))?.isEmpty == true }
+
+        // Ahead of the writing here: made in the page's own text.
+        try store.save(LampWritingReview(writingID: id + "-ahead").markingAssistantChange(from: "See it now.", to: new))
+        let ahead = new + " More."
+        let other = WritingReviewSession()
+        let followingAhead = Task {
+            await other.follow(writingID: id + "-ahead", text: new, libraryRootURL: root, isShown: true)
+        }
+        defer { followingAhead.cancel() }
+        try await waitUntil { other.count == 1 }
+        other.clear(
+            markedMarkdown: "See \(LampWritingReview.markStart)\(link)\(LampWritingReview.markEnd) now. More.",
+            pageText: ahead
+        )
+        try await waitUntil { (try? store.review(writingID: id + "-ahead"))?.isEmpty == true }
+    }
+
     /// Codex's case: typing into a marked passage, not yet saved, splits it.
     /// Both halves are still counted and drawn, not nothing.
     @Test func unsavedTypingIntoAMarkKeepsItCounted() async throws {
