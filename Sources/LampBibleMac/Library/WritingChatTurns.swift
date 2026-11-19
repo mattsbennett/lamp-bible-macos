@@ -184,6 +184,24 @@ enum WritingChatTurns {
         (watchers[writingID] ?? 0) > 0
     }
 
+    /// The stored version of each writing an editor last loaded or saved.
+    private static var revisions: [String: Date] = [:]
+
+    /// Said by the editor as it loads a writing and after each save: the
+    /// `lastModified` of the copy it now holds.
+    static func noteRevision(_ revision: Date?, of writingID: String) {
+        revisions[writingID] = revision
+    }
+
+    /// The stored version the window watching a writing holds, or nil if no
+    /// window watches it or none was said. A turn asked on a newer copy than
+    /// this would have the agent edit the window's older draft, which the
+    /// window then saves over the newer. Stored dates are whole seconds,
+    /// while a save says its own to the fraction, so compare to the second.
+    static func watchedRevision(_ writingID: String) -> Date? {
+        isWatched(writingID) ? revisions[writingID] : nil
+    }
+
     fileprivate static func unwatch(_ writingID: String) {
         guard let count = watchers[writingID] else { return }
         watchers[writingID] = count > 1 ? count - 1 : nil

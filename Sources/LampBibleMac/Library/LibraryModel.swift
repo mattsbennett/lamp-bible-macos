@@ -1681,10 +1681,6 @@ final class LibraryModel: ObservableObject {
         return (store, previous)
     }
 
-    /// The last carry asked for, which the next one waits on: carried out of
-    /// order, a later edit would be carried from text the marks had not yet
-    /// reached, and they would be left where they were.
-    private var reviewCarryTask: Task<Void, Never>?
     /// How many saves of each writing have asked for a carry. A carry runs
     /// only while its save is the latest: dates cannot say, since a save is
     /// stamped to the fraction of a second and stored to the second.
@@ -1702,38 +1698,29 @@ final class LibraryModel: ObservableObject {
     private func carryReviewMarks(
         _ carry: (store: LampWritingReviewStore, previous: LampDevotional), to saved: LampDevotional
     ) {
-        let waitFor = reviewCarryTask
         let generation = (reviewSaveGeneration[saved.id] ?? 0) + 1
         reviewSaveGeneration[saved.id] = generation
         // The versions the editor has seen, a clear's among them: each mark
         // is carried from the text it is anchored in.
         let known = WritingReviewTexts.shared.known(for: saved.id)
-        // Counted as a write, so quitting waits for it: the save has
-        // finished, and a carry left behind would leave the new body with
-        // the old marks.
-        LampPendingWrites.shared.begin()
-        reviewCarryTask = Task.detached(priority: .utility) { [weak self] in
-            await waitFor?.value
+        // In line with the assistant's drafts taken in, and counted as a
+        // write, so quitting waits for it (`WritingReviewWork`).
+        WritingReviewWork.shared.run { [weak self] in
             // Overtaken: a newer save of this writing is in, and its carry
             // takes each mark from its own text. Carried now, from this
             // save's older pair, a mark a turn made since would be taken
             // back to a text the writing has already left.
             let overtaken = await MainActor.run { self?.reviewSaveGeneration[saved.id] != generation }
-            guard !overtaken else {
-                await MainActor.run { LampPendingWrites.shared.end() }
-                return
-            }
+            guard !overtaken else { return }
             let previous = carry.previous.displayMarkdown
             let current = saved.displayMarkdown
             if previous != current {
                 _ = try? carry.store.update(writingID: saved.id) { $0.carryingToText(current, from: known + [previous]) }
             }
-            await MainActor.run {
-                WritingReviewTexts.shared.remember(current, for: saved.id)
-                LampPendingWrites.shared.end()
-            }
+            await MainActor.run { WritingReviewTexts.shared.remember(current, for: saved.id) }
         }
     }
+
 
     /// Re-splits the writing across any deck whose notes follow it, and reports
     /// each split into the writing's agent workspace.

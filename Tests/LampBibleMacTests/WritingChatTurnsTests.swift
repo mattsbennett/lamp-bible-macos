@@ -60,4 +60,15 @@ struct WritingChatTurnsTests {
         second.end()
         #expect(!WritingChatTurns.isWatched(id))
     }
+
+    @Test func theRevisionAWindowHoldsIsSaidOnlyWhileItWatches() {
+        let id = "revision-\(UUID().uuidString)"
+        let revision = Date(timeIntervalSince1970: 1_700_000_000)
+        WritingChatTurns.noteRevision(revision, of: id)
+        #expect(WritingChatTurns.watchedRevision(id) == nil)
+        let watch = WritingChatTurns.watch(writingID: id)
+        #expect(WritingChatTurns.watchedRevision(id) == revision)
+        watch.end()
+        #expect(WritingChatTurns.watchedRevision(id) == nil)
+    }
 }

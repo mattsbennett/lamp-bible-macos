@@ -459,9 +459,12 @@ struct DevotionalAgentDraftReconciler {
     /// Changes the writing's marks, if they are kept. Never in the way of
     /// the writing itself: a mark file that cannot be read or written costs
     /// the marks, not the draft the assistant wrote.
-    private func updateReview(_ change: (LampWritingReview) -> LampWritingReview) {
+    private func updateReview(_ change: @escaping @Sendable (LampWritingReview) -> LampWritingReview) {
         guard let reviewStore else { return }
-        _ = try? reviewStore.update(writingID: writingID, change)
+        let writingID = writingID
+        // In line with the saves' carries, off the main actor
+        // (`WritingReviewWork`).
+        WritingReviewWork.shared.run { _ = try? reviewStore.update(writingID: writingID, change) }
     }
 
     private func markSynced(_ draft: String) throws {

@@ -33,6 +33,34 @@ final class WritingReviewTexts {
     }
 }
 
+/// Where the marks are changed by a save's carry and by an assistant's draft
+/// taken in: one at a time, in the order they were asked for, off the main
+/// actor. In order, a carry asked for before a turn's draft was taken in is
+/// done before the draft's marks are made, so it can never take the turn's
+/// new marks back to the text before it; off the main actor, the whole
+/// manuscript compared, and the wait on the marks file's lock, are not the
+/// writer's to feel. Each counts as a pending write, so quitting waits.
+@MainActor
+final class WritingReviewWork {
+    static let shared = WritingReviewWork()
+    private var last: Task<Void, Never>?
+
+    func run(_ work: @escaping @Sendable () async -> Void) {
+        let previous = last
+        LampPendingWrites.shared.begin()
+        last = Task.detached(priority: .utility) {
+            await previous?.value
+            await work()
+            await MainActor.run { LampPendingWrites.shared.end() }
+        }
+    }
+
+    /// Returns once everything asked for so far is done.
+    func drained() async {
+        await last?.value
+    }
+}
+
 /// The review marks of the writing an editor has open (`LampWritingReview`):
 /// what is drawn, how many passages are still to read, and the writer's
 /// clears. One per editor, held apart from the editor's view so that none of

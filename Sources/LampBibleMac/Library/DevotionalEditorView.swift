@@ -3231,6 +3231,7 @@ struct DevotionalEditorView: View {
         saveState = .idle
         savedFields = editedFields
         hasLoaded = true
+        WritingChatTurns.noteRevision(devotional.lastModified, of: devotional.id)
     }
 
     /// Writes what is waiting, on the way out.
@@ -3309,6 +3310,7 @@ struct DevotionalEditorView: View {
             )
             do {
                 let saved = try await model.savePersonalDevotional(devotional)
+                WritingChatTurns.noteRevision(saved.lastModified, of: saved.id)
                 createdDate = saved.created
                 originalContentJSON = saved.contentJSON
                 originalPlainContent = saved.content

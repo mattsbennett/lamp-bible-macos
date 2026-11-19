@@ -358,7 +358,7 @@ struct DevotionalAgentDraftReconcilerTests {
         try store.review(writingID: "writing-1").highlightedRanges(in: text).map { (text as NSString).substring(with: $0) }
     }
 
-    @Test func aDraftTakenInIsMarkedUnderItsTurnAndUndoingTheTurnTakesTheMark() throws {
+    @Test func aDraftTakenInIsMarkedUnderItsTurnAndUndoingTheTurnTakesTheMark() async throws {
         let workspace = try workspace()
         defer { try? FileManager.default.removeItem(at: workspace) }
         let store = LampWritingReviewStore(rootURL: workspace.appendingPathComponent("library", isDirectory: true))
@@ -368,14 +368,16 @@ struct DevotionalAgentDraftReconcilerTests {
         let turn = UUID()
         try writeDraft("One deux three.", to: workspace)
         #expect(try marking(workspace, store: store).reconcile(writing: "One two three.", turnID: turn) == .take("One deux three."))
+        await WritingReviewWork.shared.drained()
         #expect(try marked(store, in: "One deux three.") == ["deux"])
         #expect(try store.review(writingID: "writing-1").marks.first?.turnID == turn)
 
         _ = try marking(workspace, store: store).undo(turns: [turn], writing: "One deux three.")
+        await WritingReviewWork.shared.drained()
         #expect(try store.review(writingID: "writing-1").isEmpty)
     }
 
-    @Test func aDraftOnlyFiledInTheHistoryIsNotMarked() throws {
+    @Test func aDraftOnlyFiledInTheHistoryIsNotMarked() async throws {
         let workspace = try workspace()
         defer { try? FileManager.default.removeItem(at: workspace) }
         let store = LampWritingReviewStore(rootURL: workspace.appendingPathComponent("library", isDirectory: true))
@@ -386,6 +388,7 @@ struct DevotionalAgentDraftReconcilerTests {
             Issue.record("expected the writing to be kept")
             return
         }
+        await WritingReviewWork.shared.drained()
         #expect(try store.review(writingID: "writing-1").isEmpty)
     }
 
