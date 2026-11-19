@@ -131,116 +131,22 @@ public enum LampAgentRemoteHosting {
         }
     }
 
-    /// What an open chat's model shows at a moment: its finished messages,
-    /// the reply so far, what the run is doing, and what went wrong.
-    public struct ChatState: Equatable, Sendable {
-        public var messages: [AgentChatTranscript.Message]
-        public var arriving: String
-        public var activity: AgentChatActivity?
-        public var isRunning: Bool
-        public var failure: String?
-
-        public init(
-            messages: [AgentChatTranscript.Message] = [],
-            arriving: String = "",
-            activity: AgentChatActivity? = nil,
-            isRunning: Bool = false,
-            failure: String? = nil
-        ) {
-            self.messages = messages
-            self.arriving = arriving
-            self.activity = activity
-            self.isRunning = isRunning
-            self.failure = failure
-        }
-    }
-
-    public static func snapshot(summary: LampAgentRemoteChatSummary, state: ChatState) -> LampAgentRemoteChatSnapshot {
-        LampAgentRemoteChatSnapshot(
-            summary: summary,
-            messages: state.messages.map(message),
-            partialReply: state.isRunning && !state.arriving.isEmpty ? state.arriving : nil,
-            activity: state.isRunning ? activity(state.activity) : nil,
-            notice: state.failure
+    /// The Mac's chat model as the protocol states it: its finished messages,
+    /// the reply so far, what the run is doing, what went wrong. What is sent
+    /// from it is decided in core (`LampAgentRemoteChatUpdates`).
+    public static func state(
+        messages: [AgentChatTranscript.Message],
+        arriving: String,
+        activity: AgentChatActivity?,
+        isRunning: Bool,
+        failure: String?
+    ) -> LampAgentRemoteChatState {
+        LampAgentRemoteChatState(
+            messages: messages.map(message),
+            arriving: arriving,
+            activity: Self.activity(activity),
+            isRunning: isRunning,
+            failure: failure
         )
-    }
-
-    /// Whether the phone's copy can no longer be brought up to date by
-    /// events: messages it holds are gone (the conversation was cleared, or
-    /// turns undone), so it needs a fresh snapshot instead.
-    public static func needsSnapshot(from old: ChatState, to new: ChatState) -> Bool {
-        let now = Set(new.messages.map(\.id))
-        return old.messages.contains { !now.contains($0.id) }
-    }
-
-    /// The events that take a phone from one state of a chat to the next, in
-    /// the order they happened.
-    ///
-    /// The state is taken a few changes at a time, so one step can hold a
-    /// whole turn, or the end of one and the start of the next: each turn
-    /// is still told as its own — begun with its question, its answer, ended
-    /// — and every reply is filed under the question it answers. A question
-    /// from another pane or Mac while nothing runs here is just a message.
-    ///
-    /// The reply so far goes whole each time, replacing the last: a frame
-    /// lost or a phone that joins mid-reply still ends up with all of it.
-    public static func events(chatID: String, from old: ChatState, to new: ChatState) -> [LampAgentRemoteChatEvent] {
-        var events: [LampAgentRemoteChatEvent] = []
-        func event(_ kind: String, _ turn: UUID?, message: AgentChatTranscript.Message? = nil,
-                   text: String? = nil, activity: LampAgentRemoteActivity? = nil) {
-            events.append(LampAgentRemoteChatEvent(
-                chatID: chatID, kind: kind, turnID: turn, message: message.map(Self.message), text: text, activity: activity
-            ))
-        }
-        let known = Set(old.messages.map(\.id))
-        let added = new.messages.filter { !known.contains($0.id) }
-        let lastAddedQuestion = added.last { $0.role == .user }?.id
-        /// The question each message answers: the one before it.
-        func question(before id: UUID) -> UUID? {
-            guard let index = new.messages.firstIndex(where: { $0.id == id }) else { return nil }
-            return new.messages[..<index].last { $0.role == .user }?.id
-        }
-        var open: UUID? = old.isRunning ? old.messages.last { $0.role == .user }?.id : nil
-
-        for (index, message) in added.enumerated() {
-            if message.role == .user {
-                if let ending = open {
-                    event(LampAgentRemoteChatEvent.turnEnded, ending)
-                    open = nil
-                }
-                // A turn of its own when it is running now or was answered in
-                // the same step; otherwise someone else's message.
-                let answered = added[(index + 1)...].contains { $0.role == .assistant }
-                if message.id == lastAddedQuestion, new.isRunning || answered {
-                    event(LampAgentRemoteChatEvent.turnStarted, message.id, message: message)
-                    open = message.id
-                } else if answered {
-                    event(LampAgentRemoteChatEvent.turnStarted, message.id, message: message)
-                    open = message.id
-                } else {
-                    event(LampAgentRemoteChatEvent.reply, message.id, message: message)
-                }
-            } else {
-                event(LampAgentRemoteChatEvent.reply, question(before: message.id), message: message)
-            }
-        }
-        if new.isRunning, open == nil {
-            // Running with no new question: a run picked up where it was.
-            open = new.messages.last { $0.role == .user }?.id
-            if !old.isRunning { event(LampAgentRemoteChatEvent.turnStarted, open) }
-        }
-        if new.isRunning, new.arriving != old.arriving, !new.arriving.isEmpty {
-            event(LampAgentRemoteChatEvent.fragment, open, text: new.arriving)
-        }
-        if new.isRunning, new.activity != old.activity {
-            event(LampAgentRemoteChatEvent.activity, open, activity: activity(new.activity))
-        }
-        if let failure = new.failure, failure != old.failure {
-            event(LampAgentRemoteChatEvent.failed, open ?? new.messages.last { $0.role == .user }?.id, text: failure)
-        }
-        if !new.isRunning, let ending = open {
-            event(LampAgentRemoteChatEvent.turnEnded, ending)
-        }
-        return events
     }
 }

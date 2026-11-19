@@ -41,77 +41,17 @@ struct LampAgentRemoteHostingTests {
         ) == nil)
     }
 
-    @Test func areplyArrivesAsTheTurnTheReplySoFarWholeAndTheFinishedMessage() {
+    /// The Mac's model as the protocol states it; what is sent from that is
+    /// core's to decide, and tested there (`LampAgentRemoteChatTests`).
+    @Test func theModelIsStatedAsTheProtocolNamesIt() {
         let question = said("Who wrote Hebrews?", .user, 0)
-        let answer = said("Nobody knows for certain.", .assistant, 1)
-        let idle = LampAgentRemoteHosting.ChatState()
-        let started = LampAgentRemoteHosting.ChatState(messages: [question], isRunning: true)
-        let thinking = LampAgentRemoteHosting.ChatState(messages: [question], activity: .thinking(estimatedTokens: 40), isRunning: true)
-        let writing = LampAgentRemoteHosting.ChatState(messages: [question], arriving: "Nobody", activity: .writing, isRunning: true)
-        let more = LampAgentRemoteHosting.ChatState(messages: [question], arriving: "Nobody knows", activity: .writing, isRunning: true)
-        let done = LampAgentRemoteHosting.ChatState(messages: [question, answer])
-        let id = "chat"
-        let kinds = [idle, started, thinking, writing, more, done].indices.dropFirst().flatMap { i in
-            LampAgentRemoteHosting.events(chatID: id, from: [idle, started, thinking, writing, more, done][i - 1],
-                                          to: [idle, started, thinking, writing, more, done][i])
-        }
-        #expect(kinds.map(\.kind) == ["turn-started", "activity", "fragment", "activity", "fragment", "reply", "turn-ended"])
-        #expect(kinds[0].message?.id == question.id && kinds[0].turnID == question.id)
-        // Whole each time, not what was added.
-        #expect(kinds[4].text == "Nobody knows")
-        #expect(kinds[5].message?.id == answer.id)
-        #expect(kinds.allSatisfy { $0.turnID == question.id })
-    }
-
-    @Test func afailureIsToldOnceAndAMessageFromElsewhereStillArrives() {
-        let question = said("Hello", .user, 0)
-        let failed = LampAgentRemoteHosting.ChatState(messages: [question], failure: "Not signed in")
-        let events = LampAgentRemoteHosting.events(
-            chatID: "c", from: .init(messages: [question], isRunning: true), to: failed
+        let state = LampAgentRemoteHosting.state(
+            messages: [question], arriving: "Nobody", activity: .tool(name: "mcp__lamp__read_passage", summary: "Hebrews 1"),
+            isRunning: true, failure: nil
         )
-        #expect(events.map(\.kind) == ["failed", "turn-ended"])
-        #expect(LampAgentRemoteHosting.events(chatID: "c", from: failed, to: failed).isEmpty)
-
-        let elsewhere = said("Asked on the Mac", .user, 2)
-        let arrived = LampAgentRemoteHosting.events(
-            chatID: "c", from: .init(messages: [question]), to: .init(messages: [question, elsewhere])
-        )
-        #expect(arrived.map(\.kind) == ["reply"] && arrived[0].message?.id == elsewhere.id)
-    }
-
-    @Test func asnapshotCarriesTheReplySoFarOnlyWhileRunning() {
-        let summary = LampAgentRemoteChatSummary(id: "c", title: "t", kind: "reader", provider: "codex", providerName: "Codex", acceptsMessages: true)
-        let running = LampAgentRemoteHosting.snapshot(
-            summary: summary, state: .init(messages: [said("Q", .user, 0)], arriving: "So far", activity: .writing, isRunning: true)
-        )
-        #expect(running.partialReply == "So far" && running.activity?.kind == "writing")
-        let stopped = LampAgentRemoteHosting.snapshot(summary: summary, state: .init(arriving: "stale", activity: .writing))
-        #expect(stopped.partialReply == nil && stopped.activity == nil)
-    }
-
-    @Test func twoTurnsInOneStepAreToldAsTwoAndEachReplyUnderItsQuestion() {
-        let first = said("First?", .user, 0), firstAnswer = said("One.", .assistant, 1)
-        let second = said("Second?", .user, 2)
-        let events = LampAgentRemoteHosting.events(
-            chatID: "c",
-            from: .init(messages: [first], isRunning: true),
-            to: .init(messages: [first, firstAnswer, second], isRunning: true)
-        )
-        #expect(events.map(\.kind) == ["reply", "turn-ended", "turn-started"])
-        #expect(events[0].turnID == first.id && events[1].turnID == first.id)
-        #expect(events[2].turnID == second.id && events[2].message?.id == second.id)
-    }
-
-    @Test func awholeTurnInOneStepStillBeginsAndEnds() {
-        let question = said("Quick?", .user, 0), answer = said("Yes.", .assistant, 1)
-        let events = LampAgentRemoteHosting.events(chatID: "c", from: .init(), to: .init(messages: [question, answer]))
-        #expect(events.map(\.kind) == ["turn-started", "reply", "turn-ended"])
-        #expect(events.allSatisfy { $0.turnID == question.id })
-    }
-
-    @Test func aclearedConversationNeedsAFreshSnapshot() {
-        let question = said("Q", .user, 0)
-        #expect(LampAgentRemoteHosting.needsSnapshot(from: .init(messages: [question]), to: .init()))
-        #expect(!LampAgentRemoteHosting.needsSnapshot(from: .init(messages: [question]), to: .init(messages: [question, said("A", .assistant, 1)])))
+        #expect(state.messages.map(\.id) == [question.id])
+        #expect(state.messages[0].role == LampAgentRemoteChatMessage.user)
+        #expect(state.activity == LampAgentRemoteActivity(kind: LampAgentRemoteActivity.tool, name: "read_passage", summary: "Hebrews 1"))
+        #expect(state.arriving == "Nobody" && state.isRunning)
     }
 }

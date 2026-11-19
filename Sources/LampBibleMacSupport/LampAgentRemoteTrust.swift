@@ -148,37 +148,3 @@ public final class LampAgentRemoteTrustStore {
         }
     }
 }
-
-/// A pairing QR on screen: its code, good for one device, and closed after
-/// a few proofs that fail under it, so a code read over a shoulder cannot be
-/// guessed at for as long as the window stays open.
-public struct LampAgentRemotePairingWindow: Equatable, Sendable {
-    public let code: String
-    public private(set) var failuresLeft: Int
-    public private(set) var isClosed = false
-
-    public static let allowedFailures = 5
-
-    public init(code: String = LampPresentationRemotePairing.generateCode(), allowedFailures: Int = Self.allowedFailures) {
-        self.code = code
-        self.failuresLeft = allowedFailures
-    }
-
-    /// The pairing key a device may prove itself with, while the window is
-    /// open.
-    public var credential: LampAgentRemoteCredential? {
-        isClosed ? nil : LampAgentRemoteCredential.pairing(code: code)
-    }
-
-    /// A device paired under the code: it is spent.
-    public mutating func paired() {
-        isClosed = true
-    }
-
-    /// A proof that matched no key while the window was open.
-    public mutating func failed() {
-        guard !isClosed else { return }
-        failuresLeft -= 1
-        if failuresLeft <= 0 { isClosed = true }
-    }
-}
