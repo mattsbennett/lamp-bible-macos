@@ -216,6 +216,20 @@ enum LampMetrics {
     static let listCaptionSize: CGFloat = 11.5
 }
 
+extension Animation {
+    /// A column or pane beside a page arriving or leaving: a writing list, a
+    /// details inspector, an assistant.
+    ///
+    /// Named rather than written out at each toggle, because the ones that
+    /// were written out did not all get written: in the writing workspace the
+    /// list in the library pane slid while the same list in the writing
+    /// window appeared from nowhere, and showing the details to reveal a
+    /// footnote snapped them open where pressing the button for them had not.
+    /// A pane that moves in one place and jumps in another reads as a glitch
+    /// rather than a style, so the toggles name one animation.
+    static let lampPaneReveal = Animation.easeInOut(duration: 0.2)
+}
+
 extension Color {
     /// Anything in text that takes you somewhere. Set it explicitly, or as the
     /// `tint` of the text drawing it: SwiftUI draws a link in the tint, which

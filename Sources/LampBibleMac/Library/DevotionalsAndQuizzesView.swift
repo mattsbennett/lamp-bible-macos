@@ -244,7 +244,7 @@ struct DevotionalsView: View {
                                 editing = nil
                             })
                             .onPreferenceChange(WritingAssistantOpenKey.self) { open in
-                                withAnimation(.easeInOut(duration: 0.2)) { layout.setAssistantOpen(open) }
+                                withAnimation(.lampPaneReveal) { layout.setAssistantOpen(open) }
                             }
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .layoutPriority(2)
@@ -353,7 +353,7 @@ struct DevotionalsView: View {
     private func listToggle(systemImage: String) -> some View {
         let shown = layout.showsList(readingShowsList: showsWritingList)
         return Button {
-            withAnimation(.easeInOut(duration: 0.2)) {
+            withAnimation(.lampPaneReveal) {
                 layout.toggleList(readingShowsList: &showsWritingList)
             }
         } label: {

@@ -52,6 +52,48 @@ private enum DevotionalSaveState: Equatable {
     case failed(String)
 }
 
+/// Decodes a writing's media list, and keeps the answer against the JSON it
+/// was decoded from.
+///
+/// A reference type, so the editor can ask it from a computed property: the
+/// list is wanted during `body`, which runs on every keystroke, and what it
+/// must never do there is parse the JSON again for an answer that changes
+/// only when a picture or recording is added.
+private final class DevotionalMediaReferenceCache {
+    /// Doubly optional on purpose: the outer says whether anything has been
+    /// decoded, the inner is the JSON itself, which is nil for a writing with
+    /// no media. Without that, a writing with no media decodes on every pass.
+    private var decodedFrom: String??
+    private var decoded: [LampDevotionalMediaReference] = []
+
+    func references(for json: String?) -> [LampDevotionalMediaReference] {
+        if let decodedFrom, decodedFrom == json { return decoded }
+        decodedFrom = .some(json)
+        decoded = Self.decode(json)
+        return decoded
+    }
+
+    private static func decode(_ json: String?) -> [LampDevotionalMediaReference] {
+        guard let json else { return [] }
+        return (try? JSONDecoder().decode(
+            [LampDevotionalMediaReference].self, from: Data(json.utf8)
+        )) ?? []
+    }
+}
+
+/// What the workspace's debounced save watches: each open file's identity and
+/// its text as it stands.
+///
+/// The texts are the same string values the documents hold, so building this
+/// copies references. Interpolating the id and the text into one string
+/// instead made a fresh copy of every open file's whole text on every body
+/// pass — a couple of microseconds each time, but two 70KB files' worth of
+/// garbage per pass, and the body is evaluated as the writer types.
+private struct WorkspaceEditTrigger: Equatable {
+    let ids: [String]
+    let texts: [String]
+}
+
 private struct DevotionalWorkspaceEditorDocument: Identifiable, Equatable {
     let url: URL
     /// Where the file sits inside the workspace. This is the document's
@@ -485,7 +527,7 @@ struct WritingEditorWindow: View {
         .toolbar {
             ToolbarItem(placement: .navigation) {
                 Button(showsLibrary ? "Hide Writing List" : "Show Writing List", systemImage: "sidebar.left") {
-                    showsLibrary.toggle()
+                    withAnimation(.lampPaneReveal) { showsLibrary.toggle() }
                 }
                 .help(showsLibrary ? "Hide the list of writing" : "Show the list of writing")
             }
@@ -689,6 +731,9 @@ struct DevotionalEditorView: View {
     @State private var originalPlainContent = ""
     @State private var originalProjectedMarkdown = ""
     @State private var mediaJSON: String?
+    /// Holds the media list last decoded from `mediaJSON`, so reading
+    /// `mediaReferences` from `body` is a comparison rather than a parse.
+    @State private var mediaCache = DevotionalMediaReferenceCache()
     @State private var footnotes = ""
     @State private var keyScriptures: [LampScriptureLink] = []
 
@@ -709,6 +754,17 @@ struct DevotionalEditorView: View {
     @State private var visualEditorIsReady = false
     @State private var find = WritingFindController()
     @State private var markdownFinder = MarkdownTextFinder()
+    /// The count and reading time the status bar shows, measured once the
+    /// text has settled rather than inside `body`.
+    ///
+    /// Measuring walks the whole document and builds a prose copy of it to
+    /// count. In `body` that ran on every keystroke, and the cost grew with
+    /// the writing — which is the wrong way round, since it is the long
+    /// writing whose typing must stay smooth.
+    @State private var statistics = WritingStatistics(wordCount: 0, characterCount: 0)
+    /// Whether anything has been counted yet, so the first count is immediate
+    /// and a writing never opens reading "No words".
+    @State private var hasMeasuredStatistics = false
     @State private var saveState: DevotionalSaveState = .idle
     /// Identifies this editor to the quit hook, for as long as it is on screen.
     @State private var pendingWritesID = UUID()
@@ -729,11 +785,18 @@ struct DevotionalEditorView: View {
         ]
     }
 
+    /// The writing's media, decoded once per change of `mediaJSON`.
+    ///
+    /// This is read from `body` — the visual editor is handed the list, and
+    /// asks it for its media map — and `body` runs on every keystroke, so
+    /// decoding here put a JSON parse of every picture and recording in the
+    /// writing on the typing path. The cache is asked for the JSON in hand
+    /// rather than told when it changes, because `addMedia` reads this in the
+    /// same breath as it appends to `mediaJSON` (see `updateRichMediaIDs`),
+    /// where anything updated on a later pass would answer with the media as
+    /// it was before.
     private var mediaReferences: [LampDevotionalMediaReference] {
-        guard let mediaJSON else { return [] }
-        return (try? JSONDecoder().decode(
-            [LampDevotionalMediaReference].self, from: Data(mediaJSON.utf8)
-        )) ?? []
+        mediaCache.references(for: mediaJSON)
     }
 
     private var isDirty: Bool {
@@ -852,8 +915,11 @@ struct DevotionalEditorView: View {
         }
     }
 
-    private var workspaceDocumentEditTrigger: [String] {
-        workspaceDocuments.map { "\($0.id)\u{0}\($0.text)" }
+    private var workspaceDocumentEditTrigger: WorkspaceEditTrigger {
+        WorkspaceEditTrigger(
+            ids: workspaceDocuments.map(\.id),
+            texts: workspaceDocuments.map(\.text)
+        )
     }
 
     private var hasSavableContent: Bool {
@@ -976,6 +1042,27 @@ struct DevotionalEditorView: View {
             guard !Task.isCancelled else { return }
             save()
         }
+        // Counted here rather than in the status bar's own body, so a
+        // keystroke does not measure the document. The pause is what keeps it
+        // off the typing path; a count that lands a moment after the typing
+        // stops reads the same as one that kept up with it.
+        .task(id: activeText) {
+            if hasMeasuredStatistics {
+                try? await Task.sleep(for: .milliseconds(300))
+                guard !Task.isCancelled else { return }
+            }
+            // Counted off the main thread as well as off the typing path.
+            // Measured with `-O` over writing from the corpus: 1.3ms for a
+            // 10KB writing, 4.1ms for 30KB, around 10ms for 70KB. Even once
+            // per pause, a 70KB writing would drop a frame counting itself.
+            let text = activeText
+            let measured = await Task.detached(priority: .utility) {
+                WritingStatistics.measuring(markdown: text)
+            }.value
+            guard !Task.isCancelled else { return }
+            statistics = measured
+            hasMeasuredStatistics = true
+        }
         .task(id: workspaceDocumentEditTrigger) {
             guard workspaceDocuments.contains(where: { $0.isDirty && !$0.hasExternalConflict }) else {
                 return
@@ -1002,8 +1089,10 @@ struct DevotionalEditorView: View {
         // details take its place as they would on closing it by hand.
         .onChange(of: aiFeaturesEnabled) { _, enabled in
             if !enabled, showingAgentWorkspace {
-                showingAgentWorkspace = false
-                showsDetails = true
+                withAnimation(.lampPaneReveal) {
+                    showingAgentWorkspace = false
+                    showsDetails = true
+                }
             }
         }
         .onChange(of: selectedWorkspaceDocumentID) {
@@ -1373,7 +1462,20 @@ struct DevotionalEditorView: View {
                     }
                     coordinator.onSelectionChanged = { selection in
                         DispatchQueue.main.async {
-                            tipTapSelection = selection
+                            // The page reports a selection with every
+                            // keystroke, and this state is read by the format
+                            // bar — so writing a value equal to the one held
+                            // rebuilt the editor, its status bar and both
+                            // surfaces for a caret that had moved one
+                            // character. It carries which styles are on,
+                            // nothing about where the caret is, so typing
+                            // inside a paragraph reports the same state over
+                            // and over: only a change of style is news.
+                            if tipTapSelection != selection {
+                                tipTapSelection = selection
+                            }
+                            // What is selected does change with the caret, and
+                            // this reads it on its own clock, a moment later.
                             readVisualSelectionSoon()
                         }
                     }
@@ -1614,8 +1716,7 @@ struct DevotionalEditorView: View {
     }
 
     private var statusBar: some View {
-        let statistics = WritingStatistics.measuring(markdown: activeText)
-        return HStack(spacing: 10) {
+        HStack(spacing: 10) {
             Text(activeSaveStateDescription)
                 .foregroundStyle(activeSaveStateIsProblem ? AnyShapeStyle(.red) : AnyShapeStyle(Color.lampSecondaryText))
 
@@ -1954,7 +2055,7 @@ struct DevotionalEditorView: View {
                 Toggle(isOn: Binding(
                     get: { showsDetails && !showingAgentWorkspace },
                     set: { isShowing in
-                        withAnimation(.easeInOut(duration: 0.2)) {
+                        withAnimation(.lampPaneReveal) {
                             showingAgentWorkspace = false
                             showsDetails = isShowing
                         }
@@ -1970,7 +2071,7 @@ struct DevotionalEditorView: View {
                             // The assistant covers the details rather than
                             // closing them: closed again, it leaves the side
                             // as it found it, details open or not.
-                            withAnimation(.easeInOut(duration: 0.2)) {
+                            withAnimation(.lampPaneReveal) {
                                 showingAgentWorkspace = isShowing
                             }
                         }
@@ -3237,8 +3338,10 @@ struct DevotionalEditorView: View {
         // The sidebar holds either the details or the agent's workspace, so
         // showing the field means putting the details back. One click returns
         // the workspace, and the writer asked to see this note.
-        showingAgentWorkspace = false
-        showsDetails = true
+        withAnimation(.lampPaneReveal) {
+            showingAgentWorkspace = false
+            showsDetails = true
+        }
         footnotesSelection = NSRange(location: found.content.location, length: 0)
         footnotesRevealToken += 1
     }
