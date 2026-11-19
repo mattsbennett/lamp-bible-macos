@@ -7,7 +7,8 @@ import LampBibleMacSupport
 #endif
 import Network
 
-/// Lets a paired iPhone or iPad follow and continue this Mac's reader chats.
+/// Lets a paired iPhone or iPad follow and continue this Mac's reader chats,
+/// and the chat on each writing.
 ///
 /// The phone cannot sign in to the providers' command-line tools, so it runs
 /// no agent: it is a window onto the chats running here. A turn it sends goes
@@ -17,9 +18,11 @@ import Network
 /// Direct over the local network or peer to peer, with nothing of ours in
 /// between. Each connection agrees fresh keys (`LampAgentRemoteHandshake`), so
 /// a recording of today's chat cannot be opened with a key stolen later.
-/// Only while the AI switch and this host's own setting are both on, and only
-/// reader chats: read-only, with the same Lamp tools and limits as a reader
-/// chat in a window.
+/// Only while the AI switch and this host's own setting are both on. A reader
+/// chat is read-only, with the same Lamp tools and limits as one in a
+/// window. A writing turn is a writing window's turn (`WritingChatTurns`):
+/// what the assistant writes is taken into the writing, recorded in its
+/// history and marked for review, and reaches the phone by sync.
 ///
 /// Network work runs on the main queue: the chats are main-actor objects,
 /// and a chat's traffic is a person typing and a reply arriving. What is slow
@@ -108,8 +111,8 @@ final class AgentRemoteHost: ObservableObject {
         // Library access may have changed: the open chats' helpers read their
         // policy file on every call, so it is rewritten now, not at the next
         // turn.
-        for open in Set(peers.values.compactMap { $0.open?.workspace }) {
-            try? writePolicy(in: open)
+        for open in peers.values.compactMap(\.open) {
+            try? writePolicy(for: open.chat, in: open.workspace)
         }
     }
 
@@ -254,14 +257,16 @@ final class AgentRemoteHost: ObservableObject {
     /// A chat a device has open: the model it follows, and what it was last
     /// told, to tell it only what changed.
     private final class OpenChat {
-        let id: UUID
+        let chat: LampAgentRemoteHosting.Chat
         let workspace: URL
         let model: NativeAgentChatModel
         var told = LampAgentRemoteChatState()
         var watching: AnyCancellable?
 
-        init(id: UUID, workspace: URL, model: NativeAgentChatModel) {
-            self.id = id
+        var id: String { chat.id }
+
+        init(chat: LampAgentRemoteHosting.Chat, workspace: URL, model: NativeAgentChatModel) {
+            self.chat = chat
             self.workspace = workspace
             self.model = model
         }
@@ -396,7 +401,7 @@ final class AgentRemoteHost: ObservableObject {
         case .send:
             track(peer) { await self.send(message, from: peer) }
         case .cancel:
-            guard let open = peer.open, message.chatID == open.id.uuidString else {
+            guard let open = peer.open, message.chatID == open.id else {
                 send(.failed(LampAgentRemoteFailure.notFound, "That chat isn't open.", requestID: message.requestID), to: peer)
                 return
             }
@@ -430,11 +435,38 @@ final class AgentRemoteHost: ObservableObject {
         .init(id: provider.rawValue, name: provider.name)
     }
 
-    /// The provider a chat goes on with: what the reader chat pane would open
-    /// it on.
-    private func continuingProvider(in workspace: URL) -> AIProviderCLI {
-        let id = LampAgentRemoteHosting.continuingProviderID(in: workspace, appProviderID: ReaderChatTurns.appProviderID)
+    /// The provider a writing's chat starts on: the writing window's own
+    /// default (`DevotionalAgentWorkspaceView`).
+    private static var writingAppProviderID: String {
+        UserDefaults.standard.string(forKey: "devotional.agent.provider") ?? AIProviderCLI.codex.rawValue
+    }
+
+    private static func appProviderID(for chat: LampAgentRemoteHosting.Chat) -> String {
+        switch chat {
+        case .reader: ReaderChatTurns.appProviderID
+        case .writing: writingAppProviderID
+        }
+    }
+
+    /// The provider a chat goes on with: what its pane would open it on.
+    private func continuingProvider(for chat: LampAgentRemoteHosting.Chat, in workspace: URL) -> AIProviderCLI {
+        let id = LampAgentRemoteHosting.continuingProviderID(in: workspace, appProviderID: Self.appProviderID(for: chat))
         return AIProviderCLI(rawValue: id) ?? .codex
+    }
+
+    private func workspace(of chat: LampAgentRemoteHosting.Chat, root: URL) -> URL {
+        switch chat {
+        case .reader(let id): ReaderChatWorkspaceStore.workspaceURL(libraryRootURL: root, chatID: id)
+        case .writing(let id): LampWritingWorkspace.url(libraryRootURL: root, writingID: id)
+        }
+    }
+
+    private func writing(_ id: String) -> LampDevotional? {
+        libraryModel?.devotionals.first { $0.id == id }
+    }
+
+    private static func listed(_ writing: LampDevotional) -> LampAgentRemoteHosting.Writing {
+        .init(id: writing.id, title: writing.title, isEditable: writing.isEditable)
     }
 
     private func transcripts(in workspace: URL) -> [LampAgentRemoteHosting.ProviderTranscript] {
@@ -446,27 +478,51 @@ final class AgentRemoteHost: ObservableObject {
         }
     }
 
-    private func summary(of id: UUID) -> LampAgentRemoteChatSummary? {
+    private func summary(of chat: LampAgentRemoteHosting.Chat) -> LampAgentRemoteChatSummary? {
         guard let root = libraryRootURL else { return nil }
-        let workspace = ReaderChatWorkspaceStore.workspaceURL(libraryRootURL: root, chatID: id)
-        return LampAgentRemoteHosting.summary(
-            chatID: id,
-            transcripts: transcripts(in: workspace),
-            continuing: Self.hostingProvider(continuingProvider(in: workspace)),
-            isRunning: KeptAgentChats.isRunning(in: workspace)
+        let workspace = workspace(of: chat, root: root)
+        let continuing = Self.hostingProvider(continuingProvider(for: chat, in: workspace))
+        let isRunning = KeptAgentChats.isRunning(in: workspace)
+        switch chat {
+        case .reader(let id):
+            return LampAgentRemoteHosting.summary(
+                chatID: id, transcripts: transcripts(in: workspace), continuing: continuing, isRunning: isRunning
+            )
+        case .writing(let id):
+            guard let writing = writing(id) else { return nil }
+            return LampAgentRemoteHosting.summary(
+                writing: Self.listed(writing), transcripts: transcripts(in: workspace), continuing: continuing, isRunning: isRunning
+            )
+        }
+    }
+
+    /// A chat with nothing said in it yet, as it is listed until something is.
+    private func untitled(_ chat: LampAgentRemoteHosting.Chat, workspace: URL, title: String = "New Chat", isRunning: Bool) -> LampAgentRemoteChatSummary {
+        let writing: LampAgentRemoteHosting.Writing? = switch chat {
+        case .reader: nil
+        case .writing(let id): self.writing(id).map(Self.listed)
+        }
+        return LampAgentRemoteHosting.untitled(
+            chat, Self.hostingProvider(continuingProvider(for: chat, in: workspace)), title: title, writing: writing, isRunning: isRunning
         )
     }
 
-    /// Every reader chat, read off the main thread, with whether a reply is
-    /// running in it added from the live models here.
+    /// Every reader chat and writing chat, newest first, read off the main
+    /// thread, with whether a reply is running in each added from the live
+    /// models here.
     private func list(for peer: Peer, requestID: UUID?) async {
         guard let root = libraryRootURL else {
             send(.chats([], requestID: requestID), to: peer)
             return
         }
-        let providers = Self.providers, appProvider = ReaderChatTurns.appProviderID
+        let providers = Self.providers, readerProvider = ReaderChatTurns.appProviderID
+        let writingProvider = Self.writingAppProviderID
+        let writings = (libraryModel?.devotionals ?? []).map(Self.listed)
         let read = await Task.detached(priority: .userInitiated) {
-            LampAgentRemoteHosting.readSummaries(libraryRootURL: root, providers: providers, appProviderID: appProvider)
+            LampAgentRemoteHosting.readSummaries(libraryRootURL: root, providers: providers, appProviderID: readerProvider)
+                + LampAgentRemoteHosting.readWritingSummaries(
+                    libraryRootURL: root, writings: writings, providers: providers, appProviderID: writingProvider
+                )
         }.value
         guard isConnected(peer) else { return }
         let summaries = read.map { item -> LampAgentRemoteChatSummary in
@@ -474,44 +530,63 @@ final class AgentRemoteHost: ObservableObject {
             summary.isRunning = KeptAgentChats.isRunning(in: item.workspace)
             return summary
         }
+        .sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
         send(.chats(summaries, requestID: requestID), to: peer)
     }
 
-    private func writePolicy(in workspace: URL) throws {
+    private func writePolicy(for chat: LampAgentRemoteHosting.Chat, in workspace: URL) throws {
         guard let libraryModel else { return }
-        try ReaderChatTurns.writeAccessPolicy(
-            ReaderChatTurns.currentAccessPolicy(libraryModel: libraryModel), workspace: workspace
-        )
+        let policy = ReaderChatTurns.currentAccessPolicy(libraryModel: libraryModel)
+        switch chat {
+        case .reader:
+            try ReaderChatTurns.writeAccessPolicy(policy, workspace: workspace)
+        case .writing:
+            // Where a writing's helper reads it (`WritingChatTurns.prepare`).
+            _ = try AgentModuleAccessPreferences.writePolicy(policy, libraryRootURL: libraryModel.library.rootURL)
+        }
     }
 
     /// The model a chat runs in, made ready: the same one a window on this
     /// chat uses, if one is open.
-    private func model(for id: UUID) throws -> (model: NativeAgentChatModel, workspace: URL) {
+    private func model(for chat: LampAgentRemoteHosting.Chat) throws -> (model: NativeAgentChatModel, workspace: URL) {
         guard let libraryModel, let root = libraryRootURL else {
             throw CocoaError(.fileReadUnknown, userInfo: [NSLocalizedDescriptionKey: "The library isn't open yet."])
         }
-        let workspace = ReaderChatWorkspaceStore.workspaceURL(libraryRootURL: root, chatID: id)
-        let configuration = try ReaderChatTurns.prepare(
-            workspace: workspace,
-            policy: ReaderChatTurns.currentAccessPolicy(libraryModel: libraryModel),
-            libraryRootURL: root
-        )
-        let model = KeptAgentChats.model(
-            provider: continuingProvider(in: workspace), workspace: workspace, mode: .reader(configuration)
-        )
+        let workspace = workspace(of: chat, root: root)
+        let model: NativeAgentChatModel
+        switch chat {
+        case .reader:
+            let configuration = try ReaderChatTurns.prepare(
+                workspace: workspace,
+                policy: ReaderChatTurns.currentAccessPolicy(libraryModel: libraryModel),
+                libraryRootURL: root
+            )
+            model = KeptAgentChats.model(
+                provider: continuingProvider(for: chat, in: workspace), workspace: workspace, mode: .reader(configuration)
+            )
+        case .writing:
+            // Pinned as the writing's pane pins it on opening, so the chat
+            // goes on with the model and effort the pane would show.
+            let choices = AgentChatOwnChoices.pinned(in: workspace, appProviderID: Self.writingAppProviderID)
+            let provider = AIProviderCLI(
+                rawValue: choices.value(for: AgentChatChoices.providerKey, orAppDefault: Self.writingAppProviderID)
+                    ?? Self.writingAppProviderID
+            ) ?? .codex
+            model = WritingChatTurns.model(provider: provider, workspace: workspace)
+        }
         model.load()
         return (model, workspace)
     }
 
     @discardableResult
     private func open(_ chatID: String?, for peer: Peer, requestID: UUID?) -> OpenChat? {
-        guard let chatID, let id = UUID(uuidString: chatID), let summary = summary(of: id) else {
+        guard let chatID, let chat = LampAgentRemoteHosting.Chat(id: chatID), let summary = summary(of: chat) else {
             send(.failed(LampAgentRemoteFailure.notFound, "That chat isn't on this Mac.", requestID: requestID, chatID: chatID), to: peer)
             return nil
         }
         do {
-            let (model, workspace) = try model(for: id)
-            return follow(OpenChat(id: id, workspace: workspace, model: model), summary: summary, for: peer, requestID: requestID)
+            let (model, workspace) = try model(for: chat)
+            return follow(OpenChat(chat: chat, workspace: workspace, model: model), summary: summary, for: peer, requestID: requestID)
         } catch {
             send(.failed(LampAgentRemoteFailure.needsSetup, error.localizedDescription, requestID: requestID, chatID: chatID), to: peer)
             return nil
@@ -580,14 +655,13 @@ final class AgentRemoteHost: ObservableObject {
                     askedBy: self.askedBy
                 )
                 if LampAgentRemoteChatUpdates.needsSnapshot(from: open.told, to: next),
-                   let summary = self.summary(of: open.id) ?? Optional(LampAgentRemoteHosting.untitled(
-                       open.id, Self.hostingProvider(self.continuingProvider(in: open.workspace)), isRunning: isRunning
-                   )) {
+                   let summary = self.summary(of: open.chat)
+                    ?? Optional(self.untitled(open.chat, workspace: open.workspace, isRunning: isRunning)) {
                     // Cleared, or turns undone, on the Mac: start the phone's
                     // copy again rather than patch it.
                     self.send(.snapshot(LampAgentRemoteChatUpdates.snapshot(summary: summary, state: next)), to: peer)
                 } else {
-                    for event in LampAgentRemoteChatUpdates.events(chatID: open.id.uuidString, from: open.told, to: next) {
+                    for event in LampAgentRemoteChatUpdates.events(chatID: open.id, from: open.told, to: next) {
                         self.send(.event(event), to: peer)
                     }
                 }
@@ -598,18 +672,19 @@ final class AgentRemoteHost: ObservableObject {
 
     private func send(_ message: LampAgentRemoteMessage, from peer: Peer) async {
         guard let text = message.text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty,
-              let chatID = message.chatID, let id = UUID(uuidString: chatID) else {
+              let chatID = message.chatID, let chat = LampAgentRemoteHosting.Chat(id: chatID) else {
             send(.failed(LampAgentRemoteFailure.notFound, "That chat isn't on this Mac.", requestID: message.requestID), to: peer)
             return
         }
-        let open = peer.open?.id == id ? peer.open : open(chatID, for: peer, requestID: nil)
+        let open = peer.open?.chat == chat ? peer.open : open(chatID, for: peer, requestID: nil)
         guard let open else { return }
-        await run(text, reading: message.reading, in: open, requestID: message.requestID, peer: peer)
+        await run(text, reading: message.reading, selection: message.selection, in: open, requestID: message.requestID, peer: peer)
     }
 
     private func startChat(_ message: LampAgentRemoteMessage, from peer: Peer) async {
-        guard let newChat = message.newChat, newChat.kind == LampAgentRemoteChatSummary.reader else {
-            send(.failed(LampAgentRemoteFailure.notAllowed, "Only reader chats can be started from a device.", requestID: message.requestID), to: peer)
+        guard let newChat = message.newChat,
+              [LampAgentRemoteChatSummary.reader, LampAgentRemoteChatSummary.writing].contains(newChat.kind) else {
+            send(.failed(LampAgentRemoteFailure.notAllowed, "Only reader and writing chats can be started from a device.", requestID: message.requestID), to: peer)
             return
         }
         let first = newChat.firstMessage.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -618,61 +693,172 @@ final class AgentRemoteHost: ObservableObject {
             return
         }
         guard let root = libraryRootURL else { return }
-        let id = UUID()
-        let workspace = ReaderChatWorkspaceStore.workspaceURL(libraryRootURL: root, chatID: id)
+        let chat: LampAgentRemoteHosting.Chat
+        if newChat.kind == LampAgentRemoteChatSummary.writing {
+            guard let writingID = newChat.writingID, writing(writingID) != nil else {
+                send(.failed(LampAgentRemoteFailure.notFound, "That writing isn't on this Mac.", requestID: message.requestID), to: peer)
+                return
+            }
+            chat = .writing(writingID)
+        } else {
+            chat = .reader(UUID())
+        }
+        // A writing has one chat: asking again goes on in it.
+        if let open = peer.open, open.chat == chat {
+            await run(first, reading: newChat.reading, selection: newChat.selection, in: open, requestID: message.requestID, peer: peer)
+            return
+        }
+        let workspace = workspace(of: chat, root: root)
         do {
+            if case .writing(let id) = chat {
+                // The workspace made before anything is chosen in it, as the
+                // writing's pane makes it on opening.
+                guard try await prepareWriting(id, requestID: message.requestID, peer: peer) else { return }
+            }
             // The provider chosen is the chat's own, pinned as the pane pins
-            // it, so the chat opens on it in a window too.
-            let provider = newChat.provider.flatMap(AIProviderCLI.init(rawValue:))
-                ?? AIProviderCLI(rawValue: ReaderChatTurns.appProviderID) ?? .codex
-            var choices = AgentChatChoicesStore.load(in: workspace)
-            choices.set(provider.rawValue, for: AgentChatChoices.providerKey)
-            try AgentChatChoicesStore.save(choices, in: workspace)
-            _ = AgentChatOwnChoices.pinned(in: workspace, appProviderID: provider.rawValue)
+            // it, so the chat opens on it in a window too. A writing that
+            // has a chat already keeps the provider it has.
+            if summary(of: chat) == nil {
+                let provider = newChat.provider.flatMap(AIProviderCLI.init(rawValue:))
+                    ?? AIProviderCLI(rawValue: Self.appProviderID(for: chat)) ?? .codex
+                var choices = AgentChatChoicesStore.load(in: workspace)
+                choices.set(provider.rawValue, for: AgentChatChoices.providerKey)
+                try AgentChatChoicesStore.save(choices, in: workspace)
+                _ = AgentChatOwnChoices.pinned(in: workspace, appProviderID: provider.rawValue)
+            }
 
-            let (model, _) = try model(for: id)
-            let summary = LampAgentRemoteHosting.untitled(
-                id, Self.hostingProvider(provider), title: ReaderChatWorkspaceStore.label(first), isRunning: false
-            )
+            let (model, _) = try model(for: chat)
+            let summary = summary(of: chat)
+                ?? untitled(chat, workspace: workspace, title: ReaderChatWorkspaceStore.label(first), isRunning: false)
             // The snapshot before anything streams, so every event after it
             // is for a chat the phone already holds.
-            let open = follow(OpenChat(id: id, workspace: workspace, model: model), summary: summary, for: peer, requestID: message.requestID)
-            await run(first, reading: newChat.reading, in: open, requestID: message.requestID, peer: peer)
+            let open = follow(OpenChat(chat: chat, workspace: workspace, model: model), summary: summary, for: peer, requestID: message.requestID)
+            await run(first, reading: newChat.reading, selection: newChat.selection, in: open, requestID: message.requestID, peer: peer)
         } catch {
             send(.failed(LampAgentRemoteFailure.needsSetup, error.localizedDescription, requestID: message.requestID), to: peer)
         }
     }
 
-    /// Sends a turn through the chat's model, with the passage the phone is
-    /// reading, as a window would send it — checked again just before it
-    /// goes, since preparing it waits, and the device may have been forgotten
-    /// or the host turned off meanwhile.
-    private func run(_ text: String, reading: LampAgentRemoteReading?, in open: OpenChat, requestID: UUID?, peer: Peer) async {
+    /// Sends a turn through the chat's model, as a window would send it: a
+    /// reader turn with the passage the phone is reading, a writing turn with
+    /// what is selected in it and what is still marked. Checked again just
+    /// before it goes, since preparing it waits, and the device may have been
+    /// forgotten or the host turned off meanwhile.
+    private func run(
+        _ text: String, reading: LampAgentRemoteReading?, selection: String?,
+        in open: OpenChat, requestID: UUID?, peer: Peer
+    ) async {
         guard !open.model.isRunning else {
-            send(.failed(LampAgentRemoteFailure.busy, "A reply is still arriving in this chat.", requestID: requestID, chatID: open.id.uuidString), to: peer)
+            send(.failed(LampAgentRemoteFailure.busy, "A reply is still arriving in this chat.", requestID: requestID, chatID: open.id), to: peer)
             return
         }
         let conversation = open.model.conversationID
-        do {
-            // Every turn, whether or not it names a passage: the helper reads
-            // this file on each call, and access may have narrowed since.
-            try writePolicy(in: open.workspace)
-        } catch {
-            send(.failed(LampAgentRemoteFailure.needsSetup, error.localizedDescription, requestID: requestID, chatID: open.id.uuidString), to: peer)
-            return
+        let prompt: String
+        switch open.chat {
+        case .reader:
+            do {
+                // Every turn, whether or not it names a passage: the helper
+                // reads this file on each call, and access may have narrowed
+                // since.
+                try writePolicy(for: open.chat, in: open.workspace)
+            } catch {
+                send(.failed(LampAgentRemoteFailure.needsSetup, error.localizedDescription, requestID: requestID, chatID: open.id), to: peer)
+                return
+            }
+            prompt = await contextualPrompt(text, reading: reading)
+        case .writing(let id):
+            guard let written = await writingPrompt(text, selection: selection, writingID: id, in: open, requestID: requestID, peer: peer)
+            else { return }
+            prompt = written
         }
-        let prompt = await contextualPrompt(text, reading: reading)
         guard !Task.isCancelled, mayAct(peer), let device = peer.deviceID else { return }
         // The question's id is chosen here, so the turn is known as this
         // device's for as long as it runs, and no longer.
         let turn = UUID()
         runs[device, default: []].append((open.model, turn))
         if let requestID { remember(requestID, asked: turn) }
+        let collecting = collectWhileRunning(open)
         let taken = await open.model.send(text, contextualPrompt: prompt, messageID: turn, inConversation: conversation)
+        collecting?.cancel()
+        if case .writing(let id) = open.chat, let libraryModel {
+            // Once more as it ends: a run's last write lands just before it
+            // exits, after the last poll.
+            _ = try? await WritingChatTurns.collect(
+                writingID: id, turnID: open.model.takeTurnForAttribution() ?? turn, libraryModel: libraryModel
+            )
+        }
         runs[device]?.removeAll { $0.turn == turn }
         if runs[device]?.isEmpty == true { runs[device] = nil }
         if !taken, isConnected(peer), peer.open === open {
-            send(.failed(LampAgentRemoteFailure.busy, "This chat changed on the Mac before the message could go.", requestID: requestID, chatID: open.id.uuidString), to: peer)
+            send(.failed(LampAgentRemoteFailure.busy, "This chat changed on the Mac before the message could go.", requestID: requestID, chatID: open.id), to: peer)
+        }
+    }
+
+    /// Makes a writing's workspace ready for a turn, as its pane does on
+    /// opening: under the policy as it is now, and holding the writing as it
+    /// is now, which may have moved since the last turn, by sync or in a
+    /// window. False, having said why, where there is nothing to do it on.
+    private func prepareWriting(_ id: String, requestID: UUID?, peer: Peer) async throws -> Bool {
+        guard let libraryModel, let writing = writing(id) else {
+            send(.failed(LampAgentRemoteFailure.notFound, "That writing isn't on this Mac.", requestID: requestID, chatID: LampAgentRemoteHosting.Chat.writing(id).id), to: peer)
+            return false
+        }
+        guard writing.isEditable else {
+            send(.failed(LampAgentRemoteFailure.notAllowed, "This writing came with a module, so the assistant can't change it.", requestID: requestID, chatID: LampAgentRemoteHosting.Chat.writing(id).id), to: peer)
+            return false
+        }
+        _ = try await WritingChatTurns.prepare(
+            writingID: id,
+            draft: writing.displayMarkdown,
+            context: WritingChatTurns.contextDocument(for: writing),
+            policy: ReaderChatTurns.currentAccessPolicy(libraryModel: libraryModel),
+            libraryRootURL: libraryModel.library.rootURL,
+            bundledModulesArchiveURL: Bundle.main.url(forResource: "bundled_modules.db", withExtension: "zlib")
+        )
+        try await WritingChatTurns.begin(writingID: id, turnID: nil, libraryModel: libraryModel)
+        return true
+    }
+
+    /// A writing turn's message as the provider is sent it: with the words
+    /// selected on the phone, as the visual editor would show them, and what
+    /// is still marked for the writer to read.
+    private func writingPrompt(
+        _ text: String, selection: String?, writingID: String, in open: OpenChat, requestID: UUID?, peer: Peer
+    ) async -> String? {
+        do {
+            guard try await prepareWriting(writingID, requestID: requestID, peer: peer) else { return nil }
+        } catch {
+            send(.failed(LampAgentRemoteFailure.needsSetup, error.localizedDescription, requestID: requestID, chatID: open.id), to: peer)
+            return nil
+        }
+        guard let libraryModel, let writing = writing(writingID) else { return nil }
+        let root = libraryModel.library.rootURL
+        let focus = WritingEditorFocus(
+            documentPath: "draft.md", documentName: writing.title, isVisual: false,
+            selectedText: selection?.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        return WritingChatTurns.prompt(
+            for: text,
+            focus: focus,
+            review: try? WritingReviewMarks.store(libraryRootURL: root)?.review(writingID: writingID),
+            writing: (try? DevotionalAgentWorkspaceStore.readDraft(from: open.workspace)) ?? writing.displayMarkdown
+        )
+    }
+
+    /// Takes in what a writing turn writes as it writes it, as the writing's
+    /// window does by its poll: so a window opened meanwhile, or the phone
+    /// by sync, sees the work arrive rather than all at the end. Nil for a
+    /// reader chat, which writes nothing.
+    private func collectWhileRunning(_ open: OpenChat) -> Task<Void, Never>? {
+        guard case .writing(let id) = open.chat, let libraryModel else { return nil }
+        return Task { [weak libraryModel, model = open.model] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(400))
+                guard !Task.isCancelled, let libraryModel else { return }
+                _ = try? await WritingChatTurns.collect(
+                    writingID: id, turnID: model.takeTurnForAttribution() ?? model.currentTurn, libraryModel: libraryModel
+                )
+            }
         }
     }
 

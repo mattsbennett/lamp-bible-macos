@@ -1,11 +1,56 @@
 import Foundation
 import LampCore
 
-/// How this Mac's reader chats are shown to a paired phone: as summaries in
-/// a list, as a snapshot when one is opened, and as the events of a reply
-/// while it arrives. Worked out here from plain values, where it is tested;
-/// the host only reads the chats and their models and sends what this says.
+/// How this Mac's reader and writing chats are shown to a paired phone: as
+/// summaries in a list, as a snapshot when one is opened, and as the events
+/// of a reply while it arrives. Worked out here from plain values, where it
+/// is tested; the host only reads the chats and their models and sends what
+/// this says.
 public enum LampAgentRemoteHosting {
+    /// Which chat a summary's id names: a reader chat, by its own id, or a
+    /// writing's one chat, by the writing's.
+    public enum Chat: Hashable, Sendable {
+        case reader(UUID)
+        case writing(String)
+
+        private static let writingPrefix = "writing:"
+
+        public init?(id: String) {
+            if id.hasPrefix(Self.writingPrefix) {
+                let writingID = String(id.dropFirst(Self.writingPrefix.count))
+                guard !writingID.isEmpty else { return nil }
+                self = .writing(writingID)
+            } else if let uuid = UUID(uuidString: id) {
+                self = .reader(uuid)
+            } else {
+                return nil
+            }
+        }
+
+        public var id: String {
+            switch self {
+            case .reader(let id): id.uuidString
+            case .writing(let id): Self.writingPrefix + id
+            }
+        }
+    }
+
+    /// A writing, as much of it as its chat's summary shows.
+    public struct Writing: Equatable, Sendable {
+        public let id: String
+        public let title: String
+        /// False for a writing that came in a module: an assistant may not
+        /// change it, so a device may read its chat but not send to it.
+        public let isEditable: Bool
+        public init(id: String, title: String, isEditable: Bool) {
+            self.id = id
+            self.title = title
+            self.isEditable = isEditable
+        }
+
+        var name: String { title.isEmpty ? "Untitled" : title }
+    }
+
     /// A provider, as a chat summary names it.
     public struct Provider: Equatable, Sendable {
         public let id: String
@@ -50,37 +95,59 @@ public enum LampAgentRemoteHosting {
         continuing: Provider,
         isRunning: Bool
     ) -> LampAgentRemoteChatSummary? {
+        summary(.reader(chatID), writing: nil, transcripts: transcripts, continuing: continuing, isRunning: isRunning)
+    }
+
+    /// A writing's chat as the phone lists it: titled by its opening, as a
+    /// reader chat is, with the writing's name under it. Nil while nothing
+    /// was said in it.
+    public static func summary(
+        writing: Writing,
+        transcripts: [ProviderTranscript],
+        continuing: Provider,
+        isRunning: Bool
+    ) -> LampAgentRemoteChatSummary? {
+        summary(.writing(writing.id), writing: writing, transcripts: transcripts, continuing: continuing, isRunning: isRunning)
+    }
+
+    private static func summary(
+        _ chat: Chat,
+        writing: Writing?,
+        transcripts: [ProviderTranscript],
+        continuing: Provider,
+        isRunning: Bool
+    ) -> LampAgentRemoteChatSummary? {
         // The conversation it goes on with; for its title, the one spoken in
         // last if that is still empty.
         let own = transcripts.first { $0.provider == continuing && !$0.transcript.messages.isEmpty }
         guard let shown = own ?? newest(transcripts) else {
-            return isRunning ? untitled(chatID, continuing, isRunning: true) : nil
+            return isRunning ? untitled(chat, continuing, writing: writing, isRunning: true) : nil
         }
         let messages = shown.transcript.messages
         let opening = messages.first { $0.role == .user }?.text
-        return LampAgentRemoteChatSummary(
-            id: chatID.uuidString,
-            title: opening.map { ReaderChatWorkspaceStore.label($0) } ?? "New Chat",
-            kind: LampAgentRemoteChatSummary.reader,
-            provider: continuing.id,
-            providerName: continuing.name,
-            updatedAt: messages.last?.date,
-            preview: messages.last.map { ReaderChatWorkspaceStore.label($0.text, limit: 140) },
-            isRunning: isRunning,
-            acceptsMessages: true
+        var summary = untitled(
+            chat, continuing, title: opening.map { ReaderChatWorkspaceStore.label($0) } ?? "New Chat",
+            writing: writing, isRunning: isRunning
         )
+        summary.updatedAt = messages.last?.date
+        summary.preview = messages.last.map { ReaderChatWorkspaceStore.label($0.text, limit: 140) }
+        return summary
     }
 
     /// A chat with nothing in it yet: one a phone has just started.
-    public static func untitled(_ chatID: UUID, _ provider: Provider, title: String = "New Chat", isRunning: Bool) -> LampAgentRemoteChatSummary {
+    public static func untitled(
+        _ chat: Chat, _ provider: Provider, title: String = "New Chat", writing: Writing? = nil, isRunning: Bool
+    ) -> LampAgentRemoteChatSummary {
         LampAgentRemoteChatSummary(
-            id: chatID.uuidString,
+            id: chat.id,
             title: title,
-            kind: LampAgentRemoteChatSummary.reader,
+            subtitle: writing?.name,
+            kind: writing == nil ? LampAgentRemoteChatSummary.reader : LampAgentRemoteChatSummary.writing,
+            writingID: writing?.id,
             provider: provider.id,
             providerName: provider.name,
             isRunning: isRunning,
-            acceptsMessages: true
+            acceptsMessages: writing?.isEditable ?? true
         )
     }
 
@@ -101,6 +168,30 @@ public enum LampAgentRemoteHosting {
             let continuing = providers.first { $0.id == continuingID } ?? providers.first { $0.id == appProviderID }
             guard let continuing,
                   let summary = summary(chatID: chat.id, transcripts: transcripts, continuing: continuing, isRunning: false)
+            else { return nil }
+            return (workspace, summary)
+        }
+    }
+
+    /// Every writing's chat on disk as the phone lists it: a writing whose
+    /// workspace was never made, or that nothing was said in, has none. Off
+    /// the main thread, as `readSummaries` is.
+    public static func readWritingSummaries(
+        libraryRootURL: URL,
+        writings: [Writing],
+        providers: [Provider],
+        appProviderID: String
+    ) -> [(workspace: URL, summary: LampAgentRemoteChatSummary)] {
+        writings.compactMap { writing in
+            let workspace = LampWritingWorkspace.url(libraryRootURL: libraryRootURL, writingID: writing.id)
+            guard FileManager.default.fileExists(atPath: workspace.path) else { return nil }
+            let transcripts = providers.map {
+                ProviderTranscript(provider: $0, transcript: AgentChatTranscriptStore.load(providerID: $0.id, in: workspace))
+            }
+            let continuingID = continuingProviderID(in: workspace, appProviderID: appProviderID)
+            let continuing = providers.first { $0.id == continuingID } ?? providers.first { $0.id == appProviderID }
+            guard let continuing,
+                  let summary = summary(writing: writing, transcripts: transcripts, continuing: continuing, isRunning: false)
             else { return nil }
             return (workspace, summary)
         }

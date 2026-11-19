@@ -3,7 +3,7 @@ import LampBibleMacSupport
 import LampCore
 import Testing
 
-/// What a paired phone is told about this Mac's reader chats.
+/// What a paired phone is told about this Mac's reader and writing chats.
 struct LampAgentRemoteHostingTests {
     private let codex = LampAgentRemoteHosting.Provider(id: "codex", name: "OpenAI Codex")
     private let claude = LampAgentRemoteHosting.Provider(id: "claude", name: "Claude Code")
@@ -39,6 +39,38 @@ struct LampAgentRemoteHostingTests {
         #expect(LampAgentRemoteHosting.summary(
             chatID: UUID(), transcripts: [.init(provider: codex, transcript: transcript([]))], continuing: codex, isRunning: false
         ) == nil)
+    }
+
+    /// A writing's chat is titled by its opening, as a reader chat is, with
+    /// the writing named under it; one that came in a module can be read but
+    /// not sent to.
+    @Test func awritingChatIsListedWithItsWriting() throws {
+        let writing = LampAgentRemoteHosting.Writing(id: "studies/grace", title: "On Grace", isEditable: true)
+        let summary = try #require(LampAgentRemoteHosting.summary(
+            writing: writing,
+            transcripts: [.init(provider: claude, transcript: transcript([said("Tighten the opening", .user, 0), said("Done.", .assistant, 1)]))],
+            continuing: claude,
+            isRunning: false
+        ))
+        #expect(summary.id == "writing:studies/grace")
+        #expect(summary.kind == LampAgentRemoteChatSummary.writing && summary.writingID == "studies/grace")
+        #expect(summary.title == "Tighten the opening" && summary.subtitle == "On Grace")
+        #expect(summary.acceptsMessages)
+
+        let bundled = LampAgentRemoteHosting.Writing(id: "m/1", title: "", isEditable: false)
+        let started = LampAgentRemoteHosting.untitled(.writing(bundled.id), claude, writing: bundled, isRunning: true)
+        #expect(!started.acceptsMessages && started.subtitle == "Untitled")
+        #expect(LampAgentRemoteHosting.summary(writing: bundled, transcripts: [], continuing: claude, isRunning: false) == nil)
+    }
+
+    /// A summary's id names one chat and reads back as it.
+    @Test func achatIdNamesItsKind() {
+        let reader = UUID()
+        #expect(LampAgentRemoteHosting.Chat(id: reader.uuidString) == .reader(reader))
+        #expect(LampAgentRemoteHosting.Chat(id: "writing:a/b:c") == .writing("a/b:c"))
+        #expect(LampAgentRemoteHosting.Chat(id: LampAgentRemoteHosting.Chat.writing("x").id) == .writing("x"))
+        #expect(LampAgentRemoteHosting.Chat(id: "writing:") == nil)
+        #expect(LampAgentRemoteHosting.Chat(id: "nonsense") == nil)
     }
 
     /// The Mac's model as the protocol states it; what is sent from that is
