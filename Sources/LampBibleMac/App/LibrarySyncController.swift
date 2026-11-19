@@ -1139,7 +1139,7 @@ extension LibrarySyncController {
         let reviewDeletions = try LampWritingReviewStore(rootURL: library.rootURL).deletions(
             deleted: Set((personalLedger.entries[.devotional] ?? [:]).filter { $0.value.deletedAt != nil }.keys),
             held: Set(writings.map(\.id)),
-            members: Set(manifest.members.map(\.path)),
+            members: Dictionary(manifest.members.map { ($0.path, $0.presentSince ?? 0) }, uniquingKeysWith: max),
             now: Int64(Date().timeIntervalSince1970 * 1_000)
         )
         candidates += LampSyncLocalFiles.writingReviews(inLibraryAt: library.rootURL, fileManager: fileManager)
