@@ -283,8 +283,10 @@ final class AgentRemoteHost: ObservableObject {
         connection.send(content: peer.link.opening, completion: .contentProcessed { _ in })
         receive(from: peer)
         Task { [weak self, weak peer] in
-            try? await Task.sleep(for: .seconds(LampAgentRemoteHostConnection.handshakeDeadline + 0.5))
-            guard let self, let peer, self.isConnected(peer), peer.link.hasExpired(now: Date()) else { return }
+            // Measured by the task's own sleep, not the wall clock, which can
+            // be set back: still unproven when it wakes, it is closed.
+            try? await Task.sleep(for: .seconds(LampAgentRemoteHostConnection.handshakeDeadline))
+            guard let self, let peer, self.isConnected(peer), !peer.link.isProven else { return }
             self.close(peer)
         }
     }
