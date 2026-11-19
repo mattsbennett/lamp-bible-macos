@@ -216,6 +216,15 @@ enum WritingChatTurns {
             .map { ($0.revision, $0.digest) }
     }
 
+    /// Every copy of a writing the open editors hold, one for each. Two
+    /// editors can hold different bodies dated the same second, and no one
+    /// date stands for both: a turn is to be checked against each.
+    static func watchedCopies(_ writingID: String) -> [(revision: Date, digest: String?)] {
+        holds.values.filter { $0.writingID == writingID }
+            .map { ($0.revision, $0.digest) }
+            .sorted { $0.revision < $1.revision }
+    }
+
     /// The oldest revision any open editor holds of a writing.
     static func watchedRevision(_ writingID: String) -> Date? {
         watched(writingID)?.revision

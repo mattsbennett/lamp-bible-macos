@@ -70,11 +70,23 @@ struct WritingChatTurnsTests {
         let second = WritingChatTurns.hold(id, revision: newer, digest: "b")
         #expect(WritingChatTurns.watched(id)?.revision == older)
         #expect(WritingChatTurns.watched(id)?.digest == "a")
+        #expect(WritingChatTurns.watchedCopies(id).map(\.digest) == ["a", "b"])
         first.release()
         #expect(WritingChatTurns.watchedRevision(id) == newer)
         second.update(revision: older, digest: "c")
         #expect(WritingChatTurns.watched(id)?.digest == "c")
         second.release()
         #expect(WritingChatTurns.watched(id) == nil)
+        #expect(WritingChatTurns.watchedCopies(id).isEmpty)
+    }
+
+    @Test func copiesFromTheSameSecondAreEachSaid() {
+        let id = "revision-\(UUID().uuidString)"
+        let second = Date(timeIntervalSince1970: 1_700_000_000)
+        let matching = WritingChatTurns.hold(id, revision: second, digest: "phone")
+        let stale = WritingChatTurns.hold(id, revision: second, digest: "older")
+        #expect(Set(WritingChatTurns.watchedCopies(id).compactMap(\.digest)) == ["phone", "older"])
+        matching.release()
+        stale.release()
     }
 }
