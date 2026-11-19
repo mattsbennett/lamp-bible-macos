@@ -33,9 +33,20 @@ final class WritingReviewSession: ObservableObject {
     private var store: LampWritingReviewStore?
     private var review: LampWritingReview?
     private var text = ""
+    /// The text the marks were last read against, which a clear first
+    /// carries them from: the writer may have typed into a marked passage
+    /// since, before the save that would carry it.
+    private var basis = ""
     private var fileDate: Date?
     private var settleTask: Task<Void, Never>?
     private var drawGeneration = 0
+    /// The page refused the last marks sent (its text was a moment ahead of
+    /// this one's), so the next draw sends them again.
+    private var needsResend = false
+    /// The text a refused set of marks was last sent again for. Refused
+    /// again for the same text, they wait for the text to change rather
+    /// than going round every few hundred milliseconds.
+    private var resentFor: String?
 
     static let checkInterval: Duration = .seconds(1)
     static let settleDelay: Duration = .milliseconds(300)
@@ -44,41 +55,55 @@ final class WritingReviewSession: ObservableObject {
     /// editor's `.task(id:)`, keyed on the writing and on whether marks are
     /// shown at all. Shown off, everything is cleared and nothing is read.
     func follow(writingID: String, text: String, libraryRootURL: URL, isShown: Bool) async {
+        // Nothing drawn for the writing before may land now.
+        settleTask?.cancel()
+        drawGeneration += 1
         self.writingID = writingID
         self.text = text
+        basis = text
         review = nil
         fileDate = nil
+        needsResend = false
+        resentFor = nil
         store = isShown ? LampWritingReviewStore(rootURL: libraryRootURL) : nil
         publish(ranges: [], count: 0, marked: nil, sendsMarks: true)
         guard isShown else { return }
         while !Task.isCancelled {
-            reloadIfMoved()
+            await reloadIfMoved()
             try? await Task.sleep(for: Self.checkInterval)
         }
     }
 
     /// The writing's text moved: what to draw is worked out again once it
-    /// settles. The visual page is not sent the marks again for it.
+    /// settles. The visual page is not sent the marks again for it, unless
+    /// it refused the last ones.
     func textChanged(_ text: String) {
         guard text != self.text else { return }
         self.text = text
         guard review != nil else { return }
-        settleTask?.cancel()
-        settleTask = Task { [weak self] in
-            try? await Task.sleep(for: Self.settleDelay)
-            guard !Task.isCancelled else { return }
-            self?.draw(sendsMarks: false)
-        }
+        scheduleDraw()
+    }
+
+    /// The page could not place the marks it was sent: its text was not
+    /// this one. They go again once the text settles.
+    func marksRejected() {
+        needsResend = true
+        guard resentFor != text else { return }
+        resentFor = text
+        scheduleDraw()
     }
 
     // MARK: - Clearing
 
     /// Clears what of the marks `range` of the writing covers. A caret with
     /// nothing selected clears the mark it stands in.
+    ///
+    /// The marks are carried to the text as it is now first: typed into
+    /// since they were read, a marked passage would otherwise not be found
+    /// and the clear would do nothing.
     func clear(range: NSRange) {
-        guard let store, let writingID else { return }
-        let text = self.text
-        apply((try? store.update(writingID: writingID) { $0.clearing(range, in: text) }))
+        let text = self.text, basis = self.basis
+        change { $0.carryingWriterEdit(from: basis, to: text).clearing(range, in: text) }
     }
 
     /// Clears the range the visual page marked in the Markdown it sent:
@@ -90,32 +115,71 @@ final class WritingReviewSession: ObservableObject {
     }
 
     func clearAll() {
-        guard let store, let writingID else { return }
-        apply((try? store.update(writingID: writingID) { $0.clearingAll() }))
+        change { $0.clearingAll() }
     }
 
     // MARK: - Internals
 
-    private func reloadIfMoved() {
-        guard let store, let writingID, let url = try? store.url(writingID: writingID) else { return }
-        let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
-        guard date != fileDate else { return }
-        fileDate = date
-        apply(try? store.review(writingID: writingID))
+    /// Changes the marks file off the main actor — another writer can hold
+    /// its lock for as long as a long manuscript takes to compare — and
+    /// takes up what was written.
+    private func change(_ edit: @escaping @Sendable (LampWritingReview) -> LampWritingReview) {
+        guard let store, let writingID else { return }
+        let generation = drawGeneration
+        Task { [weak self] in
+            let written = await Task.detached(priority: .userInitiated) { () -> (LampWritingReview, Date?)? in
+                guard let review = try? store.update(writingID: writingID, edit) else { return nil }
+                return (review, Self.modified(store, writingID))
+            }.value
+            // Not for a writing left since, nor once marks were turned off.
+            guard let self, let written, self.drawGeneration >= generation,
+                  self.writingID == writingID, self.store != nil else { return }
+            self.apply(written.0, date: written.1)
+        }
     }
 
-    private func apply(_ review: LampWritingReview?) {
+    /// Reads the marks file again if its date has moved since it was last
+    /// read. Off the main actor, for the same reason as `change`. The date
+    /// is taken before the read, so a write landing between the two is
+    /// read on the next check rather than taken for the one just read.
+    private func reloadIfMoved() async {
+        guard let store, let writingID else { return }
+        let known = fileDate
+        let read = await Task.detached(priority: .utility) { () -> (LampWritingReview?, Date?)? in
+            let date = Self.modified(store, writingID)
+            guard date != known else { return nil }
+            return (try? store.review(writingID: writingID), date)
+        }.value
+        guard let read, self.writingID == writingID, !Task.isCancelled else { return }
+        apply(read.0, date: read.1)
+    }
+
+    private nonisolated static func modified(_ store: LampWritingReviewStore, _ writingID: String) -> Date? {
+        guard let url = try? store.url(writingID: writingID) else { return nil }
+        return (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+    }
+
+    private func apply(_ review: LampWritingReview?, date: Date?) {
+        fileDate = date
         guard review != self.review else { return }
         self.review = review
-        if let store, let writingID, let url = try? store.url(writingID: writingID) {
-            fileDate = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
-        }
+        basis = text
         draw(sendsMarks: true)
+    }
+
+    private func scheduleDraw() {
+        settleTask?.cancel()
+        settleTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.settleDelay)
+            guard !Task.isCancelled, let self else { return }
+            self.draw(sendsMarks: self.needsResend)
+        }
     }
 
     private func draw(sendsMarks: Bool) {
         drawGeneration += 1
         let generation = drawGeneration
+        if sendsMarks { needsResend = false }
         guard let review, !review.isEmpty else {
             publish(ranges: [], count: 0, marked: nil, sendsMarks: sendsMarks)
             return

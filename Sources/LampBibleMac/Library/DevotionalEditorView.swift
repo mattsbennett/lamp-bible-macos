@@ -2170,6 +2170,9 @@ struct DevotionalEditorView: View {
         coordinator.onReviewClear = { [weak reviewSession] marked in
             reviewSession?.clear(markedMarkdown: marked)
         }
+        coordinator.onReviewMarksRejected = { [weak reviewSession] in
+            reviewSession?.marksRejected()
+        }
     }
 
     /// How much is still to read, and the clears that do not need a

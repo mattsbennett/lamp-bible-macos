@@ -1693,12 +1693,18 @@ final class LibraryModel: ObservableObject {
         _ carry: (store: LampWritingReviewStore, previous: LampDevotional), to saved: LampDevotional
     ) {
         let waitFor = reviewCarryTask
+        // Counted as a write, so quitting waits for it: the save has
+        // finished, and a carry left behind would leave the new body with
+        // the old marks.
+        LampPendingWrites.shared.begin()
         reviewCarryTask = Task.detached(priority: .utility) {
             await waitFor?.value
             let previous = carry.previous.displayMarkdown
             let current = saved.displayMarkdown
-            guard previous != current else { return }
-            _ = try? carry.store.update(writingID: saved.id) { $0.carryingWriterEdit(from: previous, to: current) }
+            if previous != current {
+                _ = try? carry.store.update(writingID: saved.id) { $0.carryingWriterEdit(from: previous, to: current) }
+            }
+            await MainActor.run { LampPendingWrites.shared.end() }
         }
     }
 

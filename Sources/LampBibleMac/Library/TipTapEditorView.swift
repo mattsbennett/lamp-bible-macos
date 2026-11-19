@@ -275,6 +275,9 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     /// Markdown with a marker at each edge of what was cleared
     /// (`LampWritingReview.markedRange(in:of:)` reads it).
     var onReviewClear: ((String) -> Void)?
+    /// The page could not place the marks it was sent — its text was a
+    /// moment ahead of the host's — so the host sends them again.
+    var onReviewMarksRejected: (() -> Void)?
     /// The review marks shown, as the writing's Markdown with markers, kept
     /// so every load puts them back: a document loaded into the page starts
     /// with none.
@@ -848,7 +851,9 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     private func applyReviewMarks() {
         guard isReady, hasLoadedContent else { return }
         let argument = reviewMarks.map { Self.javascriptString(editorMarkdown(from: $0)) } ?? "null"
-        evaluate("window.editorAPI.setReviewMarks && window.editorAPI.setReviewMarks(\(argument))")
+        evaluate("window.editorAPI.setReviewMarks ? window.editorAPI.setReviewMarks(\(argument)) : true") { [weak self] placed in
+            if placed as? Bool == false { self?.onReviewMarksRejected?() }
+        }
     }
 
     /// The selection as the writing's Markdown with markers at its edges,
