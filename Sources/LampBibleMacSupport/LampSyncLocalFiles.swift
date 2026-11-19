@@ -399,6 +399,21 @@ extension LampSyncLocalFiles {
         return (candidates, unplaceable)
     }
 
+    /// Each writing's review marks, one file each, kept at the path the
+    /// server keeps them at under the library. A file whose name is not a
+    /// review's is left out, as the server would leave it out of a listing.
+    public static func writingReviews(
+        inLibraryAt libraryRoot: URL,
+        fileManager: FileManager = .default
+    ) -> [Candidate] {
+        let store = LampWritingReviewStore(rootURL: libraryRoot)
+        return plainFiles(in: store.directoryURL, fileManager: fileManager).compactMap { url in
+            let path = "\(LampSyncFolderLayout.writingReviewDirectory)/\(url.lastPathComponent)"
+            guard LampSyncFolderLayout.kind(of: path) == .writingReview else { return nil }
+            return Candidate(path: path, kind: .writingReview, url: url)
+        }
+    }
+
     /// Regular files directly inside a directory, links and subdirectories
     /// left out. A missing directory is simply empty.
     private static func plainFiles(in directory: URL, fileManager: FileManager) -> [URL] {

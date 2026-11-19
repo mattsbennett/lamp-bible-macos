@@ -30,6 +30,7 @@ struct LampSyncLocalWorkTests {
             "Databases/mcheyne.sqlite",
             "Presentations/sunday.lampdeck",
             "Presentations/Assets/picture.png",
+            "WritingReview/advent.json",
             "AgentSkills/write-a-devotional/SKILL.md",
             "AgentWorkspaces/Writing/Advent/notes.md",
             "AgentWorkspaces/Writing/Advent/context/isaiah.md",
@@ -303,6 +304,8 @@ struct LampSyncLocalWorkTests {
         case .deckAsset:
             // Immutable at a path, so only the folder's own date can matter.
             return ["Presentations/Assets"]
+        case .writingReview:
+            return ["WritingReview/advent.json"]
         case .workspaceFile:
             return [
                 "Workspaces/Advent/Documents/notes.md",
@@ -318,7 +321,7 @@ struct LampSyncLocalWorkTests {
         let marks = marks(library)
         let kinds: [LampSyncFileKind] =
             LampSyncContentKind.allCases.map { .module($0) }
-                + [.devotionalMedia, .bookMedia, .deck, .deckAsset, .workspaceFile]
+                + [.devotionalMedia, .bookMedia, .deck, .deckAsset, .workspaceFile, .writingReview]
 
         for kind in kinds {
             for home in homes(of: kind) {

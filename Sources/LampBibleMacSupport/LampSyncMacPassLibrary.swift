@@ -163,6 +163,16 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
         case .bookMedia:
             try installBookMedia(from: url, remotePath: path)
             return nil
+        case .writingReview:
+            // Merged into the copy here, never put over it: this Mac may
+            // hold clears the server's copy has not seen. What differs from
+            // the download goes back up, by the plan's comparison on the next
+            // pass, or by `reconcile` when both sides changed.
+            guard let writingID = LampSyncFolderLayout.writingID(ofReviewPath: path) else {
+                throw PassError.unsupported(path)
+            }
+            try reviewStore.takeIn(downloaded: try Data(contentsOf: url), writingID: writingID)
+            return nil
         case .workspaceFile:
             // Staged, not installed: a workspace is a tree with one importer,
             // so what arrives is gathered and taken in by `finishInstalling`.
@@ -410,6 +420,15 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
                       let url = try await exportHighlights(setID: setID, moduleID: moduleID)
                 else { continue }
                 republish[path] = url
+            case .writingReview:
+                // `install` merged the two copies here. If this Mac had marks
+                // or clears the server's copy lacked, the merge is what goes
+                // back up; if not, the server already has it all.
+                guard let writingID = LampSyncFolderLayout.writingID(ofReviewPath: path) else { continue }
+                let local = try reviewStore.url(writingID: writingID)
+                if let held = try? Data(contentsOf: local), let arrived = downloaded[path], held != (try Data(contentsOf: arrived)) {
+                    republish[path] = local
+                }
             default:
                 // Nothing else is merged: a read-only module is replaced
                 // wholesale, and media never changes at a path.
@@ -537,6 +556,8 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             try removeFile(named: filename, from: deckStore.decksDirectoryURL)
         case .deckAsset(let filename):
             try removeFile(named: filename, from: deckStore.assetsDirectoryURL)
+        case .writingReview(let writingID):
+            try reviewStore.remove(writingID: writingID)
         case .module(let moduleID):
             // A highlight module is an installed module on the phone and a
             // *set* here, so the one allowed deletion that needs translating
@@ -561,5 +582,9 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
 
     private var deckStore: LampPresentationDeckStore {
         LampPresentationDeckStore(rootURL: library.rootURL)
+    }
+
+    private var reviewStore: LampWritingReviewStore {
+        LampWritingReviewStore(rootURL: library.rootURL)
     }
 }

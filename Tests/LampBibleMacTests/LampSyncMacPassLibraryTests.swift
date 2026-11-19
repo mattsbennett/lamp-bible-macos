@@ -345,8 +345,64 @@ struct MergedCollectionKindsMatchInstallTests {
         .devotionalMedia,
         .bookMedia,
         .workspaceFile,
+        .writingReview,
     ])
     func akindKeptAsAFileIsNotClaimedAsMerged(kind: LampSyncFileKind) throws {
         #expect(!LampSyncMacPassLibrary.mergedIntoTheLibrary.contains(kind))
+    }
+
+}
+
+extension LampSyncMacPassLibraryTests {
+    // MARK: - A writing's review marks
+
+    private func reviewFile(_ review: LampWritingReview, in directory: URL) throws -> URL {
+        let url = directory.appendingPathComponent("\(UUID().uuidString).json")
+        try review.encoded().write(to: url)
+        return url
+    }
+
+    /// A downloaded copy is merged into the one here, so a clear made here
+    /// survives it; and what the merge holds that the download lacked goes
+    /// back up, which is nothing when this Mac had nothing new.
+    @Test func aDownloadedReviewIsMergedAndOnlyNewsGoesBackUp() async throws {
+        let (library, root, workspace) = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let pass = passLibrary(library, workspace: workspace)
+        let store = LampWritingReviewStore(rootURL: root)
+        let text = "Alpha BETA gamma.\n\nDelta EPSILON zeta."
+        let marked = LampWritingReview(writingID: "w").markingAssistantChange(
+            from: "Alpha beta gamma.\n\nDelta epsilon zeta.", to: text,
+            at: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let path = try LampSyncFolderLayout.writingReviewPath(writingID: "w")
+
+        // Nothing here yet: the copy is taken as it is, and nothing goes back.
+        let first = try reviewFile(marked, in: workspace)
+        #expect(try await pass.reconcile([path: first]).isEmpty)
+        #expect(try store.review(writingID: "w").encoded() == marked.encoded())
+
+        // Cleared here, cleared there, differently: both clears hold, and
+        // the merge goes back up.
+        try store.save(marked.clearing((text as NSString).range(of: "BETA"), in: text,
+                                       at: Date(timeIntervalSince1970: 1_700_000_100)))
+        let there = try reviewFile(
+            marked.clearing((text as NSString).range(of: "EPSILON"), in: text,
+                            at: Date(timeIntervalSince1970: 1_700_000_200)),
+            in: workspace
+        )
+        let republished = try await pass.reconcile([path: there])
+        #expect(republished[path] == (try store.url(writingID: "w")))
+        #expect(try store.review(writingID: "w").isEmpty)
+    }
+
+    @Test func aReviewDeletedElsewhereIsRemovedHere() async throws {
+        let (library, root, workspace) = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LampWritingReviewStore(rootURL: root)
+        try store.save(LampWritingReview(writingID: "w").markingAssistantChange(from: "a", to: "b"))
+        try await passLibrary(library, workspace: workspace)
+            .deleteLocally(try LampSyncFolderLayout.writingReviewPath(writingID: "w"))
+        #expect(try store.writingIDs().isEmpty)
     }
 }

@@ -88,6 +88,12 @@ public enum LampSyncLocalWork {
                 ?? LampPresentationDeckStore.assetsDirectoryName] = time
         }
 
+        // Each writing's review marks: a clear or a marked turn writes its
+        // file, and nothing else records either.
+        marks.merge(
+            list(LampWritingReviewStore(rootURL: root).directoryURL, from: root, fileManager: fileManager)
+        ) { first, _ in first }
+
         // The custom skills, which sync as one catalog for every workspace.
         // Walked, since a skill is a small folder of files somebody edits.
         marks.merge(

@@ -1132,6 +1132,17 @@ extension LibrarySyncController {
         candidates += decks.candidates
         result.gaps += decks.unplaceable
 
+        // Each writing's review marks. A deleted writing's go with it
+        // everywhere, and are swept first, so a file removed here is not
+        // also offered for upload.
+        let personalLedger = try await library.personalDeletionLedger()
+        let reviewDeletions = try LampWritingReviewStore(rootURL: library.rootURL).deletions(
+            deletedAt: (personalLedger.entries[.devotional] ?? [:]).compactMapValues(\.deletedAt),
+            held: Set(writings.map(\.id)),
+            members: Set(manifest.members.map(\.path))
+        )
+        candidates += LampSyncLocalFiles.writingReviews(inLibraryAt: library.rootURL, fileManager: fileManager)
+
         // Off the main thread, which this controller otherwise holds. Hashing
         // every file is most of a pass's own work, a second and a half on a
         // full library, and a launch sync doing it here froze the splash half
@@ -1175,7 +1186,8 @@ extension LibrarySyncController {
         }
         // A highlight set's deletion is recorded per item; the file that
         // carried it is the module this source published it under.
-        let personal = try await library.personalDeletionLedger()
+        let personal = personalLedger
+        result.gathered.deletedLocally.merge(reviewDeletions) { max($0, $1) }
         for (setID, entry) in personal.entries[.highlightSet] ?? [:] {
             guard let deletedAt = entry.deletedAt,
                   let moduleID = moduleIDs[setID],
