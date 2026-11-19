@@ -29,6 +29,14 @@ struct AgentRemoteSettingsSection: View {
 
             if isEnabled {
                 LabeledContent("Status", value: statusText)
+                if !host.canKeepPairings {
+                    Label(
+                        "Lamp couldn't read its saved devices from the keychain, so a device paired now will need pairing again after Lamp next opens.",
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
                 ForEach(host.devices) { device in
                     LabeledContent(device.name ?? "Device") {
                         HStack(spacing: 10) {

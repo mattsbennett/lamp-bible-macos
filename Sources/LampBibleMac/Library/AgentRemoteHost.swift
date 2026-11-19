@@ -44,6 +44,10 @@ final class AgentRemoteHost: ObservableObject {
 
     @Published private(set) var status: Status = .off
     @Published private(set) var devices: [LampAgentRemotePairedDevice] = []
+    /// False when the keychain could not be read this run: nothing is
+    /// written then, so a device paired now would be forgotten at the next
+    /// launch, and Settings says so rather than let it seem to have worked.
+    @Published private(set) var canKeepPairings = true
     @Published private(set) var connectedNames: [String] = []
     /// The pairing QR's window while it is on screen.
     @Published private(set) var pairing: LampAgentRemotePairingWindow?
@@ -120,6 +124,7 @@ final class AgentRemoteHost: ObservableObject {
             let devices = trust.devices()
             let credentials = trust.credentials()
             let secret = trust.hostSecret()
+            let readable = trust.isReadable
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     guard let self, generation == self.trustGeneration else { return }
@@ -130,6 +135,7 @@ final class AgentRemoteHost: ObservableObject {
                         return false
                     }
                     self.knownHostSecret = secret
+                    self.canKeepPairings = readable
                     self.closeUntrusted()
                 }
             }
