@@ -1,4 +1,5 @@
 import Foundation
+import LampCore
 #if canImport(LampBibleMacSupport)
 import LampBibleMacSupport
 #endif
@@ -32,11 +33,19 @@ struct DevotionalAgentDraftReconciler {
     /// where there is no Application Support to read, which reads as "no
     /// note" — the rule a draft without one has always followed.
     let applicationSupportURL: URL?
+    /// Where the passages the assistant changes are marked for the writer
+    /// to read through (`LampWritingReview`), or nil where they are not:
+    /// the writer has not asked for it, or AI is off.
+    let reviewStore: LampWritingReviewStore?
 
-    init(workspace: URL, writingID: String, applicationSupportURL: URL?) {
+    init(
+        workspace: URL, writingID: String, applicationSupportURL: URL?,
+        reviewStore: LampWritingReviewStore? = nil
+    ) {
         self.workspace = workspace
         self.writingID = writingID
         self.applicationSupportURL = applicationSupportURL
+        self.reviewStore = reviewStore
     }
 
     /// What the caller should do about the writing it holds.
@@ -277,6 +286,10 @@ struct DevotionalAgentDraftReconciler {
                 provider: provider, turnID: turnID
             )
             try markSynced(diskDraft)
+            // Marked here and nowhere else: the one place the assistant's
+            // words reach the writing. A draft only filed in the history,
+            // above, changed nothing the writer has to read.
+            markAssistantChange(from: writing, to: diskDraft, turnID: turnID)
             return .take(diskDraft)
         }
     }
@@ -317,7 +330,11 @@ struct DevotionalAgentDraftReconciler {
             )
         }
         guard let markdown = before[primary] else { return .nothingToPutBack }
-        return .restored(try restore(markdown, writing: writing, provider: provider))
+        let restored = try restore(markdown, writing: writing, provider: provider)
+        // The turns' work is gone, so is what marked it; what the undo put
+        // back was read before.
+        updateReview { $0.undoingTurns(Set(turns), from: writing, to: restored) }
+        return .restored(restored)
     }
 
     /// Puts a version back, recording what it replaces.
@@ -406,6 +423,18 @@ struct DevotionalAgentDraftReconciler {
             after: after,
             in: workspace
         )
+    }
+
+    private func markAssistantChange(from writing: String, to draft: String, turnID: UUID?) {
+        updateReview { $0.markingAssistantChange(from: writing, to: draft, turnID: turnID) }
+    }
+
+    /// Changes the writing's marks, if they are kept. Never in the way of
+    /// the writing itself: a mark file that cannot be read or written costs
+    /// the marks, not the draft the assistant wrote.
+    private func updateReview(_ change: (LampWritingReview) -> LampWritingReview) {
+        guard let reviewStore else { return }
+        _ = try? reviewStore.update(writingID: writingID, change)
     }
 
     private func markSynced(_ draft: String) throws {

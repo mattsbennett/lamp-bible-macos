@@ -1654,10 +1654,29 @@ final class LibraryModel: ObservableObject {
 
     @discardableResult
     func savePersonalDevotional(_ devotional: LampDevotional) async throws -> LampDevotional {
+        let previous = devotionals.first { $0.id == devotional.id }?.displayMarkdown
         let saved = try await library.savePersonalDevotional(devotional)
+        carryReviewMarks(writingID: saved.id, from: previous, to: saved.displayMarkdown)
         devotionals = try await library.devotionals()
         await refreshManuscriptNotes(for: saved)
         return saved
+    }
+
+    /// Carries the writing's review marks across an edit, so the rest of a
+    /// marked passage the writer typed into stays marked and their own words
+    /// do not. Most saves touch no mark, and then nothing is written.
+    ///
+    /// Every save comes through here, an assistant's draft taken in among
+    /// them; its marks were made as it was taken, in the text it brought,
+    /// and carrying them again across the same change finds them where they
+    /// already are.
+    private func carryReviewMarks(writingID: String, from previous: String?, to current: String) {
+        guard let previous, previous != current,
+              let store = WritingReviewMarks.store(libraryRootURL: library.rootURL),
+              let url = try? store.url(writingID: writingID),
+              FileManager.default.fileExists(atPath: url.path)
+        else { return }
+        _ = try? store.update(writingID: writingID) { $0.carryingWriterEdit(from: previous, to: current) }
     }
 
     /// Re-splits the writing across any deck whose notes follow it, and reports

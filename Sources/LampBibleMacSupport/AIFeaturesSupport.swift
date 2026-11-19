@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import LampCore
 import LampModuleKit
 import SwiftUI
 
@@ -12,6 +13,24 @@ import SwiftUI
 /// time it is read, never taken as off: an older Lamp that does not know the
 /// key rewrites the shared preferences without it, and someone who uses AI
 /// must not come back to find it gone.
+/// Marking what the writing assistant changes until the writer has read it
+/// through (`LampWritingReview`). The writer's choice, shared between their
+/// devices, off until they make it, and only ever on with AI on.
+public enum WritingReviewMarks {
+    public static let key = LampPreferenceDefaults.writingReviewMarksKey
+
+    public static var isEnabledNow: Bool {
+        AIFeatures.isEnabledNow
+            && (UserDefaults.standard.object(forKey: key) as? Bool ?? LampPreferenceDefaults.writingReviewMarksEnabled)
+    }
+
+    /// Where a library's marks are kept, or nil while marking is off: what
+    /// a writer has not asked for is neither drawn nor recorded.
+    public static func store(libraryRootURL: URL) -> LampWritingReviewStore? {
+        isEnabledNow ? LampWritingReviewStore(rootURL: libraryRootURL) : nil
+    }
+}
+
 public enum AIFeatures {
     public static let key = LampPreferenceDefaults.aiFeaturesKey
     /// The value before anyone chooses: off.

@@ -1,5 +1,6 @@
 import Foundation
 import LampBibleMacSupport
+import LampCore
 import Testing
 @testable import LampBibleMac
 
@@ -345,6 +346,49 @@ struct DevotionalAgentDraftReconcilerTests {
     /// The marker is read from the workspace every time, so a reconciler
     /// built fresh — as the view's is, on every pass — knows where things
     /// stand without being told.
+    // MARK: - Marking what the assistant changed
+
+    private func marking(_ workspace: URL, store: LampWritingReviewStore) -> DevotionalAgentDraftReconciler {
+        DevotionalAgentDraftReconciler(
+            workspace: workspace, writingID: "writing-1", applicationSupportURL: nil, reviewStore: store
+        )
+    }
+
+    private func marked(_ store: LampWritingReviewStore, in text: String) throws -> [String] {
+        try store.review(writingID: "writing-1").highlightedRanges(in: text).map { (text as NSString).substring(with: $0) }
+    }
+
+    @Test func aDraftTakenInIsMarkedUnderItsTurnAndUndoingTheTurnTakesTheMark() throws {
+        let workspace = try workspace()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let store = LampWritingReviewStore(rootURL: workspace.appendingPathComponent("library", isDirectory: true))
+        try writeDraft("One two three.", to: workspace)
+        try marking(workspace, store: store).synchronize(writing: "One two three.")
+
+        let turn = UUID()
+        try writeDraft("One deux three.", to: workspace)
+        #expect(try marking(workspace, store: store).reconcile(writing: "One two three.", turnID: turn) == .take("One deux three."))
+        #expect(try marked(store, in: "One deux three.") == ["deux"])
+        #expect(try store.review(writingID: "writing-1").marks.first?.turnID == turn)
+
+        _ = try marking(workspace, store: store).undo(turns: [turn], writing: "One deux three.")
+        #expect(try store.review(writingID: "writing-1").isEmpty)
+    }
+
+    @Test func aDraftOnlyFiledInTheHistoryIsNotMarked() throws {
+        let workspace = try workspace()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let store = LampWritingReviewStore(rootURL: workspace.appendingPathComponent("library", isDirectory: true))
+        try writeDraft("Base", to: workspace)
+        try marking(workspace, store: store).synchronize(writing: "Base")
+        try writeDraft("The agent's, from the base", to: workspace)
+        guard case .keep = try marking(workspace, store: store).prepare(writing: "Mine, written since") else {
+            Issue.record("expected the writing to be kept")
+            return
+        }
+        #expect(try store.review(writingID: "writing-1").isEmpty)
+    }
+
     @Test func theWorkspaceRemembersWhereThingsStand() throws {
         let workspace = try workspace()
         defer { try? FileManager.default.removeItem(at: workspace) }

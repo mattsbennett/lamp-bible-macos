@@ -1560,7 +1560,8 @@ struct DevotionalAgentWorkspaceView: View {
         DevotionalAgentDraftReconciler(
             workspace: workspace,
             writingID: devotionalID,
-            applicationSupportURL: LampAgentDescriptorStore.defaultApplicationSupportURL()
+            applicationSupportURL: LampAgentDescriptorStore.defaultApplicationSupportURL(),
+            reviewStore: WritingReviewMarks.store(libraryRootURL: libraryRootURL)
         )
     }
 
