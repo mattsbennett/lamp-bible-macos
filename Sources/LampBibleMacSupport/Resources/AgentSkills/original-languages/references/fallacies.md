@@ -15,7 +15,8 @@ assembly. Hebrew roots invite this especially, because the system is so visible.
 
 Strong's glosses are a 19th-century index of how the KJV rendered words, not a lexicon.
 `strongs_greek` on σάρξ answers "carnal(-ly, + -ly minded), flesh(-ly)" — a list of KJV
-renderings, not a semantic range. Read a lexicon for range: `bdb` for Hebrew,
+renderings, not a semantic range. Read a lexicon for range: the one selected
+under the entrypoint's module rule, or else the bundled `bdb` for Hebrew and
 `tbesg` for Greek. And name whichever you used, because they differ.
 
 ## Illegitimate totality transfer

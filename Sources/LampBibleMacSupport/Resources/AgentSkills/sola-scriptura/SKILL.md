@@ -53,15 +53,18 @@ The comfortable claims need the same scrutiny as the unfamiliar ones.
 ## Research without unnecessary work
 
 Call `list_modules` once at the start of the task; refresh if availability changes.
-Use only what it lists. The modules named below are the ones Lamp bundles: they are
-the default, not the ceiling. Where the inventory shows something else that bears on
-the question — another lexicon, another translation, another original-language text
-— say so and offer it rather than answering from the bundled set in silence, and use
-it if the reader says so. The inventory gives a module's id, name, language and
-whether it tags Strong's, and nothing about its edition, so a name is neither a
-warrant nor grounds for dismissal. Reuse passages, annotations and lexicon entries already
-verified in this task, including work shared with `original-languages`. Batch
-nearby verses and compatible translations, not an entire library by default.
+Use only what it lists. Use the module the reader selected — in the question, in
+this task, or in `original-languages`, whose choices and offers carry over — and
+otherwise the bundled default named below. Where the inventory shows another
+lexicon or original-language text bearing on the question, offer it once rather
+than answering from the bundled set in silence, and carry on meanwhile; an
+installed translation you are quoting needs no offer, only naming. You cannot rank
+them yourself: the inventory gives a module's id, name, language and whether it
+tags Strong's, and nothing about its edition.
+
+Reuse passages, annotations and lexicon entries already verified in this task,
+including work shared with `original-languages`. Batch nearby verses and
+compatible translations, not an entire library by default.
 
 - `read_passage`: name `translation_ids` explicitly; omission returns up to three.
   Start with the cited or current translation. If a claim turns on its wording,
@@ -79,10 +82,9 @@ nearby verses and compatible translations, not an entire library by default.
   20, subject to the reader's cap), not proof of absence or complete inventories.
   Use alternate wording and narrower module/book ranges when relevant.
 - `lookup_dictionary_keys` retrieves exact keys; of the bundled lexicons prefer
-  `bdb` for Hebrew and `tbesg` for Greek semantic range, and offer a lexicon of the
-  reader's own ahead of them, these two being from 1906 and 1922. Ask `bdb` with
-  the Strong's key: each entry lists the keys that led to it in `mappedFrom`, and
-  one key can lead to several. Strong's glosses and
+  `bdb` for Hebrew and `tbesg` for Greek semantic range, these two being from 1906
+  and 1922. When using `bdb`, ask with the Strong's key: each entry lists the keys
+  that led to it in `mappedFrom`, and one key can lead to several. Strong's glosses and
   `analyze_strongs` rendering counts describe tagging/rendering, not the sense in
   this sentence.
 
