@@ -306,12 +306,21 @@ public struct WritingEditorFocus: Equatable, Sendable {
             .appendingPathComponent("editor.md")
     }
 
-    public func write(to workspace: URL) throws {
+    /// What `stateURL(in:)` holds: this, and after it what of the writing is
+    /// still marked for the writer to read (`reviewNote`, nil while marks
+    /// are off). A Terminal session is told the marks only from here, as a
+    /// Chat message is told them with the message.
+    public func stateText(reviewNote: String? = nil) -> String {
+        guard let reviewNote else { return contextText + "\n" }
+        return "\(contextText)\n\n\(reviewNote)\n"
+    }
+
+    public func write(to workspace: URL, reviewNote: String? = nil) throws {
         let url = Self.stateURL(in: workspace)
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true
         )
-        try (contextText + "\n").write(to: url, atomically: true, encoding: .utf8)
+        try stateText(reviewNote: reviewNote).write(to: url, atomically: true, encoding: .utf8)
     }
 }
 

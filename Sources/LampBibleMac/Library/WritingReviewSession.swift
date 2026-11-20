@@ -128,6 +128,12 @@ final class WritingReviewSession: ObservableObject {
     /// How many passages are still to read, places words were taken out
     /// among them.
     @Published private(set) var count = 0
+    /// What the writing's agent is told is still marked
+    /// (`WritingChatTurns.reviewNote`), for `.lamp/editor.md`: nil only
+    /// while marks are off, `unreadReviewNote` until the marks file is first
+    /// read. Changes only as the marks are drawn, once the text settles, so
+    /// typing writes nothing.
+    @Published private(set) var agentNote: String?
 
     /// The marks as the visual editor takes them, each time they change:
     /// the writing's Markdown with markers, or nil for none. The page keeps
@@ -141,6 +147,10 @@ final class WritingReviewSession: ObservableObject {
     private var review: LampWritingReview?
     private var text = ""
     private var fileDate: Date?
+    /// Whether the marks file has been read since the writing was followed:
+    /// the first read is drawn even when it finds nothing, so the agent is
+    /// told that nothing is marked.
+    private var hasRead = false
     private var settleTask: Task<Void, Never>?
     private var drawGeneration = 0
     /// The page refused the last marks sent (its text was a moment ahead of
@@ -173,10 +183,14 @@ final class WritingReviewSession: ObservableObject {
         remember(text)
         review = nil
         fileDate = nil
+        hasRead = false
         needsResend = false
         resentFor = nil
         store = isShown ? LampWritingReviewStore(rootURL: libraryRootURL) : nil
-        publish(ranges: [], count: 0, marked: nil, sendsMarks: true)
+        publish(
+            ranges: [], count: 0, marked: nil,
+            note: isShown ? WritingChatTurns.unreadReviewNote : nil, sendsMarks: true
+        )
         guard isShown else { return }
         while !Task.isCancelled {
             await reloadIfMoved()
@@ -300,13 +314,25 @@ final class WritingReviewSession: ObservableObject {
         let read = await Task.detached(priority: .utility) {
             try? store.snapshot(writingID: writingID)
         }.value
-        guard let read, read.modified != fileDate, self.writingID == writingID, !Task.isCancelled else { return }
+        guard self.writingID == writingID, !Task.isCancelled else { return }
+        guard let read else {
+            // Unreadable now, though it was read before: the agent is told
+            // so rather than what was read then, until a read succeeds.
+            hasRead = false
+            if agentNote != nil, agentNote != WritingChatTurns.unreadReviewNote {
+                agentNote = WritingChatTurns.unreadReviewNote
+            }
+            return
+        }
+        guard read.modified != fileDate || !hasRead else { return }
         apply(read.modified == nil ? nil : read.review, date: read.modified)
     }
 
     private func apply(_ review: LampWritingReview?, date: Date?) {
         fileDate = date
-        guard review != self.review else { return }
+        let isFirstRead = !hasRead
+        hasRead = true
+        guard review != self.review || isFirstRead else { return }
         self.review = review
         draw(sendsMarks: true)
     }
@@ -330,7 +356,7 @@ final class WritingReviewSession: ObservableObject {
         let generation = drawGeneration
         if sendsMarks { needsResend = false }
         guard let review, !review.isEmpty else {
-            publish(ranges: [], count: 0, marked: nil, sendsMarks: sendsMarks)
+            publish(ranges: [], count: 0, marked: nil, note: noteForAgent(ranges: []), sendsMarks: sendsMarks)
             return
         }
         let text = self.text
@@ -349,13 +375,26 @@ final class WritingReviewSession: ObservableObject {
                 )
             }.value
             guard let self, self.drawGeneration == generation else { return }
-            self.publish(ranges: drawn.0, count: drawn.1, marked: drawn.2, sendsMarks: sendsMarks)
+            self.publish(
+                ranges: drawn.0, count: drawn.1, marked: drawn.2,
+                note: self.noteForAgent(ranges: drawn.0, in: text), sendsMarks: sendsMarks
+            )
         }
     }
 
-    private func publish(ranges: [NSRange], count: Int, marked: String?, sendsMarks: Bool) {
+    /// The note for what is drawn, as the session stands: nothing once marks
+    /// are off, though a draw asked for before (a rejection the page sends
+    /// late) still lands; unread until the file has been read.
+    private func noteForAgent(ranges: [NSRange], in text: String? = nil) -> String? {
+        guard store != nil else { return nil }
+        guard hasRead else { return WritingChatTurns.unreadReviewNote }
+        return WritingChatTurns.reviewNote(ranges: ranges, in: text ?? self.text)
+    }
+
+    private func publish(ranges: [NSRange], count: Int, marked: String?, note: String?, sendsMarks: Bool) {
         if self.ranges != ranges { self.ranges = ranges }
         if self.count != count { self.count = count }
+        if agentNote != note { agentNote = note }
         if sendsMarks {
             markedMarkdown = marked
             onMarksChanged?(marked)

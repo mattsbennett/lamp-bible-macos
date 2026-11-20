@@ -51,6 +51,7 @@ struct WorkspaceFileOwnershipTests {
                 "codexSkillsDirectory": "builds a path",
                 "claudeSkillsDirectory": "builds a path",
                 "presentationImportMarkerURL": "builds a path",
+                "instructions": "builds the instructions' text, touching nothing",
             ]
         ),
         Surface(

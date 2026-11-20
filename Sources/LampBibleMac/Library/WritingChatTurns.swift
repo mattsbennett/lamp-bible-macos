@@ -113,24 +113,47 @@ enum WritingChatTurns {
     /// and the message.
     ///
     /// The marks are said so the agent can leave alone what the writer has
-    /// already read: a change there is marked again, and read again. Said
-    /// only where there are marks, and at most `reviewPassageLimit` of them,
-    /// each shortened, since the agent can read the whole file.
-    static func prompt(
-        for message: String, focus: WritingEditorFocus, review: LampWritingReview?, writing: String
-    ) -> String {
-        guard let note = reviewNote(review, in: writing) else { return focus.prompt(for: message) }
+    /// already read: a change there is marked again, and read again. `note`
+    /// is `reviewNote`, nil only while marks are off.
+    static func prompt(for message: String, focus: WritingEditorFocus, note: String?) -> String {
+        guard let note else { return focus.prompt(for: message) }
         return "\(focus.contextText)\n\n\(note)\n\nThe user's message:\n\(message)"
     }
 
-    static let reviewPassageLimit = 20
-    static let reviewPassageCharacters = 160
+    nonisolated static let reviewPassageLimit = 20
+    nonisolated static let reviewPassageCharacters = 160
 
-    static func reviewNote(_ review: LampWritingReview?, in writing: String) -> String? {
-        guard let review else { return nil }
+    /// Said while marks are on but what is marked is not known: before the
+    /// marks file is first read, or when it cannot be. Never nothing, which
+    /// the agent is told means marks are off.
+    nonisolated static let unreadReviewNote = """
+        The writer reads through each change you make and clears it, but Lamp has not been able to \
+        read which passages are still marked: change only what the message asks for, and leave the \
+        rest as it is.
+        """
+
+    /// What the agent is told of the marks in `writing`, the draft it will
+    /// read: nil while marks are off, `unreadReviewNote` for a review that
+    /// could not be read. The stored marks are carried into `writing` from
+    /// the texts this Mac has seen (`WritingReviewTexts`), as the editor
+    /// draws them, so a mark typed into since the last save is still said.
+    /// Compares whole drafts, so it is for off the main actor.
+    nonisolated static func reviewNote(
+        _ review: LampWritingReview?, marksAreOn: Bool, in writing: String, known: [String]
+    ) -> String? {
+        guard marksAreOn else { return nil }
+        guard let review else { return unreadReviewNote }
+        let live = review.carryingToText(writing, from: known)
+        return reviewNote(ranges: live.highlightedRanges(in: writing), in: writing)
+    }
+
+    /// The note from what is marked in `writing`, as the editor draws it:
+    /// said only where there are marks, at most `reviewPassageLimit` of
+    /// them, each shortened, since the agent can read the whole file.
+    nonisolated static func reviewNote(ranges: [NSRange], in writing: String) -> String {
         let source = writing as NSString
-        let passages = review.highlightedRanges(in: writing).filter { $0.length > 0 }
-        let removals = review.highlightedRanges(in: writing).count - passages.count
+        let passages = ranges.filter { $0.length > 0 }
+        let removals = ranges.count - passages.count
         guard !passages.isEmpty || removals > 0 else {
             return """
                 The writer reads through each change you make and clears it. Everything in the \

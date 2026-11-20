@@ -956,12 +956,14 @@ final class AgentRemoteHost: ObservableObject {
         // would hold up the Mac's own windows.
         let store = WritingReviewMarks.store(libraryRootURL: root)
         let workspace = open.workspace
-        let (review, draft) = await Task.detached(priority: .userInitiated) {
-            (try? store?.review(writingID: writingID), try? await DevotionalAgentWorkspaceStore.readDraft(from: workspace))
+        let known = WritingReviewTexts.shared.known(for: writingID)
+        let fallback = writing.displayMarkdown
+        let note = await Task.detached(priority: .userInitiated) { () -> String? in
+            let review = try? store?.review(writingID: writingID)
+            let draft = (try? await DevotionalAgentWorkspaceStore.readDraft(from: workspace)) ?? fallback
+            return WritingChatTurns.reviewNote(review ?? nil, marksAreOn: store != nil, in: draft, known: known)
         }.value
-        return WritingChatTurns.prompt(
-            for: text, focus: focus, review: review ?? nil, writing: draft ?? writing.displayMarkdown
-        )
+        return WritingChatTurns.prompt(for: text, focus: focus, note: note)
     }
 
     /// Takes in what a writing turn writes as it writes it, as the writing's

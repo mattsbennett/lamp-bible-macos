@@ -1023,6 +1023,7 @@ struct DevotionalEditorView: View {
                             draftMarkdown: content,
                             contextDocument: agentContextDocument,
                             editorFocus: editorFocus,
+                            reviewNote: reviewSession.agentNote,
                             importDraft: { importedDraft in
                                 // Held before anything else runs: the
                                 // turn's marks are anchored in it, and

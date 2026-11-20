@@ -254,6 +254,81 @@ struct WritingReviewSessionTests {
         try await waitUntil { session.texts == ["Else."] }
     }
 
+    /// What `.lamp/editor.md` tells a Terminal agent: the passages still
+    /// marked, that nothing is once the writer clears them, and that
+    /// nothing is when no mark was ever made.
+    @Test func theAgentIsToldWhatIsMarkedAsItIsDrawn() async throws {
+        let root = try library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let new = "One deux three.\n\nFour five six."
+        try LampWritingReviewStore(rootURL: root).save(LampWritingReview(writingID: "w").markingAssistantChange(
+            from: "One two three.\n\nFour five six.", to: new
+        ))
+        let session = WritingReviewSession()
+        let following = Task { await session.follow(writingID: "w", text: new, libraryRootURL: root, isShown: true) }
+        defer { following.cancel() }
+        try await waitUntil { session.agentNote?.contains("- \"deux\"") == true }
+        session.clearAll()
+        try await waitUntil { session.agentNote?.contains("Everything in the writing has been read and cleared") == true }
+
+        let unmarked = WritingReviewSession()
+        let followingUnmarked = Task {
+            await unmarked.follow(writingID: "never-marked", text: "Mine.", libraryRootURL: root, isShown: true)
+        }
+        defer { followingUnmarked.cancel() }
+        try await waitUntil { unmarked.agentNote?.contains("Everything in the writing has been read and cleared") == true }
+    }
+
+    /// A marks file that cannot be read leaves the agent told marks are on
+    /// but unread, never nothing (which it is told means off) nor that
+    /// everything has been read.
+    @Test func marksThatCannotBeReadAreSaidToBeUnread() async throws {
+        let root = try library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try LampWritingReviewStore(rootURL: root).save(
+            LampWritingReview(writingID: "w").markingAssistantChange(from: "a b", to: "a c")
+        )
+        let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)?
+            .compactMap { $0 as? URL }.filter { !$0.hasDirectoryPath } ?? []
+        #expect(files.count == 1)
+        for file in files { try Data("not a review".utf8).write(to: file) }
+        let session = WritingReviewSession()
+        let following = Task { await session.follow(writingID: "w", text: "a c", libraryRootURL: root, isShown: true) }
+        defer { following.cancel() }
+        try await waitUntil { session.agentNote != nil }
+        try await Task.sleep(for: WritingReviewSession.checkInterval + .milliseconds(300))
+        #expect(session.agentNote == WritingChatTurns.unreadReviewNote)
+        // A draw before any read, as a rejection from the page asks for,
+        // still says unread rather than that nothing is marked.
+        session.marksRejected()
+        try await Task.sleep(for: WritingReviewSession.settleDelay + .milliseconds(200))
+        #expect(session.agentNote == WritingChatTurns.unreadReviewNote)
+    }
+
+    /// Read once, then unreadable: the agent is told the marks are unread,
+    /// not the last note read, until a read succeeds again.
+    @Test func marksThatBecomeUnreadableAreSaidToBeUnread() async throws {
+        let root = try library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try LampWritingReviewStore(rootURL: root).save(
+            LampWritingReview(writingID: "w").markingAssistantChange(from: "a b", to: "a c")
+        )
+        let session = WritingReviewSession()
+        let following = Task { await session.follow(writingID: "w", text: "a c", libraryRootURL: root, isShown: true) }
+        defer { following.cancel() }
+        try await waitUntil { session.agentNote?.contains("- \"c\"") == true }
+        let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)?
+            .compactMap { $0 as? URL }.filter { !$0.hasDirectoryPath } ?? []
+        let saved = try files.map { ($0, try Data(contentsOf: $0)) }
+        for file in files { try Data("not a review".utf8).write(to: file) }
+        try await waitUntil { session.agentNote == WritingChatTurns.unreadReviewNote }
+        session.marksRejected()
+        try await Task.sleep(for: WritingReviewSession.settleDelay + .milliseconds(200))
+        #expect(session.agentNote == WritingChatTurns.unreadReviewNote, "a draw meanwhile still says unread")
+        for (file, data) in saved { try data.write(to: file) }
+        try await waitUntil { session.agentNote?.contains("- \"c\"") == true }
+    }
+
     @Test func turnedOffNothingIsShown() async throws {
         let root = try library()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -266,6 +341,12 @@ struct WritingReviewSessionTests {
         await session.follow(writingID: "w", text: "a c", libraryRootURL: root, isShown: false)
         #expect(session.count == 0)
         #expect(sent == [nil])
+        #expect(session.agentNote == nil, "the agent is told nothing of marks that are off")
+        // A rejection the page sends after marks went off draws again, and
+        // still says nothing.
+        session.marksRejected()
+        try await Task.sleep(for: WritingReviewSession.settleDelay + .milliseconds(200))
+        #expect(session.agentNote == nil)
     }
 
     @Test func aPlaceInLineIsFilledInOrderAndGivingUpMovesTheLineOn() async {

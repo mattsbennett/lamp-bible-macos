@@ -253,4 +253,16 @@ struct WritingEditorFocusTests {
         #expect(WritingEditorFocus.stateURL(in: workspace).path.hasSuffix("/.lamp/editor.md"))
         #expect(try String(contentsOf: WritingEditorFocus.stateURL(in: workspace), encoding: .utf8) == focus.contextText + "\n")
     }
+
+    /// A Terminal session is told the marks only by this file, so they go
+    /// in it after the focus, and nothing is said of them while they are off.
+    @Test func theMarksAreKeptBesideTheFocus() throws {
+        let workspace = FileManager.default.temporaryDirectory.appendingPathComponent("lamp-focus-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let focus = WritingEditorFocus(documentPath: "draft.md", documentName: "Main Prose", isVisual: false)
+        try focus.write(to: workspace, reviewNote: "Still marked: deux.")
+        #expect(try String(contentsOf: WritingEditorFocus.stateURL(in: workspace), encoding: .utf8)
+            == focus.contextText + "\n\nStill marked: deux.\n")
+        #expect(focus.stateText(reviewNote: nil) == focus.contextText + "\n")
+    }
 }
