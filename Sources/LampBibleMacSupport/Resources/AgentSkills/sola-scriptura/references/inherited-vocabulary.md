@@ -9,9 +9,10 @@ while sounding like the text.
 **Does scripture use this word, in this sense?** `search_library` with
 `kinds: ["translation"]`, over whichever translations the reader has.
 
-A phrase that returns nothing is not thereby wrong — scripture has no word for
-*canon* or for *monotheism* either. It means the phrase is a summary, and a summary
-must be defended from texts rather than used as one.
+A phrase that returns nothing is not thereby wrong. A summary word can stand for
+something the texts say at length without ever using that word. What the empty
+result establishes is that the phrase is a summary — and a summary must be
+defended from texts rather than used as one.
 
 **Does the claim survive a change of translation?** Compare the relevant installed
 English translations with compatible coverage and numbering. Bundled candidates
