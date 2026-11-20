@@ -1332,8 +1332,12 @@ private struct PersonalNoteEditor: View {
             )
             .frame(height: editorHeight)
         }
-        // The window's colour, as the editor's page is, and an edge that
-        // holds on the dark card: the system's separator all but vanished.
+        // A well set into the card, the same as the title field above it, and
+        // an edge that holds on it: the system's separator all but vanished.
+        // `windowBackgroundColor` is a step *below* the card in both
+        // appearances, which is what a field set into one should be — it is
+        // not standing in for the window here. The editor's page shows it
+        // through, being transparent.
         .background(Color(nsColor: .windowBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 7))
         .overlay {

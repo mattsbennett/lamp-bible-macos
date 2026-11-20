@@ -325,7 +325,11 @@ struct ReaderChatSidebarView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .background(.background)
+        // The same ground as the study tools, which take this column's other
+        // half: `.background` is `windowBackgroundColor`, which is the
+        // window's own ground in light, so the chat pane stood white beside a
+        // study pane a step back from the page. One pane, one ground.
+        .background(Color.lampPaneGround)
         .alert(
             "Could not start a chat from that turn",
             isPresented: Binding(

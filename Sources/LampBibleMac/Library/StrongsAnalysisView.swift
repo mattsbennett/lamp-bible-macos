@@ -5093,7 +5093,7 @@ struct StudyAnalysisView: View {
                 verseRow: { occurrence, analysis in
                     AnyView(occurrenceRow(occurrence, in: analysis))
                 },
-                pinnedFill: Color.lampInspectorFill,
+                pinnedFill: Color.lampPaneGround,
                 scrollMemory: studyPane.scrollMemory
             )
         }

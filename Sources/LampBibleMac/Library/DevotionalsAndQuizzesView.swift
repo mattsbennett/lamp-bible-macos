@@ -1705,9 +1705,11 @@ struct QuizzesView: View {
                 .padding(.bottom, 36)
                 .frame(maxWidth: .infinity, alignment: .top)
             }
-            // The window, with the cards a step off it, as cards are drawn
-            // across the app.
-            .background(QuizCardSurface.page)
+            // No ground of its own: the window's own, as every other page
+            // shows, with the cards a step off it. It used to paint
+            // `windowBackgroundColor` for "the window", which is a few
+            // percent darker than the window actually is, so this was the one
+            // page in the app that did not match the ground around it.
         }
     }
 
@@ -2072,10 +2074,10 @@ struct QuizQuestionCard: View {
     }
 }
 
-/// The quiz page's layers: the window, cards one step off it, and the
-/// revealed answer set into its card.
+/// The quiz page's layers: the window's own ground, which the page paints
+/// nothing to show, cards one step off it, and the revealed answer set into
+/// its card.
 enum QuizCardSurface {
-    static var page: Color { Color(nsColor: .windowBackgroundColor) }
     static var card: Color { .lampCardFill }
     static var answer: Color { Color.primary.opacity(0.05) }
 }

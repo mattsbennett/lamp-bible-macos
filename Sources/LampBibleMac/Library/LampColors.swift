@@ -95,13 +95,25 @@ extension NSColor {
             : NSColor(srgbRed: 0.15, green: 0.15, blue: 0.16, alpha: 1)
     }
 
-    /// A card's ground: one step off the window, in both appearances, so a
-    /// grouped panel separates from the page without a heavy border. The
-    /// system's quaternary fills all but vanished on the dark window.
+    /// A card's ground: one step off whatever it is laid on, so a grouped
+    /// panel separates without a heavy border. The system's quaternary fills
+    /// all but vanished on the dark window.
+    ///
+    /// **A tint rather than a fixed colour, because a card is not always on
+    /// the window.** It was 0.198 dark / 0.958 light, one step off the window
+    /// and only off the window; the same card also sits inside a pane, and a
+    /// pane now stands a step back from the page (`lampPaneGround`), so there
+    /// the card's step doubled — in the reader's notes it read as a cut-out
+    /// block. As a tint it keeps its one step wherever it is laid, and a card
+    /// moved from the page into a pane needs nothing said about it.
+    ///
+    /// It lifts in dark and deepens in light, for the reason
+    /// `lampSidebarTint` gives: the page is pure white in light, so nothing
+    /// can be laid over it that is lighter.
     static let lampCardFill = NSColor(name: nil) { appearance in
         appearance.lampIsDark
-            ? NSColor(srgbRed: 0.198, green: 0.198, blue: 0.208, alpha: 1)
-            : NSColor(srgbRed: 0.958, green: 0.958, blue: 0.966, alpha: 1)
+            ? NSColor(white: 1, alpha: 0.065)
+            : NSColor(white: 0, alpha: 0.042)
     }
 
     /// The hairline around a card, which is what keeps it a card on the dark
@@ -170,13 +182,6 @@ extension NSColor {
         appearance.lampIsDark
             ? NSColor(white: 1, alpha: 0.075)
             : NSColor(white: 1, alpha: 0.9)
-    }
-
-    /// A side pane beside the page — the study tools — one step off it.
-    static let lampInspectorFill = NSColor(name: nil) { appearance in
-        appearance.lampIsDark
-            ? NSColor(srgbRed: 0.180, green: 0.180, blue: 0.188, alpha: 1)
-            : NSColor(srgbRed: 0.978, green: 0.978, blue: 0.982, alpha: 1)
     }
 
     /// The ground of a pane beside the page: a writing list, a details
@@ -358,8 +363,6 @@ extension Color {
     static let lampRowHover = Color(nsColor: .lampRowHover)
 
     /// A side pane beside the page.
-    static let lampInspectorFill = Color(nsColor: .lampInspectorFill)
-
     /// Verse numbers and scripture's other small apparatus.
     static let lampVerseNumber = Color(nsColor: .lampVerseNumber)
 
