@@ -319,6 +319,8 @@ struct ReaderChatSidebarView: View {
                     Text(preparationError)
                 } actions: {
                     Button("Try Again", action: prepareWorkspace)
+                    .buttonStyle(.lampSecondary)
+                    .controlSize(.small)
                 }
             } else {
                 ProgressView("Preparing Chat…")
@@ -555,8 +557,10 @@ private struct StartWritingFromChatSheet: View {
                 Spacer()
                 Button("Cancel", role: .cancel, action: cancel)
                     .keyboardShortcut(.cancelAction)
+                    .buttonStyle(.lampSecondary)
                 Button("Start Writing") { start(trimmedTitle) }
                     .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.lampProminent)
                     .disabled(trimmedTitle.isEmpty)
             }
         }

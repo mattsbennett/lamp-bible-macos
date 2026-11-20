@@ -1238,6 +1238,7 @@ private struct BookSectionReaderView: View {
                     Spacer()
                     Button("Done") { presentedImage = nil }
                         .keyboardShortcut(.defaultAction)
+                        .buttonStyle(.lampProminent)
                 }
                 Image(nsImage: item.image)
                     .resizable()
@@ -1419,6 +1420,8 @@ private struct BookSectionReaderView: View {
             Button("Next Section", systemImage: "chevron.right") {
                 if let nextSection { selectSection(nextSection) }
             }
+            .buttonStyle(.lampSecondary)
+            .controlSize(.small)
             .labelStyle(.iconOnly)
             .disabled(nextSection == nil)
             .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
@@ -2453,6 +2456,7 @@ private struct BookFootnoteSheet: View {
                 Spacer()
                 Button("Done") { dismiss() }
                     .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.lampProminent)
             }
             BookInlineText(
                 attributedText: document.attributedText(for: footnote.content.annotatedText),

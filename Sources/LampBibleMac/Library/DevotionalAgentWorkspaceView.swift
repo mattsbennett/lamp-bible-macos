@@ -302,6 +302,7 @@ struct AIProviderAuthenticationTerminal: View {
                 }
                 Button("Done") { dismiss() }
                     .keyboardShortcut(.cancelAction)
+                    .buttonStyle(.lampProminent)
             }
             .padding(12)
             Divider()
@@ -1345,6 +1346,8 @@ struct DevotionalAgentWorkspaceView: View {
                 sectionHeader("Context", systemImage: "paperclip")
                 Spacer()
                 Button("Add Files", systemImage: "plus") { chooseContextFiles() }
+                .buttonStyle(.lampSecondary)
+                .controlSize(.small)
                     .labelStyle(.iconOnly)
                     .controlSize(.small)
             }
@@ -2456,6 +2459,7 @@ struct DevotionalAgentRevisionHistoryView: View {
                 Spacer()
                 Button("Done") { dismiss() }
                     .keyboardShortcut(.cancelAction)
+                    .buttonStyle(.lampProminent)
             }
             .padding(16)
             Divider()
@@ -2663,9 +2667,11 @@ private struct DevotionalAgentSkillEditor: View {
                 if isReadOnly {
                     Button("Done") { dismiss() }
                         .keyboardShortcut(.defaultAction)
+                        .buttonStyle(.lampProminent)
                 } else {
                     Button("Cancel", role: .cancel) { dismiss() }
                         .keyboardShortcut(.cancelAction)
+                        .buttonStyle(.lampSecondary)
                     Button("Save Skill") {
                         // Writing the skill takes its turn on
                         // `WritingWorkspaceFiles`, so the sheet waits for the
@@ -2683,6 +2689,7 @@ private struct DevotionalAgentSkillEditor: View {
                         }
                     }
                     .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.lampProminent)
                     .disabled(
                         !DevotionalAgentWorkspaceStore.isValidSkillName(name)
                         || description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

@@ -198,8 +198,10 @@ private struct NewWorkspaceMarkdownDocumentSheet: View {
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
+                    .buttonStyle(.lampSecondary)
                 Button("Create") { createDocument() }
                     .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.lampProminent)
                     .disabled(normalizedFilename == nil)
             }
         }
@@ -3944,6 +3946,8 @@ private struct WritingDateField: View {
                 Button(trimmed.isEmpty ? "Add Date" : "Choose Date", systemImage: "calendar.badge.plus") {
                     storedValue = LampCalendarDate.today()
                 }
+                .buttonStyle(.lampSecondary)
+                .controlSize(.small)
             }
         }
         .frame(minHeight: 28)
@@ -3967,6 +3971,8 @@ struct WritingDoneToolbarItem: ToolbarContent {
 
     private var button: some View {
         Button("Done", action: done.action)
+        .buttonStyle(.lampSecondary)
+        .controlSize(.small)
             .keyboardShortcut("e", modifiers: [.command, .shift])
             .help("\(done.help) (⇧⌘E)")
     }

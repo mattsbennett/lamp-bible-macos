@@ -239,6 +239,8 @@ struct WritingFindBar: View {
                     .disabled(!controller.canStep)
 
                     Button("Done") { controller.close() }
+                    .buttonStyle(.lampSecondary)
+                    .controlSize(.small)
                 }
             }
 
@@ -253,9 +255,13 @@ struct WritingFindBar: View {
                     }
                     HStack(spacing: 8) {
                         Button("Replace") { controller.replaceCurrent() }
+                        .buttonStyle(.lampSecondary)
+                        .controlSize(.small)
                             .disabled(!controller.canReplaceCurrent)
                             .help("Replace this match and find the next")
                         Button("Replace All") { controller.replaceAll() }
+                        .buttonStyle(.lampSecondary)
+                        .controlSize(.small)
                             .disabled(!controller.canStep)
                             .help("Replace every match")
                     }

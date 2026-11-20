@@ -217,6 +217,8 @@ struct VerseHighlightEditorView: View {
                         Button("Save Theme…", systemImage: "bookmark") {
                             showingSaveTheme = true
                         }
+                        .buttonStyle(.lampSecondary)
+                        .controlSize(.small)
                     }
                 }
             }

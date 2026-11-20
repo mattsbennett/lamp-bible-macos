@@ -96,6 +96,7 @@ struct ModuleStudioView: View {
             Button("Add JSON Files", systemImage: "plus") {
                 showingImporter = true
             }
+            .buttonStyle(.lampSecondary)
 
             if !model.documents.isEmpty {
                 Button("Clear", systemImage: "trash", role: .destructive) {

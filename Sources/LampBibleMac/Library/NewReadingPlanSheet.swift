@@ -224,6 +224,7 @@ struct NewReadingPlanSheet: View {
                 Button("Remove This Reading", systemImage: "minus") {
                     form.tracks.removeAll { $0.id == track.wrappedValue.id }
                 }
+                .buttonStyle(.lampSecondary)
             }
             // In the last reading's own section rather than one of its own:
             // a section to hold one button costs the height that "How Long"
@@ -232,6 +233,7 @@ struct NewReadingPlanSheet: View {
                 Button("Add Another Reading", systemImage: "plus") {
                     form.tracks.append(LampReadingPlanForm.Track())
                 }
+                .buttonStyle(.lampSecondary)
                 .help("Readings run side by side: every day of the plan has a portion of each")
             }
         }

@@ -706,6 +706,8 @@ struct SlideStudioView: View {
             Divider()
             HStack {
                 Button("Add Slide", systemImage: "plus") { addSlide() }
+                .buttonStyle(.lampSecondary)
+                .controlSize(.small)
                 Spacer()
                 Button("Move Up", systemImage: "arrow.up") { moveSlide(by: -1) }
                     .labelStyle(.iconOnly)
@@ -1819,6 +1821,8 @@ private struct LampSlideBlockEditor: View {
                         .labelsHidden()
                         .help(block.assetPath ?? "")
                         Button("Choose Image…", systemImage: "photo", action: chooseImage)
+                        .buttonStyle(.lampSecondary)
+                        .controlSize(.small)
                             .controlSize(.small)
                             .help("Copy an image into this library and use it here")
                     }
@@ -2067,6 +2071,8 @@ private struct LampSlideChartEditor: View {
                     by: .book
                 )
             }
+            .buttonStyle(.lampSecondary)
+            .controlSize(.small)
         }
     }
 

@@ -221,9 +221,13 @@ struct AgentChatProviderChoice: View {
                         typed = ""
                         commit()
                     }
+                    .buttonStyle(.lampSecondary)
+                    .controlSize(.small)
                     Spacer()
                     Button("Done") { commit() }
                         .keyboardShortcut(.defaultAction)
+                        .buttonStyle(.lampProminent)
+                        .controlSize(.small)
                 }
             }
             .padding(14)

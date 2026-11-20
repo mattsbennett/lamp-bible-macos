@@ -69,6 +69,7 @@ struct TodayView: View {
                     Button("New Plan…", systemImage: "square.and.pencil") { isMakingPlan = true }
                         .buttonStyle(.lampProminent)
                     Button("Add Plan…", systemImage: "plus", action: showImporter)
+                        .buttonStyle(.lampSecondary)
                 }
             } else {
                 ScrollView {

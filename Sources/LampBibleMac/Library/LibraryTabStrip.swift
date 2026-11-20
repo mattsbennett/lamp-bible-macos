@@ -268,8 +268,12 @@ struct LibraryTabBar: View {
             HStack {
                 Spacer()
                 Button("Cancel") { renamingID = nil }
+                    .buttonStyle(.lampSecondary)
+                    .controlSize(.small)
                 Button("Rename") { commitRename(item.id) }
                     .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.lampProminent)
+                    .controlSize(.small)
             }
         }
         .padding(14)

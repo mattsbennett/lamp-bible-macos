@@ -131,11 +131,13 @@ struct WritingImportSheet: View {
                     dismiss()
                 }
                     .keyboardShortcut(.cancelAction)
+                    .buttonStyle(.lampSecondary)
                 Button(importLabel) {
                     onImport(selection)
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
+                .buttonStyle(.lampProminent)
                 .disabled(selection.isEmpty)
             }
         }

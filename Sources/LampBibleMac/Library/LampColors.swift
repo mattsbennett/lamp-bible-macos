@@ -671,15 +671,22 @@ struct LampProminentButtonStyle: ButtonStyle {
             let metrics = LampButtonMetrics.forSize(controlSize)
             configuration.label
                 .font(metrics.font)
-                .foregroundStyle(.white)
+                // Disabled, it leaves the accent entirely and goes neutral, as
+                // macOS does. Fading the whole button instead — which this
+                // style did at first — left a murky maroon that still shouted
+                // for attention while its white label fell to about 2:1
+                // against it: a sheet's default button is disabled until the
+                // form is filled in, so that is the first thing seen.
+                .foregroundStyle(isEnabled ? AnyShapeStyle(.white) : AnyShapeStyle(.tertiary))
                 .padding(.horizontal, metrics.horizontal)
                 .padding(.vertical, metrics.vertical)
-                .background(Color.lampAccentMuted, in: Capsule(style: .continuous))
-                // Pressed and disabled are carried by the whole button rather
-                // than by a second colour, so there is one muted accent in the
-                // app and not three.
+                .background(
+                    isEnabled
+                        ? AnyShapeStyle(Color.lampAccentMuted)
+                        : AnyShapeStyle(Color.lampTileFill),
+                    in: Capsule(style: .continuous)
+                )
                 .opacity(configuration.isPressed ? 0.78 : 1)
-                .opacity(isEnabled ? 1 : 0.4)
                 .contentShape(Capsule(style: .continuous))
         }
     }
@@ -701,12 +708,13 @@ struct LampSecondaryButtonStyle: ButtonStyle {
             let metrics = LampButtonMetrics.forSize(controlSize)
             configuration.label
                 .font(metrics.font)
-                .foregroundStyle(.primary)
+                // The ground stays; the label is what says it cannot be
+                // pressed, so a disabled button does not turn into a hole.
+                .foregroundStyle(isEnabled ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
                 .padding(.horizontal, metrics.horizontal)
                 .padding(.vertical, metrics.vertical)
                 .background(Color.lampTileFill, in: Capsule(style: .continuous))
                 .opacity(configuration.isPressed ? 0.7 : 1)
-                .opacity(isEnabled ? 1 : 0.4)
                 .contentShape(Capsule(style: .continuous))
         }
     }
@@ -738,12 +746,11 @@ struct LampMenuButtonStyle: ButtonStyle {
                     .foregroundStyle(Color.lampSecondaryText)
             }
             .font(metrics.font)
-            .foregroundStyle(.primary)
+            .foregroundStyle(isEnabled ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
             .padding(.horizontal, metrics.horizontal)
             .padding(.vertical, metrics.vertical)
             .background(Color.lampTileFill, in: Capsule(style: .continuous))
             .opacity(configuration.isPressed ? 0.7 : 1)
-            .opacity(isEnabled ? 1 : 0.4)
             .contentShape(Capsule(style: .continuous))
         }
     }

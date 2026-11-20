@@ -124,6 +124,7 @@ struct WritingEmptyState: View {
             Button("Import Writing…", systemImage: "square.and.arrow.down") {
                 isChoosingFiles = true
             }
+            .buttonStyle(.lampProminent)
             .help("Bring in writing from Markdown files or a folder of them")
         }
         .fileImporter(

@@ -1454,6 +1454,8 @@ struct UnifiedSearchView: View {
                         }
                     }
                 }
+                .buttonStyle(.lampSecondary)
+                .controlSize(.small)
             }
             if result.kind == .book {
                 Button("Open Book", systemImage: "book.closed") {

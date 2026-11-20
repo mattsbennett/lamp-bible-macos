@@ -89,6 +89,8 @@ struct StoredCalendarDateField: View {
                     Button("Remove Date", systemImage: "xmark.circle") {
                         storedValue = ""
                     }
+                    .buttonStyle(.lampSecondary)
+                    .controlSize(.small)
                     .labelStyle(.iconOnly)
                     .help("Remove date")
                 }

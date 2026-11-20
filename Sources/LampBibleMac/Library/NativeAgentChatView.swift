@@ -2367,6 +2367,8 @@ struct NativeAgentChatView: View {
                         Button("Start a Writing from Here…", systemImage: "square.and.pencil") {
                             startWritingFromTurn(message.id)
                         }
+                        .buttonStyle(.lampSecondary)
+                        .controlSize(.small)
                     }
                     if revertTurn != nil, message.isSender, model.canFork(from: message.id) {
                         Button("Undo This Turn…", systemImage: "arrow.uturn.backward") {
@@ -2826,6 +2828,7 @@ struct AIProviderBrowserAuthenticationView: View {
                 } else {
                     Button("Done") { dismiss() }
                         .keyboardShortcut(.defaultAction)
+                        .buttonStyle(.lampProminent)
                 }
             }
         }

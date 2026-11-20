@@ -1128,6 +1128,8 @@ struct TranslationReaderView: View, Equatable {
                     Button("Add a Companion Translation", systemImage: "plus") {
                         addCompanion(reading: chapter)
                     }
+                    .buttonStyle(.lampSecondary)
+                    .controlSize(.small)
                     .help("Read another translation beside these")
                 }
                 if companions.count == 1, let only = companions.first {

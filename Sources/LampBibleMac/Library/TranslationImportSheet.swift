@@ -123,11 +123,13 @@ struct TranslationImportSheet: View {
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
+                    .buttonStyle(.lampSecondary)
                 Button(destination.replacedModuleID == nil ? "Import" : "Replace") {
                     onImport(trimmedName, trimmedAbbreviation, language)
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
+                .buttonStyle(.lampProminent)
                 .disabled(trimmedName.isEmpty || trimmedAbbreviation.isEmpty)
             }
         }

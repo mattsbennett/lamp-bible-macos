@@ -3406,6 +3406,8 @@ struct StrongsAnalysisPane: View {
         if showsGaps, let original, let openIn {
             let originalName = original.translationAbbreviation ?? original.translationName
             Button("Open in \(originalName)") { openIn(original.translationID) }
+            .buttonStyle(.lampSecondary)
+            .controlSize(.small)
                 .controlSize(.small)
                 // Apart from the disclosure above it, which it is not part of.
                 .padding(.top, 8)

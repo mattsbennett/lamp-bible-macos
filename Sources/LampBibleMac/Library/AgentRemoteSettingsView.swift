@@ -103,6 +103,7 @@ private struct AgentRemotePairingSheet: View {
                 Spacer()
                 Button("Done", action: done)
                     .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.lampProminent)
             }
         }
         .padding(20)

@@ -210,6 +210,7 @@ struct AddToLibraryView: View {
                 unlockKey = ""
                 model.translationUnlockRequest = nil
             }
+            .buttonStyle(.lampSecondary)
         } message: { request in
             Text(request.prompt)
         }
@@ -304,6 +305,7 @@ struct AddToLibraryView: View {
                     Button("Import Writing…", systemImage: "book.closed") {
                         showingDevotionalsMarkdownImporter = true
                     }
+                    .buttonStyle(.lampProminent)
                 }
 
                 Button("Restore Notes or Highlights from .json/.lamp…", systemImage: "archivebox") {

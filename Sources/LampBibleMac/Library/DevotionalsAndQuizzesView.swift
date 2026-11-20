@@ -797,6 +797,8 @@ struct DevotionalsView: View {
             Button("Next Writing", systemImage: "chevron.right") {
                 if let next = neighbours.next { selection = next }
             }
+            .buttonStyle(.lampSecondary)
+            .controlSize(.small)
             .labelStyle(.iconOnly)
             .disabled(neighbours.next == nil)
             .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
@@ -1455,6 +1457,7 @@ struct DevotionalPresentationView: View {
                         }
                         .labelStyle(.iconOnly)
                         .keyboardShortcut(.cancelAction)
+                        .buttonStyle(.lampSecondary)
                         .help("Close presenter")
                     }
                     .padding(24)

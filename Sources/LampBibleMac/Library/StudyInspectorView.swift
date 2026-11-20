@@ -464,7 +464,9 @@ private struct NotesInspectorView: View {
                 .help("Write a note on this verse")
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .lampCard(padding: 14)
+            // Unfilled, as the notes themselves are: the pane reads the same
+            // whether it is being read or edited.
+            .lampCard(padding: 14, filled: false)
         } else if group.id == reader.selectedVerseReference {
             PersonalNoteEditor(
                 reference: group.id,
@@ -507,7 +509,10 @@ private struct NotesInspectorView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .lampCard(padding: 14)
+                // A note's own words, previewed: unfilled like the card it
+                // opens into, and like the same note read in the other mode.
+                // The hairline is what says where one note ends.
+                .lampCard(padding: 14, filled: false)
                 .contentShape(RoundedRectangle(cornerRadius: LampMetrics.cardRadius))
             }
             .buttonStyle(.plain)
@@ -1171,6 +1176,8 @@ private struct PersonalNoteEditor: View {
         Button(isSaving ? "Saving…" : "Save") {
             save()
         }
+        .buttonStyle(.lampProminent)
+        .controlSize(.small)
         .keyboardShortcut("s", modifiers: .command)
         .disabled(!hasUnsavedEdits || isSaving || isLoading)
     }

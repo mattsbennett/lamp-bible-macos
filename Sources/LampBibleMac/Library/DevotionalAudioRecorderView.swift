@@ -40,6 +40,7 @@ struct DevotionalAudioRecorderView: View {
                     recorder.discard()
                     dismiss()
                 }
+                .buttonStyle(.lampSecondary)
                 Spacer()
                 if recorder.recordedURL != nil, !recorder.isRecording {
                     Button("Record Again", systemImage: "arrow.counterclockwise") {
