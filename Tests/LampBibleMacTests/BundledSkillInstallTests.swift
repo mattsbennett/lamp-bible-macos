@@ -279,6 +279,46 @@ struct BundledSkillInstallTests {
         )
     }
 
+    /// A workspace left over from an older build loses the import skill the
+    /// next time its custom skills are brought up to date, not only when Lamp
+    /// prepares it again.
+    ///
+    /// `synchronizeWorkspace` used to exempt every bundled name from its sweep,
+    /// so a copy that was installed before the skill left the workspace set
+    /// survived every path but `prepare` — and `read_skill` serves a
+    /// workspace's own copy ahead of the catalog, so the one workspace holding
+    /// a stale copy is the one reading it.
+    @Test func synchronizingAworkspaceTakesOutAbundledSkillThatLeftIt() async throws {
+        let library = FileManager.default.temporaryDirectory
+            .appendingPathComponent("library-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: library) }
+        let workspace = LampWritingWorkspace.root(libraryRootURL: library)
+            .appendingPathComponent("a-writing", isDirectory: true)
+        let catalog = try catalog(["build-lamp-deck", "import-lamp-writing", "sola-scriptura"])
+        defer { try? FileManager.default.removeItem(at: catalog) }
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        try WorkspaceSkillStore.installBundledSkills(
+            named: ["build-lamp-deck", "import-lamp-writing", "sola-scriptura"],
+            from: catalog,
+            intoSkillDirectoriesOf: workspace
+        )
+
+        try await WorkspaceSkillStore.synchronizeWorkspace(workspace, libraryRootURL: library)
+
+        for provider in [
+            WorkspaceSkillStore.codexSkillsDirectory,
+            WorkspaceSkillStore.claudeSkillsDirectory,
+        ] {
+            let present = installed(in: workspace, provider: provider)
+            #expect(!present.contains("import-lamp-writing"))
+            #expect(
+                present.contains("build-lamp-deck"),
+                "a built-in that does belong here was swept away with it"
+            )
+            #expect(present.contains("sola-scriptura"))
+        }
+    }
+
     /// A built-in stays out of the custom catalog however it got there, so a
     /// reader cannot edit or delete the copy their build ships.
     @Test func aninstalledBuiltInIsStillNotAcustomSkill() async throws {

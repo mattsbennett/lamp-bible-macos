@@ -113,8 +113,12 @@ public enum WorkspaceSkillStore {
         // bundled names are removed: a custom skill cannot carry one.
         for name in bundledSkillNames.subtracting(names).sorted() {
             for root in [codexSkillsDirectory(in: workspace), claudeSkillsDirectory(in: workspace)] {
+                // Confined the same way the custom-skill sweep is: a provider
+                // directory that is a link leads the delete out of the
+                // workspace, and this one runs on a reader chat's folder too.
+                guard isSafeDirectory(root, fileManager: fileManager) else { continue }
                 let stale = root.appendingPathComponent(name, isDirectory: true)
-                guard fileManager.fileExists(atPath: stale.path) else { continue }
+                guard isSafeDirectory(stale, fileManager: fileManager) else { continue }
                 try fileManager.removeItem(at: stale)
             }
         }
@@ -415,9 +419,20 @@ public enum WorkspaceSkillStore {
             claudeSkillsDirectory(in: workspace),
         ] {
             try ensureSafeDirectory(providerRoot, fileManager: fileManager)
-            for installed in try safeChildDirectories(in: providerRoot, fileManager: fileManager)
-            where !builtInSkillNames.contains(installed.lastPathComponent) {
+            for installed in try safeChildDirectories(in: providerRoot, fileManager: fileManager) {
                 let name = installed.lastPathComponent
+                if builtInSkillNames.contains(name) {
+                    // A built-in is not the reader's to enable or disable, so
+                    // the rule below does not apply to it. One that no longer
+                    // belongs in a writing's workspace is still taken out:
+                    // `import-lamp-writing` left here by an older build would
+                    // otherwise be read by an agent in place of the catalog's,
+                    // for as long as this workspace is never prepared again.
+                    if !workspaceBundledSkillNames.contains(name) {
+                        try fileManager.removeItem(at: installed)
+                    }
+                    continue
+                }
                 let canonical = catalog.appendingPathComponent(name, isDirectory: true)
                 let hasCanonicalDefinition = try definition(in: canonical) != nil
                 if !enabled.contains(name) || !hasCanonicalDefinition {
