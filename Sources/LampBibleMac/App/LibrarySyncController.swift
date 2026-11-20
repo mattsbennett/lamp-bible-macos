@@ -868,6 +868,9 @@ extension LibrarySyncController {
         var manifest = LampSyncLibraryManifest()
         var gaps: [LampSyncLocalFiles.Unreadable] = []
         var skippedHighlightSets: [String] = []
+        // When each deletion the pass was handed was made, for forgetting
+        // only those, not one made again while it ran.
+        var carriedDeletions: [String: Int64] = [:]
 
         // What the server sent, when it sent something unusable.
         //
@@ -906,6 +909,7 @@ extension LibrarySyncController {
                 )
                 gaps = gathered.gaps
                 skippedHighlightSets = gathered.skippedHighlightSets
+                carriedDeletions = gathered.gathered.deletedLocally
                 return gathered.gathered
             },
             records: &records,
@@ -959,7 +963,8 @@ extension LibrarySyncController {
         // that stopped before forgetting them, with a copy written since put
         // back. Kept, each would plan its path as deleted here for good.
         try LampSyncRemovedModules.forget(
-            outcome.tombstoned + outcome.settled, inLibraryAt: library.rootURL, fileManager: fileManager
+            outcome.tombstoned + outcome.settled, carried: carriedDeletions,
+            inLibraryAt: library.rootURL, fileManager: fileManager
         )
         if let plannedSettings {
             try settings.remember(plannedSettings)

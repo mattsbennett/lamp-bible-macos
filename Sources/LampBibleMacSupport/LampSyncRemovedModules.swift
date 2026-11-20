@@ -73,8 +73,19 @@ public struct LampSyncRemovedModules: Codable, Equatable, Sendable {
 
     /// Forgotten once the manifest carries the deletion, since from then on
     /// the tombstone is what every device reads.
-    public mutating func forget(_ paths: some Sequence<String>) {
-        for path in paths { removedAt[path] = nil }
+    ///
+    /// `carried`, where given, is when each deletion the pass carried was
+    /// made: a path is forgotten only if it was removed then or before, and
+    /// a removal made again while the pass ran waits for the next one.
+    /// Forgotten by path alone, that later removal went unrecorded, and the
+    /// module came back.
+    public mutating func forget(_ paths: some Sequence<String>, carried: [String: Int64]? = nil) {
+        for path in paths {
+            if let carried {
+                guard let at = carried[path], let removed = removedAt[path], removed <= at else { continue }
+            }
+            removedAt[path] = nil
+        }
     }
 
     /// Forgets `paths` in the library's record, writing only if that moved
@@ -96,12 +107,13 @@ public struct LampSyncRemovedModules: Codable, Equatable, Sendable {
     @discardableResult
     public static func forget(
         _ paths: some Sequence<String>,
+        carried: [String: Int64]? = nil,
         inLibraryAt libraryRoot: URL,
         fileManager: FileManager = .default
     ) throws -> Bool {
         let before = load(fromLibraryAt: libraryRoot, fileManager: fileManager)
         var records = before
-        records.forget(paths)
+        records.forget(paths, carried: carried)
         guard records != before else { return false }
         try records.save(toLibraryAt: libraryRoot, fileManager: fileManager)
         return true

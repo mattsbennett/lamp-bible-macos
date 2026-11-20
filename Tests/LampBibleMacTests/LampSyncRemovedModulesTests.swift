@@ -159,6 +159,28 @@ struct LampSyncRemovedModulesTests {
         #expect(LampSyncRemovedModules.load(fromLibraryAt: root).removedAt.isEmpty)
     }
 
+    /// A removal made again while a pass ran is not the one the pass carried,
+    /// and is kept for the next pass, however the path was reported.
+    @Test func aRemovalMadeAgainDuringThePassIsKept() throws {
+        let root = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var records = LampSyncRemovedModules()
+        records.record("Translations/KJVs.lamp", at: 300)
+        records.record("Books/atonement.lamp", at: 200)
+        records.record("Plans/mcheyne.lamp", at: 100)
+        try records.save(toLibraryAt: root)
+
+        try LampSyncRemovedModules.forget(
+            ["Translations/KJVs.lamp", "Books/atonement.lamp", "Plans/mcheyne.lamp"],
+            carried: ["Translations/KJVs.lamp": 100, "Books/atonement.lamp": 200],
+            inLibraryAt: root
+        )
+
+        #expect(LampSyncRemovedModules.load(fromLibraryAt: root).removedAt == [
+            "Translations/KJVs.lamp": 300, "Plans/mcheyne.lamp": 100,
+        ])
+    }
+
     /// Nothing at all to forget is the ordinary case between removals.
     @Test func forgettingNothingWritesNothing() throws {
         let root = try makeLibrary()
