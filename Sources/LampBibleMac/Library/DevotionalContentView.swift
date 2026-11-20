@@ -672,7 +672,8 @@ private struct DevotionalAudioView: View {
                 player.toggle(url: url)
             }
             .labelStyle(.iconOnly)
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.lampProminent)
+            .controlSize(.small)
             VStack(alignment: .leading, spacing: 2) {
                 Text(label.isEmpty ? "Audio" : label).font(.headline)
                 Text(url.lastPathComponent).font(.caption).foregroundStyle(.secondary)

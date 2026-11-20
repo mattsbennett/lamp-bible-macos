@@ -234,7 +234,7 @@ struct AIProviderAccountsSettingsView: View {
         let state = states[provider, default: .checking]
         if state == .notInstalled {
             Link("Install Guide", destination: provider.documentationURL)
-                .buttonStyle(.bordered)
+                .buttonStyle(.lampSecondary)
                 .controlSize(.small)
         } else {
             Button(state == .connected ? "Reconnect…" : "Connect…") {
@@ -248,7 +248,7 @@ struct AIProviderAccountsSettingsView: View {
                     )
                 }
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.lampProminent)
             .controlSize(.small)
             .disabled(state == .checking)
 
@@ -1287,7 +1287,8 @@ struct DevotionalAgentWorkspaceView: View {
             Button(activeProvider == nil ? "Launch" : "Restart", systemImage: "play.fill") {
                 Task { await launch(selectedProvider) }
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.lampProminent)
+            .controlSize(.small)
             .disabled(workspaceURL == nil)
         }
 
@@ -1409,6 +1410,7 @@ struct DevotionalAgentWorkspaceView: View {
                 } label: {
                     Label("Add Skill", systemImage: "plus")
                 }
+                .lampMenu()
                 .controlSize(.small)
                 .fixedSize()
             }
@@ -1606,7 +1608,8 @@ struct DevotionalAgentWorkspaceView: View {
                 Button("Launch \(selectedProvider.shortName)", systemImage: "play.fill") {
                     Task { await launch(selectedProvider) }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.lampProminent)
+                .controlSize(.small)
                 .disabled(workspaceURL == nil)
                 .padding(.top, 4)
             }
@@ -2500,7 +2503,7 @@ struct DevotionalAgentRevisionHistoryView: View {
                                 restore(revision.afterMarkdown)
                                 dismiss()
                             }
-                            .buttonStyle(.borderedProminent)
+                            .buttonStyle(.lampProminent)
                         }
                         .controlSize(.small)
                     }

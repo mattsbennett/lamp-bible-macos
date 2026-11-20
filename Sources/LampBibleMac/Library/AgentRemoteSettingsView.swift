@@ -16,6 +16,7 @@ struct AgentRemoteSettingsSection: View {
     var body: some View {
         Section("Chats on iPhone and iPad") {
             Toggle("Allow chats from paired devices", isOn: $isEnabled)
+            .tint(Color.lampAccentMuted)
             Text(
                 """
                 A paired iPhone or iPad can read your reader chats and carry \

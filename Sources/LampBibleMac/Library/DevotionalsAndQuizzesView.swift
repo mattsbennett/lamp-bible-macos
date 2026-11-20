@@ -416,6 +416,10 @@ struct DevotionalsView: View {
             )
             .labelStyle(.titleAndIcon)
         }
+        .lampMenu()
+        // Icon alone, in a list header beside a bare +: the compact
+        // footprint, still fully rounded like every other Lamp control.
+        .controlSize(.small)
         .accessibilityLabel("Filter writing")
         .help("Show one collection of writing")
     }
@@ -441,6 +445,10 @@ struct DevotionalsView: View {
                 groupItems
             }
         }
+        .lampMenu()
+        // Icon alone, in a list header beside a bare +: the compact
+        // footprint, still fully rounded like every other Lamp control.
+        .controlSize(.small)
         .accessibilityLabel("Sort and group writing")
         .help("Sort and group writing")
     }
@@ -916,7 +924,7 @@ struct DevotionalsView: View {
                                 Button(scripture.displayDescription) {
                                     openReference(scripture.startReference)
                                 }
-                                .buttonStyle(.bordered)
+                                .buttonStyle(.lampSecondary)
                                 .controlSize(.small)
                             }
                         }
@@ -1123,7 +1131,8 @@ struct DevotionalsView: View {
         } actions: {
             if devotional.isEditable {
                 Button("Edit") { beginEditing(devotional) }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.lampProminent)
+                    .controlSize(.small)
             }
         }
         .frame(maxWidth: .infinity, alignment: .center)
@@ -1577,7 +1586,7 @@ struct QuizzesView: View {
                     message: "Questions on each day’s reading, set for every age group. A quiz comes as a .lamp file: add one to begin."
                 ) {
                     Button("Add Quiz…", systemImage: "plus", action: showImporter)
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.lampProminent)
                 }
             } else if let quiz = selectedModule {
                 VStack(spacing: 0) {
@@ -1606,28 +1615,57 @@ struct QuizzesView: View {
         .onDisappear { readAloud.stop() }
     }
 
+    /// What the age-group menu says it is set to. The pop-up it replaced drew
+    /// this itself from the chosen tag.
+    private func selectedAgeGroupLabel(in quiz: LampQuizModule) -> String {
+        guard let ageGroup = quiz.ageGroups.first(where: { $0.id == selectedAgeGroupID }) else {
+            return "Age Group"
+        }
+        return "\(ageGroup.label) (\(ageGroup.ageRange))"
+    }
+
     /// The quiz, the age group and the day, on one line over the column of
     /// questions and aligned to it. Spread across the full window, the
     /// controls floated with gaps of their own choosing and lined up with
     /// nothing below them.
     private func quizControls(_ quiz: LampQuizModule) -> some View {
         HStack(alignment: .center, spacing: 12) {
-            Picker("Quiz", selection: $selectedModuleID) {
-                ForEach(model.quizModules) { module in
-                    Text(module.name).tag(Optional(module.id))
+            // A menu holding the choice, rather than a pop-up `Picker`: a
+            // pop-up is an AppKit control that no button style reaches, so
+            // these two were the system's rounded squares standing beside
+            // Lamp's own capsules. The label carries what is chosen, which is
+            // what the pop-up showed.
+            Menu {
+                Picker("Quiz", selection: $selectedModuleID) {
+                    ForEach(model.quizModules) { module in
+                        Text(module.name).tag(Optional(module.id))
+                    }
                 }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            } label: {
+                Text(quiz.name)
             }
-            .labelsHidden()
+            .lampMenu()
+            // Compact, like the day stepper on the other side of this row.
+            .controlSize(.small)
             .fixedSize()
             .help("Quiz")
 
-            Picker("Age Group", selection: $selectedAgeGroupID) {
-                ForEach(quiz.ageGroups) { ageGroup in
-                    Text("\(ageGroup.label) (\(ageGroup.ageRange))")
-                        .tag(Optional(ageGroup.id))
+            Menu {
+                Picker("Age Group", selection: $selectedAgeGroupID) {
+                    ForEach(quiz.ageGroups) { ageGroup in
+                        Text("\(ageGroup.label) (\(ageGroup.ageRange))")
+                            .tag(Optional(ageGroup.id))
+                    }
                 }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            } label: {
+                Text(selectedAgeGroupLabel(in: quiz))
             }
-            .labelsHidden()
+            .lampMenu()
+            .controlSize(.small)
             .fixedSize()
             .help("Age group")
 
@@ -1655,6 +1693,7 @@ struct QuizzesView: View {
             .accessibilityLabel("Day")
 
             QuizOptionsMenu()
+                .controlSize(.small)
         }
         .frame(maxWidth: QuizzesView.columnWidth)
         .padding(.horizontal, 28)
@@ -1796,7 +1835,9 @@ struct QuizOptionsMenu: View {
                 lineSpacingScale: .quizLineSpacing
             )
         }
-        .menuStyle(.borderlessButton)
+        // A capsule like the two beside it, not a borderless label: all three
+        // stand in the same row over the questions.
+        .lampMenu()
         .fixedSize()
         .help("Choose quiz answers, preview context, typeface, text size, and line spacing")
     }
@@ -1926,7 +1967,7 @@ struct QuizQuestionCard: View {
                     .fontWeight(answerVisible ? .regular : .medium)
                     .padding(.horizontal, 4)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.lampSecondary)
             }
         }
         .padding(showsTheme ? 20 : 13)

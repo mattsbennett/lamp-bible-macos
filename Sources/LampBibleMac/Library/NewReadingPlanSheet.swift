@@ -61,7 +61,7 @@ struct NewReadingPlanSheet: View {
                     .keyboardShortcut(.cancelAction)
                 Button("Add Plan", action: add)
                     .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.lampProminent)
                     .disabled(draft == nil || isAdding)
             }
             .padding(20)
@@ -183,6 +183,7 @@ struct NewReadingPlanSheet: View {
                 HStack(spacing: 4) {
                     ForEach(LampWeekday.inWeekOrder, id: \.self) { day in
                         Toggle(day.shortTitle, isOn: restDay(day))
+                        .tint(Color.lampAccentMuted)
                             .toggleStyle(.button)
                             .help("No reading on \(day.title)s")
                     }

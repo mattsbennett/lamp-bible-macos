@@ -79,7 +79,8 @@ struct PlanReadingModeBar: View {
                 Button(showingQuiz ? "Hide Quiz" : "Show Quiz", systemImage: "questionmark.bubble") {
                     showingQuiz.toggle()
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.lampSecondary)
+                .controlSize(.small)
 
                 Button("Exit Plan Mode", systemImage: "xmark.circle") {
                     self.mode = nil

@@ -241,7 +241,7 @@ struct AddToLibraryView: View {
                 Button("Choose .lamp Modules…", systemImage: "folder") {
                     showingModuleImporter = true
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.lampProminent)
                 .controlSize(.large)
                 .disabled(model.isImporting)
 
@@ -268,7 +268,7 @@ struct AddToLibraryView: View {
                 Button("Choose a Bible…", systemImage: "folder") {
                     showingBibleImporter = true
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.lampProminent)
                 .controlSize(.large)
                 .disabled(model.isReadingTranslation || model.isImporting)
 
@@ -299,7 +299,7 @@ struct AddToLibraryView: View {
                     Button("Import Notes from .md…", systemImage: "note.text") {
                         showingNotesMarkdownImporter = true
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.lampProminent)
 
                     Button("Import Writing…", systemImage: "book.closed") {
                         showingDevotionalsMarkdownImporter = true

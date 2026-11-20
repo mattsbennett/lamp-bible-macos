@@ -237,7 +237,8 @@ struct VerseHighlightEditorView: View {
                 Spacer()
                 Button("Cancel") { dismiss() }
                 Button(isWorking ? "Saving…" : "Save Highlight") { save() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.lampProminent)
+                    .controlSize(.small)
                     .disabled(selectedCharacterRange == nil || isWorking)
             }
         }
@@ -264,7 +265,8 @@ struct VerseHighlightEditorView: View {
                     Spacer()
                     Button("Cancel") { showingNewSet = false }
                     Button("Create") { createSet() }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.lampProminent)
+                        .controlSize(.small)
                         .disabled(newSetName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
@@ -283,7 +285,8 @@ struct VerseHighlightEditorView: View {
                     Spacer()
                     Button("Cancel") { showingSaveTheme = false }
                     Button("Save") { saveTheme() }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.lampProminent)
+                        .controlSize(.small)
                         .disabled(themeName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }

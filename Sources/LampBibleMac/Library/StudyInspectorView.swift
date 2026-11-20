@@ -459,7 +459,8 @@ private struct NotesInspectorView: View {
                 Button("Add a Note", systemImage: "square.and.pencil") {
                     composingReference = group.id
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.lampSecondary)
+                .controlSize(.small)
                 .help("Write a note on this verse")
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -623,13 +624,18 @@ private struct NotesInspectorView: View {
     @ViewBuilder
     private var footer: some View {
         HStack {
-            Picker("Notes", selection: $isReadingNotes) {
-                Label("Read", systemImage: "book").tag(true)
-                Label("Edit", systemImage: "square.and.pencil").tag(false)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
+            // `LampSegmentedPicker`, not the system's, which fills the
+            // chosen segment with the accent: ColorRules.md names a choice
+            // among modes as the one place the accent does not go, and this
+            // is one. It was the last pane still on the system control.
+            LampSegmentedPicker(
+                "Notes",
+                selection: $isReadingNotes,
+                items: [
+                    .init(id: true, title: "Read", systemImage: "book"),
+                    .init(id: false, title: "Edit", systemImage: "square.and.pencil"),
+                ]
+            )
             // Reading would put away an editor holding unsaved words.
             .disabled(editorIsDirty && !isReadingNotes)
             .help(editorIsDirty && !isReadingNotes
@@ -673,6 +679,7 @@ private struct NotesInspectorView: View {
                     importStudyData()
                 }
             }
+            .lampMenu()
             .disabled(editorIsDirty || isExporting)
             .help(editorIsDirty
                 ? "Save or revert this note before transferring study data"
@@ -1127,7 +1134,8 @@ private struct PersonalNoteEditor: View {
                 // Prominent only when there is something to save: drawn in the
                 // accent while disabled, it read as the thing to press next on
                 // a note nobody had touched.
-                saveButton.buttonStyle(.borderedProminent)
+                saveButton.buttonStyle(.lampProminent)
+                .controlSize(.small)
                 }
             }
             }
@@ -1757,7 +1765,7 @@ private struct DictionaryInspectorView: View {
         let keys = analysableKeys(lookup)
         if keys.count == 1, let key = keys.first {
             Button("Analyse", systemImage: "chart.bar.xaxis") { analyse(key) }
-                .buttonStyle(.bordered)
+                .buttonStyle(.lampSecondary)
                 .controlSize(.small)
                 .help("Analyse \(key): where it is used and how it is translated")
         } else if keys.count > 1 {
@@ -1769,7 +1777,7 @@ private struct DictionaryInspectorView: View {
                 Label("Analyse", systemImage: "chart.bar.xaxis")
             }
             .menuStyle(.button)
-            .buttonStyle(.bordered)
+            .buttonStyle(.lampSecondary)
             .controlSize(.small)
             .fixedSize()
             .help("Analyse one of these numbers")
@@ -3512,7 +3520,8 @@ struct ScriptureReferencePopover: View {
                             referenceActions.openInNewTab(link.startReference)
                             dismiss()
                         }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.lampProminent)
+                        .controlSize(.small)
                     }
                 }
                 .padding(12)
@@ -3897,7 +3906,8 @@ private struct DictionaryReferencePopover: View {
                     }
                     dismiss()
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.lampProminent)
+                .controlSize(.small)
             }
             .padding(12)
         }

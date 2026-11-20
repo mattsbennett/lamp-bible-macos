@@ -37,7 +37,7 @@ struct NewReaderTabPage: View {
                                         .lineLimit(1)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                 }
-                                .buttonStyle(.bordered)
+                                .buttonStyle(.lampSecondary)
                                 .controlSize(.large)
                             }
                         }

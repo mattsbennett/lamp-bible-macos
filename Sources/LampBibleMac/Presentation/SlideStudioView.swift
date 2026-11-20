@@ -540,7 +540,7 @@ struct SlideStudioView: View {
                     .labelStyle(.titleAndIcon)
                     .padding(.horizontal, 4)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.lampProminent)
             .disabled(deck == nil || hasErrors)
             .help("Present this deck")
         }
@@ -792,6 +792,7 @@ struct SlideStudioView: View {
                                 VStack(alignment: .leading, spacing: 12) {
                                     StudioLayoutPicker(selection: slideBinding.layout)
                                     Toggle("Skip while presenting", isOn: slideBinding.isHidden)
+                                    .tint(Color.lampAccentMuted)
                                 }
                             }
                             Divider().padding(.vertical, 18)
@@ -817,6 +818,7 @@ struct SlideStudioView: View {
                                             Button(kind.displayName) { addBlock(kind) }
                                         }
                                     }
+                                    .lampMenu()
                                     .fixedSize()
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                 }
@@ -873,6 +875,7 @@ struct SlideStudioView: View {
                                         .pickerStyle(.inline)
                                         .labelsHidden()
                                     }
+                                    .lampMenu()
                                 }
                             }
                         }
@@ -945,6 +948,11 @@ struct SlideStudioView: View {
 
     /// The two panes, chosen in the text's own colour: a segmented control
     /// would have filled the chosen one with the accent, one more red mark.
+    ///
+    /// `LampSegmentedPicker` in all but shape — it is drawn here because
+    /// these two span the inspector's width, which that control does not do
+    /// (it sizes to its items). Its capsule and its height are matched by
+    /// hand, so a toggle does not change shape from one pane to the next.
     private var inspectorTabs: some View {
         HStack(spacing: 4) {
             ForEach(InspectorPane.allCases) { pane in
@@ -955,10 +963,10 @@ struct SlideStudioView: View {
                     Text(pane.rawValue)
                         .font(.callout.weight(isChosen ? .semibold : .regular))
                         .foregroundStyle(isChosen ? AnyShapeStyle(.primary) : AnyShapeStyle(Color.lampSecondaryText))
-                        .frame(maxWidth: .infinity, minHeight: 26)
+                        .frame(maxWidth: .infinity, minHeight: 32)
                         .background(
                             isChosen ? Color.primary.opacity(0.09) : Color.clear,
-                            in: RoundedRectangle(cornerRadius: LampMetrics.tileRadius, style: .continuous)
+                            in: Capsule(style: .continuous)
                         )
                         .contentShape(Rectangle())
                 }
@@ -967,7 +975,7 @@ struct SlideStudioView: View {
             }
         }
         .padding(3)
-        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: LampMetrics.tileRadius + 2, style: .continuous))
+        .background(Color.primary.opacity(0.04), in: Capsule(style: .continuous))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Inspector")
     }
@@ -981,6 +989,7 @@ struct SlideStudioView: View {
                         .font(.subheadline.weight(.semibold))
                     Spacer()
                     Toggle("Follow the writing", isOn: followsManuscriptBinding)
+                    .tint(Color.lampAccentMuted)
                         .toggleStyle(.switch)
                         .controlSize(.mini)
                         .font(.caption)
@@ -2126,6 +2135,7 @@ private struct LampSlideChartEditor: View {
                     get: { chart.wrappedValue.source.includesOriginalLanguages },
                     set: { chart.wrappedValue.source.includesOriginalLanguages = $0 }
                 ))
+                .tint(Color.lampAccentMuted)
             }
             Divider()
             // Only those tagged with Strong's: no other can be compared.
@@ -2175,6 +2185,7 @@ private struct LampSlideChartEditor: View {
                         chart.wrappedValue.source.translations = list.isEmpty ? nil : list
                     }
                 ))
+                .tint(Color.lampAccentMuted)
             }
     }
 
@@ -2396,7 +2407,8 @@ private struct LampSlideScripturePicker: View {
                 // Bordered, not filled: Play is the window's one filled
                 // button, and this one beside the selected slide and the
                 // placement control made four red marks competing.
-                .buttonStyle(.bordered)
+                .buttonStyle(.lampSecondary)
+                .controlSize(.small)
                 .disabled(selectedVerses.isEmpty)
             }
             .padding(.top, 8)

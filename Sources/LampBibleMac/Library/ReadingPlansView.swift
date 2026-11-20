@@ -135,7 +135,7 @@ struct ReadingPlansView: View {
                     message: "Make a plan from the passages you want to read, or add one someone has shared as a .lamp file."
                 ) {
                     Button("New Plan…", systemImage: "square.and.pencil") { isMakingPlan = true }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.lampProminent)
                     Button("Add Plan…", systemImage: "plus", action: showImporter)
                 }
             } else {
@@ -269,6 +269,7 @@ private struct ReadingPlanCard: View {
                             set: { model.setPlanSelected(plan.id, selected: $0) }
                         )
                     )
+                    .tint(Color.lampAccentMuted)
                     .toggleStyle(.switch)
 
                     if removableModule != nil {
@@ -400,7 +401,7 @@ private struct PlanDayReadings: View {
                     guard let first = day.readings.first else { return }
                     openReading(readingMode(activeReadingID: first.id))
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.lampProminent)
                 .disabled(day.readings.isEmpty)
 
                 Menu("More", systemImage: "ellipsis.circle") {

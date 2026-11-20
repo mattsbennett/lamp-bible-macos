@@ -167,6 +167,30 @@ extension NSColor {
             : NSColor.white
     }
 
+    /// The accent as a button's ground: the same hue with less of the window
+    /// in it, so a page of controls does not shout.
+    ///
+    /// The accent at full strength (`#DB344A` / `#EF4F63`) under a white label
+    /// is the loudest thing on most surfaces, and a window has several of
+    /// these at once. Dark lays it 30% back toward the pane it sits on.
+    /// Light takes the saturation out and holds the lightness instead:
+    /// laying it back toward a near-white ground gives a fill a white label
+    /// cannot sit on comfortably, and the owner chose the desaturated one
+    /// (2026-11-20).
+    ///
+    /// Contrast against white, by `ColorRules.md`'s bar for a fill carrying a
+    /// label (3:1, not the 4.5:1 that text must hold): 5.0:1 light, 5.7:1
+    /// dark. Both are better than the accent itself (4.56:1 and 3.52:1), so
+    /// this is a quieter button *and* a more legible one.
+    ///
+    /// Only a button's ground. The accent role itself is unchanged, and what
+    /// is selected or current still wears it.
+    static let lampAccentMuted = NSColor(name: nil) { appearance in
+        appearance.lampIsDark
+            ? NSColor(srgbRed: 0.691, green: 0.252, blue: 0.307, alpha: 1)
+            : NSColor(srgbRed: 0.739, green: 0.281, blue: 0.341, alpha: 1)
+    }
+
     /// A tile or row that can be chosen but is not: a chapter in the passage
     /// picker. Visible against an opaque popover in both appearances.
     static let lampTileFill = NSColor(name: nil) { appearance in
@@ -386,6 +410,9 @@ extension Color {
     static let lampPanelShadow = Color(nsColor: .lampPanelShadow)
 
     /// A choosable tile that is not chosen.
+    /// The accent as a button's ground, quieter than the accent itself.
+    static let lampAccentMuted = Color(nsColor: .lampAccentMuted)
+
     static let lampTileFill = Color(nsColor: .lampTileFill)
 
     /// A choosable tile laid on a popover or card.
@@ -581,6 +608,176 @@ struct LampTextButtonStyle: ButtonStyle {
     }
 }
 
+/// The metrics a Lamp button is drawn at. The standard one is what macOS
+/// calls `.large`: the owner found the regular size small for the app's own
+/// buttons (2026-11-20).
+///
+/// **Which size a control takes is decided by where it stands** (owner's rule,
+/// 2026-11-20, as already used elsewhere in the app):
+///
+/// - **Large** on a main panel or page, and in a sheet: the surface's own
+///   action, with room around it — Start Reading, Open, New Deck, Play, a
+///   sheet's footer, an empty state's one offer.
+/// - **Compact** (`.controlSize(.small)`) in a popover, in a secondary pane
+///   beside the work (the study tools, the assistant, the plan bar, the slide
+///   inspector), inside a list row, and in a header where it stands beside
+///   other small controls — the quiz header next to the day stepper, the
+///   writing list's header next to a bare `+`.
+///
+/// Size is the only thing that changes: every Lamp control is a capsule at
+/// every size, so a compact one is as fully rounded as a large one, with less
+/// padding and a smaller label.
+///
+/// This is not advice. A control put on the wrong side of it is visibly wrong:
+/// the search detail pane's `Open in Reader` wrapped onto two lines at the
+/// large size, because the padding took it wider than the column it sits in.
+private struct LampButtonMetrics {
+    let font: Font
+    let horizontal: CGFloat
+    let vertical: CGFloat
+
+    static func forSize(_ size: ControlSize) -> LampButtonMetrics {
+        switch size {
+        case .mini, .small:
+            return LampButtonMetrics(
+                font: .system(size: 12, weight: .medium), horizontal: 10, vertical: 4
+            )
+        default:
+            return LampButtonMetrics(
+                font: .system(size: 14, weight: .medium), horizontal: 16, vertical: 9
+            )
+        }
+    }
+}
+
+/// The button a surface's own action wears: the accent as a ground, quieted
+/// (`lampAccentMuted`), a white label, and a capsule.
+///
+/// Capsule rather than a rounded square, for every Lamp button: macOS draws
+/// its own bordered buttons as capsules, so a rounded-square one beside them
+/// reads as a corner that doesn't belong — the same reason
+/// `LampSegmentedPicker` takes `isCapsule` in a toolbar.
+struct LampProminentButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Drawn(configuration: configuration)
+    }
+
+    private struct Drawn: View {
+        let configuration: ButtonStyleConfiguration
+        @Environment(\.isEnabled) private var isEnabled
+        @Environment(\.controlSize) private var controlSize
+
+        var body: some View {
+            let metrics = LampButtonMetrics.forSize(controlSize)
+            configuration.label
+                .font(metrics.font)
+                .foregroundStyle(.white)
+                .padding(.horizontal, metrics.horizontal)
+                .padding(.vertical, metrics.vertical)
+                .background(Color.lampAccentMuted, in: Capsule(style: .continuous))
+                // Pressed and disabled are carried by the whole button rather
+                // than by a second colour, so there is one muted accent in the
+                // app and not three.
+                .opacity(configuration.isPressed ? 0.78 : 1)
+                .opacity(isEnabled ? 1 : 0.4)
+                .contentShape(Capsule(style: .continuous))
+        }
+    }
+}
+
+/// The button beside it: the same shape and size, on the neutral tile fill,
+/// with the label in the text's own colour. What `.bordered` was.
+struct LampSecondaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Drawn(configuration: configuration)
+    }
+
+    private struct Drawn: View {
+        let configuration: ButtonStyleConfiguration
+        @Environment(\.isEnabled) private var isEnabled
+        @Environment(\.controlSize) private var controlSize
+
+        var body: some View {
+            let metrics = LampButtonMetrics.forSize(controlSize)
+            configuration.label
+                .font(metrics.font)
+                .foregroundStyle(.primary)
+                .padding(.horizontal, metrics.horizontal)
+                .padding(.vertical, metrics.vertical)
+                .background(Color.lampTileFill, in: Capsule(style: .continuous))
+                .opacity(configuration.isPressed ? 0.7 : 1)
+                .opacity(isEnabled ? 1 : 0.4)
+                .contentShape(Capsule(style: .continuous))
+        }
+    }
+}
+
+/// A menu drawn as a Lamp button, with the chevron that says it opens one.
+///
+/// The chevron is drawn here rather than asked for: `.menuIndicator(.visible)`
+/// is honoured by the system's own menu styles, not by a custom button style,
+/// so a menu given `.lampSecondary` alone came out identical to a button and
+/// said nothing about opening.
+struct LampMenuButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Drawn(configuration: configuration)
+    }
+
+    private struct Drawn: View {
+        let configuration: ButtonStyleConfiguration
+        @Environment(\.isEnabled) private var isEnabled
+        @Environment(\.controlSize) private var controlSize
+
+        var body: some View {
+            let metrics = LampButtonMetrics.forSize(controlSize)
+            HStack(spacing: 6) {
+                configuration.label
+                Image(systemName: "chevron.down")
+                    .font(.system(size: controlSize == .small || controlSize == .mini ? 8 : 10,
+                                  weight: .semibold))
+                    .foregroundStyle(Color.lampSecondaryText)
+            }
+            .font(metrics.font)
+            .foregroundStyle(.primary)
+            .padding(.horizontal, metrics.horizontal)
+            .padding(.vertical, metrics.vertical)
+            .background(Color.lampTileFill, in: Capsule(style: .continuous))
+            .opacity(configuration.isPressed ? 0.7 : 1)
+            .opacity(isEnabled ? 1 : 0.4)
+            .contentShape(Capsule(style: .continuous))
+        }
+    }
+}
+
+extension ButtonStyle where Self == LampMenuButtonStyle {
+    /// A menu drawn as a button, with its chevron.
+    static var lampMenu: LampMenuButtonStyle { LampMenuButtonStyle() }
+}
+
+extension View {
+    /// A menu that reads as a button: the same ground, capsule and size as
+    /// `.lampSecondary`, with a chevron.
+    ///
+    /// A bare `Menu` draws as the system's pull-down — a rounded square at the
+    /// regular size — so one standing beside Lamp's own buttons was a
+    /// different shape and a different height. `.menuStyle(.button)` is what
+    /// hands the menu to a button style at all.
+    func lampMenu() -> some View {
+        menuStyle(.button)
+            .buttonStyle(.lampMenu)
+    }
+}
+
+extension ButtonStyle where Self == LampProminentButtonStyle {
+    /// The surface's own action: muted accent ground, white label, capsule.
+    static var lampProminent: LampProminentButtonStyle { LampProminentButtonStyle() }
+}
+
+extension ButtonStyle where Self == LampSecondaryButtonStyle {
+    /// The action beside the prominent one: neutral ground, same shape.
+    static var lampSecondary: LampSecondaryButtonStyle { LampSecondaryButtonStyle() }
+}
+
 extension ButtonStyle where Self == LampTextButtonStyle {
     /// Words alone, in the accent.
     static var lampText: LampTextButtonStyle { LampTextButtonStyle() }
@@ -608,26 +805,22 @@ struct LampSegmentedPicker<ID: Hashable>: View {
     let label: String
     let items: [Item]
     @Binding var selection: ID
-    /// Rounded fully, track and chosen segment alike, for a toolbar: the
-    /// toolbar sets its items on capsules of glass, and a rounded-square
-    /// segment inside one reads as a corner that doesn't belong.
-    let isCapsule: Bool
     @Environment(\.controlSize) private var controlSize
     @Environment(\.isEnabled) private var isEnabled
 
-    init(_ label: String, selection: Binding<ID>, items: [Item], isCapsule: Bool = false) {
+    init(_ label: String, selection: Binding<ID>, items: [Item]) {
         self.label = label
         self._selection = selection
         self.items = items
-        self.isCapsule = isCapsule
     }
 
-    /// The track's corners, or the chosen segment's two points inside them,
-    /// so the two curves keep the same centre.
+    /// Rounded fully, track and chosen segment alike, as every Lamp control
+    /// is: macOS draws its own buttons as capsules, so a rounded-square one
+    /// beside them reads as a corner that doesn't belong. This used to be a
+    /// toolbar-only choice, and the owner asked for it everywhere
+    /// (2026-11-20).
     private func shape(inset: CGFloat) -> AnyShape {
-        isCapsule
-            ? AnyShape(Capsule(style: .continuous))
-            : AnyShape(RoundedRectangle(cornerRadius: LampMetrics.tileRadius - inset, style: .continuous))
+        AnyShape(Capsule(style: .continuous))
     }
 
     /// The chosen segment, raised off the track: white on light; on dark a
@@ -641,8 +834,12 @@ struct LampSegmentedPicker<ID: Hashable>: View {
     }
 
     private var isSmall: Bool { controlSize == .small || controlSize == .mini }
-    private var height: CGFloat { isSmall ? 20 : 24 }
-    private var font: Font { .system(size: isSmall ? 11.5 : 13) }
+    /// The standard size matches a Lamp button's, so a toggle set beside one
+    /// is the same height (2026-11-20). A site that asks for `.small` keeps
+    /// the compact one: the analysis panes put these in a corner.
+    private var height: CGFloat { isSmall ? 20 : 32 }
+    private var font: Font { .system(size: isSmall ? 11.5 : 14, weight: .medium) }
+    private var horizontalPadding: CGFloat { isSmall ? 8 : 14 }
 
     var body: some View {
         HStack(spacing: 2) {
@@ -673,7 +870,7 @@ struct LampSegmentedPicker<ID: Hashable>: View {
             .font(font)
             .lineLimit(1)
             .fixedSize()
-            .padding(.horizontal, isSmall ? 8 : 10)
+            .padding(.horizontal, horizontalPadding)
             .frame(height: height)
             .foregroundStyle(isChosen ? AnyShapeStyle(.primary) : AnyShapeStyle(Color.lampSecondaryText))
             .background {

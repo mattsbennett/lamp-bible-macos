@@ -197,7 +197,7 @@ private struct ModuleInspectionView: View {
                     header
                     Spacer(minLength: 16)
                     Button("Build .lamp", systemImage: "shippingbox", action: buildAction)
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.lampProminent)
                         .disabled(!document.canBuild || isBuilding)
                         .help(buildHelp)
                 }
@@ -246,7 +246,7 @@ private struct ModuleInspectionView: View {
                 Button("Install in Library", systemImage: "square.and.arrow.down") {
                     installAction(result.outputURL)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.lampProminent)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 6)

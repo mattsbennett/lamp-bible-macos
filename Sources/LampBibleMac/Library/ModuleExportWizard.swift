@@ -138,7 +138,7 @@ struct ModuleExportWizard: View {
                 Button("Export…", systemImage: "square.and.arrow.up") {
                     chooseDestinationAndExport()
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.lampProminent)
                 .keyboardShortcut(.defaultAction)
                 .disabled(selectedChoice == nil || isExporting)
                 .help("Choose where to save the exported module")

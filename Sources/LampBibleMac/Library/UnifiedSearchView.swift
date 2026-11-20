@@ -1212,7 +1212,7 @@ struct UnifiedSearchView: View {
                 Label("All Results", systemImage: "chevron.left")
                     .font(.subheadline.weight(.medium))
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.lampSecondary)
             .controlSize(.small)
             .help("Back to the results from every kind")
         }
@@ -1437,7 +1437,8 @@ struct UnifiedSearchView: View {
                     saveSearch()
                     openReference(reference, translationID(of: result))
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.lampProminent)
+                .controlSize(.small)
             }
             // A highlight found can be taken off here, without going to it.
             if result.kind == .highlights, personalHighlightSetIDs.contains(result.moduleID),
@@ -1459,29 +1460,34 @@ struct UnifiedSearchView: View {
                     saveSearch()
                     openBook(result)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.lampProminent)
+                .controlSize(.small)
             } else if result.kind == .dictionary, let key = lexiconKey(of: result) {
                 if let analysable = analysableKey(of: result) {
                     Button("Analyse \(analysable)", systemImage: "chart.bar.xaxis") {
                         saveSearch()
                         analyse(analysable)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.lampProminent)
+                    .controlSize(.small)
                 }
                 Button("Look Up", systemImage: "character.book.closed") {
                     saveSearch()
                     openDictionaryEntry(key, result.title)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.lampSecondary)
+                .controlSize(.small)
             } else if [.devotional, .plan, .quiz].contains(result.kind) {
                 Button("Open \(result.kind.displayName)", systemImage: icon(for: result.kind)) {
                     saveSearch()
                     openKind(result)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.lampProminent)
+                .controlSize(.small)
             }
             Button("Copy", systemImage: "doc.on.doc") { copy(result) }
-                .buttonStyle(.bordered)
+                .buttonStyle(.lampSecondary)
+                .controlSize(.small)
             // How much of the chapter the passage above shows, set here
             // where it is read; it was a button opening the same passage
             // again in a popover, which had the setting.
@@ -1891,6 +1897,7 @@ struct UnifiedSearchView: View {
                 }
             }
         }
+        .lampMenu()
         .menuStyle(.borderlessButton)
         .fixedSize()
         .help("Find highlights by theme, colour or style")
@@ -1906,6 +1913,7 @@ struct UnifiedSearchView: View {
                     Image(nsImage: ReaderHighlighter.themeImage(theme))
                 }
             }
+            .tint(Color.lampAccentMuted)
         }
     }
 
@@ -2163,7 +2171,8 @@ private struct SearchHitPreview: View {
                 .font(.caption)
                 Spacer()
                 Button("Open in Reader", systemImage: "book", action: open)
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.lampProminent)
+                    .controlSize(.small)
             }
         }
         .padding(14)
@@ -2416,7 +2425,7 @@ private struct SearchLanding: View {
 
                 if let installModule {
                     Button("Install a Module…", action: installModule)
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.lampProminent)
                         .controlSize(.large)
                 }
 
@@ -2636,7 +2645,7 @@ private struct SearchNothingFound: View {
                 HStack(spacing: 10) {
                     ForEach(widenings) { widening in
                         Button(widening.title, action: widening.action)
-                            .buttonStyle(.bordered)
+                            .buttonStyle(.lampSecondary)
                             .controlSize(.large)
                     }
                 }

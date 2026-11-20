@@ -621,7 +621,8 @@ private struct AgentToolApprovalCard: View {
                         .help("Saves \(rule.ruleText) to this writing's settings")
                 }
                 Button("Allow") { answer(.allow) }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.lampProminent)
+                    .controlSize(.small)
                     .help("Allow this once")
             }
         }
@@ -2587,7 +2588,7 @@ struct NativeAgentChatView: View {
             Spacer()
             if connectionState != .connected && connectionState != .checking {
                 Button("Connect", systemImage: "person.badge.key") { connect() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.lampProminent)
                     .controlSize(.small)
             }
             if model.isRunning {
@@ -2625,7 +2626,8 @@ struct NativeAgentChatView: View {
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 360)
                 Button("Connect", systemImage: "safari") { connect() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.lampProminent)
+                    .controlSize(.small)
                     .disabled(connectionState == .notInstalled)
                 if connectionState == .notInstalled {
                     Link("Open installation guide", destination: provider.documentationURL)

@@ -364,7 +364,8 @@ struct TranslationReaderView: View, Equatable {
                 Button("Read in \(other.name)") {
                     workspace.openReference(reference, translationID: other.id)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.lampProminent)
+                .controlSize(.small)
             }
         }
     }
@@ -378,7 +379,8 @@ struct TranslationReaderView: View, Equatable {
                 Text("Install a translation .lamp module, or build one in Module Studio.")
             } actions: {
                 Button("Install Module…", action: showImporter)
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.lampProminent)
+                    .controlSize(.small)
             }
         } else if let request = planReadingChapterRequest {
             if loadedPlanReadingRequest == request, !planReadingChapters.isEmpty {

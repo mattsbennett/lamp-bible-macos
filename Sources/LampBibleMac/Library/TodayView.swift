@@ -67,7 +67,7 @@ struct TodayView: View {
                     message: "Today brings each day’s readings from your reading plans. Make a plan from the passages you want to read, or add one someone has shared as a .lamp file."
                 ) {
                     Button("New Plan…", systemImage: "square.and.pencil") { isMakingPlan = true }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.lampProminent)
                     Button("Add Plan…", systemImage: "plus", action: showImporter)
                 }
             } else {
@@ -236,7 +236,7 @@ struct TodayView: View {
                 Text("Choose which of your reading plans set the day’s readings.")
                     .foregroundStyle(Color.lampSecondaryText)
                 Button("Choose Plans", action: showPlans)
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.lampProminent)
                     .padding(.top, 4)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -607,9 +607,9 @@ private struct TodayPlanCard: View {
                 // Plain once the day is done, as on the phone: reading
                 // again is no longer the thing to do next.
                 if isDayDone {
-                    readButton.buttonStyle(.bordered)
+                    readButton.buttonStyle(.lampSecondary)
                 } else {
-                    readButton.buttonStyle(.borderedProminent)
+                    readButton.buttonStyle(.lampProminent)
                 }
             }
             .padding(.bottom, 12)
@@ -865,7 +865,7 @@ private struct TodayCompanionCard: View {
             Spacer(minLength: 0)
             // Tinted, so the way on reads as a button rather than a grey chip.
             Button(action.title, action: action.run)
-                .buttonStyle(.bordered)
+                .buttonStyle(.lampSecondary)
                 .tint(.accentColor)
                 .controlSize(.regular)
         }

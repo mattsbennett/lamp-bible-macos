@@ -431,6 +431,7 @@ private struct ReaderSettingsView: View {
                             )
                         }
                         Toggle("Follow the spoken verse", isOn: $followReadAloud)
+                        .tint(Color.lampAccentMuted)
                         LabeledContent {
                             Picker("Greek Words", selection: Binding(
                                 get: {
@@ -465,7 +466,9 @@ private struct ReaderSettingsView: View {
                     }
                     Section {
                         Toggle("Show Strong’s number hints", isOn: $showStrongsHints)
+                        .tint(Color.lampAccentMuted)
                         Toggle("Sort cross-references canonically", isOn: $canonicalCrossReferenceOrder)
+                        .tint(Color.lampAccentMuted)
                     } header: {
                         Text("Study Aids")
                     } footer: {
@@ -702,6 +705,7 @@ private struct ReaderSettingsView: View {
                     // stays findable and nothing else in Lamp mentions AI.
                     Section {
                         Toggle("Show AI Features", isOn: $aiFeaturesEnabled)
+                        .tint(Color.lampAccentMuted)
                     } header: {
                         Text("AI Features")
                     } footer: {
@@ -722,6 +726,7 @@ private struct ReaderSettingsView: View {
                     if aiFeaturesEnabled {
                     Section {
                         Toggle("Mark the assistant’s changes for review", isOn: $reviewMarksEnabled)
+                        .tint(Color.lampAccentMuted)
                     } header: {
                         Text("Writing")
                     } footer: {
@@ -741,6 +746,7 @@ private struct ReaderSettingsView: View {
                         AIProviderAccountsSettingsView()
                         Divider()
                         Toggle("Allow agents to query Lamp modules", isOn: $agentModuleAccessEnabled)
+                        .tint(Color.lampAccentMuted)
                         Picker("Module Access", selection: $agentModuleAccessScope) {
                             ForEach(AgentModuleAccessScope.allCases) { scope in
                                 Text(scope.title).tag(scope.rawValue)
@@ -751,6 +757,7 @@ private struct ReaderSettingsView: View {
                             "Include personal writing, notes, and highlights",
                             isOn: $agentPersonalContentEnabled
                         )
+                        .tint(Color.lampAccentMuted)
                         .disabled(!agentModuleAccessEnabled)
                         HStack {
                             Text(
@@ -798,6 +805,7 @@ private struct ReaderSettingsView: View {
                         .foregroundStyle(.secondary)
 
                         Toggle("Allow agents to start a writing", isOn: $agentAllowsWritingStarts)
+                        .tint(Color.lampAccentMuted)
                         Text(
                             """
                             When you ask, the agent in a reader chat can start \
@@ -820,6 +828,7 @@ private struct ReaderSettingsView: View {
                             "Allow other apps to read my library",
                             isOn: $agentAllowsExternalApps
                         )
+                        .tint(Color.lampAccentMuted)
                         .disabled(!agentModuleAccessEnabled)
                         Text(
                             """
@@ -835,6 +844,7 @@ private struct ReaderSettingsView: View {
                             "Allow other apps to change my writings",
                             isOn: $agentAllowsExternalWriting
                         )
+                        .tint(Color.lampAccentMuted)
                         .disabled(!agentModuleAccessEnabled || !agentAllowsExternalApps)
                         Text(
                             """
@@ -852,6 +862,7 @@ private struct ReaderSettingsView: View {
                             "Allow other apps to add reading plans",
                             isOn: $agentAllowsExternalReadingPlans
                         )
+                        .tint(Color.lampAccentMuted)
                         .disabled(!agentModuleAccessEnabled || !agentAllowsExternalApps)
                         Text(
                             """
@@ -900,6 +911,7 @@ private struct ReaderSettingsView: View {
                             }
                         }
                         Toggle("Daily reading reminder", isOn: $reminderEnabled)
+                        .tint(Color.lampAccentMuted)
                         DatePicker(
                             "Reminder Time",
                             selection: Binding(
@@ -925,10 +937,12 @@ private struct ReaderSettingsView: View {
                                 get: { softwareUpdater.automaticallyChecksForUpdates },
                                 set: { softwareUpdater.automaticallyChecksForUpdates = $0 }
                             ))
+                            .tint(Color.lampAccentMuted)
                             Toggle("Download and install updates automatically", isOn: Binding(
                                 get: { softwareUpdater.automaticallyDownloadsUpdates },
                                 set: { softwareUpdater.automaticallyDownloadsUpdates = $0 }
                             ))
+                            .tint(Color.lampAccentMuted)
                             .disabled(
                                 !softwareUpdater.automaticallyChecksForUpdates
                                     || !softwareUpdater.allowsAutomaticUpdates
@@ -989,6 +1003,7 @@ private struct ReaderSettingsView: View {
                             }
                         }
                         Toggle("Sync automatically when Lamp Bible opens", isOn: $automaticSync)
+                        .tint(Color.lampAccentMuted)
                             .disabled(syncController.provider == .off)
                         Text("Includes companion writing files, agent context, custom workspace skills, and revision history. Provider credentials and generated agent configuration stay on this Mac.")
                             .font(.caption)
@@ -1286,6 +1301,7 @@ private struct ReaderSettingsView: View {
                 if !enabled { onDisable() }
             }
         ))
+        .tint(Color.lampAccentMuted)
     }
 
     private var currentAgentAccessPolicy: LampAgentAccessPolicy {

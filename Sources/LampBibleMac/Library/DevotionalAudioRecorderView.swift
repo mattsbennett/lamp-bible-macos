@@ -48,7 +48,7 @@ struct DevotionalAudioRecorderView: View {
                     Button(isSaving ? "Saving…" : "Use Recording", systemImage: "checkmark") {
                         useRecording()
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.lampProminent)
                     .disabled(isSaving)
                 } else {
                     Button(
@@ -57,7 +57,7 @@ struct DevotionalAudioRecorderView: View {
                     ) {
                         recorder.isRecording ? recorder.stop() : startRecording()
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.lampProminent)
                 }
             }
         }

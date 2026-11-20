@@ -2126,8 +2126,7 @@ struct DevotionalEditorView: View {
             LampSegmentedPicker(
                 "Writing Surface",
                 selection: editorSurfaceSelection,
-                items: DevotionalEditorMode.allCases.map { .init(id: $0, title: $0.title) },
-                isCapsule: true
+                items: DevotionalEditorMode.allCases.map { .init(id: $0, title: $0.title) }
             )
             .disabled(!activeDocumentSupportsVisual)
             .help(activeDocumentSupportsVisual
@@ -2151,6 +2150,7 @@ struct DevotionalEditorView: View {
                 )) {
                     Label("Details", systemImage: "info.circle")
                 }
+                .tint(Color.lampAccentMuted)
                 .help(showsDetails && !showingAgentWorkspace ? "Hide details" : "Show details")
                 if aiFeaturesEnabled {
                     Toggle(isOn: Binding(
@@ -2166,6 +2166,7 @@ struct DevotionalEditorView: View {
                     )) {
                         Label("Assistant", systemImage: "sparkles")
                     }
+                    .tint(Color.lampAccentMuted)
                     .help(showingAgentWorkspace ? "Hide the assistant" : "Show the assistant")
                 }
             }

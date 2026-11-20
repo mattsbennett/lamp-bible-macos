@@ -114,6 +114,7 @@ struct WritingImportSheet: View {
                 Button("Untick All") { selection = [] }
                 Spacer()
                 Toggle("Only files with notes", isOn: $onlyWithNotes)
+                .tint(Color.lampAccentMuted)
                     .toggleStyle(.checkbox)
             }
             .controlSize(.small)
@@ -165,6 +166,7 @@ private struct WritingImportRow: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Toggle(isOn: $isSelected) { EmptyView() }
+                .tint(Color.lampAccentMuted)
                     .toggleStyle(.checkbox)
                     .labelsHidden()
                     .disabled(!canImport)

@@ -120,7 +120,7 @@ struct WritingEmptyState: View {
             message: "Studies, talks and devotionals you write are kept here, with every passage they cite a click away."
         ) {
             Button("New Writing", systemImage: "square.and.pencil", action: newWriting)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.lampProminent)
             Button("Import Writing…", systemImage: "square.and.arrow.down") {
                 isChoosingFiles = true
             }

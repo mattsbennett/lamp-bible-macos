@@ -166,7 +166,7 @@ struct BookModulesView: View {
                     message: "Books you add stand here on a shelf, each keeping your place, with every passage they cite a click away."
                 ) {
                     Button("Add Book…", systemImage: "plus", action: showImporter)
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.lampProminent)
                 }
             } else if showsShelf {
                 BookShelfView(
@@ -1506,7 +1506,7 @@ private struct BookSectionReaderView: View {
                             Button(link.displayDescription) {
                                 openReference(link.startReference)
                             }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(.lampSecondary)
                             .controlSize(.small)
                         }
                     }
@@ -1550,7 +1550,7 @@ private struct BookSectionReaderView: View {
                 }
             }
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.lampSecondary)
         .padding(.top, 24)
     }
 
@@ -2258,7 +2258,8 @@ private struct BookAudioView: View {
                     player.toggle(url: url, expectedDuration: media.duration)
                 }
                 .labelStyle(.iconOnly)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.lampProminent)
+                .controlSize(.small)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(label.isEmpty ? "Audio" : label).font(.headline)
                     Text(media.filename).font(.caption).foregroundStyle(.secondary)

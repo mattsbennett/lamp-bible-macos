@@ -73,7 +73,7 @@ struct PresentationsLibraryView: View {
                     message: "Decks you build from your writing, or begin here, are kept here, ready to edit or present."
                 ) {
                     Button("New Deck", systemImage: "plus", action: newDeck)
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.lampProminent)
                 }
             } else {
                 ScrollView {
@@ -113,14 +113,17 @@ struct PresentationsLibraryView: View {
         .searchable(text: $query, placement: .toolbar, prompt: "Find a deck")
         .toolbar {
             ToolbarItemGroup {
-                Picker(selection: $layoutRawValue) {
-                    ForEach(Layout.allCases) { layout in
-                        Label(layout.rawValue, systemImage: layout.systemImage).tag(layout.rawValue)
+                // `LampSegmentedPicker`, not the system's: Grid or List is a
+                // choice among modes, which ColorRules.md keeps clear of the
+                // accent, and the shelf was one of the last two panes still
+                // on the accent-filled system control.
+                LampSegmentedPicker(
+                    "View",
+                    selection: $layoutRawValue,
+                    items: Layout.allCases.map {
+                        .init(id: $0.rawValue, title: $0.rawValue, systemImage: $0.systemImage)
                     }
-                } label: {
-                    Label("View", systemImage: layout.systemImage)
-                }
-                .pickerStyle(.segmented)
+                )
                 .help("Show decks as covers or as a list")
                 Menu {
                     Picker("Sort By", selection: $sortRawValue) {

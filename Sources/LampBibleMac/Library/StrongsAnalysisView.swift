@@ -2142,6 +2142,7 @@ struct StrongsAnalysisPane: View {
             // to sit beside it is a tooltip rather than a line of prose in
             // front of the figures.
             Toggle(LampSeptuagintSection.OriginalLanguage.title, isOn: $showsGreek)
+            .tint(Color.lampAccentMuted)
                 .toggleStyle(.checkbox)
                 .font(.system(size: Self.chartFinePrintSize))
                 .help(LampSeptuagintSection.OriginalLanguage.note)

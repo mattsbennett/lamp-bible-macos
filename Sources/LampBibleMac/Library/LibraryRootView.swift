@@ -1453,6 +1453,7 @@ struct LibraryRootView: View {
             Toggle(isOn: readsSideBySide) {
                 Label(ReaderLayoutMode.sideBySide.title, systemImage: ReaderLayoutMode.sideBySide.systemImage)
             }
+            .tint(Color.lampAccentMuted)
             .toggleStyle(.button)
             .fittingToolbarLabel()
             .disabled(readerLayoutMode != .sideBySide && model.translations.count < 2)

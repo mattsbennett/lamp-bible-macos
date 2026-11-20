@@ -2244,7 +2244,7 @@ struct ReaderHighlightPalette: View {
             }
         }
         .menuStyle(.button)
-        .buttonStyle(.bordered)
+        .buttonStyle(.lampSecondary)
         .controlSize(.small)
         .fixedSize()
         .help(current.map { [$0.name, $0.description].compactMap { $0 }.joined(separator: " — ") }
