@@ -338,26 +338,41 @@ struct LibraryRootView: View {
 
     private var libraryInterface: some View {
         NavigationSplitView(columnVisibility: $sidebarVisibility) {
-            List(selection: $selection) {
-                Section {
-                    ForEach(LibrarySection.allCases.filter { $0 != .modules }) { section in
-                        Label(section.rawValue, systemImage: section.systemImage)
-                            .tag(LibrarySelection.section(section))
+            // The footer below the list rather than inset over it: inset, the
+            // rows scroll under it in a short window, and it needed a ground
+            // of its own to hide them, a different colour from the sidebar.
+            // Here the list stops above it and both sit on the one tint.
+            VStack(spacing: 0) {
+                List(selection: $selection) {
+                    Section {
+                        ForEach(LibrarySection.allCases.filter { $0 != .modules }) { section in
+                            Label(section.rawValue, systemImage: section.systemImage)
+                                .tag(LibrarySelection.section(section))
+                        }
+                    } header: {
+                        sidebarHeading("Study")
                     }
-                } header: {
-                    sidebarHeading("Study")
-                }
 
-                Section {
-                    Label(LibrarySection.modules.rawValue, systemImage: LibrarySection.modules.systemImage)
-                        .tag(LibrarySelection.section(.modules))
-                } header: {
-                    sidebarHeading("Library")
+                    Section {
+                        Label(LibrarySection.modules.rawValue, systemImage: LibrarySection.modules.systemImage)
+                            .tag(LibrarySelection.section(.modules))
+                    } header: {
+                        sidebarHeading("Library")
+                    }
                 }
+                // The list's own ground hidden so the tint reaches the material
+                // rather than sitting on a colour the list painted over it.
+                .scrollContentBackground(.hidden)
+
+                Button {
+                    openWindow(id: "add-to-library")
+                } label: {
+                    Label("Import or Create…", systemImage: "plus.square.on.square")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .padding()
             }
-            // The list's own ground hidden so the tint reaches the material
-            // rather than sitting on a colour the list painted over it.
-            .scrollContentBackground(.hidden)
             .background(Color.lampSidebarTint)
             .navigationTitle("Lamp Bible")
             // While a writing is edited in place, Writing's list button is
@@ -381,17 +396,6 @@ struct LibraryRootView: View {
                 } else {
                     sidebarVisibility = sidebarVisibilityBeforeEditing
                 }
-            }
-            .safeAreaInset(edge: .bottom) {
-                Button {
-                    openWindow(id: "add-to-library")
-                } label: {
-                    Label("Import or Create…", systemImage: "plus.square.on.square")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .buttonStyle(.plain)
-                .padding()
-                .background(.bar)
             }
         } detail: {
             detail
