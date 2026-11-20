@@ -325,10 +325,7 @@ struct ReaderChatSidebarView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        // A pane beside the reader's page, so it takes the ground every such
-        // pane takes. `.background` is the page's own colour, so the chat and
-        // the passage it is about were one surface with a hairline between.
-        .background(Color.lampInspectorFill)
+        .background(.background)
         .alert(
             "Could not start a chat from that turn",
             isPresented: Binding(

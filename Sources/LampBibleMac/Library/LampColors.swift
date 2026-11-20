@@ -172,11 +172,12 @@ extension NSColor {
             : NSColor(white: 1, alpha: 0.9)
     }
 
-    // `lampInspectorFill`, the ground every pane beside the page takes, is
-    // declared in `LampBibleMacSupport` (ChatSurfaceSupport.swift) rather than
-    // here: the conversation surfaces there are the ground of two of those
-    // panes — the writing's assistant and the reader's chat — and Support
-    // cannot see this module. Its doc comment carries the rule.
+    /// A side pane beside the page — the study tools — one step off it.
+    static let lampInspectorFill = NSColor(name: nil) { appearance in
+        appearance.lampIsDark
+            ? NSColor(srgbRed: 0.180, green: 0.180, blue: 0.188, alpha: 1)
+            : NSColor(srgbRed: 0.978, green: 0.978, blue: 0.982, alpha: 1)
+    }
 
     /// Behind a row or tile the pointer is over.
     static let lampRowHover = NSColor(name: nil) { appearance in

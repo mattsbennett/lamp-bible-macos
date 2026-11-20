@@ -1088,10 +1088,7 @@ struct DevotionalAgentWorkspaceView: View {
                 sessionPane
             }
         }
-        // A pane beside the writing, so it takes the ground every such pane
-        // takes. On the window background it was the page's own colour, and
-        // the two parted along a hairline alone.
-        .background(Color.lampInspectorFill)
+        .background(SwiftUI.Color(nsColor: .windowBackgroundColor))
         .onChange(of: errorMessage) { _, message in
             if message != nil { showsSetup = true }
         }
@@ -1566,9 +1563,7 @@ struct DevotionalAgentWorkspaceView: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // The pane's own ground, as the empty state takes: this is what the
-        // pane shows before anything runs in it, and a colour of its own here
-        // would change the pane's ground for the moment it is on screen.
+        .background(SwiftUI.Color(nsColor: .windowBackgroundColor))
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Opening this writing's workspace")
     }
@@ -1618,12 +1613,7 @@ struct DevotionalAgentWorkspaceView: View {
                 .padding(.top, 4)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // No ground of its own: nothing is running, so this is the pane's
-            // own chrome and takes the pane's ground. On the text background
-            // it was the writing's colour, which made the empty pane read as
-            // more page rather than as a pane waiting to be started. A running
-            // terminal does take that colour, in `inset()`, because its text
-            // is then the thing being read.
+            .background(SwiftUI.Color(nsColor: .textBackgroundColor))
         }
     }
 
