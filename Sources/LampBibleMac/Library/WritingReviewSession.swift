@@ -362,3 +362,44 @@ final class WritingReviewSession: ObservableObject {
         }
     }
 }
+
+/// Makes the marks a reconciler pass asked for, in the order it asked.
+///
+/// Synchronous and on the main actor by design. `WritingReviewWork` carries
+/// each save's marks into that save's body in order, so a carry of pre-draft
+/// text that runs after a turn's marks were made takes those marks back to
+/// the pre-draft text and retires them. The caller therefore makes these in
+/// the same uninterrupted stretch that makes the editor's content the draft:
+/// then every save reserved before them saved pre-draft text and runs first,
+/// and every save reserved after them saved post-draft text. Put an `await`
+/// between the two and that ordering is gone.
+///
+/// See `DevotionalAgentDraftReconciler.ReviewChange`, which is why a pass
+/// names its marks rather than making them.
+@MainActor
+struct WritingReviewChanges {
+    let writingID: String
+    let store: LampWritingReviewStore?
+
+    func make(_ changes: [DevotionalAgentDraftReconciler.ReviewChange]) {
+        for change in changes {
+            switch change {
+            case .assistantWrote(let from, let to, let turnID):
+                update { $0.markingAssistantChange(from: from, to: to, turnID: turnID) }
+                WritingReviewTexts.shared.remember(to, for: writingID)
+            case .turnsUndone(let turns, let from, let to):
+                update { $0.undoingTurns(turns, from: from, to: to) }
+            }
+        }
+    }
+
+    private func update(
+        _ change: @escaping @Sendable (LampWritingReview) -> LampWritingReview
+    ) {
+        guard let store else { return }
+        let writingID = writingID
+        // In line with the saves' carries, off the main actor
+        // (`WritingReviewWork`).
+        WritingReviewWork.shared.run { _ = try? store.update(writingID: writingID, change) }
+    }
+}

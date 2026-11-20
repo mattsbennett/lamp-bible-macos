@@ -95,8 +95,14 @@ enum WritingChatTurns {
         DevotionalAgentDraftReconciler(
             workspace: workspace,
             writingID: writingID,
-            applicationSupportURL: LampAgentDescriptorStore.defaultApplicationSupportURL(),
-            reviewStore: WritingReviewMarks.store(libraryRootURL: libraryRootURL)
+            applicationSupportURL: LampAgentDescriptorStore.defaultApplicationSupportURL()
+        )
+    }
+
+    /// Makes the marks a pass asked for, where the writer keeps marks.
+    static func reviewChanges(writingID: String, libraryRootURL: URL) -> WritingReviewChanges {
+        WritingReviewChanges(
+            writingID: writingID, store: WritingReviewMarks.store(libraryRootURL: libraryRootURL)
         )
     }
 
@@ -246,12 +252,19 @@ enum WritingChatTurns {
         guard !isWatched(writingID) else { return .unchanged }
         let (writing, workspace, root) = try located(writingID, in: libraryModel)
         let current = writing.displayMarkdown
-        let outcome = try reconciler(writingID: writingID, workspace: workspace, libraryRootURL: root)
+        let pass = try await reconciler(writingID: writingID, workspace: workspace, libraryRootURL: root)
             .prepare(writing: current, turnID: turnID)
-        if case .take(let draft) = outcome, draft != current {
-            try await save(draft, as: writing, in: libraryModel)
+        var taking: String?
+        if case .take(let draft) = pass.outcome, draft != current { taking = draft }
+        // The marks, then the save, with nothing awaited between them: a
+        // save reserved after them saved the draft's text and runs after,
+        // and one reserved before saved what came before it. See
+        // `DevotionalAgentDraftReconciler.ReviewChange`.
+        reviewChanges(writingID: writingID, libraryRootURL: root).make(pass.reviewChanges)
+        if let taking {
+            try await save(taking, as: writing, in: libraryModel)
         }
-        return outcome
+        return pass.outcome
     }
 
     /// Takes in what a turn wrote to the writing's draft when no window is
@@ -278,12 +291,19 @@ enum WritingChatTurns {
         guard !isWatched(writingID) else { return .unchanged }
         let (writing, workspace, root) = try located(writingID, in: libraryModel)
         let current = writing.displayMarkdown
-        let outcome = try reconciler(writingID: writingID, workspace: workspace, libraryRootURL: root)
+        let pass = try await reconciler(writingID: writingID, workspace: workspace, libraryRootURL: root)
             .reconcileUnwatched(writing: current, turnID: turnID)
-        if case .take(let draft) = outcome, draft != current {
-            try await save(draft, as: writing, in: libraryModel)
+        var taking: String?
+        if case .take(let draft) = pass.outcome, draft != current { taking = draft }
+        // The marks, then the save, with nothing awaited between them: a
+        // save reserved after them saved the draft's text and runs after,
+        // and one reserved before saved what came before it. See
+        // `DevotionalAgentDraftReconciler.ReviewChange`.
+        reviewChanges(writingID: writingID, libraryRootURL: root).make(pass.reviewChanges)
+        if let taking {
+            try await save(taking, as: writing, in: libraryModel)
         }
-        return outcome
+        return pass.outcome
     }
 
     private static func located(

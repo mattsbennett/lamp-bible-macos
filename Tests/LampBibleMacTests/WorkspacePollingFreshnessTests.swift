@@ -51,13 +51,27 @@ struct WorkspacePollingFreshnessTests {
     }
 
     /// Everything the 400ms poll calls, directly or one level down.
+    ///
+    /// The poll is asked for by `schedulePoll` and does its work in `runPoll`,
+    /// behind the pane's job queue. `apply` is what takes a pass's answer up,
+    /// and it decides whether the writer has moved on since — so it must read
+    /// the editor's live text, never the frozen property.
     private let reachedByThePoll = [
-        "refreshWorkspace",
+        "schedulePoll",
+        "runPoll",
+        "apply",
+        // Not the poll, but the same trap: it runs inside the same
+        // long-lived `.task` closure, after an await that can last seconds,
+        // and it decides which side of a conflict is kept.
+        "prepareWorkspace",
         "refreshWorkspaceMetadata",
         "importPresentationArtifactIfNeeded",
         "resolveManuscriptNotes",
         "collectTerminalTurns",
         "manuscript",
+        // Asked for on every keystroke rather than by the poll, but it runs
+        // in the same queue and reads the same live text.
+        "runEditorSync",
     ]
 
     @Test func thePollingLoopNeverReadsTheFrozenDraftProperty() throws {

@@ -51,8 +51,6 @@ struct WorkspaceFileOwnershipTests {
                 "codexSkillsDirectory": "builds a path",
                 "claudeSkillsDirectory": "builds a path",
                 "presentationImportMarkerURL": "builds a path",
-                "writeDraftContent": Self.draftPairReason,
-                "readDraft": Self.draftPairReason,
             ]
         ),
         Surface(
@@ -89,15 +87,6 @@ struct WorkspaceFileOwnershipTests {
             outsideTheOwner: [:]
         ),
     ]
-
-    /// Why the draft is not on the owner yet.
-    private static let draftPairReason = """
-        the draft pair, left for its own change: the reconciler writes the draft \
-        from four places around turn ordering and undo, and preparation's one \
-        point of contact is its create-if-missing on draft.md, which can only \
-        race while the draft does not yet exist — and the reconciler reads the \
-        draft before it writes.
-        """
 
     private static func source(_ relativePath: String) throws -> String {
         let url = URL(fileURLWithPath: #filePath)
@@ -177,6 +166,40 @@ struct WorkspaceFileOwnershipTests {
             `workspaceFiles(inLibraryAt:stagingIn:)` exports the live library into \
             the pass's scratch directory, so it reads workspaces a pane may be \
             part-way through writing.
+            """
+        )
+    }
+
+    /// Every pass the pane asks for must be awaited.
+    ///
+    /// Annotating a function does not put a call on the actor: in this
+    /// project's Swift 5 mode, calling it without `await` from a synchronous
+    /// main-actor context is a **warning**, and the call then runs inline on
+    /// the thread that drew the frame. Three of the pane's five passes —
+    /// the one on opening, every poll and every keystroke — shipped that way
+    /// in this change's first draft, through a green build and a clean
+    /// warning count, because the count was read from a log rather than the
+    /// call sites. So the call sites are read here.
+    @Test func thePanesPassesAreAwaited() throws {
+        let source = try Self.source(
+            "Sources/LampBibleMac/Library/DevotionalAgentWorkspaceView.swift"
+        )
+        var unawaited: [String] = []
+        for line in source.components(separatedBy: "\n") {
+            guard line.contains("reconciler(for:") else { continue }
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.hasPrefix("private func"), !trimmed.hasPrefix("///") else { continue }
+            if !trimmed.contains("await") {
+                unawaited.append(trimmed)
+            }
+        }
+        #expect(
+            unawaited.isEmpty,
+            """
+            These calls into the reconciler are not awaited, so they run on \
+            whoever called them instead of on `WritingWorkspaceFiles`: \
+            \(unawaited.joined(separator: " / ")). In Swift 5 mode the compiler \
+            only warns about this.
             """
         )
     }

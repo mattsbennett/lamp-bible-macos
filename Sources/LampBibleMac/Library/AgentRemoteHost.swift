@@ -957,7 +957,7 @@ final class AgentRemoteHost: ObservableObject {
         let store = WritingReviewMarks.store(libraryRootURL: root)
         let workspace = open.workspace
         let (review, draft) = await Task.detached(priority: .userInitiated) {
-            (try? store?.review(writingID: writingID), try? DevotionalAgentWorkspaceStore.readDraft(from: workspace))
+            (try? store?.review(writingID: writingID), try? await DevotionalAgentWorkspaceStore.readDraft(from: workspace))
         }.value
         return WritingChatTurns.prompt(
             for: text, focus: focus, review: review ?? nil, writing: draft ?? writing.displayMarkdown

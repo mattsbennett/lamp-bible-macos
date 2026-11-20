@@ -401,6 +401,7 @@ enum DevotionalAgentWorkspaceStore {
         return workspace
     }
 
+    @WritingWorkspaceFiles
     static func writeDraftContent(_ draft: String, to workspace: URL) throws {
         try draft.write(
             to: workspace.appendingPathComponent(draftFilename),
@@ -419,6 +420,7 @@ enum DevotionalAgentWorkspaceStore {
         try updateInstructions(in: workspace)
     }
 
+    @WritingWorkspaceFiles
     static func readDraft(from workspace: URL) throws -> String {
         try String(contentsOf: workspace.appendingPathComponent(draftFilename), encoding: .utf8)
     }
@@ -733,6 +735,65 @@ enum DevotionalAgentWorkspaceStore {
 
 }
 
+/// One pane's workspace work, in the order it asked for it, and the
+/// editor's text as it stands now.
+///
+/// Every pass is a job on `WritingWorkspaceFiles`, so each one suspends.
+/// Left to run as they were queued, a poll could overtake a keystroke's
+/// synchronise and reconcile against text the writer had already moved past
+/// — the draft would then look like the newer side, and taking it would put
+/// the keystrokes back. Chained, a job runs only once the one before it has
+/// finished, including its main-actor tail, so what that tail recorded is
+/// there to be read.
+///
+/// `editorText` lives here rather than being read from the view because a
+/// view's stored properties stop changing the moment a long-lived closure
+/// captures them, which is why the pane keeps its live text here. A job
+/// runs, so a synchronise that waited out a long import writes what the
+/// writer has now rather than what they had when it was queued.
+@MainActor
+final class WritingWorkspaceWork {
+    /// The editor's text as it stands. Set before each job is asked for.
+    var editorText = ""
+    private var tail: Task<Void, Never>?
+    private var pollWaiting = false
+
+    func run(_ job: @escaping @MainActor () async -> Void) {
+        let previous = tail
+        tail = Task { @MainActor in
+            await previous?.value
+            await job()
+        }
+    }
+
+    /// At most one poll waiting. A pass that waits out a multi-second
+    /// import would otherwise find a dozen more behind it, each reading the
+    /// same files to the same answer.
+    func poll(_ job: @escaping @MainActor () async -> Void) {
+        guard !pollWaiting else { return }
+        pollWaiting = true
+        run { [weak self] in
+            self?.pollWaiting = false
+            await job()
+        }
+    }
+
+    /// Runs after everything already asked for, and gives its answer back.
+    /// The prompt's draft read uses this so it describes the marks against
+    /// the draft the agent will actually read, not one a keystroke behind.
+    func afterEverything<Value: Sendable>(
+        _ job: @escaping @MainActor () async -> Value
+    ) async -> Value {
+        let previous = tail
+        let work = Task { @MainActor in
+            await previous?.value
+            return await job()
+        }
+        tail = Task { @MainActor in _ = await work.value }
+        return await work.value
+    }
+}
+
 /// The small shared surface the writing editor needs in order to discover companion
 /// documents without exposing the agent pane's storage implementation.
 enum DevotionalAgentWorkspaceFiles {
@@ -885,6 +946,8 @@ struct DevotionalAgentWorkspaceView: View {
     /// items mid-animation and every button greyed for a moment (measured:
     /// a 5.9 dip in its brightness, against 0.00 with this). It follows one
     /// reveal later instead, with the placeholder in its place.
+    /// This pane's workspace jobs, in order, and the editor's live text.
+    @State private var work = WritingWorkspaceWork()
     @State private var sessionCanMount = false
     @State private var providerConnection = AIProviderConnectionState.checking
     /// The setup was opened because the provider needed it,
@@ -1059,14 +1122,18 @@ struct DevotionalAgentWorkspaceView: View {
             // while it is open (`WritingChatTurns.watch`).
             let watch = WritingChatTurns.watch(writingID: devotionalID)
             defer { watch.end() }
+            // Before anything can read it. A pass that ran against the empty
+            // string would find the draft newer than "the writing" and take
+            // it, and preparation is allowed to fail.
+            work.editorText = draftMarkdown
             await prepareWorkspace()
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(400))
-                refreshWorkspace()
+                schedulePoll()
             }
         }
         .onChange(of: draftMarkdown) { _, draft in
-            synchronizeEditorDraft(draft)
+            scheduleEditorSync(draft)
         }
         .onChange(of: contextDocument) { _, document in
             Task { await synchronizeContext(document) }
@@ -1082,7 +1149,7 @@ struct DevotionalAgentWorkspaceView: View {
                 documentTitle: "Main Prose",
                 revisions: revisions
             ) { markdown in
-                restoreRevision(markdown)
+                Task { await restoreRevision(markdown) }
             }
         }
         .sheet(item: $skillEditorRequest) { request in
@@ -1414,21 +1481,29 @@ struct DevotionalAgentWorkspaceView: View {
                     provider: selectedProvider,
                     workspace: workspaceURL,
                     preparePrompt: { [editorFocus, libraryRootURL, devotionalID] message in
-                        // The draft as the agent will read it, which is
-                        // where the marks are found; read off the main
-                        // actor, since another writer can hold the marks
-                        // file's lock for as long as a long draft takes.
+                        // The marks file read off the main actor, since
+                        // another writer can hold its lock for as long as a
+                        // long draft takes, and that should not hold up a
+                        // keystroke's synchronise.
                         let store = WritingReviewMarks.store(libraryRootURL: libraryRootURL)
-                        let (draft, review) = await Task.detached(priority: .userInitiated) {
-                            (
-                                (try? DevotionalAgentWorkspaceStore.readDraft(from: workspaceURL)) ?? "",
-                                try? store?.review(writingID: devotionalID)
-                            )
+                        async let review = Task.detached(priority: .userInitiated) {
+                            try? store?.review(writingID: devotionalID)
                         }.value
-                        return WritingChatTurns.prompt(for: message, focus: editorFocus, review: review, writing: draft)
+                        // The draft behind everything this pane has asked
+                        // for, so the prompt describes the marks against the
+                        // draft the agent will actually read rather than one
+                        // a keystroke behind. Actors schedule by priority,
+                        // not arrival, so a detached read of it could
+                        // otherwise overtake a queued synchronise.
+                        let draft = await work.afterEverything {
+                            (try? await DevotionalAgentWorkspaceStore.readDraft(from: workspaceURL)) ?? ""
+                        }
+                        return WritingChatTurns.prompt(
+                            for: message, focus: editorFocus, review: await review, writing: draft
+                        )
                     },
                     onRunningChanged: { chatIsReplying = $0 },
-                    revertTurn: { undoTurn($0) },
+                    revertTurn: { await undoTurn($0) },
                     onTurnChanged: { turn in
                         // What the finishing turn wrote is collected while
                         // it is still the current one. The poll runs every
@@ -1438,7 +1513,7 @@ struct DevotionalAgentWorkspaceView: View {
                         // question, whose undo then put the draft back past
                         // work it never did.
                         guard turn != chatTurn else { return }
-                        refreshWorkspace()
+                        schedulePoll()
                         chatTurn = turn
                     }
                 )
@@ -1562,7 +1637,10 @@ struct DevotionalAgentWorkspaceView: View {
         do {
             let workspace = try await WritingChatTurns.prepare(
                 writingID: devotionalID,
-                draft: draftMarkdown,
+                // The box, not the property: this closure's copy of
+                // `draftMarkdown` froze when the pane opened, and this is
+                // the text a workspace with no draft yet is created from.
+                draft: work.editorText,
                 context: contextDocument,
                 policy: agentAccessPolicy,
                 libraryRootURL: libraryRootURL,
@@ -1577,8 +1655,17 @@ struct DevotionalAgentWorkspaceView: View {
             workspaceURL = workspace
             writeEditorFocus(editorFocus)
 
-            apply(try reconciler(for: workspace).prepare(
-                writing: draftMarkdown,
+            // The editor's text as it stands now, taken from the box
+            // rather than from `draftMarkdown`: preparing the workspace can
+            // wait seconds on the owner, the writer can type through it, and
+            // this closure's copy of the property froze when the pane opened.
+            // Keystrokes in that window do reach the box, queuing no
+            // synchronise because there was no workspace yet — so writing the
+            // property back here erased them, and the pass that followed took
+            // the draft over text the writer had just typed.
+            let opening = work.editorText
+            apply(try await reconciler(for: workspace).prepare(
+                writing: opening,
                 provider: activeProvider?.shortName,
                 // A run outlives its pane, so reopening is when its work
                 // is found — and it belongs to the turn that asked for it.
@@ -1592,7 +1679,7 @@ struct DevotionalAgentWorkspaceView: View {
                     ?? KeptAgentChats.existing(
                         provider: selectedProvider, workspace: workspace
                     )?.currentTurn
-            ), in: workspace)
+            ), reconciledWith: opening)
             await refreshWorkspaceMetadata(in: workspace)
             Task { await importPresentationArtifactIfNeeded(in: workspace) }
         } catch {
@@ -1600,12 +1687,26 @@ struct DevotionalAgentWorkspaceView: View {
         }
     }
 
-    private func refreshWorkspace() {
+    /// Asks for a pass, behind whatever this pane has already asked for.
+    private func schedulePoll() {
         guard let workspaceURL else { return }
+        work.poll { await runPoll(in: workspaceURL) }
+    }
+
+    private func runPoll(in workspaceURL: URL) async {
         do {
+            // Read when the job runs, not when it was asked for: the
+            // writer may have typed through a long import since.
+            let writing = work.editorText
             apply(
-                try reconciler(for: workspaceURL).reconcile(
-                    writing: writingNow,
+                try await reconciler(for: workspaceURL).reconcile(
+                    writing: writing,
+                    // Where this pane last saw the two agree. Without it a
+                    // poll that ran while a keystroke's synchronise was
+                    // still queued read the editor being ahead of the draft
+                    // as another window's work, and took the draft back
+                    // over the writer's unsynced typing.
+                    lastKnownMarker: lastSyncedDraft,
                     provider: activeProvider?.shortName,
                     // Asked for, not waited for. What this pane was last
                     // told can be a change SwiftUI never delivered — two
@@ -1616,7 +1717,7 @@ struct DevotionalAgentWorkspaceView: View {
                             provider: selectedProvider, workspace: workspaceURL
                         )?.takeTurnForAttribution()
                 ),
-                in: workspaceURL
+                reconciledWith: writing
             )
             Task { await refreshWorkspaceMetadata(in: workspaceURL) }
             Task { await importPresentationArtifactIfNeeded(in: workspaceURL) }
@@ -1633,10 +1734,52 @@ struct DevotionalAgentWorkspaceView: View {
         WritingChatTurns.reconciler(writingID: devotionalID, workspace: workspace, libraryRootURL: libraryRootURL)
     }
 
+    /// Takes up what a pass decided, on the main actor.
+    ///
+    /// `reconciledWith` is the text the pass was given. The writer can have
+    /// typed on while it ran, and an outcome reached about text they have
+    /// moved past would put those keystrokes back if it were applied — so
+    /// it is dropped and another pass asked for instead. Only what the pass
+    /// *left* is taken either way: those are facts about the files it
+    /// wrote, and reading them back here instead would read whatever
+    /// another window had written in the meantime.
+    ///
+    /// Assigned only on a real change: this runs several times a second,
+    /// and assigning `@State` at all redraws the pane whether the value
+    /// differs or not.
+    ///
+    /// The history is **not** read here. Reading it decodes every file in
+    /// the folder, and this is the polling path: that read belongs to
+    /// `refreshWorkspaceMetadata`, which lists the folder first and only
+    /// reads when the listing says it has moved.
     private func apply(
-        _ outcome: DevotionalAgentDraftReconciler.Outcome, in workspace: URL
+        _ pass: DevotionalAgentDraftReconciler.Pass<DevotionalAgentDraftReconciler.Outcome>,
+        reconciledWith writing: String
     ) {
-        switch outcome {
+        if let draft = pass.draftLeft, draft != workspaceDraft { workspaceDraft = draft }
+        if let marker = pass.markerLeft, marker != lastSyncedDraft { lastSyncedDraft = marker }
+        guard work.editorText == writing else {
+            // The writer typed while the pass ran, so its answer is about
+            // text they have moved past and applying it would put those
+            // keystrokes back. The next pass settles it — and for a draft
+            // the agent wrote, that settling is the writer's text staying
+            // and the draft going to the history, which is the resolution
+            // `.keep` describes. Said here, because the writer would
+            // otherwise watch a turn finish and see nothing change.
+            if case .take = pass.outcome {
+                contextNote = """
+                    A draft written outside the editor was not applied: you had edited \
+                    this writing since. Your text is unchanged, and the draft is in the \
+                    history below.
+                    """
+            }
+            schedulePoll()
+            return
+        }
+        // The marks, then the text, in one stretch with nothing awaited
+        // between them — see `DevotionalAgentDraftReconciler.ReviewChange`.
+        reviewChanges.make(pass.reviewChanges)
+        switch pass.outcome {
         case .unchanged:
             break
         case .take(let draft), .adopt(let draft):
@@ -1644,40 +1787,53 @@ struct DevotionalAgentWorkspaceView: View {
             // under its name. This pane takes the text and records
             // nothing — but it does have to take it, or its own next save
             // writes the older copy back over the newer one.
+            //
+            // The box is told here rather than waiting for SwiftUI to
+            // deliver the change back through `draftMarkdown`: a pass that
+            // ran in that gap would reconcile the text this one replaced
+            // and import the same draft a second time.
+            work.editorText = draft
             importDraft(draft)
         case .keep(let note):
             contextNote = note
         }
-        // Assigned only on a real change: this runs several times a
-        // second, and assigning `@State` at all redraws the pane whether
-        // or not the value differs.
-        if let draft = try? DevotionalAgentWorkspaceStore.readDraft(from: workspace),
-           draft != workspaceDraft {
-            workspaceDraft = draft
-        }
-        if let marker = reconciler(for: workspace).marker(), marker != lastSyncedDraft {
-            lastSyncedDraft = marker
-        }
-        // The history is **not** read here. Reading it decodes every file
-        // in the folder, and this is the polling path: that read belongs
-        // to `refreshWorkspaceMetadata`, which lists the folder first and
-        // only reads when the listing says it has moved.
     }
 
-    private func synchronizeEditorDraft(_ draft: String) {
+    /// Makes the marks a pass asked for, where the writer keeps marks.
+    private var reviewChanges: WritingReviewChanges {
+        WritingChatTurns.reviewChanges(writingID: devotionalID, libraryRootURL: libraryRootURL)
+    }
+
+    /// The writer's own change, on its way to the workspace.
+    ///
+    /// The text is read when the job runs rather than taken from the
+    /// keystroke that asked for it, so a synchronise that waited out a long
+    /// import writes what the writer has now. That also makes a queued
+    /// synchronise idempotent: several keystrokes' jobs write the same
+    /// final text, and the ones that find nothing left to do say so.
+    private func scheduleEditorSync(_ draft: String) {
+        work.editorText = draft
         guard let workspaceURL else { return }
+        work.run { await runEditorSync(in: workspaceURL) }
+    }
+
+    private func runEditorSync(in workspaceURL: URL) async {
+        let draft = work.editorText
+        guard draft != lastSyncedDraft else { return }
         do {
-            try reconciler(for: workspaceURL).synchronize(
+            let pass = try await reconciler(for: workspaceURL).synchronize(
                 writing: draft,
                 // Where this pane last saw the two agree, so that text
                 // another window has put there since is filed rather than
-                // written over.
+                // written over. Read here, after everything this pane
+                // asked for earlier has finished writing it.
                 lastKnownMarker: lastSyncedDraft,
                 provider: activeProvider?.shortName,
                 turnID: chatTurn
             )
-            if lastSyncedDraft != draft { lastSyncedDraft = draft }
-            if workspaceDraft != draft { workspaceDraft = draft }
+            if let marker = pass.markerLeft, marker != lastSyncedDraft { lastSyncedDraft = marker }
+            if let left = pass.draftLeft, left != workspaceDraft { workspaceDraft = left }
+            reviewChanges.make(pass.reviewChanges)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -1715,71 +1871,78 @@ struct DevotionalAgentWorkspaceView: View {
         }
     }
 
-    /// The writing as Lamp holds it, read live.
-    ///
-    /// Not `draftMarkdown`. The polling task and the chat's turn observer
-    /// are long-lived closures holding the view struct as it was when they
-    /// were made, and a plain `let` in that struct keeps whatever it was
-    /// given — for ever. `@State` reads stay live because they go through
-    /// SwiftUI's storage, and `lastSyncedDraft` follows the editor: every
-    /// change it makes is written to the workspace and marked synced in
-    /// the same pass. Read through the stale copy, "has the writing moved
-    /// since?" was answered about the writing as it was hours ago, and the
-    /// answer decided which side of a conflict was kept.
-    private var writingNow: String { lastSyncedDraft ?? draftMarkdown }
 
     /// Puts the draft back as it was before these turns, and says whether
     /// it could. The deciding is the reconciler's; this is what to do with
     /// its answer.
+    ///
+    /// Behind everything this pane has already asked for: an undo that
+    /// overtook a queued synchronise would put back text the writer has
+    /// since typed over.
     @discardableResult
-    private func undoTurn(_ turns: [UUID]) -> Bool {
+    private func undoTurn(_ turns: [UUID]) async -> Bool {
         guard let workspaceURL else { return false }
-        do {
-            switch try reconciler(for: workspaceURL).undo(
-                turns: turns, writing: writingNow, provider: activeProvider?.shortName
-            ) {
-            case .refused(let reason):
-                errorMessage = reason
+        return await work.afterEverything {
+            do {
+                let pass = try await reconciler(for: workspaceURL).undo(
+                    turns: turns,
+                    writing: work.editorText,
+                    provider: activeProvider?.shortName
+                )
+                switch pass.outcome {
+                case .refused(let reason):
+                    errorMessage = reason
+                    return false
+                case .nothingToPutBack:
+                    reviewChanges.make(pass.reviewChanges)
+                    refreshAfterWriting(pass, in: workspaceURL)
+                    return true
+                case .restored(let markdown):
+                    // The marks, then the text, with nothing awaited
+                    // between them.
+                    reviewChanges.make(pass.reviewChanges)
+                    work.editorText = markdown
+                    importDraft(markdown)
+                    refreshAfterWriting(pass, in: workspaceURL)
+                    return true
+                }
+            } catch {
+                errorMessage = error.localizedDescription
                 return false
-            case .nothingToPutBack:
-                refreshAfterWriting(in: workspaceURL)
-                return true
-            case .restored(let markdown):
-                importDraft(markdown)
-                refreshAfterWriting(in: workspaceURL)
-                return true
             }
-        } catch {
-            errorMessage = error.localizedDescription
-            return false
         }
     }
 
     @discardableResult
-    private func restoreRevision(_ markdown: String) -> Bool {
+    private func restoreRevision(_ markdown: String) async -> Bool {
         guard let workspaceURL else { return false }
-        do {
-            let restored = try reconciler(for: workspaceURL).restore(
-                markdown, writing: writingNow, provider: activeProvider?.shortName
-            )
-            importDraft(restored)
-            refreshAfterWriting(in: workspaceURL)
-            return true
-        } catch {
-            errorMessage = error.localizedDescription
-            return false
+        return await work.afterEverything {
+            do {
+                let pass = try await reconciler(for: workspaceURL).restore(
+                    markdown, writing: work.editorText, provider: activeProvider?.shortName
+                )
+                reviewChanges.make(pass.reviewChanges)
+                work.editorText = pass.outcome
+                importDraft(pass.outcome)
+                refreshAfterWriting(pass, in: workspaceURL)
+                return true
+            } catch {
+                errorMessage = error.localizedDescription
+                return false
+            }
         }
     }
 
     /// What this pane holds about a workspace it has just written to.
-    private func refreshAfterWriting(in workspace: URL) {
-        if let marker = reconciler(for: workspace).marker(), marker != lastSyncedDraft {
-            lastSyncedDraft = marker
-        }
-        if let draft = try? DevotionalAgentWorkspaceStore.readDraft(from: workspace),
-           draft != workspaceDraft {
-            workspaceDraft = draft
-        }
+    ///
+    /// Taken from what the pass left rather than read back: between the
+    /// pass and a second read, another window can write, and its text would
+    /// arrive here as this pane's own.
+    private func refreshAfterWriting<Outcome>(
+        _ pass: DevotionalAgentDraftReconciler.Pass<Outcome>, in workspace: URL
+    ) {
+        if let marker = pass.markerLeft, marker != lastSyncedDraft { lastSyncedDraft = marker }
+        if let draft = pass.draftLeft, draft != workspaceDraft { workspaceDraft = draft }
         // Read here, and only here: this ran because something was just
         // written, so the history has moved and the reader is looking at
         // it. The polling path leaves it to the folder listing.
@@ -1879,7 +2042,7 @@ struct DevotionalAgentWorkspaceView: View {
             // Notes that follow the manuscript are derived here, against the
             // writing Lamp already holds, so they are right even when no agent
             // ran the build command.
-            let notesSummary = resolveManuscriptNotes(in: &imported, from: workspace)
+            let notesSummary = await resolveManuscriptNotes(in: &imported, from: workspace)
 
             // Charts next, before the deck is saved: an agent writes a chart's
             // source and never its values, so a deck arriving from a workspace
@@ -1991,11 +2154,11 @@ struct DevotionalAgentWorkspaceView: View {
     private func resolveManuscriptNotes(
         in deck: inout LampPresentationDeck,
         from workspace: URL
-    ) -> LampPresentationImportStatus.SpeakerNotes? {
+    ) async -> LampPresentationImportStatus.SpeakerNotes? {
         guard deck.followsManuscript else { return nil }
         let resolution = LampPresentationManuscriptNotes.resolve(
             deck: deck,
-            manuscript: manuscript(in: workspace)
+            manuscript: await manuscript(in: workspace)
         )
         deck = LampPresentationManuscriptNotes.applying(resolution, to: deck)
         return .init(resolution: resolution, deck: deck)
@@ -2015,8 +2178,8 @@ struct DevotionalAgentWorkspaceView: View {
     /// on every change, and the agent's own edits are read back from it. The
     /// `@State` copies are the fallback for the brief moment before the
     /// workspace has one.
-    private func manuscript(in workspace: URL) -> String {
-        (try? DevotionalAgentWorkspaceStore.readDraft(from: workspace))
+    private func manuscript(in workspace: URL) async -> String {
+        (try? await DevotionalAgentWorkspaceStore.readDraft(from: workspace))
             ?? lastSyncedDraft
             ?? workspaceDraft
     }
@@ -2053,7 +2216,7 @@ struct DevotionalAgentWorkspaceView: View {
                 to: workspaceURL,
                 libraryRootURL: libraryRootURL
             )
-            refreshWorkspace()
+            schedulePoll()
             if !skipped.isEmpty {
                 let listed = skipped.prefix(4).joined(separator: ", ")
                 contextNote = skipped.count > 4
@@ -2075,7 +2238,7 @@ struct DevotionalAgentWorkspaceView: View {
                 from: workspaceURL,
                 libraryRootURL: libraryRootURL
             )
-            refreshWorkspace()
+            schedulePoll()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -2091,7 +2254,7 @@ struct DevotionalAgentWorkspaceView: View {
                 to: workspaceURL,
                 libraryRootURL: libraryRootURL
             )
-            refreshWorkspace()
+            schedulePoll()
             return nil
         } catch {
             return error.localizedDescription
@@ -2106,7 +2269,7 @@ struct DevotionalAgentWorkspaceView: View {
                 from: workspaceURL,
                 libraryRootURL: libraryRootURL
             )
-            refreshWorkspace()
+            schedulePoll()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -2120,7 +2283,7 @@ struct DevotionalAgentWorkspaceView: View {
                 to: workspaceURL,
                 libraryRootURL: libraryRootURL
             )
-            refreshWorkspace()
+            schedulePoll()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -2129,7 +2292,7 @@ struct DevotionalAgentWorkspaceView: View {
     private func launch(_ provider: AIProviderCLI) async {
         guard let workspaceURL else { return }
         try? await DevotionalAgentWorkspaceStore.writeContext(contextDocument, to: workspaceURL)
-        synchronizeEditorDraft(draftMarkdown)
+        scheduleEditorSync(draftMarkdown)
         do {
             terminalCommand = try prepareTerminalLaunch(of: provider, in: workspaceURL)
         } catch {

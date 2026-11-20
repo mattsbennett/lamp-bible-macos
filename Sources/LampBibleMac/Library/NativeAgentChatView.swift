@@ -2118,7 +2118,11 @@ struct NativeAgentChatView: View {
     /// Answering matters too: the host refuses what it cannot put back
     /// whole, and a conversation trimmed after such a refusal would have
     /// taken away the questions and kept their work.
-    let revertTurn: (([UUID]) -> Bool)?
+    /// Puts the draft back, and says whether it managed to. Asynchronous
+    /// because the draft belongs to `WritingWorkspaceFiles` and the pane
+    /// puts this behind its own queued work; the order it is awaited in is
+    /// what the undo below depends on.
+    let revertTurn: (([UUID]) async -> Bool)?
     /// Told which turn is running, for a pane that marks its own records
     /// with it.
     let onTurnChanged: ((UUID?) -> Void)?
@@ -2162,7 +2166,7 @@ struct NativeAgentChatView: View {
         onRunningChanged: @escaping (Bool) -> Void = { _ in },
         forkFromTurn: ((UUID) -> Void)? = nil,
         startWritingFromTurn: ((UUID) -> Void)? = nil,
-        revertTurn: (([UUID]) -> Bool)? = nil,
+        revertTurn: (([UUID]) async -> Bool)? = nil,
         onTurnChanged: ((UUID?) -> Void)? = nil
     ) {
         self.provider = provider
@@ -2486,9 +2490,14 @@ struct NativeAgentChatView: View {
                 // the writing back is the half that can fail; trimmed
                 // first, a failure would leave the question gone and its
                 // work still in the draft, with nothing left to undo it
-                // from.
-                guard revertTurn?(going) == true else { return }
-                _ = model.revert(turns: going)
+                // from. The draft is awaited for that reason: a
+                // button's action cannot wait, so the two halves are kept
+                // in order inside one task rather than started side by
+                // side.
+                Task {
+                    guard await revertTurn?(going) == true else { return }
+                    _ = model.revert(turns: going)
+                }
             }
             Button("Cancel", role: .cancel) { turnToUndo = nil }
         } message: { _ in
