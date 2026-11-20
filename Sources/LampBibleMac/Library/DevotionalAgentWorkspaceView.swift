@@ -1088,7 +1088,6 @@ struct DevotionalAgentWorkspaceView: View {
                 sessionPane
             }
         }
-        .background(SwiftUI.Color(nsColor: .windowBackgroundColor))
         .onChange(of: errorMessage) { _, message in
             if message != nil { showsSetup = true }
         }
@@ -1563,7 +1562,6 @@ struct DevotionalAgentWorkspaceView: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(SwiftUI.Color(nsColor: .windowBackgroundColor))
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Opening this writing's workspace")
     }
@@ -1613,7 +1611,6 @@ struct DevotionalAgentWorkspaceView: View {
                 .padding(.top, 4)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(SwiftUI.Color(nsColor: .textBackgroundColor))
         }
     }
 
@@ -2426,7 +2423,6 @@ struct DevotionalAgentWorkspaceView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
-            .background(SwiftUI.Color(nsColor: .controlBackgroundColor))
         }
     }
 
@@ -2737,12 +2733,13 @@ final class LampTerminalView: LocalProcessTerminalView {
 }
 
 extension EmbeddedAITerminalView {
-    /// The terminal with a margin in its own colour, so its text doesn't run to
-    /// the edges of the pane. The terminal itself has no padding to set.
+    /// A margin so the terminal's text doesn't run to the edges of the pane.
+    /// The terminal itself has no padding to set, and the margin takes no
+    /// colour: the terminal is told to draw none either, so both show the
+    /// window's ground like every other surface in the pane.
     func inset() -> some View {
         padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(SwiftUI.Color(nsColor: .textBackgroundColor))
     }
 }
 
@@ -2762,7 +2759,11 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
         let terminal = LampTerminalView(frame: .zero)
         terminal.processDelegate = context.coordinator
         terminal.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-        terminal.nativeBackgroundColor = .textBackgroundColor
+        // No colour of its own, so the pane's ground shows through and the
+        // terminal is not a darker block inside it. SwiftTerm paints its
+        // native background behind the cells, so clearing it is what lets
+        // the ground through; the cells' own colours are untouched.
+        terminal.nativeBackgroundColor = .clear
         terminal.nativeForegroundColor = .textColor
         terminal.optionAsMetaKey = true
         // Scrolling is SwiftTerm's own. On the alternate buffer the agents'

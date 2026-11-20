@@ -694,7 +694,6 @@ private struct NativeAgentChatInputView: View {
         .padding(.horizontal, 14)
         .padding(.top, 8)
         .padding(.bottom, 12)
-        .background(LampChatSurface.conversation)
     }
 
     private func submit() {
@@ -781,7 +780,6 @@ private struct QueuedMessagesView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(LampChatSurface.conversation)
         }
     }
 }
@@ -2391,14 +2389,22 @@ struct NativeAgentChatView: View {
                 .environment(\.chatStyle, chatStyle)
                 // Lines scrolled up under the header fade out rather than
                 // being cut through the middle of a word.
-                .overlay(alignment: .top) {
-                    LinearGradient(
-                        colors: [LampChatSurface.conversation, LampChatSurface.conversation.opacity(0)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .frame(height: 18)
-                    .allowsHitTesting(false)
+                //
+                // Done by fading the lines themselves rather than by laying a
+                // strip of the ground's colour over them: the conversation no
+                // longer has a colour to lay, since it shows whatever pane it
+                // is in, and a strip of any named colour would be a block of
+                // the wrong shade.
+                .mask(alignment: .top) {
+                    VStack(spacing: 0) {
+                        LinearGradient(
+                            colors: [.clear, .black],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .frame(height: 18)
+                        Rectangle()
+                    }
                 }
 
                 if connectionState != .connected || model.messages.isEmpty {
@@ -2406,7 +2412,6 @@ struct NativeAgentChatView: View {
                 }
             }
         }
-        .background(LampChatSurface.conversation)
         .task(id: provider.id) {
             model.load()
             await refreshConnectionState()

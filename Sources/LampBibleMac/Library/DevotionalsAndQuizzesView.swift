@@ -233,6 +233,10 @@ struct DevotionalsView: View {
                     HStack(spacing: 0) {
                         writingList(listSections)
                             .frame(width: writingListWidth)
+                            // A side pane, so it recedes one step from the
+                            // writing beside it, as the details pane on the
+                            // other side does.
+                            .background(Color.lampPaneGround)
                         LampColumnResizeHandle(
                             preferredWidth: $preferredWritingListWidth,
                             displayedWidth: Double(writingListWidth),
@@ -598,6 +602,10 @@ struct DevotionalsView: View {
         }
         // Inset, as Books' list is: a sidebar list draws under the toolbar.
         .listStyle(.inset)
+        // A `List` paints a ground of its own, which covered the pane's step
+        // from the rows down and left only the header above them carrying it.
+        // The pane behind decides the colour; the rows just sit on it.
+        .scrollContentBackground(.hidden)
     }
 
     private func devotionalRows(_ devotionals: [LampDevotional]) -> some View {

@@ -397,6 +397,13 @@ private struct DevotionalEditorToolbarScrollView<Content: View>: View {
             // text below it is; scrolled only when the window is too narrow.
             content
                 .frame(minWidth: containerWidth, alignment: .center)
+                // The width arrives from `onGeometryChange`, which reports a
+                // layout that has already happened and so lands outside the
+                // transaction that is animating the pane. Without this the
+                // editor slid while the bar above it jumped to its new centre
+                // in one step. Attached to the value, not to the change, for
+                // the reason `Animation.lampPaneReveal` gives.
+                .animation(.lampPaneReveal, value: containerWidth)
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { containerWidth = $0 }
         .scrollIndicators(.hidden)
@@ -1068,6 +1075,9 @@ struct DevotionalEditorView: View {
                 }
                 .frame(width: sidebarWidth, height: geometry.size.height)
                 .clipped()
+                // A side pane, so it recedes one step from the writing, as the
+                // slide studio's inspector does.
+                .background(Color.lampPaneGround)
                 .accessibilityHidden(!usesSidePane)
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .leading)
@@ -1992,9 +2002,9 @@ struct DevotionalEditorView: View {
             .padding(.horizontal, 18)
             .padding(.vertical, 18)
         }
-        // No background, so this shows the window's own ground, as the
-        // reader's page and the writing list do. Its own colour made it a
-        // step darker than everything round it (0.1408 against 0.1863).
+        // No ground of its own: it is inside the side pane, which carries the
+        // one step for everything in it. Its old colour overshot that step
+        // and read as a hole (0.1408 against the window's 0.1863).
         // A footnote marker clicked in the writing whose note is kept here
         // opens the section, so the caret has somewhere visible to go.
         .onChange(of: footnotesRevealToken) { foldedOpen["Footnotes"] = true }

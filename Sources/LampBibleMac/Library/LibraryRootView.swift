@@ -355,6 +355,10 @@ struct LibraryRootView: View {
                     sidebarHeading("Library")
                 }
             }
+            // The list's own ground hidden so the tint reaches the material
+            // rather than sitting on a colour the list painted over it.
+            .scrollContentBackground(.hidden)
+            .background(Color.lampSidebarTint)
             .navigationTitle("Lamp Bible")
             // While a writing is edited in place, Writing's list button is
             // the one on the left, so the window's own goes. View ▸ Toggle
@@ -1069,6 +1073,14 @@ struct LibraryRootView: View {
                 sectionDetail
             }
         }
+        // The separators inside the content run from here to the bottom of the
+        // window and, with nothing across the top, stopped in mid-air under
+        // the toolbar. This closes them off, in the same colour they are.
+        //
+        // On the content, not on the whole split view: across the sidebar too
+        // it cut that column in half, and the sidebar reads as one continuous
+        // column from the toolbar to Import or Create.
+        .overlay(alignment: .top) { Divider() }
     }
 
 
@@ -1954,10 +1966,11 @@ private struct StudyInspectorColumn<Content: View>: View {
             content
                 .frame(width: clampedWidth)
         }
-        // No background. The reader's page paints none either, so both show
-        // the window's own ground and match by construction rather than by
-        // two colours chosen to look alike. Painting one here made the column
-        // lighter than the page beside it (0.2379 against 0.1863 measured).
+        // A side pane, so it recedes one step from the page, as the slide
+        // studio's lists and inspector do. `lampPaneGround` carries that step
+        // in both appearances: lifting instead read as a patch, and a deeper
+        // step read as a hole.
+        .background(Color.lampPaneGround)
     }
 
     private var clampedWidth: Double {

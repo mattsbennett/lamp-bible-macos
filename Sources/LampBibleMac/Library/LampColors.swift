@@ -179,6 +179,44 @@ extension NSColor {
             : NSColor(srgbRed: 0.978, green: 0.978, blue: 0.982, alpha: 1)
     }
 
+    /// The ground of a pane beside the page: a writing list, a details
+    /// inspector, the reader's study tools, the assistant.
+    ///
+    /// One step back from the window's own ground, so the page reads as the
+    /// thing being worked on and the panes as what is beside it — the
+    /// arrangement the slide studio already had.
+    ///
+    /// **It carries its own light value rather than taking
+    /// `windowBackgroundColor`.** That colour is 1.000 in light, which is the
+    /// window's ground there too, so panes painted with it stepped back in
+    /// dark and not at all in light; the slide studio still has that fault.
+    /// The two steps are matched by eye against the measured grounds, not by
+    /// one number used in both.
+    static let lampPaneGround = NSColor(name: nil) { appearance in
+        appearance.lampIsDark
+            ? NSColor(white: 0.118, alpha: 1)
+            : NSColor(srgbRed: 0.957, green: 0.957, blue: 0.962, alpha: 1)
+    }
+
+    /// Laid over the sidebar's own material to carry it further from the page.
+    ///
+    /// The source list is the outermost thing in the window and was reading as
+    /// the shallowest boundary in it: 0.2063 against the page's 0.1863, a step
+    /// of 0.02, where the page to a side pane is 0.029. A tint rather than a
+    /// flat colour so the column keeps the vibrancy macOS gives it, and
+    /// carries no border.
+    ///
+    /// It goes the opposite way in each appearance, because the sidebar has to
+    /// be the furthest thing from the page and the page is pure white in light:
+    /// in dark the page sits between a lighter sidebar and darker panes, and in
+    /// light both go darker with the sidebar deepest — the ordinary macOS
+    /// arrangement, a different order rather than a reflection of the dark one.
+    static let lampSidebarTint = NSColor(name: nil) { appearance in
+        appearance.lampIsDark
+            ? NSColor(white: 1, alpha: 0.045)
+            : NSColor(white: 0, alpha: 0.035)
+    }
+
     /// Behind a row or tile the pointer is over.
     static let lampRowHover = NSColor(name: nil) { appearance in
         appearance.lampIsDark
@@ -309,6 +347,12 @@ extension Color {
 
     /// The words on a find match's ground.
     static let lampOnFindMatch = Color(nsColor: .lampOnFindMatch)
+
+    /// The ground of a pane beside the page.
+    static let lampPaneGround = Color(nsColor: .lampPaneGround)
+
+    /// Laid over the sidebar's material to carry it further from the page.
+    static let lampSidebarTint = Color(nsColor: .lampSidebarTint)
 
     /// Behind a row or tile the pointer is over.
     static let lampRowHover = Color(nsColor: .lampRowHover)
