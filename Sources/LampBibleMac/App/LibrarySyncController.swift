@@ -896,7 +896,9 @@ extension LibrarySyncController {
             }
         }
 
-        let outcome = try await reportingWeakRevision {
+        let outcome: LampSyncBundlePass.Outcome
+        do {
+        outcome = try await reportingWeakRevision {
             try await LampSyncBundlePass(
             store: store, library: passLibrary, source: source
         ).run(
@@ -942,6 +944,14 @@ extension LibrarySyncController {
                 try ledgers?.apply(to: &bundle)
             }
         )
+        }
+        } catch {
+            // Kept even so: a pass that stopped after writing files leaves
+            // their revisions in `records`, unrecorded in the manifest, and
+            // the next pass records them. Lost, a copy this Mac sent and then
+            // deleted reads as one someone else put back, and comes back.
+            try? records.save(toLibraryAt: library.rootURL, fileManager: fileManager)
+            throw error
         }
 
         // A highlight set's module ID lives only in the module on the server,
