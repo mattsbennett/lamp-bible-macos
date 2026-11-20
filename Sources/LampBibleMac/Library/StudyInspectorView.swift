@@ -464,9 +464,7 @@ private struct NotesInspectorView: View {
                 .help("Write a note on this verse")
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            // Unfilled, as the notes themselves are: the pane reads the same
-            // whether it is being read or edited.
-            .lampCard(padding: 14, filled: false)
+            .lampCard(padding: 14)
         } else if group.id == reader.selectedVerseReference {
             PersonalNoteEditor(
                 reference: group.id,
@@ -509,10 +507,10 @@ private struct NotesInspectorView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                // A note's own words, previewed: unfilled like the card it
-                // opens into, and like the same note read in the other mode.
-                // The hairline is what says where one note ends.
-                .lampCard(padding: 14, filled: false)
+                // Filled, unlike the same note in Read mode: here it is a
+                // container to pick between, as the verse cards are, and not
+                // a column of text being read.
+                .lampCard(padding: 14)
                 .contentShape(RoundedRectangle(cornerRadius: LampMetrics.cardRadius))
             }
             .buttonStyle(.plain)
@@ -692,6 +690,10 @@ private struct NotesInspectorView: View {
             .fixedSize()
         }
         .padding()
+        // The pane is a secondary one, so its controls are compact — the rule
+        // on `LampButtonMetrics`. On the row, so the toggle and the menu
+        // cannot drift apart.
+        .controlSize(.small)
     }
 
     private var currentBookName: String {

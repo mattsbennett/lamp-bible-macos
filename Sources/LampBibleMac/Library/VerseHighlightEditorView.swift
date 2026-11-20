@@ -194,6 +194,7 @@ struct VerseHighlightEditorView: View {
                         selection: $style,
                         items: LampHighlightStyle.allCases.map { .init(id: $0, title: $0.displayName) }
                     )
+                    .controlSize(.small)
                 }
                 GridRow {
                     Text("Color")

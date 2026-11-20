@@ -1900,6 +1900,7 @@ struct UnifiedSearchView: View {
             }
         }
         .lampMenu()
+        .controlSize(.small)
         .menuStyle(.borderlessButton)
         .fixedSize()
         .help("Find highlights by theme, colour or style")

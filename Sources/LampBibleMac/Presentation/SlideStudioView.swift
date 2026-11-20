@@ -821,6 +821,7 @@ struct SlideStudioView: View {
                                         }
                                     }
                                     .lampMenu()
+                                    .controlSize(.small)
                                     .fixedSize()
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                 }
@@ -878,6 +879,7 @@ struct SlideStudioView: View {
                                         .labelsHidden()
                                     }
                                     .lampMenu()
+                                    .controlSize(.small)
                                 }
                             }
                         }
@@ -1860,6 +1862,7 @@ private struct LampSlideBlockEditor: View {
                         items: [.init(id: nil, title: "Text")]
                             + LampPresentationListStyle.allCases.map { .init(id: Optional($0), title: $0.displayName) }
                     )
+                    .controlSize(.small)
 
                     if block.listStyle != nil {
                         Text("Enter one list item per line.")

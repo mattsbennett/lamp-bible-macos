@@ -124,6 +124,7 @@ struct PresentationsLibraryView: View {
                         .init(id: $0.rawValue, title: $0.rawValue, systemImage: $0.systemImage)
                     }
                 )
+                .controlSize(.small)
                 .help("Show decks as covers or as a list")
                 Menu {
                     Picker("Sort By", selection: $sortRawValue) {

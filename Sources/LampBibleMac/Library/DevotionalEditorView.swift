@@ -2130,6 +2130,7 @@ struct DevotionalEditorView: View {
                 selection: editorSurfaceSelection,
                 items: DevotionalEditorMode.allCases.map { .init(id: $0, title: $0.title) }
             )
+            .controlSize(.small)
             .disabled(!activeDocumentSupportsVisual)
             .help(activeDocumentSupportsVisual
                 ? "Choose the writing surface"

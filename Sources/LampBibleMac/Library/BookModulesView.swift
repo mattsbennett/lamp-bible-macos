@@ -1554,6 +1554,7 @@ private struct BookSectionReaderView: View {
             }
         }
         .buttonStyle(.lampSecondary)
+        .controlSize(.small)
         .padding(.top, 24)
     }
 

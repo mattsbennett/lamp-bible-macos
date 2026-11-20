@@ -38,7 +38,10 @@ struct NewReaderTabPage: View {
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                 }
                                 .buttonStyle(.lampSecondary)
-                                .controlSize(.large)
+                                // A popover, so compact, by the rule on
+                                // `LampButtonMetrics`. It asked for `.large`
+                                // when these were system bordered buttons.
+                                .controlSize(.small)
                             }
                         }
                     }

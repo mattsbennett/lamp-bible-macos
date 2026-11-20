@@ -537,6 +537,7 @@ private struct ReaderSettingsView: View {
                                 selection: $selectedModuleType,
                                 items: ConfigurableModuleType.allCases.map { .init(id: $0, title: $0.title) }
                             )
+                            .controlSize(.small)
                         }
 
                         switch selectedModuleType {

@@ -1283,6 +1283,7 @@ struct DevotionalAgentWorkspaceView: View {
                 .init(id: $0.rawValue, title: $0.title, systemImage: $0.systemImage)
             }
         )
+        .controlSize(.small)
 
         if sessionMode == .terminal {
             Button(activeProvider == nil ? "Launch" : "Restart", systemImage: "play.fill") {
