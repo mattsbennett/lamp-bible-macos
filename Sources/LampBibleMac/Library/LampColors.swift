@@ -172,12 +172,11 @@ extension NSColor {
             : NSColor(white: 1, alpha: 0.9)
     }
 
-    /// A side pane beside the page — the study tools — one step off it.
-    static let lampInspectorFill = NSColor(name: nil) { appearance in
-        appearance.lampIsDark
-            ? NSColor(srgbRed: 0.180, green: 0.180, blue: 0.188, alpha: 1)
-            : NSColor(srgbRed: 0.978, green: 0.978, blue: 0.982, alpha: 1)
-    }
+    // `lampInspectorFill`, the ground every pane beside the page takes, is
+    // declared in `LampBibleMacSupport` (ChatSurfaceSupport.swift) rather than
+    // here: the conversation surfaces there are the ground of two of those
+    // panes — the writing's assistant and the reader's chat — and Support
+    // cannot see this module. Its doc comment carries the rule.
 
     /// Behind a row or tile the pointer is over.
     static let lampRowHover = NSColor(name: nil) { appearance in
@@ -214,6 +213,17 @@ enum LampMetrics {
     static let listTitleSize: CGFloat = 14
     static let listDetailSize: CGFloat = 12.5
     static let listCaptionSize: CGFloat = 11.5
+
+    /// The bar across the top of a pane: the writing editor's format bar, the
+    /// assistant's setup row. These panes sit side by side, so their bars are
+    /// read as one line across the window and any difference in height shows
+    /// as a step in that line — the format bar stood 42pt against the
+    /// assistant's 32 and the two headers visibly disagreed.
+    ///
+    /// Set as a height rather than as padding: the bars hold different
+    /// controls, and matching their padding would only match them until one
+    /// of those controls changed size.
+    static let paneHeaderHeight: CGFloat = 42
 }
 
 /// How long the app's own movements take, where something else has to be

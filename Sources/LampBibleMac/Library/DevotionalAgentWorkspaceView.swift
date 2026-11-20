@@ -1088,7 +1088,10 @@ struct DevotionalAgentWorkspaceView: View {
                 sessionPane
             }
         }
-        .background(SwiftUI.Color(nsColor: .windowBackgroundColor))
+        // A pane beside the writing, so it takes the ground every such pane
+        // takes. On the window background it was the page's own colour, and
+        // the two parted along a hairline alone.
+        .background(Color.lampInspectorFill)
         .onChange(of: errorMessage) { _, message in
             if message != nil { showsSetup = true }
         }
@@ -1237,7 +1240,10 @@ struct DevotionalAgentWorkspaceView: View {
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        // The writing's format bar stands beside this row and the two read as
+        // one line across the window, so they take one height; this row's own
+        // padding left it 10pt shorter and the line stepped at the divider.
+        .frame(height: LampMetrics.paneHeaderHeight)
         .help(showsSetup ? "Hide the agent's setup"
               : "Choose the agent and model, and add context and skills. It reads and edits this writing's files.")
     }
@@ -1560,7 +1566,9 @@ struct DevotionalAgentWorkspaceView: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(SwiftUI.Color(nsColor: .windowBackgroundColor))
+        // The pane's own ground, as the empty state takes: this is what the
+        // pane shows before anything runs in it, and a colour of its own here
+        // would change the pane's ground for the moment it is on screen.
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Opening this writing's workspace")
     }
@@ -1597,9 +1605,25 @@ struct DevotionalAgentWorkspaceView: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 330)
+                // The same Launch the setup holds. This placeholder told the
+                // reader to launch an agent while the only button that does it
+                // was behind a disclosure that is closed until someone opens
+                // it — so the one screen the pane opens on named an action it
+                // did not offer.
+                Button("Launch \(selectedProvider.shortName)", systemImage: "play.fill") {
+                    Task { await launch(selectedProvider) }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(workspaceURL == nil)
+                .padding(.top, 4)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(SwiftUI.Color(nsColor: .textBackgroundColor))
+            // No ground of its own: nothing is running, so this is the pane's
+            // own chrome and takes the pane's ground. On the text background
+            // it was the writing's colour, which made the empty pane read as
+            // more page rather than as a pane waiting to be started. A running
+            // terminal does take that colour, in `inset()`, because its text
+            // is then the thing being read.
         }
     }
 

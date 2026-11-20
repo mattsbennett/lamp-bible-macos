@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The surfaces a conversation is drawn on, defined in one place because they
@@ -14,8 +15,12 @@ public enum LampChatSurface {
     /// beneath it.
     private static let step = 0.055
 
-    /// What the whole conversation is drawn on.
-    public static var conversation: Color { Color(nsColor: .textBackgroundColor) }
+    /// What the whole conversation is drawn on: the ground of the pane that
+    /// holds it. Both chats — the writing's assistant and the reader's — are
+    /// panes beside a page, and on `textBackgroundColor` the conversation was
+    /// the page's own colour, so it painted the pane's ground back out again
+    /// and the pane stopped reading as a surface of its own.
+    public static var conversation: Color { Color(nsColor: .lampInspectorFill) }
 
     /// The agent's bubble: one step off the conversation.
     public static var agentBubble: Color { .primary.opacity(step) }
@@ -41,5 +46,31 @@ public enum LampChatSurface {
         case .removed: Color(nsColor: .systemRed).opacity(0.14)
         case .meta, .context: .clear
         }
+    }
+}
+
+public extension NSColor {
+    /// The ground of any pane beside the page: the reader's study tools, the
+    /// writing's details, the assistant, a reader chat. One step off the page,
+    /// so two panes part along their edge rather than along a hairline alone,
+    /// which on the dark window all but vanished.
+    ///
+    /// **It lifts in dark and steps down in light**, which is the direction
+    /// macOS itself takes — `textBackgroundColor` is 0.118 in dark and
+    /// `underPageBackgroundColor`, the ground around it, is 0.157. A pane that
+    /// went darker than the page instead read as a hole cut in the window.
+    ///
+    /// This is the only ground a side pane takes. The leading sidebar is not
+    /// one of these: macOS gives a `NavigationSplitView`'s source list its own
+    /// vibrant material, which tints with the desktop behind the window, and a
+    /// flat fill over it would read as a panel glued to the window edge.
+    ///
+    /// It lives here, rather than beside the app's other colours, because the
+    /// conversation surfaces above are the ground of two of these panes and
+    /// Support cannot see the app module.
+    static let lampInspectorFill = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            ? NSColor(srgbRed: 0.180, green: 0.180, blue: 0.188, alpha: 1)
+            : NSColor(srgbRed: 0.965, green: 0.965, blue: 0.969, alpha: 1)
     }
 }

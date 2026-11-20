@@ -1689,7 +1689,9 @@ struct DevotionalEditorView: View {
             .buttonStyle(FormatBarButtonStyle())
             .disabled(!visualEditorIsReady)
             .padding(.horizontal, 16)
-            .padding(.vertical, 7)
+            // The assistant's setup row stands beside this one, so both
+            // take the shared height rather than each adding up its own.
+            .frame(height: LampMetrics.paneHeaderHeight)
         }
         .background(Color(nsColor: .windowBackgroundColor))
     }
@@ -1779,7 +1781,9 @@ struct DevotionalEditorView: View {
                 }
                 .buttonStyle(FormatBarButtonStyle())
                 .padding(.horizontal, 16)
-                .padding(.vertical, 7)
+                // The assistant's setup row stands beside this one, so both
+                // take the shared height rather than each adding up its own.
+                .frame(height: LampMetrics.paneHeaderHeight)
             }
             .background(Color(nsColor: .windowBackgroundColor))
 
@@ -1994,10 +1998,12 @@ struct DevotionalEditorView: View {
             .padding(.horizontal, 18)
             .padding(.vertical, 18)
         }
-        // A ground of its own, a step off the page in either appearance, so
-        // the inspector reads as beside the writing rather than part of it:
-        // on the same dark as the page, the two ran together.
-        .background(Self.inspectorGround)
+        // A step off the page, so the inspector reads as beside the writing
+        // rather than part of it: on the same dark as the page, the two ran
+        // together. The one role every pane beside a page takes — this had a
+        // ground of its own that went darker in dark where the reader's went
+        // lighter, so the same gesture read two ways in one app.
+        .background(Color.lampInspectorFill)
         // A footnote marker clicked in the writing whose note is kept here
         // opens the section, so the caret has somewhere visible to go.
         .onChange(of: footnotesRevealToken) { foldedOpen["Footnotes"] = true }
@@ -2065,12 +2071,6 @@ struct DevotionalEditorView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
-
-    private static let inspectorGround = Color(nsColor: NSColor(name: nil) { appearance in
-        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            ? NSColor(white: 0.105, alpha: 1)
-            : NSColor(srgbRed: 0.955, green: 0.955, blue: 0.962, alpha: 1)
-    })
 
     /// What an empty field is for, in the place its text will go.
     private func fieldPlaceholder(_ text: String) -> some View {
