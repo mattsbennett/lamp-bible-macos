@@ -192,6 +192,11 @@ struct TipTapEditorView: NSViewRepresentable {
     /// Nothing public reaches this. `underPageBackgroundColor` covers only the
     /// rubber-band area, and clearing the view's layer does not survive — both
     /// were tried, and each left the page flat white over the window.
+    ///
+    /// **Revisit this if the Mac app is ever submitted to the App Store.** It
+    /// ships as a notarized disk image updated through Sparkle, so an
+    /// undocumented key is a maintenance risk and not a review one; under App
+    /// Review it would be neither, and the page would need a colour again.
     fileprivate static let webViewCanBeTransparent: Bool =
         WKWebView().responds(to: NSSelectorFromString("_setDrawsBackground:"))
 
