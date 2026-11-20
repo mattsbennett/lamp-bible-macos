@@ -40,6 +40,9 @@ series:
 keyScriptures:
   - ref: "Matthew 24:36-44"
   - ref: "Genesis 6"
+  - ref: "The flood narrative"
+    sv: 1006001
+    ev: 1009017
 summary: "Jesus draws two lessons from the days of Noah."
 ---
 
@@ -68,10 +71,10 @@ Front matter is optional. Without it, a file that opens with `# Heading` takes t
 | `subtitle` | A line under the title. | Optional. |
 | `author` | Who wrote it. | Only if the source says. |
 | `date` | When it was given or written. | `YYYY-MM-DD`. Other text is kept as written, with a warning. Only if the source says. |
-| `category` | What kind of writing. | Any word; common ones are `devotional`, `study`, `reflection`, `exhortation`, `prayer`. `sermon` is filed as `exhortation`. |
-| `tags` | Topics. | A list: `[a, b]`. |
-| `series` | A series and its place in it. | `name` and a whole-number `order`. |
-| `keyScriptures` | The passages it is about. | A list of `ref:` references as people write them: `Matthew 24:36-44`, `Psalm 23` (a whole chapter), `John 3:16`. A reference Lamp cannot read is left out, with a warning. |
+| `category` | What kind of writing. | The vocabulary is open: any word, kept as you spell it, capitals and all. Lamp's own are `devotional`, `exhortation`, `reflection`, `study`, `prayer`; `sermon` is filed as `exhortation`, and the report says so. Use the person's word — `Handout`, `Bible class`, `Q&A` — rather than forcing one of the five. Two spellings of one word are one kind. |
+| `tags` | Topics. | A list — `[a, b]` or `["Matthew", "readiness"]` — or one comma-separated line, `tags: Matthew, readiness`. |
+| `series` | A series and its place in it. | Indented `name:` and a whole-number `order:` beneath `series:`. Both go there: a value written on the `series:` line itself is dropped, so a series with no order is still `series:` with `name:` under it. |
+| `keyScriptures` | The passages it is about. | A list of entries. Usually `ref:` alone, a reference as people write it — `Matthew 24:36-44`, `Psalm 23` (a whole chapter), `John 3:16` — which Lamp reads into verses itself. A reference Lamp cannot read is left out, with a warning; where that happens, or where the source names a passage in a form Lamp will not parse, give the verses yourself as `sv:` and optional `ev:` in `BBCCCVVV` (`sv: 40024036`, `ev: 40024044`), and `ref:` is then the label shown. |
 | `summary` | The writer's own summary. | Optional; a `## Summary` section at the very top of the text is read as one too. |
 | `created`, `lastModified` | When the writing was made and last changed. | ISO 8601 (`2026-01-18T09:00:00Z`) or a date. Without `lastModified`, the file's own saved time is used, which is what lets an import tell a file saved since from a copy edited in Lamp since. A document passed in `documents` has no saved time: give `lastModified`, or any change to a writing already in Lamp arrives as a conflict for the person to choose. |
 | `source` | Where you converted it from. | Accepted and ignored; useful for your own bookkeeping. |
