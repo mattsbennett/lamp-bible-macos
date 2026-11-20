@@ -59,6 +59,7 @@ struct NewReadingPlanSheet: View {
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
+                    .buttonStyle(.lampSecondary)
                 Button("Add Plan", action: add)
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.lampProminent)

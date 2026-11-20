@@ -135,6 +135,7 @@ struct ModuleExportWizard: View {
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
+                    .buttonStyle(.lampSecondary)
                 Button("Export…", systemImage: "square.and.arrow.up") {
                     chooseDestinationAndExport()
                 }
