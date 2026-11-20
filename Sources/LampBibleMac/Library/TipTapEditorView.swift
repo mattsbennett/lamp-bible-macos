@@ -197,8 +197,12 @@ struct TipTapEditorView: NSViewRepresentable {
     /// ships as a notarized disk image updated through Sparkle, so an
     /// undocumented key is a maintenance risk and not a review one; under App
     /// Review it would be neither, and the page would need a colour again.
+    /// Asked of the class, not of an instance: a `static let` is initialised
+    /// on whichever thread first reads it, and a `WKWebView` has to be built
+    /// on the main one, so constructing a throwaway here to ask put a
+    /// main-thread requirement on an innocent-looking property access.
     fileprivate static let webViewCanBeTransparent: Bool =
-        WKWebView().responds(to: NSSelectorFromString("_setDrawsBackground:"))
+        WKWebView.instancesRespond(to: NSSelectorFromString("_setDrawsBackground:"))
 
     private func cssColor(for color: NSColor, in appearance: NSAppearance) -> String {
         Self.cssColor(for: color, in: appearance)
