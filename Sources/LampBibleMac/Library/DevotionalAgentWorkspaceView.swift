@@ -1307,13 +1307,12 @@ struct DevotionalAgentWorkspaceView: View {
 
     @ViewBuilder
     private var agentChoiceControls: some View {
-        Picker("Provider", selection: providerSelection) {
-            ForEach(AIProviderCLI.allCases, id: \.rawValue) { provider in
-                Text(provider.shortName).tag(provider.rawValue)
-            }
-        }
-        .labelsHidden()
-        .fixedSize()
+        LampMenuPicker(
+            "Provider",
+            selection: providerSelection,
+            items: AIProviderCLI.allCases.map { .init(id: $0.rawValue, title: $0.shortName) }
+        )
+        .controlSize(.small)
         AgentChatProviderChoice(
             kind: .model, provider: selectedProvider, workspace: workspaceURL,
             chatChoices: $chatChoices

@@ -1051,16 +1051,20 @@ private struct PersonalNoteEditor: View {
                 HStack(spacing: 6) {
                     Text("Covers")
                         .foregroundStyle(Color.lampSecondaryText)
-                    Picker("Verses the note covers", selection: $rangeEndVerse) {
-                        // The verse itself first, whether or not this
-                        // translation has it.
-                        ForEach([verseNumber] + chapter.verses.map(\.number).filter { $0 > verseNumber }, id: \.self) { number in
-                            Text(number == verseNumber ? "This verse only" : "Verses \(verseNumber)–\(number)").tag(number)
-                        }
-                    }
-                    .labelsHidden()
-                    .fixedSize()
-                    .accessibilityLabel("Verses the note covers")
+                    LampMenuPicker(
+                        "Verses the note covers",
+                        selection: $rangeEndVerse,
+                        items: ([verseNumber] + chapter.verses.map(\.number).filter { $0 > verseNumber })
+                            .map {
+                                .init(
+                                    id: $0,
+                                    title: $0 == verseNumber
+                                        ? "This verse only"
+                                        : "Verses \(verseNumber)–\($0)"
+                                )
+                            }
+                    )
+                    .controlSize(.small)
                 }
             }
 

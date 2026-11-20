@@ -2740,19 +2740,25 @@ struct StrongsAnalysisPane: View {
     private func spread(_ analysis: LampStrongsAnalysis) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 10) {
-                Picker("By", selection: $spreadGrouping) {
-                    ForEach(LampStrongsSpreadGrouping.allCases) { Text($0.title).tag($0) }
-                }
-                .labelsHidden()
-                .fixedSize()
+                // `LampMenuPicker`, not a pop-up: a pop-up is an AppKit
+                // control no button style reaches, so these two stood as the
+                // system's rounded squares, chevrons and all, beside the
+                // pane's own capsules.
+                LampMenuPicker(
+                    "By",
+                    selection: $spreadGrouping,
+                    items: LampStrongsSpreadGrouping.allCases.map { .init(id: $0, title: $0.title) }
+                )
+                .controlSize(.small)
                 .help("Where to count it")
 
                 if spreadGrouping.usesMeasure {
-                    Picker("Measure", selection: $measure) {
-                        ForEach(LampStrongsSpreadMeasure.allCases) { Text($0.title).tag($0) }
-                    }
-                    .labelsHidden()
-                    .fixedSize()
+                    LampMenuPicker(
+                        "Measure",
+                        selection: $measure,
+                        items: LampStrongsSpreadMeasure.allCases.map { .init(id: $0, title: $0.title) }
+                    )
+                    .controlSize(.small)
                     .help("What to count")
                 }
                 Spacer(minLength: 0)

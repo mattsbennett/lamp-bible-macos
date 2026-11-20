@@ -321,6 +321,13 @@ struct UnifiedSearchView: View {
             ?? resultGroups.first?.results.first
     }
 
+    /// What the module filter says it is set to. The pop-up it replaced
+    /// drew this itself from the chosen tag.
+    private var selectedModuleName: String {
+        guard let id = field(\.moduleID).wrappedValue else { return "All Modules" }
+        return availableModules.first { $0.id == id }?.name ?? "All Modules"
+    }
+
     private var availableModules: [(id: String, name: String)] {
         // Hidden modules are left out: a module the reader has hidden is not
         // searched, so offering it as a filter promises results it can never
@@ -1554,31 +1561,49 @@ struct UnifiedSearchView: View {
     @ToolbarContentBuilder
     private var searchToolbar: some ToolbarContent {
         ToolbarItem {
-            Picker("Content", selection: field(\.kind)) {
-                Text("All Content").tag(LampModuleKind?.none)
-                ForEach(LampModuleKind.allCases, id: \.self) { kind in
-                    Text(kind.displayName).tag(Optional(kind))
-                }
-            }
-            .frame(minWidth: 130, maxWidth: 160)
+            // A Lamp menu, not a pop-up: this stands in the toolbar beside
+            // Lamp's own controls. Its neighbour, the module filter, keeps its
+            // pop-up — its choices are grouped by language, which a flat list
+            // of items cannot say.
+            LampMenuPicker(
+                "Content",
+                selection: field(\.kind),
+                items: [.init(id: nil, title: "All Content")]
+                    + LampModuleKind.allCases.map { .init(id: $0, title: $0.displayName) },
+                tag: { $0 }
+            )
+            .controlSize(.small)
         }
 
         ToolbarItem {
-            Picker("Module", selection: field(\.moduleID)) {
-                Text("All Modules").tag(String?.none)
-                if selectedKind == .translation {
-                    // By language, as every translation picker lists them.
-                    let offered = Set(availableModules.map(\.id))
-                    TranslationPickerOptions(
-                        translations: model.translations.filter { offered.contains($0.id) },
-                        tag: { Optional($0.id) }
-                    )
-                } else {
-                    ForEach(availableModules, id: \.id) { module in
-                        Text(module.name).tag(Optional(module.id))
+            // A Lamp menu like the filter beside it. The choices stay the
+            // picker they were — translations grouped by language — because
+            // a flat list of items cannot say that; the menu only changes
+            // what draws them, and the label says what is chosen, as the
+            // pop-up did.
+            Menu {
+                Picker("Module", selection: field(\.moduleID)) {
+                    Text("All Modules").tag(String?.none)
+                    if selectedKind == .translation {
+                        // By language, as every translation picker lists them.
+                        let offered = Set(availableModules.map(\.id))
+                        TranslationPickerOptions(
+                            translations: model.translations.filter { offered.contains($0.id) },
+                            tag: { Optional($0.id) }
+                        )
+                    } else {
+                        ForEach(availableModules, id: \.id) { module in
+                            Text(module.name).tag(Optional(module.id))
+                        }
                     }
                 }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            } label: {
+                Text(selectedModuleName)
             }
+            .lampMenu()
+            .controlSize(.small)
             // Capped, so a long module name cannot take the search
             // field's room: uncapped, "All Modules" grew to a third of the
             // toolbar and the field beside it shrank until it truncated.

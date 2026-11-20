@@ -792,6 +792,90 @@ extension ButtonStyle where Self == LampTextButtonStyle {
     static func lampText(_ color: Color) -> LampTextButtonStyle { LampTextButtonStyle(color: color) }
 }
 
+/// A choice of one among many, drawn as a Lamp menu: the chosen one is the
+/// label, and the choices are an inline `Picker` inside.
+///
+/// **A pop-up `Picker` is an AppKit control that no SwiftUI button style
+/// reaches**, so one standing beside Lamp's own controls stays the system's
+/// rounded square with its up-down chevrons however the rest of the window is
+/// drawn — which is what the analysis's Books and Occurrences pickers were.
+/// Putting the choices in a `Menu` is what lets `.lampMenu()` style it at all.
+///
+/// Use it where a pop-up stands on its own beside other controls. A `Picker`
+/// inside a `Form` keeps its pop-up: the form gives it a label column and an
+/// alignment of its own, and the system control is right there.
+///
+/// For a choice among two or three *modes*, use `LampSegmentedPicker` instead,
+/// which shows them all at once.
+struct LampMenuPicker<ID: Hashable, Choice: Hashable>: View {
+    struct Item: Identifiable {
+        let id: ID
+        let title: String
+        var systemImage: String? = nil
+    }
+
+    let label: String
+    let items: [Item]
+    @Binding var selection: Choice
+    /// The tag each item carries. A pop-up over an optional selection tags its
+    /// rows `Optional(id)`, and a binding typed that way must be fed the same.
+    let tag: (ID) -> Choice
+
+    init(
+        _ label: String,
+        selection: Binding<Choice>,
+        items: [Item],
+        tag: @escaping (ID) -> Choice
+    ) {
+        self.label = label
+        self._selection = selection
+        self.items = items
+        self.tag = tag
+    }
+
+    /// What the menu says it is set to: the chosen item's title, or the label
+    /// itself while nothing is chosen, which is what a pop-up shows.
+    private var title: String {
+        items.first { tag($0.id) == selection }?.title ?? label
+    }
+
+    private var systemImage: String? {
+        items.first { tag($0.id) == selection }?.systemImage
+    }
+
+    var body: some View {
+        Menu {
+            Picker(label, selection: $selection) {
+                ForEach(items) { item in
+                    if let systemImage = item.systemImage {
+                        Label(item.title, systemImage: systemImage).tag(tag(item.id))
+                    } else {
+                        Text(item.title).tag(tag(item.id))
+                    }
+                }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        } label: {
+            if let systemImage {
+                Label(title, systemImage: systemImage)
+            } else {
+                Text(title)
+            }
+        }
+        .lampMenu()
+        .fixedSize()
+        .accessibilityLabel(label)
+    }
+}
+
+extension LampMenuPicker where Choice == ID {
+    /// The common case: the binding holds the id itself.
+    init(_ label: String, selection: Binding<ID>, items: [Item]) {
+        self.init(label, selection: selection, items: items, tag: { $0 })
+    }
+}
+
 /// A choice of one among a few — List or Ring, Visual or Markdown — drawn
 /// in the text's own colours: the chosen one raised on a quiet track, as
 /// Slide Studio's choice tiles mark theirs.
