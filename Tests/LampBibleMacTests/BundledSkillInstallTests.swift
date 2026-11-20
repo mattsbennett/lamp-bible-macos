@@ -214,6 +214,71 @@ struct BundledSkillInstallTests {
         #expect(!WorkspaceSkillStore.readOnlyBundledSkillNames.contains("import-lamp-writing"))
     }
 
+    /// Writing a file and belonging to a writing are two different questions.
+    ///
+    /// The deck skill writes one of the writing's own files, so a writing's
+    /// workspace is where it belongs. The import skill builds a bundle outside
+    /// the library, of writings that do not exist yet, so it belongs to no one
+    /// writing — it was installed into every workspace all the same, which is
+    /// the last place anyone would look for it. `read_skill` serves it from
+    /// Lamp's catalog instead.
+    @Test func theworkspaceSetIsNotSimplyTheSkillsThatWriteFiles() {
+        #expect(WorkspaceSkillStore.workspaceBundledSkillNames
+            == ["build-lamp-deck", "original-languages", "sola-scriptura"])
+        #expect(!WorkspaceSkillStore.workspaceBundledSkillNames.contains("import-lamp-writing"))
+        #expect(WorkspaceSkillStore.workspaceBundledSkillNames
+            .isSubset(of: WorkspaceSkillStore.bundledSkillNames))
+    }
+
+    /// A bundled skill a surface is no longer given is taken out of it.
+    ///
+    /// Installing only replaces what it is asked for, so a workspace that was
+    /// given `import-lamp-writing` by an older build would keep that copy for
+    /// ever, frozen at that build, and `read_skill` prefers a workspace's own
+    /// copy to the catalog — so the one surface that had the skill would be the
+    /// one surface reading a stale one.
+    @Test func abundledSkillDroppedFromAsurfaceIsTakenOutOfIt() throws {
+        let catalog = try catalog(["build-lamp-deck", "import-lamp-writing", "sola-scriptura"])
+        let workspace = workspace()
+        defer {
+            try? FileManager.default.removeItem(at: catalog)
+            try? FileManager.default.removeItem(at: workspace)
+        }
+
+        try WorkspaceSkillStore.installBundledSkills(
+            named: ["build-lamp-deck", "import-lamp-writing", "sola-scriptura"],
+            from: catalog,
+            intoSkillDirectoriesOf: workspace
+        )
+        // A skill of the reader's own, which no install of Lamp's may remove.
+        let mine = WorkspaceSkillStore.codexSkillsDirectory(in: workspace)
+            .appendingPathComponent("series-planner", isDirectory: true)
+        try FileManager.default.createDirectory(at: mine, withIntermediateDirectories: true)
+        try Data("---\nname: series-planner\n---\n".utf8)
+            .write(to: mine.appendingPathComponent("SKILL.md"))
+
+        try WorkspaceSkillStore.installBundledSkills(
+            named: WorkspaceSkillStore.workspaceBundledSkillNames,
+            from: catalog,
+            intoSkillDirectoriesOf: workspace
+        )
+
+        for provider in [
+            WorkspaceSkillStore.codexSkillsDirectory,
+            WorkspaceSkillStore.claudeSkillsDirectory,
+        ] {
+            let present = installed(in: workspace, provider: provider)
+            #expect(!present.contains("import-lamp-writing"))
+            #expect(present.contains("build-lamp-deck"))
+            #expect(present.contains("sola-scriptura"))
+        }
+        #expect(
+            installed(in: workspace, provider: WorkspaceSkillStore.codexSkillsDirectory)
+                .contains("series-planner"),
+            "a skill of the reader's own was removed by Lamp's own install"
+        )
+    }
+
     /// A built-in stays out of the custom catalog however it got there, so a
     /// reader cannot edit or delete the copy their build ships.
     @Test func aninstalledBuiltInIsStillNotAcustomSkill() async throws {

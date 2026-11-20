@@ -685,10 +685,17 @@ enum DevotionalAgentWorkspaceStore {
         }
     }
 
+    /// The bundled skills that belong to a writing, not every bundled skill:
+    /// `import-lamp-writing` brings in writings that do not exist yet, from a
+    /// bundle built outside the library, so it is read from Lamp's own catalog
+    /// rather than kept in each writing's workspace. An agent here is still
+    /// offered the import tools and can still read it — `read_skill` falls
+    /// back to the catalog — and a workspace that has a copy from an older
+    /// build has it taken out.
     @WritingWorkspaceFiles
     private static func installBundledSkillsIfNeeded(in workspace: URL) throws {
         try WorkspaceSkillStore.installBundledSkills(
-            named: WorkspaceSkillStore.bundledSkillNames,
+            named: WorkspaceSkillStore.workspaceBundledSkillNames,
             from: LampBundledSkills.catalogURL,
             intoSkillDirectoriesOf: workspace
         )

@@ -13,8 +13,8 @@ public enum LampMCPToolCatalog {
         tool(
             "read_skill",
             """
-            Read a skill installed for this session, or Lamp's bundled study \
-            skills when there is no workspace. Call it with no arguments \
+            Read a skill installed for this session, or one Lamp ships — the \
+            study skills, and the writing import's. Call it with no arguments \
             to list them, with `name` for that skill's SKILL.md, and with \
             `name` and `file` for a Markdown file the skill refers to, such as \
             `references/worked-example.md`. These hold the procedure to follow \

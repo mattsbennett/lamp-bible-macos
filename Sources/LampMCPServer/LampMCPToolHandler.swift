@@ -655,31 +655,51 @@ public actor LampMCPToolHandler {
         let text: String?
     }
 
+    /// Somewhere a session's skills are read from, and whether only the ones
+    /// Lamp serves outside a workspace may come from it.
+    private struct SkillRoot {
+        let url: URL
+        let externalOnly: Bool
+    }
+
     private func readSkill(named name: String?, file: String?) throws -> SkillReading {
         guard policy.isEnabled else { throw LampMCPToolError.accessDisabled }
         // A writing workspace keeps its skills in itself; a reader chat names
         // its folder separately, having no writing to serve.
         let fileManager = FileManager.default
-        let roots: [URL]
-        let bundled: Bool
+        var roots: [SkillRoot] = []
         if let skillsRoot = skillsURL ?? workspaceURL {
-            // A configured session exposes only its installed selection.
             roots = [".claude/skills", ".agents/skills"].map {
-                skillsRoot.appendingPathComponent($0, isDirectory: true)
+                SkillRoot(
+                    url: skillsRoot.appendingPathComponent($0, isDirectory: true),
+                    externalOnly: false
+                )
             }
-            bundled = false
-        } else {
-            guard let catalog = LampBundledSkills.catalogURL else {
-                throw LampMCPToolError.noSkills
-            }
-            roots = [catalog]
-            bundled = true
         }
-        let available = roots
-            .flatMap { (try? fileManager.contentsOfDirectory(atPath: $0.path)) ?? [] }
-            .filter { !$0.hasPrefix(".") }
-        let names = Set(available).filter {
-            !bundled || LampBundledSkills.externalSkillNames.contains($0)
+        // Then Lamp's own catalog, for every session but a reader chat's.
+        //
+        // Not only a session started without a workspace, as it was: a
+        // workspace is offered the import tools, whose descriptions say to read
+        // `import-lamp-writing` first, and that skill is no longer installed
+        // into a workspace — the bundle it describes is built outside the
+        // library, for writings that do not exist yet, so no one writing owns
+        // it. Served from the workspace alone, the agent was told to read a
+        // skill that, for it, did not exist.
+        //
+        // A reader chat is left out on purpose. It is read-only, its
+        // instructions name the skills installed for it, and the catalog would
+        // offer it one whose steps end in files it cannot write.
+        if skillsURL == nil, let catalog = LampBundledSkills.catalogURL {
+            roots.append(SkillRoot(url: catalog, externalOnly: true))
+        }
+        guard !roots.isEmpty else { throw LampMCPToolError.noSkills }
+        func readable(_ skill: String, from root: SkillRoot) -> Bool {
+            !root.externalOnly || LampBundledSkills.externalSkillNames.contains(skill)
+        }
+        let names = roots.reduce(into: Set<String>()) { names, root in
+            let entries = ((try? fileManager.contentsOfDirectory(atPath: root.url.path)) ?? [])
+                .filter { !$0.hasPrefix(".") }
+            names.formUnion(entries.filter { readable($0, from: root) })
         }.sorted()
         guard let name else {
             return SkillReading(available: names, skill: nil, file: nil, text: nil)
@@ -691,12 +711,15 @@ public actor LampMCPToolHandler {
                 "name", "no skill called \(name) is installed for this session"
             )
         }
+        // In order, so a workspace's own copy of a skill is what it is told,
+        // and the catalog answers only for what the workspace does not have.
         guard let root = roots.first(where: {
-            fileManager.fileExists(atPath: $0.appendingPathComponent(skill).path)
+            readable(skill, from: $0)
+                && fileManager.fileExists(atPath: $0.url.appendingPathComponent(skill).path)
         }) else {
             throw LampMCPToolError.invalidArgument("name", "\(skill) could not be read")
         }
-        let directory = root.appendingPathComponent(skill, isDirectory: true)
+        let directory = root.url.appendingPathComponent(skill, isDirectory: true)
         let relative = file ?? "SKILL.md"
         guard let text = try? LampBundledSkills.read(file: relative, inside: directory) else {
             throw LampMCPToolError.invalidArgument(

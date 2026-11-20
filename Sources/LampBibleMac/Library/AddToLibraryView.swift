@@ -1,3 +1,7 @@
+import AppKit
+#if canImport(LampBibleMacSupport)
+import LampBibleMacSupport
+#endif
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -66,6 +70,16 @@ struct AddToLibraryView: View {
     @State private var showingStudyDataImporter = false
     @State private var showingNotesMarkdownImporter = false
     @State private var showingDevotionalsMarkdownImporter = false
+    /// Whether AI features are shown (`AIFeatures`). Off, Lamp offers no agent
+    /// anywhere, so the writing import says nothing about handing the
+    /// converting to one.
+    @AppStorage(AIFeatures.key) private var aiFeaturesEnabled = AIFeatures.defaultValue
+    /// Whether an agent may send an import at all. Off, the prompt would end
+    /// in a refusal naming the setting, so the offer says so first.
+    @AppStorage(AgentModuleAccessPreferences.allowsWritingStartsKey)
+    private var agentAllowsWritingStarts = false
+    @State private var hasCopiedAgentPrompt = false
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         NavigationSplitView {
@@ -295,45 +309,148 @@ struct AddToLibraryView: View {
                 ("Or restore a Lamp export.", "A personal-study .json or .lamp file preserves structured notes or highlights."),
             ]
         ) {
+            // One child, because `pathPane` lays its actions out in a row: a
+            // second one here is a second column, which is where the agent
+            // offer went when it was written as a sibling.
             VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 12) {
-                    Button("Import Notes from .md…", systemImage: "note.text") {
-                        showingNotesMarkdownImporter = true
-                    }
-                    .buttonStyle(.lampProminent)
-
-                    Button("Import Writing…", systemImage: "book.closed") {
-                        showingDevotionalsMarkdownImporter = true
-                    }
-                    .buttonStyle(.lampProminent)
-                }
-
-                Button("Restore Notes or Highlights from .json/.lamp…", systemImage: "archivebox") {
-                    showingStudyDataImporter = true
-                }
-
-                if let last = model.lastWritingImport {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Button("Undo Last Writing Import", systemImage: "arrow.uturn.backward") {
-                            model.undoLastWritingImport()
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 12) {
+                        Button("Import Notes from .md…", systemImage: "note.text") {
+                            showingNotesMarkdownImporter = true
                         }
-                        Text("From \(last.sourceName), \(last.undo.importedAt.formatted(date: .abbreviated, time: .shortened)): \(last.undo.writings.count) writing\(last.undo.writings.count == 1 ? "" : "s")\(last.undo.decks.isEmpty ? "" : " and \(last.undo.decks.count) deck\(last.undo.decks.count == 1 ? "" : "s")"). Anything changed since is left as it is.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .padding(.top, 6)
-                }
-            }
-            .controlSize(.large)
-            .disabled(model.isImportingStudyData)
-            .onAppear { model.refreshWritingImportUndo() }
+                        .buttonStyle(.lampProminent)
 
-            if model.isImportingStudyData {
-                ProgressView("Importing study data…")
+                        Button("Import Writing…", systemImage: "book.closed") {
+                            showingDevotionalsMarkdownImporter = true
+                        }
+                        .buttonStyle(.lampProminent)
+                    }
+
+                    Button("Restore Notes or Highlights from .json/.lamp…", systemImage: "archivebox") {
+                        showingStudyDataImporter = true
+                    }
+
+                    if let last = model.lastWritingImport {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Button("Undo Last Writing Import", systemImage: "arrow.uturn.backward") {
+                                model.undoLastWritingImport()
+                            }
+                            Text("From \(last.sourceName), \(last.undo.importedAt.formatted(date: .abbreviated, time: .shortened)): \(last.undo.writings.count) writing\(last.undo.writings.count == 1 ? "" : "s")\(last.undo.decks.isEmpty ? "" : " and \(last.undo.decks.count) deck\(last.undo.decks.count == 1 ? "" : "s")"). Anything changed since is left as it is.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(.top, 6)
+                    }
+                }
+                .controlSize(.large)
+                .disabled(model.isImportingStudyData)
+                .onAppear { model.refreshWritingImportUndo() }
+
+                if model.isImportingStudyData {
+                    ProgressView("Importing study data…")
+                }
+
+                agentImportOffer
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
+
+    /// What someone holding thirty Word files needs to know, said where they
+    /// arrive with them.
+    ///
+    /// The buttons above take Markdown. Everything else — Word, Pages, a notes
+    /// app's export — has to be converted first, and an app allowed to read the
+    /// library can do that and check it against Lamp before anything is shown
+    /// for review. Lamp ships the instructions for it as a bundled skill, and
+    /// until now nothing in the app said so: the skill was installed into each
+    /// writing's agent workspace, which is the last place to look for a way to
+    /// bring in writings that do not exist yet.
+    ///
+    /// Behind the AI features switch, like every other agent surface: with AI
+    /// off Lamp offers no agent anywhere, and this would be the one exception.
+    @ViewBuilder private var agentImportOffer: some View {
+        if aiFeaturesEnabled {
+            VStack(alignment: .leading, spacing: 10) {
+                Divider()
+                    .padding(.vertical, 4)
+
+                Label("Or have an agent prepare the files", systemImage: "sparkles")
+                    .font(.headline)
+
+                Text(
+                    """
+                    The buttons above take Markdown. An app you have allowed \
+                    to read your library — Claude Code, Codex, Claude Desktop \
+                    — can convert Word, Pages or notes-app exports, check them \
+                    against Lamp, and send them here for the same review. \
+                    Nothing is imported until you tick it. Give it this, with \
+                    the folder they are in:
+                    """
+                )
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+                HStack(alignment: .top, spacing: 10) {
+                    Text(Self.agentImportPrompt)
+                        .font(.system(.callout, design: .monospaced))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                        .background(
+                            Color.lampTileFill,
+                            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        )
+
+                    Button(
+                        hasCopiedAgentPrompt ? "Copied" : "Copy",
+                        systemImage: hasCopiedAgentPrompt ? "checkmark" : "doc.on.doc"
+                    ) {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(Self.agentImportPrompt, forType: .string)
+                        hasCopiedAgentPrompt = true
+                    }
+                    .buttonStyle(.lampSecondary)
+                    .controlSize(.small)
+                }
+
+                if !agentAllowsWritingStarts {
+                    Label(
+                        """
+                        An agent needs “Allow agents to start a writing” \
+                        turned on before it can send one.
+                        """,
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Button("Set Up Other Apps…", systemImage: "gearshape") {
+                    SettingsDestination.shared.section = .aiAndAgents
+                    SettingsDestination.shared.anchor = .otherApps
+                    openSettings()
+                }
+                .buttonStyle(.lampSecondary)
+                .controlSize(.small)
+            }
+            .padding(.top, 8)
+        }
+    }
+
+    /// Written out rather than built from the skill, which an agent reads for
+    /// itself: this only has to get it to the skill. It names `read_skill`
+    /// because a terminal agent has no copy on disk to find — the skill is
+    /// Lamp's, served over the `lamp` server.
+    private static let agentImportPrompt = """
+        Bring my writing into Lamp Bible. Read Lamp's import-lamp-writing \
+        skill first, with the lamp server's read_skill tool, then follow it. \
+        My files are in <folder>.
+        """
 
     /// What the last import did, said beside the button that started it
     /// rather than in a sheet to dismiss.

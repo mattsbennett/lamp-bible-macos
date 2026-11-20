@@ -35,27 +35,43 @@ public enum WorkspaceSkillStore {
     private static let catalogDirectoryName = "AgentSkills"
 
     /// The skills that ship with Lamp, by the folder name each has under
-    /// `Resources/AgentSkills`, and whether doing what each says involves
-    /// writing a file.
+    /// `Resources/AgentSkills`, and what each one asks of the surface it is
+    /// installed on.
     ///
-    /// Written down once because four different rules read it — a built-in is
+    /// Written down once because five different rules read it — a built-in is
     /// kept out of the custom catalog, refused by every editing path, left out
-    /// of the sync export, and installed into a workspace — and a skill added
-    /// to the resources but not here becomes editable and syncable, which is
-    /// how a reader's copy silently diverges from the one their build ships.
+    /// of the sync export, installed into a writing's workspace, and installed
+    /// into a reader chat — and a skill added to the resources but not here
+    /// becomes editable and syncable, which is how a reader's copy silently
+    /// diverges from the one their build ships.
     ///
-    /// `writesFiles` decides which surfaces get it. A reader chat is read-only,
-    /// and a skill whose steps end in a file it cannot write is worse there than
-    /// no skill at all: the agent follows it and fails at the last step, having
-    /// spent the reader's time.
-    public static let bundledSkills: [(name: String, writesFiles: Bool)] = [
-        ("build-lamp-deck", true),
-        ("import-lamp-writing", true),
-        ("original-languages", false),
-        ("sola-scriptura", false),
+    /// `writesFiles` keeps a skill out of a read-only surface. A reader chat
+    /// cannot write anything, and a skill whose steps end in a file is worse
+    /// there than no skill at all: the agent follows it and fails at the last
+    /// step, having spent the reader's time.
+    ///
+    /// `installsInWorkspace` is a separate question, because writing a file is
+    /// not the same as belonging to a writing. `import-lamp-writing` builds its
+    /// bundle outside the library and brings in writings that do not exist yet,
+    /// so no one writing's workspace is its home — it was installed into every
+    /// one of them, which is the last place anybody would look for it. It is
+    /// read from the bundled catalog instead, wherever `read_skill` is offered
+    /// alongside the import tools.
+    public static let bundledSkills: [
+        (name: String, writesFiles: Bool, installsInWorkspace: Bool)
+    ] = [
+        ("build-lamp-deck", true, true),
+        ("import-lamp-writing", true, false),
+        ("original-languages", false, true),
+        ("sola-scriptura", false, true),
     ]
 
     public static var bundledSkillNames: Set<String> { Set(bundledSkills.map(\.name)) }
+
+    /// The bundled skills a writing's own workspace carries.
+    public static var workspaceBundledSkillNames: Set<String> {
+        Set(bundledSkills.lazy.filter(\.installsInWorkspace).map(\.name))
+    }
 
     /// The bundled skills a read-only surface can carry out in full.
     public static var readOnlyBundledSkillNames: Set<String> {
@@ -65,7 +81,8 @@ public enum WorkspaceSkillStore {
     private static var builtInSkillNames: Set<String> { bundledSkillNames }
 
     /// Brings a workspace's copy of each named bundled skill up to the one this
-    /// build ships, into every provider directory, and returns what it wrote.
+    /// build ships, into every provider directory, and takes out the bundled
+    /// skills this surface is not given. Returns what it wrote.
     ///
     /// Replacing rather than only installing when absent: a workspace used to
     /// keep whatever it was given on the day it was created, so an agent months
@@ -87,6 +104,20 @@ public enum WorkspaceSkillStore {
         fileManager: FileManager = .default
     ) throws -> [String] {
         guard let catalog else { return [] }
+        // `names` is the whole set this surface is to have, so a bundled skill
+        // left out of it is taken away rather than left behind. Without this a
+        // skill dropped from a surface — `import-lamp-writing`, when it stopped
+        // belonging to one writing's workspace — would sit in every workspace
+        // that ever had it, frozen at the build that put it there, and be
+        // preferred by `read_skill` over the bundle it was moved to. Only
+        // bundled names are removed: a custom skill cannot carry one.
+        for name in bundledSkillNames.subtracting(names).sorted() {
+            for root in [codexSkillsDirectory(in: workspace), claudeSkillsDirectory(in: workspace)] {
+                let stale = root.appendingPathComponent(name, isDirectory: true)
+                guard fileManager.fileExists(atPath: stale.path) else { continue }
+                try fileManager.removeItem(at: stale)
+            }
+        }
         var installed: [String] = []
         for name in names.sorted() {
             let source = catalog.appendingPathComponent(name, isDirectory: true)

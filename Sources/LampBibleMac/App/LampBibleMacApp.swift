@@ -881,6 +881,7 @@ private struct ReaderSettingsView: View {
                             externalAppsSetup
                         }
                     }
+                    .id(SettingsAnchor.otherApps)
                     // The helper reads the policy and the descriptor from
                     // disk, so a setting changed here has to reach them
                     // without waiting for someone to press Test.
@@ -1523,6 +1524,10 @@ final class SettingsDestination {
 /// A part of a settings section that something elsewhere can mean.
 enum SettingsAnchor: Hashable {
     case readerChats
+    /// How another app is given access to the library, which the writing
+    /// import points at: an agent cannot prepare an import until Lamp's
+    /// server is set up in it.
+    case otherApps
 }
 
 enum ReaderSettingsSection: String, CaseIterable, Identifiable {

@@ -240,6 +240,89 @@ struct ReaderSkillAccessTests {
         #expect(Set(names ?? []) == LampBundledSkills.externalSkillNames)
     }
 
+    /// A writing's workspace can read the import skill, which is not installed
+    /// in it.
+    ///
+    /// Every session is offered `plan_writing_import` and `import_writings`,
+    /// and both descriptions say to read `import-lamp-writing` first. The skill
+    /// belongs to no one writing — its bundle is built outside the library, for
+    /// writings that do not exist yet — so it is not installed into a
+    /// workspace, and a session served only from its workspace was told to read
+    /// a skill that, for it, did not exist. `read_skill` falls back to Lamp's
+    /// own catalog.
+    @Test func aworkspaceCanReadTheImportSkillItIsToldToRead() async throws {
+        let root = try workspace()
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(
+            !FileManager.default.fileExists(
+                atPath: root.appendingPathComponent(".claude/skills/import-lamp-writing").path
+            ),
+            "the skill is installed in the workspace, so the fallback is not what is tested"
+        )
+
+        let listing = try await handler(root).call(name: "read_skill", arguments: nil)
+        #expect(text(listing).contains("import-lamp-writing"))
+
+        let skill = try await handler(root).call(
+            name: "read_skill", arguments: ["name": .string("import-lamp-writing")]
+        )
+        #expect(skill.isError != true, "the skill was refused: \(text(skill))")
+        #expect(text(skill).contains("name: import-lamp-writing"))
+
+        let reference = try await handler(root).call(
+            name: "read_skill",
+            arguments: [
+                "name": .string("import-lamp-writing"),
+                "file": .string("references/format.md"),
+            ]
+        )
+        #expect(reference.isError != true, "a reference the skill links was refused")
+
+        // The catalog answers for what the workspace has not got, and never
+        // over what it has: a workspace's own copy of a skill is the one the
+        // agent was given.
+        let installed = try await handler(root).call(
+            name: "read_skill", arguments: ["name": .string("sola-scriptura")]
+        )
+        #expect(text(installed).contains("The procedure."))
+        // A bundled skill that is not served outside a workspace stays unserved.
+        #expect(!text(listing).contains("build-lamp-deck"))
+    }
+
+    /// The fallback stops at the reader's chat, which is read-only: the import
+    /// skill's steps end in files it cannot write, and its instructions name
+    /// the skills installed for it, so one it was never given must not appear.
+    @Test func areaderChatIsNotOfferedTheImportSkillByTheFallback() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-reader-fallback-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let shipped = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/LampBibleMacSupport/Resources/AgentSkills", isDirectory: true)
+        try WorkspaceSkillStore.installBundledSkills(
+            named: WorkspaceSkillStore.readOnlyBundledSkillNames,
+            from: shipped,
+            intoSkillDirectoriesOf: root
+        )
+        let handler = LampMCPToolHandler(
+            library: LampAgentLibrary(libraryRootURL: root), skillsURL: root
+        )
+
+        let listing = try await handler.call(name: "read_skill", arguments: nil)
+        let names = Set(
+            listing.structuredContent?.objectValue?["available"]?.arrayValue?
+                .compactMap(\.stringValue) ?? []
+        )
+        #expect(names == WorkspaceSkillStore.readOnlyBundledSkillNames)
+        await #expect(throws: (any Error).self) {
+            try await handler.call(
+                name: "read_skill", arguments: ["name": .string("import-lamp-writing")]
+            )
+        }
+    }
+
     @Test func aConfiguredEmptySessionDoesNotFallBackToOtherSkills() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("lamp-empty-skills-\(UUID().uuidString)")
