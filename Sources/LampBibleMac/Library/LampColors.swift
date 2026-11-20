@@ -400,14 +400,20 @@ extension View {
     /// The card is as wide as its content; give the content a flexible frame
     /// first (`.frame(maxWidth: .infinity, alignment: .leading)`) for a card
     /// that fills its column.
+    /// `filled: false` keeps the hairline and drops the fill, so the card
+    /// groups its content without lifting it off the ground. That is what a
+    /// card holding text to be *read* wants — the reader's notes are read at
+    /// length, and a step under them makes them harder to read, not easier.
+    /// A card holding controls or a summary to be glanced at keeps its fill.
     func lampCard(
         padding: CGFloat = LampMetrics.cardPadding,
-        radius: CGFloat = LampMetrics.cardRadius
+        radius: CGFloat = LampMetrics.cardRadius,
+        filled: Bool = true
     ) -> some View {
         self
             .padding(padding)
             .background(
-                Color.lampCardFill,
+                filled ? Color.lampCardFill : Color.clear,
                 in: RoundedRectangle(cornerRadius: radius, style: .continuous)
             )
             .overlay {

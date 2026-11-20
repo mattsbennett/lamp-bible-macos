@@ -930,9 +930,13 @@ private struct NoteReadingCard: View {
         }
         .textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // The card's own hairline, selected or not, as the editor's card has:
-        // an accent ring round the chosen verse drew more than it said.
-        .lampCard(padding: 16)
+        // The hairline alone, with no fill: notes are read at length, and a
+        // card lifted off the pane under a column of text makes it harder to
+        // read, not easier. The hairline still says where one note ends and
+        // the next begins — and it is there whether or not the verse is
+        // chosen, since an accent ring round the chosen one drew more than it
+        // said.
+        .lampCard(padding: 16, filled: false)
         .task(id: "\(group.id):\(group.hasPersonalNote):\(reloadToken)") {
             personalNote = group.hasPersonalNote ? try? await model.personalNote(for: group.id) : nil
             hasLoaded = true
