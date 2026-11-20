@@ -53,7 +53,13 @@ The comfortable claims need the same scrutiny as the unfamiliar ones.
 ## Research without unnecessary work
 
 Call `list_modules` once at the start of the task; refresh if availability changes.
-Use only what it lists. Reuse passages, annotations and lexicon entries already
+Use only what it lists. The modules named below are the ones Lamp bundles: they are
+the default, not the ceiling. Where the inventory shows something else that bears on
+the question — another lexicon, another translation, another original-language text
+— say so and offer it rather than answering from the bundled set in silence, and use
+it if the reader says so. The inventory gives a module's id, name, language and
+whether it tags Strong's, and nothing about its edition, so a name is neither a
+warrant nor grounds for dismissal. Reuse passages, annotations and lexicon entries already
 verified in this task, including work shared with `original-languages`. Batch
 nearby verses and compatible translations, not an entire library by default.
 
@@ -72,9 +78,11 @@ nearby verses and compatible translations, not an entire library by default.
   `kinds: ["book"]` to trace a framing. Search results are bounded samples (default
   20, subject to the reader's cap), not proof of absence or complete inventories.
   Use alternate wording and narrower module/book ranges when relevant.
-- `lookup_dictionary_keys` retrieves exact keys; prefer `bdb` for Hebrew and
-  `tbesg` for Greek semantic range. Ask `bdb` with the Strong's key: each entry
-  lists the keys that led to it in `mappedFrom`, and one key can lead to several. Strong's glosses and
+- `lookup_dictionary_keys` retrieves exact keys; of the bundled lexicons prefer
+  `bdb` for Hebrew and `tbesg` for Greek semantic range, and offer a lexicon of the
+  reader's own ahead of them, these two being from 1906 and 1922. Ask `bdb` with
+  the Strong's key: each entry lists the keys that led to it in `mappedFrom`, and
+  one key can lead to several. Strong's glosses and
   `analyze_strongs` rendering counts describe tagging/rendering, not the sense in
   this sentence.
 

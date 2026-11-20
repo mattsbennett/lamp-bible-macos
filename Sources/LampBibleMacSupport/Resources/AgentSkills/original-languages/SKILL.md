@@ -20,14 +20,47 @@ interpretation; translators' rendering counts are neither.
   draft. In a writing workspace it is `draft.md` unless another is named; in chat,
   answer in chat rather than promising a file you cannot write.
 
+## Which modules to use
+
+The modules this skill names are the ones Lamp bundles. They are always there and
+their limits are known, which is why they are written down here — but they are the
+default, not the ceiling. A library can hold better: a lexicon newer than BDB
+(1906) or Abbott-Smith (1922), an original-language text or a tagged translation
+Lamp does not ship. A question answered from the bundled set when the reader owns
+something better is answered worse than it needed to be.
+
+- **Use what the reader has named** — in the question, in the workspace's context,
+  or earlier in this task.
+- **Otherwise default to the bundled modules below.** They are known quantities,
+  and the limits in this skill are written about them.
+- **Where `list_modules` shows something else that bears on the question** —
+  another lexicon, another original-language text, another Strong's-tagged
+  translation — say so and offer it: what you would use it for, and what you are
+  using instead. Then use it if the reader says so. Do not swap it in silently:
+  the inventory gives a module's id, name, language and whether it tags Strong's,
+  and nothing about its edition, apparatus or how it was made. A name is not a
+  warrant for trusting it, and it is not grounds for dismissing it either.
+- **Do not leave a better-looking module unmentioned because a bundled one
+  answered.** "BDB (1906) gives …; your library also holds X, which I can read
+  instead" costs a line, and it is the difference between an answer and the best
+  answer available here.
+- **A limit written in this skill belongs to the module it names.** With a
+  different module, check rather than carry the limit over — and do not assume it
+  escapes the limit either. A library can hold a different module under a bundled
+  id; `list_modules` says which is installed.
+
 ## Read before explaining
 
-1. Call `list_modules` at the start of the task. Reuse that inventory and evidence
-   already verified in this task, including work done with `sola-scriptura`.
-   Refresh if availability changes; never assume an installed or permitted module.
+1. Call `list_modules` at the start of the task. Read it for two things: that the
+   modules you mean to use are there and permitted, and whether the library holds
+   anything beyond the bundled set that bears on this question — see **Which
+   modules to use** above. Reuse that inventory and evidence already verified in
+   this task, including work done with `sola-scriptura`. Refresh if availability
+   changes; never assume an installed or permitted module.
 2. Read the passage before the lexicon: `read_passage` with
    `include_annotations: true`, explicitly naming `TAHOT` for the Hebrew OT or
-   `TAGNT` for the Greek NT. These are the bundled Leningrad and Nestlé-Aland texts.
+   `TAGNT` for the Greek NT. These are the bundled Leningrad and Nestlé-Aland
+   texts; another original-language text in the library is offered, not assumed.
    Add the cited or current English translation in the same call when compatible.
    Per-word annotations give the Strong's key, dictionary form, raw morphology and
    its decoded description; one call does the verse, not one call per word.
@@ -35,9 +68,11 @@ interpretation; translators' rendering counts are neither.
    single-word text match, to identify the tag for the word under discussion.
 3. For a word the answer turns on, take parsing from that occurrence and quote a
    named lexicon for the range: `lookup_dictionary_keys`, for example
-   `{"keys": ["G4561"], "module_ids": ["tbesg"]}`. Prefer `bdb` for Hebrew and
-   `tbesg` for Greek: prefer their fuller definitions and usage citations to a
-   short gloss. If only a brief gloss is available, state that limit.
+   `{"keys": ["G4561"], "module_ids": ["tbesg"]}`. Of the bundled lexicons prefer
+   `bdb` for Hebrew and `tbesg` for Greek: prefer their fuller definitions and
+   usage citations to a short gloss. If only a brief gloss is available, state that
+   limit. A lexicon of the reader's own is the first thing to offer here, these two
+   being the oldest part of the bundled set.
    Ask `bdb` with the Strong's key. Its entries keep BDB's own numbers, so each
    comes back with `mappedFrom` listing the keys you asked that lead to it. One
    key often leads to more than one entry, such as two words spelled alike:
@@ -46,16 +81,18 @@ interpretation; translators' rendering counts are neither.
    glosses only. `strongs_hebrew` and `strongs_greek` are also bundled, but their
    glosses index renderings and must not stand in for a semantic argument.
 4. For a rendering-dependent claim, compare the relevant installed English
-   translations. Bundled candidates are `KJV`, `BSB`, `ASV`, `WEB`, `YLT`.
-   Name the ones actually compared. Do not request every translation regardless of
-   language, book coverage or versification. One unsupported book fails a combined
-   call; remove that module and retry the compatible selection.
+   translations — the ones that bear on the question, not only the bundled five,
+   which are `KJV`, `BSB`, `ASV`, `WEB`, `YLT`. A translation the reader keeps and
+   reads is usually one of the relevant ones. Name the ones actually compared.
+   Do not request every translation regardless of language, book coverage or
+   versification. One unsupported book fails a combined call; remove that module
+   and retry the compatible selection.
 5. If usage or rendering distribution matters, call `analyze_strongs` with `key`
    and explicit relevant `translation_ids`; narrow `range` when the claim is local.
    Ask only for translations `list_modules` marks `tagsStrongs: true`; of the
-   bundled English that is `KJV` and `BSB`. A translation without tags is left
-   out of the result without comment, so report the rows that came back, not the
-   ones requested.
+   bundled English that is `KJV` and `BSB`, and an installed one marked the same
+   way counts too. A translation without tags is left out of the result without
+   comment, so report the rows that came back, not the ones requested.
    Attribute every count to its translation and tagging. Unequal totals can reflect
    tagging or textual differences, not translator intent. A distribution can prompt
    a hypothesis about policy; it does not establish why this verse was rendered so.
@@ -99,8 +136,9 @@ For a substantive translation comparison read
   gives a translation's footnotes; `read_commentary` pages with `nextOffset`.
 
 If an original, lexicon or necessary analysis is unavailable, say **unverifiable
-here** and identify what evidence is missing. Do not fill gaps from memory or
-claim that an unavailable word has been disproved.
+here** and identify what evidence is missing — including when what would settle it
+is a module the reader could install, rather than leaving the gap unexplained.
+Do not fill gaps from memory or claim that an unavailable word has been disproved.
 
 ## Guard against overreach
 
