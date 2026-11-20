@@ -1068,7 +1068,6 @@ struct DevotionalEditorView: View {
                 }
                 .frame(width: sidebarWidth, height: geometry.size.height)
                 .clipped()
-                .background(Color(nsColor: .windowBackgroundColor))
                 .accessibilityHidden(!usesSidePane)
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .leading)
@@ -1576,10 +1575,9 @@ struct DevotionalEditorView: View {
                 }
             )
         }
-        // Shown while the web view is held back until its first paint, and behind
-        // it thereafter. Same colour the page is told to paint, so the reveal is
-        // invisible.
-        .background(Color(nsColor: .windowBackgroundColor))
+        // No colour here either. The page is transparent and shows whatever
+        // is behind it, so a colour here would be the one it showed — and
+        // the window's own ground is what every other surface shows.
     }
 
     private var visualFormattingToolbar: some View {
@@ -1693,8 +1691,7 @@ struct DevotionalEditorView: View {
             // take the shared height rather than each adding up its own.
             .frame(height: LampMetrics.paneHeaderHeight)
         }
-        .background(Color(nsColor: .windowBackgroundColor))
-    }
+            }
 
     /// What can be put into the writing, under one labelled menu. As four
     /// labelled buttons beside a row of glyphs, the bar mixed two kinds of
@@ -1785,8 +1782,7 @@ struct DevotionalEditorView: View {
                 // take the shared height rather than each adding up its own.
                 .frame(height: LampMetrics.paneHeaderHeight)
             }
-            .background(Color(nsColor: .windowBackgroundColor))
-
+            
             Divider()
 
             MarkdownTextEditor(
@@ -1802,8 +1798,7 @@ struct DevotionalEditorView: View {
             // shows whatever happens to be behind the window — which is close to
             // the colour the visual editor is told to paint, but not equal to it.
             // Naming the colour here makes the two surfaces match by construction.
-            .background(Color(nsColor: .windowBackgroundColor))
-        }
+                    }
     }
 
     private var statusBar: some View {
@@ -1845,8 +1840,7 @@ struct DevotionalEditorView: View {
         .lineLimit(1)
         .padding(.horizontal, 14)
         .padding(.vertical, 6)
-        .background(Color(nsColor: .windowBackgroundColor))
-    }
+            }
 
     private var activeSaveStateIsProblem: Bool {
         if let document = activeWorkspaceDocument {
@@ -1998,10 +1992,9 @@ struct DevotionalEditorView: View {
             .padding(.horizontal, 18)
             .padding(.vertical, 18)
         }
-        // A ground of its own, a step off the page in either appearance, so
-        // the inspector reads as beside the writing rather than part of it:
-        // on the same dark as the page, the two ran together.
-        .background(Self.inspectorGround)
+        // No background, so this shows the window's own ground, as the
+        // reader's page and the writing list do. Its own colour made it a
+        // step darker than everything round it (0.1408 against 0.1863).
         // A footnote marker clicked in the writing whose note is kept here
         // opens the section, so the caret has somewhere visible to go.
         .onChange(of: footnotesRevealToken) { foldedOpen["Footnotes"] = true }
@@ -2069,12 +2062,6 @@ struct DevotionalEditorView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
-
-    private static let inspectorGround = Color(nsColor: NSColor(name: nil) { appearance in
-        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            ? NSColor(white: 0.105, alpha: 1)
-            : NSColor(srgbRed: 0.955, green: 0.955, blue: 0.962, alpha: 1)
-    })
 
     /// What an empty field is for, in the place its text will go.
     private func fieldPlaceholder(_ text: String) -> some View {

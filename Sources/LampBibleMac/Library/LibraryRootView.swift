@@ -1954,10 +1954,10 @@ private struct StudyInspectorColumn<Content: View>: View {
             content
                 .frame(width: clampedWidth)
         }
-        // A step off the reader's page, as an inspector is, so the two panes
-        // part along their edge rather than along a hairline alone, which on
-        // the dark window all but vanished.
-        .background(Color.lampInspectorFill)
+        // No background. The reader's page paints none either, so both show
+        // the window's own ground and match by construction rather than by
+        // two colours chosen to look alike. Painting one here made the column
+        // lighter than the page beside it (0.2379 against 0.1863 measured).
     }
 
     private var clampedWidth: Double {

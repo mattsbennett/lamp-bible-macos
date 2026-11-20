@@ -156,18 +156,44 @@ struct TipTapEditorView: NSViewRepresentable {
         coordinator.detach()
     }
 
-    /// The Markdown surface is a text view that draws no background of its own, so
-    /// it shows the window colour straight through. Resolving that same colour and
-    /// handing it to the web view is what makes the two writing surfaces match,
-    /// and keeps them matching when the system appearance changes.
+    /// The page paints no colour of its own and lets the window's ground show
+    /// through, which is how it matches the reader and every other surface.
+    ///
+    /// It used to resolve `NSColor.windowBackgroundColor` and hand that to the
+    /// web view, on the reasoning that the Markdown text view draws nothing
+    /// and so "shows the window colour straight through". The second half is
+    /// right and the first is not: what the window shows is not that colour.
+    /// Measured in one capture, the window's ground came out 0.1863 while
+    /// `windowBackgroundColor` came out 0.1569, so the writing page sat a step
+    /// darker than the reader's page and the writing list beside it. Showing
+    /// the ground rather than naming a colour cannot drift that way again.
     private func applyBackgroundColor(
         to webView: WKWebView,
         coordinator: TipTapEditorCoordinator
     ) {
-        let color = NSColor.windowBackgroundColor
-        webView.underPageBackgroundColor = color
-        coordinator.setBackgroundColor(cssColor(for: color, in: webView.effectiveAppearance))
+        if Self.webViewCanBeTransparent {
+            webView.underPageBackgroundColor = .clear
+            webView.setValue(false, forKey: "drawsBackground")
+            coordinator.setBackgroundColor("transparent")
+        } else {
+            let color = NSColor.windowBackgroundColor
+            webView.underPageBackgroundColor = color
+            coordinator.setBackgroundColor(cssColor(for: color, in: webView.effectiveAppearance))
+        }
     }
+
+    /// Whether this WebKit still lets a web view draw no background of its own.
+    ///
+    /// `drawsBackground` is not public API, so it is asked for rather than
+    /// assumed: if a future WebKit drops it, the editor paints
+    /// `windowBackgroundColor` as it did before, which is a shade off the
+    /// window's ground rather than a white page.
+    ///
+    /// Nothing public reaches this. `underPageBackgroundColor` covers only the
+    /// rubber-band area, and clearing the view's layer does not survive — both
+    /// were tried, and each left the page flat white over the window.
+    fileprivate static let webViewCanBeTransparent: Bool =
+        WKWebView().responds(to: NSSelectorFromString("_setDrawsBackground:"))
 
     private func cssColor(for color: NSColor, in appearance: NSAppearance) -> String {
         Self.cssColor(for: color, in: appearance)
@@ -1339,10 +1365,12 @@ final class TipTapEditorPool {
         // reach it, which reads as a flash of black as the editor opens. Injecting
         // the host colour at document start means the very first paint is already
         // the right one — waiting for `ready` is far too late.
-        let initialBackground = TipTapEditorView.cssColor(
-            for: .windowBackgroundColor,
-            in: NSApp?.effectiveAppearance ?? .currentDrawing()
-        )
+        let initialBackground = TipTapEditorView.webViewCanBeTransparent
+            ? "transparent"
+            : TipTapEditorView.cssColor(
+                for: .windowBackgroundColor,
+                in: NSApp?.effectiveAppearance ?? .currentDrawing()
+            )
         configuration.userContentController.addUserScript(WKUserScript(
             source: TipTapEditorCoordinator.backgroundStyleScript(cssColor: initialBackground),
             injectionTime: .atDocumentStart,
