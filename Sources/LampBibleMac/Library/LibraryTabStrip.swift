@@ -14,14 +14,24 @@ import UniformTypeIdentifiers
 /// as Finder does: hidden, nothing on screen said tabs existed, and the only
 /// way to a second was ⌘T or the File menu (owner, 2026-11-12).
 enum LibraryTabStrip {
-    static let height: CGFloat = 32
+    /// The bar's height: a pane's header height, since a rank of tabs stands
+    /// beside the writing list's search, a format bar or the assistant's
+    /// header, and the line under them reads as one across the window.
+    static let height: CGFloat = LampMetrics.paneHeaderHeight
+    /// The raised tab itself, kept to the size it had in a 32pt bar: grown
+    /// with the bar, a tab became a slab taller than the controls beside it.
+    static let tabHeight: CGFloat = 26
+    /// The gap above and below the raised tab, which the bar's extra height
+    /// goes into.
+    static var verticalInset: CGFloat { (height - tabHeight) / 2 }
     /// Below this a tab stops shrinking and the rank scrolls instead, so a
     /// title stays readable however many tabs are open.
     static let minimumCellWidth: CGFloat = 116
     static let newTabButtonWidth: CGFloat = 30
-    /// The gap kept around the raised tab, so it reads as sitting in the bar
-    /// rather than as a block cut out of it.
-    static let inset: CGFloat = 3
+    /// The gap kept at the rank's ends, so the raised tab reads as sitting in
+    /// the bar rather than as a block cut out of it. Wider than it was at
+    /// 32pt, so the gap at the end is not a sliver beside the one above.
+    static let inset: CGFloat = 6
     static let cornerRadius: CGFloat = 7
 
     /// A tab's width: an equal share of the bar, but never so narrow that a
@@ -199,7 +209,7 @@ struct LibraryTabBar: View {
         .frame(width: width, height: LibraryTabStrip.height)
         .background {
             LibraryTabShape(isSelected: isSelected, isHovered: isHovered || targetedID == item.id)
-                .padding(.vertical, LibraryTabStrip.inset)
+                .padding(.vertical, LibraryTabStrip.verticalInset)
                 .padding(.horizontal, 1)
         }
         .overlay(alignment: .trailing) {
@@ -289,7 +299,7 @@ struct LibraryTabBar: View {
             Image(systemName: "plus")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
-                .frame(width: LibraryTabStrip.newTabButtonWidth - 4, height: LibraryTabStrip.height - 10)
+                .frame(width: LibraryTabStrip.newTabButtonWidth - 4, height: LibraryTabStrip.tabHeight - 4)
                 .background(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .fill(Color.primary.opacity(isHoveringNewTab ? 0.08 : 0))

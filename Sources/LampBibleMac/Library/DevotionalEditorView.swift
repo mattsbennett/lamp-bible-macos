@@ -1595,7 +1595,7 @@ struct DevotionalEditorView: View {
         .frame(width: width, height: LibraryTabStrip.height)
         .background {
             LibraryTabShape(isSelected: isSelected, isHovered: isHovered)
-                .padding(.vertical, LibraryTabStrip.inset)
+                .padding(.vertical, LibraryTabStrip.verticalInset)
                 .padding(.horizontal, 1)
         }
         .overlay(alignment: .trailing) {
