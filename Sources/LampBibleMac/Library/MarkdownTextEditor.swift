@@ -34,6 +34,13 @@ struct MarkdownTextEditor: NSViewRepresentable {
     /// Offered on the context menu as "Mark as Reviewed", with the selected
     /// range, while there is anything marked. Nil offers nothing.
     var onMarkAsReviewed: ((NSRange) -> Void)?
+    /// Offers to put the assistant's wording back over what `range` covers.
+    /// The host shows what would come back before anything changes.
+    var onRestoreWording: ((NSRange) -> Void)?
+    /// Edits the host wants put in place as one change the writer's Undo
+    /// takes back. Asked for by token, so a view made again does not make
+    /// them a second time.
+    var pendingEdits: WritingTextEdits?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -122,6 +129,11 @@ struct MarkdownTextEditor: NSViewRepresentable {
             textView.scrollRangeToVisible(selection)
         }
 
+        if let pendingEdits, context.coordinator.appliedEditsToken != pendingEdits.token {
+            context.coordinator.appliedEditsToken = pendingEdits.token
+            Self.apply(pendingEdits, in: textView)
+        }
+
         // Asked for by a host that has just moved the selection somewhere the
         // writer hasn't looked — a footnote's line in the Footnotes field —
         // where leaving the caret behind in another view would mean the line
@@ -133,6 +145,28 @@ struct MarkdownTextEditor: NSViewRepresentable {
                 window.makeFirstResponder(textView)
             }
         }
+    }
+
+    /// The host's edits, made in the text view rather than by setting its
+    /// string, so they are one entry in the writer's own Undo and the host
+    /// hears about the new text the way it hears about typing.
+    ///
+    /// The edits come last first, so each range still means in the text what
+    /// it meant when they were worked out.
+    private static func apply(_ pending: WritingTextEdits, in textView: NSTextView) {
+        guard textView.isEditable, let storage = textView.textStorage,
+              textView.shouldChangeText(
+                  inRanges: pending.edits.map { NSValue(range: $0.range) },
+                  replacementStrings: pending.edits.map(\.replacement)
+              )
+        else { return }
+        storage.beginEditing()
+        for edit in pending.edits {
+            storage.replaceCharacters(in: edit.range, with: edit.replacement)
+        }
+        storage.endEditing()
+        textView.undoManager?.setActionName(pending.actionName)
+        textView.didChangeText()
     }
 
     /// The column's width in points: a monospaced character is 0.6 of the
@@ -148,20 +182,46 @@ struct MarkdownTextEditor: NSViewRepresentable {
         var revealedToken = 0
         /// The review marks last drawn.
         var drawnReviewRanges: [NSRange] = []
+        /// The host edits last put in place.
+        var appliedEditsToken = 0
 
         func textView(_ view: NSTextView, menu: NSMenu, for event: NSEvent, at charIndex: Int) -> NSMenu? {
-            guard parent.onMarkAsReviewed != nil, !parent.reviewRanges.isEmpty else { return menu }
-            let item = NSMenuItem(title: "Mark as Reviewed", action: #selector(markAsReviewed(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = view
-            menu.insertItem(item, at: 0)
-            menu.insertItem(.separator(), at: 1)
+            guard !parent.reviewRanges.isEmpty else { return menu }
+            var inserted = 0
+            if parent.onMarkAsReviewed != nil {
+                let item = NSMenuItem(
+                    title: "Mark as Reviewed", action: #selector(markAsReviewed(_:)), keyEquivalent: ""
+                )
+                item.target = self
+                item.representedObject = view
+                menu.insertItem(item, at: inserted)
+                inserted += 1
+            }
+            if parent.onRestoreWording != nil {
+                // Its ellipsis is the promise that nothing changes yet: what
+                // would come back is shown first, which for a passage the
+                // assistant only took words out of is the one way to see it.
+                let item = NSMenuItem(
+                    title: "Restore Original Wording…", action: #selector(restoreWording(_:)), keyEquivalent: ""
+                )
+                item.target = self
+                item.representedObject = view
+                menu.insertItem(item, at: inserted)
+                inserted += 1
+            }
+            guard inserted > 0 else { return menu }
+            menu.insertItem(.separator(), at: inserted)
             return menu
         }
 
         @objc private func markAsReviewed(_ item: NSMenuItem) {
             guard let view = item.representedObject as? NSTextView else { return }
             parent.onMarkAsReviewed?(view.selectedRange())
+        }
+
+        @objc private func restoreWording(_ item: NSMenuItem) {
+            guard let view = item.representedObject as? NSTextView else { return }
+            parent.onRestoreWording?(view.selectedRange())
         }
 
         init(_ parent: MarkdownTextEditor) {
@@ -189,6 +249,22 @@ struct MarkdownTextEditor: NSViewRepresentable {
             }
         }
     }
+}
+
+/// One text put in the place of another, in the Markdown text view.
+struct WritingTextEdit: Equatable {
+    let range: NSRange
+    let replacement: String
+}
+
+/// Edits a host asks the Markdown text view to make, as one undoable change.
+struct WritingTextEdits: Equatable {
+    /// Raised for each new set, so the view makes each once.
+    let token: Int
+    /// What the writer sees in Edit ▸ Undo.
+    let actionName: String
+    /// Last first.
+    let edits: [WritingTextEdit]
 }
 
 /// Finds in the Markdown text view, for the writing editor's find bar.

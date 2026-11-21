@@ -790,6 +790,17 @@ struct DevotionalEditorView: View {
     /// they keep marks (`WritingReviewMarks`).
     @StateObject private var reviewSession = WritingReviewSession()
     @AppStorage(WritingReviewMarks.key) private var reviewMarksEnabled = LampPreferenceDefaults.writingReviewMarksEnabled
+    /// A restore the writer has been shown and not yet taken: what would
+    /// change, before anything does.
+    @State private var restoreOffer: RestoreOffer?
+    /// Edits asked of the Markdown surface, so they are one entry in the
+    /// writer's own Undo rather than a new text set over the old.
+    @State private var markdownEdits: WritingTextEdits?
+    @State private var markdownEditsToken = 0
+    /// Why a restore was not offered, said rather than left to be guessed:
+    /// the control is there while anything can come back, so a selection it
+    /// will not act on owes the writer a reason.
+    @State private var refusedRestore: String?
     @State private var tipTapSelection = TipTapSelectionState()
     /// The text selected in the visual editor, read from the page a moment
     /// after the selection settles, while the agent pane is open to be told.
@@ -1177,6 +1188,34 @@ struct DevotionalEditorView: View {
             )
         }
         .onChange(of: content) { _, text in reviewSession.textChanged(text) }
+        .confirmationDialog(
+            "Restore the original wording?",
+            isPresented: Binding(
+                get: { restoreOffer != nil },
+                set: { if !$0 { restoreOffer = nil } }
+            ),
+            presenting: restoreOffer
+        ) { offer in
+            Button("Restore") {
+                restoreOffer = nil
+                takeRestore(offer)
+            }
+            Button("Cancel", role: .cancel) { restoreOffer = nil }
+        } message: { offer in
+            Text(offer.message)
+        }
+        .alert(
+            "That wording can’t be put back",
+            isPresented: Binding(
+                get: { refusedRestore != nil },
+                set: { if !$0 { refusedRestore = nil } }
+            ),
+            presenting: refusedRestore
+        ) { _ in
+            Button("OK", role: .cancel) { refusedRestore = nil }
+        } message: { reason in
+            Text(reason)
+        }
         // Published only when the writings change, so this is not asked on
         // every keystroke. The new value is passed in: read off the model
         // here, it would still be the old one.
@@ -1805,7 +1844,9 @@ struct DevotionalEditorView: View {
                 finder: markdownFinder,
                 measure: 76,
                 reviewRanges: isEditingPrimaryDocument ? reviewSession.ranges : [],
-                onMarkAsReviewed: isEditingPrimaryDocument ? { reviewSession.clear(range: $0) } : nil
+                onMarkAsReviewed: isEditingPrimaryDocument ? { reviewSession.clear(range: $0) } : nil,
+                onRestoreWording: isEditingPrimaryDocument ? { offerRestore(of: $0) } : nil,
+                pendingEdits: markdownEdits
             )
             // The text view draws no background of its own, so without this it
             // shows whatever happens to be behind the window — which is close to
@@ -2232,6 +2273,17 @@ struct DevotionalEditorView: View {
         Menu {
             Button("Mark Selection as Reviewed") { markSelectionAsReviewed() }
             Button("Mark All as Reviewed") { reviewSession.clearAll() }
+            Divider()
+            // Enabled by what was last drawn, which says whether anything
+            // can come back; which passages, and whether this selection
+            // holds one that cannot, is the record's to answer when pressed.
+            Button("Restore Original Wording…") { offerRestore(of: contentSelection) }
+                .disabled(reviewSession.restorable.isEmpty)
+            if activeEditorMode != .visual {
+                Divider()
+                Button("Go to Next Marked Passage") { goToNextMarkedPassage() }
+                    .disabled(reviewSession.ranges.isEmpty)
+            }
         } label: {
             Label(
                 reviewSession.count == 1 ? "1 to Review" : "\(reviewSession.count) to Review",
@@ -2240,6 +2292,126 @@ struct DevotionalEditorView: View {
         }
         .fittingToolbarLabel()
         .help("Passages the assistant changed that you have not read yet")
+    }
+
+    /// What a restore would do, shown before it does it.
+    ///
+    /// Two of these are not optional. A passage the assistant only took
+    /// words out of is a single marker in the text, so what would come back
+    /// is invisible until it is written out; and a writer deciding between
+    /// two wordings is comparing them, not reading one.
+    private struct RestoreOffer: Identifiable {
+        let id = UUID()
+        /// The selection it was asked for, so the plan is worked out again
+        /// in the text as it stands when the writer says yes.
+        let range: NSRange
+        let passages: Int
+        let words: String
+        let restored: String
+        let keepsMarked: Bool
+
+        private static func quoted(_ text: String) -> String {
+            let flat = text.replacingOccurrences(of: "\n", with: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let short = flat.count > 140 ? flat.prefix(139).trimmingCharacters(in: .whitespaces) + "…" : flat
+            return "“\(short)”"
+        }
+
+        var message: String {
+            var lines: [String] = []
+            if passages > 1 {
+                lines.append("This puts back \(passages) passages the assistant changed.")
+            } else if words.isEmpty {
+                lines.append("This puts \(Self.quoted(restored)) back where the assistant took it out.")
+            } else if restored.isEmpty {
+                lines.append("This takes out \(Self.quoted(words)), which the assistant put in.")
+            } else {
+                lines.append("\(Self.quoted(words)) becomes \(Self.quoted(restored)) again.")
+            }
+            if keepsMarked {
+                lines.append(
+                    "What comes back is the assistant's too, and nobody has read it, so it stays marked."
+                )
+            }
+            return lines.joined(separator: "\n\n")
+        }
+    }
+
+    /// Offers to put back every marked passage the selection touches.
+    ///
+    /// Refused whole where any one of them cannot be put back exactly: a
+    /// passage the writer has typed into since holds their words and the
+    /// assistant's together, and nothing here can tell which is which.
+    private func offerRestore(of selection: NSRange) {
+        let text = content
+        let outcome = reviewSession.restoring(selection, in: text)
+        guard case .plan(let plan) = outcome else {
+            restoreOffer = nil
+            switch outcome {
+            case .nothingTouched:
+                refusedRestore = selection.length > 0
+                    ? "Nothing the assistant changed is inside what you have selected."
+                    : "Put the caret in a passage the assistant changed, or select one, and try again."
+            case .notExact where reviewSession.restorable.isEmpty:
+                refusedRestore = "Lamp did not keep what this change replaced, so there is nothing to put back. It was made before Lamp kept it, or by another device that does not."
+            default:
+                refusedRestore = "This passage has been edited since the assistant changed it, so putting its wording back would take your own words with it. Mark it as reviewed instead."
+            }
+            return
+        }
+        let offered = reviewSession.restorable.filter { plan.marks.contains($0.markID) }
+        restoreOffer = RestoreOffer(
+            range: selection,
+            passages: plan.edits.count,
+            words: offered.count == 1 ? offered[0].words : "",
+            restored: offered.count == 1 ? offered[0].restored : "",
+            keepsMarked: offered.contains { $0.wasUnread }
+        )
+    }
+
+    /// Puts the wording back, in the surface the writer is working in, so
+    /// that ⌘Z takes it back as it takes back their own typing.
+    ///
+    /// The plan is worked out again here rather than kept from the offer:
+    /// the writer may have typed in the moment the offer stood, and ranges
+    /// from before that would splice in the wrong place.
+    private func takeRestore(_ offer: RestoreOffer) {
+        let text = content
+        guard case .plan(let plan) = reviewSession.restoring(offer.range, in: text) else {
+            refusedRestore = "The writing changed while that was open, so nothing was put back."
+            return
+        }
+        let restored = WritingReviewSession.applying(plan, to: text)
+        if activeEditorMode == .visual {
+            // The page is given the writing, as it is given a turn's draft:
+            // the trims a restore takes with it are Markdown whitespace — a
+            // paragraph break is two characters here and a block boundary
+            // there — so there is no range in the page's own document that
+            // this could ask it to replace. The cost is that ⌘Z does not
+            // take a restore back on this surface, where it does on the
+            // Markdown one; the writing's history still holds the version
+            // before it. A transaction of the page's own, which would put
+            // it in the page's undo too, is being built on that side.
+            reviewSession.holds(restored)
+            content = restored
+        } else {
+            markdownEditsToken += 1
+            markdownEdits = WritingTextEdits(
+                token: markdownEditsToken,
+                actionName: "Restore Original Wording",
+                edits: plan.edits.map { WritingTextEdit(range: $0.range, replacement: $0.replacement) }
+            )
+        }
+        reviewSession.restored(plan, in: text, to: restored)
+    }
+
+    /// Moves the selection to the next marked passage after it, wrapping to
+    /// the first: there is no other way to walk what the assistant changed.
+    private func goToNextMarkedPassage() {
+        let ranges = reviewSession.ranges
+        guard !ranges.isEmpty else { return }
+        let after = NSMaxRange(contentSelection)
+        contentSelection = ranges.first { $0.location > after } ?? ranges[0]
     }
 
     private func markSelectionAsReviewed() {

@@ -144,22 +144,31 @@ enum WritingChatTurns {
         guard marksAreOn else { return nil }
         guard let review else { return unreadReviewNote }
         let live = review.carryingToText(writing, from: known)
-        return reviewNote(ranges: live.highlightedRanges(in: writing), in: writing)
+        return reviewNote(
+            ranges: live.highlightedRanges(in: writing), in: writing,
+            restorations: live.restorations
+        )
     }
 
     /// The note from what is marked in `writing`, as the editor draws it:
     /// said only where there are marks, at most `reviewPassageLimit` of
     /// them, each shortened, since the agent can read the whole file.
-    nonisolated static func reviewNote(ranges: [NSRange], in writing: String) -> String {
+    nonisolated static func reviewNote(
+        ranges: [NSRange], in writing: String,
+        restorations: [LampWritingReview.Restoration] = []
+    ) -> String {
         let source = writing as NSString
         let passages = ranges.filter { $0.length > 0 }
         let removals = ranges.count - passages.count
         guard !passages.isEmpty || removals > 0 else {
-            return """
+            return [
+                """
                 The writer reads through each change you make and clears it. Everything in the \
                 writing has been read and cleared: change only what the message asks for, and \
                 leave the rest as it is.
-                """
+                """,
+                restorationLines(restorations),
+            ].compactMap { $0 }.joined(separator: "\n")
         }
         var lines = [
             "The writer reads through each change you make and clears it. These passages of the writing are still marked as not yet read:",
@@ -180,7 +189,49 @@ enum WritingChatTurns {
         lines.append(
             "Everything else has been read and cleared: change it only where the message asks you to, since anything you change there is marked for the writer to read again."
         )
+        if let restored = restorationLines(restorations) { lines.append(restored) }
         return lines.joined(separator: "\n")
+    }
+
+    nonisolated static let restorationLimit = 10
+
+    /// What the writer has lately put back, which nothing else here says.
+    ///
+    /// A mark says what the assistant changed and has not been read. A
+    /// change the writer put back leaves no mark at all — the passage is
+    /// theirs again, read — so without this the assistant would make the
+    /// same change next turn, and mark it again, as often as the writer
+    /// undid it. Nil where there is nothing to say.
+    nonisolated static func restorationLines(
+        _ restorations: [LampWritingReview.Restoration]
+    ) -> String? {
+        guard !restorations.isEmpty else { return nil }
+        let recent = restorations.sorted { $0.restoredAt > $1.restoredAt }
+        var lines = [
+            "The writer has put their own wording back where you had changed these, so leave them as they stand unless the message asks for them:",
+        ]
+        for restoration in recent.prefix(restorationLimit) {
+            let back = shortened(restoration.restored)
+            let gone = shortened(restoration.discarded)
+            if back.isEmpty {
+                lines.append("- took out \"\(gone)\", which you had put in")
+            } else if gone.isEmpty {
+                lines.append("- put \"\(back)\" back, which you had taken out")
+            } else {
+                lines.append("- \"\(back)\" again, in place of your \"\(gone)\"")
+            }
+        }
+        if recent.count > restorationLimit {
+            lines.append("- and \(recent.count - restorationLimit) more")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private nonisolated static func shortened(_ text: String) -> String {
+        let flat = text.replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard flat.count > reviewPassageCharacters else { return flat }
+        return String(flat.prefix(reviewPassageCharacters)) + "…"
     }
 
     // MARK: - Taking a turn in

@@ -128,6 +128,11 @@ final class WritingReviewSession: ObservableObject {
     /// How many passages are still to read, places words were taken out
     /// among them.
     @Published private(set) var count = 0
+    /// What of those can be put back as the assistant found it, in the
+    /// order they stand. Worked out with what is drawn, off the main actor,
+    /// so the editor can offer a restore without asking for it: short of
+    /// the marks, since a passage the writer has typed into is not offered.
+    @Published private(set) var restorable: [LampWritingReview.Restorable] = []
     /// What the writing's agent is told is still marked
     /// (`WritingChatTurns.reviewNote`), for `.lamp/editor.md`: nil only
     /// while marks are off, `unreadReviewNote` until the marks file is first
@@ -188,7 +193,7 @@ final class WritingReviewSession: ObservableObject {
         resentFor = nil
         store = isShown ? LampWritingReviewStore(rootURL: libraryRootURL) : nil
         publish(
-            ranges: [], count: 0, marked: nil,
+            ranges: [], count: 0, restorable: [], marked: nil,
             note: isShown ? WritingChatTurns.unreadReviewNote : nil, sendsMarks: true
         )
         guard isShown else { return }
@@ -267,6 +272,69 @@ final class WritingReviewSession: ObservableObject {
 
     func clearAll() {
         change { $0.clearingAll() }
+    }
+
+    // MARK: - Putting a wording back
+
+    /// The restore `range` of the writing asks for, or nil where it cannot
+    /// be made exactly: every marked passage it touches whole, and nothing
+    /// unless all of them can be put back.
+    ///
+    /// Worked out here rather than taken from `restorable` so that the
+    /// refusal is the record's own: a selection holding one passage the
+    /// writer has typed into is refused, and that is not a thing the drawn
+    /// list can say, holding only what can be put back.
+    func restoring(_ range: NSRange, in text: String? = nil) -> LampWritingReview.RestoreOutcome {
+        review?.restoring(range, in: text ?? self.text) ?? .nothingTouched
+    }
+
+    /// Records a restore the editor's own surface has just made, the text
+    /// going from what it held to `restored`.
+    ///
+    /// The surface makes the edits, not this: in the visual page they are a
+    /// transaction of its own, so the writer's ⌘Z takes them back, and in
+    /// the Markdown view they are the text view's edit for the same reason.
+    func restored(_ plan: LampWritingReview.RestorePlan, in from: String, to restored: String) {
+        guard writingID != nil else { return }
+        remember(from)
+        remember(restored)
+        text = restored
+        change { $0.restoringWording(plan, from: from, to: restored) }
+    }
+
+    /// A restore the visual page has made, named the way a clear is: the
+    /// Markdown it sent with markers at the edges of what it put back,
+    /// taken before it spliced, and its own text beside it.
+    ///
+    /// The page has already changed its document, so this only records what
+    /// it did. The text the record is carried to is worked out here by
+    /// applying the plan, not taken from the page: the page writes its own
+    /// Markdown and may spell a word of it another way, and that difference
+    /// is for the next carry to settle rather than this.
+    func restore(markedMarkdown marked: String, pageText: String? = nil) {
+        if let range = LampWritingReview.markedRange(in: marked, of: text) {
+            restore(range: range, in: text)
+        } else if let pageText, let range = LampWritingReview.markedRange(in: marked, of: pageText) {
+            restore(range: range, in: pageText)
+        }
+    }
+
+    private func restore(range: NSRange, in text: String) {
+        guard let review, case .plan(let plan) = review.restoring(range, in: text) else { return }
+        remember(text)
+        let applied = Self.applying(plan, to: text)
+        remember(applied)
+        change { $0.restoringWording(plan, from: text, to: applied) }
+    }
+
+    /// A plan's edits put in place. They come last first, so each range
+    /// still means in the text what it meant when the plan was made.
+    static func applying(_ plan: LampWritingReview.RestorePlan, to text: String) -> String {
+        let result = NSMutableString(string: text)
+        for edit in plan.edits {
+            result.replaceCharacters(in: edit.range, with: edit.replacement)
+        }
+        return result as String
     }
 
     // MARK: - Internals
@@ -356,7 +424,10 @@ final class WritingReviewSession: ObservableObject {
         let generation = drawGeneration
         if sendsMarks { needsResend = false }
         guard let review, !review.isEmpty else {
-            publish(ranges: [], count: 0, marked: nil, note: noteForAgent(ranges: []), sendsMarks: sendsMarks)
+            publish(
+                ranges: [], count: 0, restorable: [], marked: nil,
+                note: noteForAgent(ranges: []), sendsMarks: sendsMarks
+            )
             return
         }
         let text = self.text
@@ -371,12 +442,13 @@ final class WritingReviewSession: ObservableObject {
                 return (
                     live.highlightedRanges(in: text),
                     live.located(in: text).count,
-                    sendsMarks ? live.markedMarkdown(in: text) : nil
+                    sendsMarks ? live.markedMarkdown(in: text) : nil,
+                    live.restorable(in: text)
                 )
             }.value
             guard let self, self.drawGeneration == generation else { return }
             self.publish(
-                ranges: drawn.0, count: drawn.1, marked: drawn.2,
+                ranges: drawn.0, count: drawn.1, restorable: drawn.3, marked: drawn.2,
                 note: self.noteForAgent(ranges: drawn.0, in: text), sendsMarks: sendsMarks
             )
         }
@@ -388,12 +460,18 @@ final class WritingReviewSession: ObservableObject {
     private func noteForAgent(ranges: [NSRange], in text: String? = nil) -> String? {
         guard store != nil else { return nil }
         guard hasRead else { return WritingChatTurns.unreadReviewNote }
-        return WritingChatTurns.reviewNote(ranges: ranges, in: text ?? self.text)
+        return WritingChatTurns.reviewNote(
+            ranges: ranges, in: text ?? self.text, restorations: review?.restorations ?? []
+        )
     }
 
-    private func publish(ranges: [NSRange], count: Int, marked: String?, note: String?, sendsMarks: Bool) {
+    private func publish(
+        ranges: [NSRange], count: Int, restorable: [LampWritingReview.Restorable],
+        marked: String?, note: String?, sendsMarks: Bool
+    ) {
         if self.ranges != ranges { self.ranges = ranges }
         if self.count != count { self.count = count }
+        if self.restorable != restorable { self.restorable = restorable }
         if agentNote != note { agentNote = note }
         if sendsMarks {
             markedMarkdown = marked

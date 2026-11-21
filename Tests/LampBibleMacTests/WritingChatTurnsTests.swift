@@ -55,6 +55,59 @@ struct WritingChatTurnsTests {
         #expect(prompt.hasSuffix("The user's message:\nTighten this."))
     }
 
+    /// A change the writer put back leaves no mark — the passage is theirs
+    /// again, and read — so nothing but this tells the assistant about it,
+    /// and without it the same change comes back every turn.
+    @Test func theAgentIsToldWhatTheWriterPutBack() throws {
+        let old = "The quick brown fox jumps."
+        let new = "The slow red fox jumps."
+        let review = LampWritingReview(writingID: "w").markingAssistantChange(from: old, to: new)
+        let plan = try #require(review.restorePlan(for: NSRange(location: 0, length: (new as NSString).length), in: new))
+        let put = review.restoringWording(plan, from: new, to: old)
+        #expect(put.marks.isEmpty, "nothing is marked: the passage is the writer's again")
+        let note = try #require(note(put, in: old))
+        #expect(note.contains("put their own wording back"))
+        #expect(note.contains("quick brown"))
+        #expect(note.contains("slow red"))
+    }
+
+    @Test func whatTheWriterPutBackIsSaidEvenWithNothingMarked() throws {
+        var review = LampWritingReview(writingID: "w")
+        review.restorations = [
+            .init(markID: UUID(), turnID: nil, restored: "mine", discarded: "yours", restoredAt: Date()),
+        ]
+        let note = try #require(note(review, in: "mine stands here"))
+        #expect(note.contains("Everything in the writing has been read and cleared"))
+        #expect(note.contains("\"mine\" again, in place of your \"yours\""))
+    }
+
+    @Test func wordsTakenBackOutAndWordsPutBackReadDifferently() throws {
+        let takenOut = WritingChatTurns.restorationLines([
+            .init(markID: UUID(), turnID: nil, restored: "", discarded: "your sentence", restoredAt: Date()),
+        ])
+        #expect(takenOut?.contains("took out \"your sentence\", which you had put in") == true)
+        let putBack = WritingChatTurns.restorationLines([
+            .init(markID: UUID(), turnID: nil, restored: "my sentence", discarded: "", restoredAt: Date()),
+        ])
+        #expect(putBack?.contains("put \"my sentence\" back, which you had taken out") == true)
+        #expect(WritingChatTurns.restorationLines([]) == nil)
+    }
+
+    @Test func aLongListOfRestorationsIsCut() throws {
+        let many: [LampWritingReview.Restoration] = (0..<WritingChatTurns.restorationLimit + 4).map {
+            .init(
+                markID: UUID(), turnID: nil, restored: "back \($0)", discarded: "gone \($0)",
+                restoredAt: Date().addingTimeInterval(-Double($0))
+            )
+        }
+        let lines = try #require(WritingChatTurns.restorationLines(many))
+        #expect(lines.contains("and 4 more"))
+        // The newest are the ones that matter: they are what the assistant
+        // would otherwise do again on this very turn.
+        #expect(lines.contains("back 0"))
+        #expect(!lines.contains("back \(WritingChatTurns.restorationLimit + 3)"))
+    }
+
     @Test func aReviewWithEverythingClearedSaysSo() {
         let review = LampWritingReview(writingID: "w")
             .markingAssistantChange(from: "a b", to: "a c")
