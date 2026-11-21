@@ -725,12 +725,48 @@ public enum AgentTerminalLaunchPlanner {
     public static func claudeSettings() throws -> Data {
         let capture: [String: Any] = ["type": "command", "command": captureCommand(prefix: "claude")]
         let context: [String: Any] = ["type": "command", "command": contextCommand]
-        let settings: [String: Any] = [
-            "hooks": Dictionary(uniqueKeysWithValues: capturedEvents.map { event in
-                (event, [["hooks": event == contextEvent ? [capture, context] : [capture]]])
-            }),
-        ]
-        return try JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys])
+        var hooks = Dictionary(uniqueKeysWithValues: capturedEvents.map { event in
+            (event, [["hooks": event == contextEvent ? [capture, context] : [capture]]])
+        })
+        // What the assistant wrote, said by the assistant.
+        //
+        // The editor sees only that a file in the workspace changed, and
+        // a change is the assistant's or the writer's own arriving from
+        // another device — a mark is a claim about which, and it cannot
+        // be read off the file. Told here, it is not guessed: the hook
+        // carries the path its tool wrote.
+        //
+        // Claude's only, which is where it is documented. The others
+        // fall back to what the editor can show for itself, which marks
+        // less rather than marking wrongly.
+        var all: [String: Any] = hooks
+        all[wroteEvent] = [[
+            "matcher": "Write|Edit|NotebookEdit",
+            "hooks": [["type": "command", "command": wroteCommand]],
+        ] as [String: Any]]
+        return try JSONSerialization.data(
+            withJSONObject: ["hooks": all], options: [.prettyPrinted, .sortedKeys]
+        )
+    }
+
+    static let wroteEvent = "PostToolUse"
+    /// Where the payloads naming what a tool wrote are left, beside the
+    /// turns: a folder of its own, so the turn reader never sees them.
+    public static let wroteDirectoryName = "wrote"
+
+    public static func wroteDirectory(in workspace: URL) -> URL {
+        AgentTerminalCaptureStore.captureDirectory(in: workspace)
+            .appendingPathComponent(wroteDirectoryName, isDirectory: true)
+    }
+
+    /// The same shape as the capture hook, into a folder of its own, and
+    /// silent about everything: a hook that fails must never be what
+    /// stops a writer's turn.
+    static var wroteCommand: String {
+        "d=\"${\(captureDirectoryVariable):-}\"; [ -n \"$d\" ] || exit 0; "
+            + "d=\"$d/\(wroteDirectoryName)\"; "
+            + "mkdir -p \"$d\" && t=$(mktemp \"$d/.wrote.XXXXXXXX\") && "
+            + "cat > \"$t\" && mv \"$t\" \"$d/wrote.${t##*.}.json\"; exit 0"
     }
 
     /// `-c hooks.<Event>=[…]` for each captured event.
@@ -892,5 +928,52 @@ public enum LampStableIdentifier {
             bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
             bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
         ))
+    }
+}
+
+/// What the assistant has said it wrote.
+///
+/// The editor's poll sees only that a file in the workspace changed, and
+/// cannot tell the assistant writing one from the writer's own edits
+/// arriving from another device. A mark is a claim about which of those
+/// happened, so it must be shown rather than guessed.
+///
+/// The assistant says so itself, through its own tool hook
+/// (`AgentTerminalLaunchPlanner.wroteCommand`), which leaves the payload its
+/// CLI hands it. This reads those payloads and answers for a path.
+///
+/// Said only where the CLI runs the hook, which today is Claude's. The
+/// others fall back to what the editor can show for itself: a turn open
+/// and a body no sync pass installed. That marks less rather than
+/// marking wrongly, which is the right way round — an unmarked change is
+/// in the document's history, while a mark on the writer's own sentence
+/// is a claim they have to clear.
+public enum AgentDeclaredWrites {
+    /// Every workspace path the assistant has said it wrote, read from
+    /// the payloads and then taken away, so one write is answered once.
+    ///
+    /// Read whole each time rather than watched: these arrive a handful
+    /// to a turn, and a directory of a few files costs nothing beside
+    /// the poll that asks.
+    @discardableResult
+    public static func take(in workspace: URL, fileManager: FileManager = .default) -> Set<String> {
+        let directory = AgentTerminalLaunchPlanner.wroteDirectory(in: workspace)
+        guard let names = try? fileManager.contentsOfDirectory(atPath: directory.path) else {
+            return []
+        }
+        var written: Set<String> = []
+        for name in names where !name.hasPrefix(".") {
+            let url = directory.appendingPathComponent(name)
+            defer { try? fileManager.removeItem(at: url) }
+            guard let data = try? Data(contentsOf: url),
+                  let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let input = payload["tool_input"] as? [String: Any],
+                  let path = input["file_path"] as? String
+            else { continue }
+            // Standardised, since a hook reports whatever path its tool
+            // was given and the editor knows the file by its own.
+            written.insert(URL(fileURLWithPath: path).standardizedFileURL.path)
+        }
+        return written
     }
 }

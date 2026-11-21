@@ -407,7 +407,11 @@ struct AgentTerminalLaunchPlannerTests {
 struct AgentTerminalEditorContextTests {
     @Test func theEditorsStateGoesWithEachMessageToClaudeAndCodex() throws {
         let settings = try JSONSerialization.jsonObject(with: AgentTerminalLaunchPlanner.claudeSettings()) as? [String: Any]
-        let hooks = try #require(settings?["hooks"] as? [String: [[String: [[String: String]]]]])
+        // Only the captured events have this shape; the write hook
+        // carries a matcher beside its handlers.
+        let captured = try #require(settings?["hooks"] as? [String: Any])
+            .filter { $0.key != "PostToolUse" }
+        let hooks = try #require(captured as? [String: [[String: [[String: String]]]]])
         #expect(hooks["UserPromptSubmit"]?.first?["hooks"]?.map { $0["command"] } == [
             AgentTerminalLaunchPlanner.captureCommand(prefix: "claude"),
             AgentTerminalLaunchPlanner.contextCommand,
@@ -470,8 +474,13 @@ struct AgentTerminalShellTests {
         let settings = try JSONSerialization.jsonObject(
             with: AgentTerminalLaunchPlanner.claudeSettings()
         ) as? [String: Any]
-        let hooks = settings?["hooks"] as? [String: [[String: [[String: String]]]]]
-        #expect(hooks?.keys.sorted() == ["SessionStart", "Stop", "UserPromptSubmit"])
+        let all = settings?["hooks"] as? [String: Any]
+        // The turns Lamp captures, and the assistant's own word for what
+        // it wrote, which is a different question with a matcher of its
+        // own (`AgentDeclaredWritesTests`).
+        #expect(all?.keys.sorted() == ["PostToolUse", "SessionStart", "Stop", "UserPromptSubmit"])
+        let hooks = (all ?? [:]).filter { $0.key != "PostToolUse" }
+            as? [String: [[String: [[String: String]]]]]
         let command = try #require(hooks?["Stop"]?.first?["hooks"]?.first?["command"])
 
         let result = try run("/bin/sh", ["-c", command], stdin: CapturedPayloads.claudeStop, environment: ["LAMP_CAPTURE_DIR": directory.path])

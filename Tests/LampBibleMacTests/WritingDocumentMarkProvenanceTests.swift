@@ -69,14 +69,22 @@ struct WritingDocumentMarkProvenanceTests {
         let body = source[start.upperBound..<end.lowerBound]
 
         #expect(
-            body.contains("let turnID = agentChatTurn"),
+            body.contains("said || agentChatTurn != nil"),
             """
-            A mark on a document is the assistant's only while a turn is open: \
-            nothing else writes these files unasked.
+            A mark on a document needs the assistant's own word for it, or a \
+            turn open: nothing else writes these files unasked.
             """
         )
         #expect(
-            body.contains("!WorkspaceDocumentsTakenIn.shared.tookIn(text, at: path)"),
+            body.contains("declared.contains("),
+            """
+            The assistant says what it wrote through its own tool hook. Without \
+            that, a write whose turn closed before the next poll is never marked, \
+            and no rule about what was running can know it happened.
+            """
+        )
+        #expect(
+            body.contains("said || !WorkspaceDocumentsTakenIn.shared.tookIn(text, at: path)"),
             """
             A body a sync pass installed is the writer's own edits arriving from \
             another device, and marking it would call their words the assistant's.
@@ -179,5 +187,66 @@ struct WritingDocumentAgentNoteTests {
         for passage in quoted.enumerated().filter({ $0.offset % 2 == 1 }).map(\.element) {
             #expect(typed.contains(passage), "The agent is given \"\(passage)\", which is not in the file")
         }
+    }
+}
+
+/// The assistant saying which files it wrote, through its own tool hook.
+struct AgentDeclaredWritesTests {
+    private func workspace() throws -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("declared-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        return root
+    }
+
+    private func leave(_ payload: [String: Any], in workspace: URL) throws {
+        let directory = AgentTerminalLaunchPlanner.wroteDirectory(in: workspace)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: payload).write(
+            to: directory.appendingPathComponent("wrote.\(UUID().uuidString).json")
+        )
+    }
+
+    @Test func apathTheAssistantWroteIsReadBackOnce() throws {
+        let root = try workspace()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("outline.md")
+        try leave(["tool_name": "Write", "tool_input": ["file_path": file.path]], in: root)
+
+        #expect(AgentDeclaredWrites.take(in: root) == [file.standardizedFileURL.path])
+        // Taken away as it is read: one write is answered once, or every
+        // later poll would mark the file again.
+        #expect(AgentDeclaredWrites.take(in: root).isEmpty)
+    }
+
+    /// A payload that is not what was expected is passed over rather than
+    /// taken for a write: the fallback marks less, never wrongly.
+    @Test func apayloadWithNoPathSaysNothing() throws {
+        let root = try workspace()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try leave(["tool_name": "Bash", "tool_input": ["command": "ls"]], in: root)
+        #expect(AgentDeclaredWrites.take(in: root).isEmpty)
+    }
+
+    @Test func aworkspaceTheAssistantNeverWroteInSaysNothing() throws {
+        let root = try workspace()
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(AgentDeclaredWrites.take(in: root).isEmpty)
+    }
+
+    /// The hook is installed for the CLI that documents it, on the tools
+    /// that write files, and never stops a turn.
+    @Test func thehookIsInstalledForTheToolsThatWriteFiles() throws {
+        let settings = try JSONSerialization.jsonObject(
+            with: AgentTerminalLaunchPlanner.claudeSettings()
+        ) as? [String: Any]
+        let hooks = try #require(settings?["hooks"] as? [String: Any])
+        let wrote = try #require(hooks["PostToolUse"] as? [[String: Any]])
+        #expect(wrote.first?["matcher"] as? String == "Write|Edit|NotebookEdit")
+        let command = try #require(
+            (wrote.first?["hooks"] as? [[String: String]])?.first?["command"]
+        )
+        #expect(command.hasSuffix("exit 0"), "A hook that fails must not be what stops a turn")
+        #expect(command.contains("LAMP_CAPTURE_DIR"))
     }
 }

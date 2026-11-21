@@ -1287,9 +1287,11 @@ struct DevotionalEditorView: View {
         // beside it. The page draws the writing's marks only: a document's
         // are drawn in the Markdown editor, where the words the marks were
         // made of are the words on screen.
+        // The page draws whatever is open, so its marks change with the
+        // document rather than going away with it.
         .onChange(of: selectedWorkspaceDocumentID) { _, _ in
             guard let tipTapCoordinator else { return }
-            showReviewMarks(isEditingPrimaryDocument && showsReviewMarks, on: tipTapCoordinator)
+            showReviewMarks(showsReviewMarks && reviewKey != nil, on: tipTapCoordinator)
         }
         .confirmationDialog(
             "Restore the original wording?",
@@ -1700,7 +1702,7 @@ struct DevotionalEditorView: View {
                     // text happened to match, and hand a press back as
                     // though it were the writing's — putting a restore
                     // into the writing from a file that is not it.
-                    if isEditingPrimaryDocument { connectReviewMarks(to: coordinator) }
+                    if reviewKey != nil { connectReviewMarks(to: coordinator) }
                     coordinator.onFootnoteNotInPage = { label in
                         revealFootnote(label)
                     }
@@ -2397,39 +2399,41 @@ struct DevotionalEditorView: View {
     }
 
     /// The visual page shows the session's marks and sends its clears back.
-    /// The writing's marks, drawn in the writing's own page.
     ///
-    /// Every one of these asks first whether the page is still showing
-    /// the writing. The same page shows a companion document when the
-    /// writer opens one, and these marks are not that document's: drawn
-    /// there they land wherever its text happens to match, and a press
-    /// handed back from there would put a restore into the writing from
-    /// a file that is not it.
+    /// Whatever the page is showing: the writing, or one of the Markdown
+    /// documents beside it, which the page draws too. The session follows
+    /// whichever is open and publishes that one's marks, so the page is
+    /// only ever handed the marks of the text it is drawing.
+    ///
+    /// These gates used to ask whether the writing itself was open,
+    /// because the session followed the writing alone and its marks were
+    /// not the open document's. Now that it follows the document, asking
+    /// would only hide a document's own marks from its own page.
     private func connectReviewMarks(to coordinator: TipTapEditorCoordinator) {
         coordinator.setReviewMarks(reviewSession.markedMarkdown, changes: reviewSession.markedChanges)
         reviewSession.onMarksChanged = { [weak coordinator] marked, changes in
-            guard isEditingPrimaryDocument else {
+            guard reviewKey != nil else {
                 coordinator?.setReviewMarks(nil, changes: [])
                 return
             }
             coordinator?.setReviewMarks(marked, changes: changes)
         }
         coordinator.onReviewRestore = { asked in
-            guard isEditingPrimaryDocument else { return }
+            guard reviewKey != nil else { return }
             restoreFromPage(ids: asked.id, pageText: asked.pageText)
         }
         coordinator.onReviewClear = { [weak reviewSession] clear in
-            guard isEditingPrimaryDocument else { return }
+            guard reviewKey != nil else { return }
             reviewSession?.clear(markedMarkdown: clear.marked, pageText: clear.pageText)
         }
         coordinator.onReviewMarksRejected = { [weak reviewSession] in
-            guard isEditingPrimaryDocument else { return }
+            guard reviewKey != nil else { return }
             reviewSession?.marksRejected()
         }
     }
 
-    /// Takes the writing's marks off the page, or puts them back, as the
-    /// writer moves between the writing and a document beside it.
+    /// Takes the marks off the page, or puts them back, as the writer
+    /// moves to something that has none.
     private func showReviewMarks(_ shown: Bool, on coordinator: TipTapEditorCoordinator) {
         if shown {
             coordinator.setReviewMarks(reviewSession.markedMarkdown, changes: reviewSession.markedChanges)
@@ -2463,22 +2467,14 @@ struct DevotionalEditorView: View {
         }
         .fittingToolbarLabel()
         .help(reviewHelp)
+        // Named for what it counts, so a writer moving between the
+        // writing and a document can see the count is a different one.
     }
 
-    /// A document's marks are drawn in the Markdown editor, where the words
-    /// they were made of are the words on screen; the page writes its own
-    /// Markdown, and a passage marked in the file is not a passage it can
-    /// find. So the count stands for a document being written visually —
-    /// the writer is told there is something to read, and where to read
-    /// it — rather than the control quietly going away with the marks.
     private var reviewHelp: String {
-        guard !isEditingPrimaryDocument, isEditingVisually else {
-            return "Passages the assistant changed that you have not read yet"
-        }
-        return """
-            Passages the assistant changed in this document that you have not read \
-            yet. Switch this document to Markdown to see them in the text.
-            """
+        isEditingPrimaryDocument
+            ? "Passages the assistant changed that you have not read yet"
+            : "Passages the assistant changed in this document that you have not read yet"
     }
 
     /// What a restore would do, shown before it does it.
@@ -2937,7 +2933,11 @@ struct DevotionalEditorView: View {
                 // working. The page's own check guards what it holds, not
                 // what arrived here in the meantime, and putting the page's
                 // answer in now would write over that draft.
-                guard content == hostText else {
+                // The text the page is drawing, which is a document's own
+                // where one is open: the page shows those too, and putting
+                // the answer into the writing would write one file's words
+                // into another.
+                guard activeText == hostText else {
                     isRestoring = false
                     refusedRestore = "A new draft arrived while that was being put back, so nothing was changed."
                     reviewSession.marksRejected()
@@ -2946,12 +2946,12 @@ struct DevotionalEditorView: View {
                 keepRestore(
                     restore, held: held, wasHolding: hostText, applied: { true }
                 ) {
-                    content = held
+                    activeTextBinding.wrappedValue = held
                 }
             case .unsupported:
                 // A page older than that API: the writing goes in the way
                 // a turn's draft does, and only ⌘Z does not cover it.
-                guard content == hostText else {
+                guard activeText == hostText else {
                     isRestoring = false
                     refusedRestore = "A new draft arrived while that was being put back, so nothing was changed."
                     return
@@ -2959,7 +2959,7 @@ struct DevotionalEditorView: View {
                 keepRestore(
                     restore, held: restored, wasHolding: hostText, applied: { true }
                 ) {
-                    content = restored
+                    activeTextBinding.wrappedValue = restored
                 }
             case .refused:
                 isRestoring = false
@@ -3760,21 +3760,30 @@ struct DevotionalEditorView: View {
     /// reconciler proves the assistant wrote a draft from the note and
     /// the marker it left, which is proof rather than circumstance.
     private func markAssistantChange(
-        inDocument document: DevotionalWorkspaceEditorDocument, to text: String
+        inDocument document: DevotionalWorkspaceEditorDocument, to text: String,
+        declared: Set<String>
     ) {
-        guard showsReviewMarks,
-              let turnID = agentChatTurn,
+        // Said by the assistant, or shown by the editor. Declared, the
+        // turn need not still be open: an assistant whose last act was
+        // writing this file, and whose turn closed before the next poll,
+        // wrote it just the same — and no rule about what was running
+        // when the poll landed can know that.
+        let said = declared.contains(document.url.standardizedFileURL.path)
+        guard showsReviewMarks, said || agentChatTurn != nil,
               let name = reviewDocumentName(of: document),
               let path = try? LampWritingWorkspaceLayout.documentPath(
                   folder: LampWritingWorkspaceLayout.directoryName(for: identifier), name: name
               ),
-              !WorkspaceDocumentsTakenIn.shared.tookIn(text, at: path)
+              said || !WorkspaceDocumentsTakenIn.shared.tookIn(text, at: path)
         else { return }
         let key = WritingReviewKey(writingID: identifier, document: name)
         WritingReviewChanges(
             writingID: identifier, document: name,
             store: LampWritingReviewStore(rootURL: model.library.rootURL)
-        ).make([.assistantWrote(from: document.persistedText, to: text, turnID: turnID)])
+        // The turn if one is open, and none where the assistant said so
+        // after its turn closed: the mark stands either way, and an undo
+        // of that turn simply has nothing of this file to put back.
+        ).make([.assistantWrote(from: document.persistedText, to: text, turnID: agentChatTurn)])
         WritingReviewTexts.shared.remember(text, for: key)
     }
 
@@ -4049,6 +4058,10 @@ struct DevotionalEditorView: View {
             /// reached them: marked below, in the same stretch that applies
             /// them, for the reason `WritingReviewChanges` gives.
             var marking: [(document: DevotionalWorkspaceEditorDocument, text: String)] = []
+            // Taken once for the whole sweep, and taken away as it is
+            // read: a write is answered once, by the poll that first
+            // sees the file it names.
+            let declared = AgentDeclaredWrites.take(in: workspaceURL)
 
             for snapshot in allSnapshots {
                 let path = workspaceRelativePath(of: snapshot.url) ?? snapshot.id
@@ -4154,7 +4167,7 @@ struct DevotionalEditorView: View {
             // before them and runs first, and one reserved after saved the
             // text with them. See `WritingReviewChanges`.
             for (document, text) in marking {
-                markAssistantChange(inDocument: document, to: text)
+                markAssistantChange(inDocument: document, to: text, declared: declared)
             }
             for (path, revisions) in pending {
                 recordWorkspaceRevisions(
