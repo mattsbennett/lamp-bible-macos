@@ -1225,3 +1225,93 @@ public enum AgentProcessTree {
         }
     }
 }
+
+/// Where an account stands against its plan's limits, as lines fit to show.
+///
+/// Read only through each CLI's documented ways of saying so, and never by
+/// calling a vendor's endpoints or reading its credentials:
+/// - Claude Code answers `/usage` sent as a headless prompt, with no model
+///   turn and no cost. Its answer is prose with no promised shape, so the
+///   lines that say what is used are shown as written, not taken apart.
+/// - Codex's app-server answers `account/rateLimits/read`. Its README calls
+///   the schema unstable, so it is read field by field and anything
+///   unrecognised means nothing is shown rather than something wrong.
+/// - OpenCode's own server answers `GET /api/experimental/usage/limits` for
+///   an OpenCode Go plan, in releases that have the route.
+public struct AgentUsageReport: Equatable, Sendable {
+    public let lines: [String]
+
+    public init(lines: [String]) { self.lines = lines }
+}
+
+public enum AgentUsageReading {
+    /// The lines of Claude Code's `/usage` answer that say what is used:
+    /// "Current week (all models): 76% used · resets Nov 23 at 9pm (…)".
+    public static func claude(usageOutput output: String) -> AgentUsageReport? {
+        let lines = output.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { $0.hasPrefix("Current ") && $0.contains("%") }
+        return lines.isEmpty ? nil : AgentUsageReport(lines: lines)
+    }
+
+    /// The windows in Codex's `account/rateLimits/read` result.
+    public static func codex(rateLimitsResult result: [String: Any], now: Date = Date()) -> AgentUsageReport? {
+        guard let limits = result["rateLimits"] as? [String: Any] else { return nil }
+        var lines: [String] = []
+        for key in ["primary", "secondary"] {
+            guard let window = limits[key] as? [String: Any],
+                  let used = (window["usedPercent"] as? NSNumber)?.doubleValue
+            else { continue }
+            var line = "\(windowName(minutes: (window["windowDurationMins"] as? NSNumber)?.intValue)): \(Int(used.rounded()))% used"
+            if let resetsAt = (window["resetsAt"] as? NSNumber)?.doubleValue {
+                line += " · resets \(resetDescription(Date(timeIntervalSince1970: resetsAt), now: now))"
+            }
+            lines.append(line)
+        }
+        if limits["spendControlReached"] as? Bool == true {
+            lines.append("The account\u{2019}s spending limit is reached.")
+        }
+        return lines.isEmpty ? nil : AgentUsageReport(lines: lines)
+    }
+
+    /// OpenCode Go's windows from OpenCode's own server route,
+    /// `GET /api/experimental/usage/limits` (`{location, data}`; `data` is
+    /// null when not signed in to an OpenCode Console workspace). The route
+    /// is marked experimental and is not in every release: a missing route,
+    /// a null, or a changed shape all show nothing.
+    public static func openCode(limitsResponse object: [String: Any], now: Date = Date()) -> AgentUsageReport? {
+        guard let data = object["data"] as? [String: Any],
+              let go = data["go"] as? [String: Any]
+        else { return nil }
+        var lines: [String] = []
+        for (key, name) in [("rolling", "5-hour limit"), ("weekly", "Weekly limit"), ("monthly", "Monthly limit")] {
+            guard let meter = go[key] as? [String: Any],
+                  let percent = (meter["percent"] as? NSNumber)?.doubleValue
+            else { continue }
+            var line = "\(name): \(Int(percent.rounded()))% used"
+            if meter["limited"] as? Bool == true { line += ", reached" }
+            if let resetsAt = (meter["resetsAt"] as? NSNumber)?.doubleValue {
+                line += " · resets \(resetDescription(Date(timeIntervalSince1970: resetsAt / 1000), now: now))"
+            }
+            lines.append(line)
+        }
+        return lines.isEmpty ? nil : AgentUsageReport(lines: lines)
+    }
+
+    static func windowName(minutes: Int?) -> String {
+        switch minutes {
+        case 10080?: return "Weekly limit"
+        case 1440?: return "Daily limit"
+        case let minutes? where minutes > 0 && minutes % 60 == 0: return "\(minutes / 60)-hour limit"
+        case let minutes? where minutes > 0: return "\(minutes)-minute limit"
+        default: return "Usage limit"
+        }
+    }
+
+    static func resetDescription(_ date: Date, now: Date) -> String {
+        if Calendar.current.isDate(date, inSameDayAs: now) {
+            return "at " + date.formatted(.dateTime.hour().minute())
+        }
+        return date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute())
+    }
+}

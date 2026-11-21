@@ -201,6 +201,9 @@ struct AIProviderAccountsSettingsView: View {
                           systemImage: states[provider, default: .checking].systemImage)
                         .font(.caption)
                         .foregroundStyle(states[provider, default: .checking].color)
+                    if states[provider] == .connected, AgentUsageService.reports(provider) {
+                        AgentUsageSummary(provider: provider)
+                    }
                 }
                 Spacer()
                 accountActions(for: provider)
@@ -213,7 +216,12 @@ struct AIProviderAccountsSettingsView: View {
                 .foregroundStyle(.secondary)
             Spacer()
             Button("Refresh", systemImage: "arrow.clockwise") {
-                Task { await refreshStates() }
+                Task {
+                    await refreshStates()
+                    for provider in AIProviderCLI.allCases where states[provider] == .connected {
+                        AgentUsageService.shared.refresh(provider)
+                    }
+                }
             }
             .controlSize(.small)
         }

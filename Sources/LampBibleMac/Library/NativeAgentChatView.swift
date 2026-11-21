@@ -306,7 +306,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
     private nonisolated(unsafe) static var versionsByName: [String: Int?] = [:]
     private static let versionLock = NSLock()
 
-    private func resolveExecutable(named name: String) throws -> URL {
+    func resolveExecutable(named name: String) throws -> URL {
         let process = Process()
         let output = Pipe()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
@@ -2840,6 +2840,9 @@ struct NativeAgentChatView: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 420)
+                AgentUsageSummary(provider: provider)
+                    .multilineTextAlignment(.center)
+                    .padding(.top, 4)
             }
             .padding(24)
             .allowsHitTesting(false)
@@ -2879,6 +2882,7 @@ struct NativeAgentChatView: View {
                     .buttonStyle(.plain)
                 }
             }
+            AgentUsageSummary(provider: provider)
         }
         .frame(maxWidth: 420)
         .padding(.horizontal, 24)
@@ -3031,4 +3035,164 @@ private func readableCLIError(in output: String) -> String? {
 extension Notification.Name {
     /// A reader chat's reply has finished. The object is the chat's workspace.
     static let lampReaderChatTurnFinished = Notification.Name("lampReaderChatTurnFinished")
+}
+
+/// Where each connected provider's account stands against its plan's limits,
+/// for Settings and for a chat before its first message.
+///
+/// Asked when a view showing it appears and the last answer is more than a
+/// few minutes old, or when the person asks; never on a timer. See
+/// `AgentUsageReport` for what each provider is asked, and why only that.
+@MainActor
+final class AgentUsageService: ObservableObject {
+    static let shared = AgentUsageService()
+
+    enum State: Equatable {
+        case loading
+        case shown(AgentUsageReport)
+        /// The provider gives no reading, or gave one Lamp could not read.
+        case unavailable
+    }
+
+    @Published private(set) var states: [AIProviderCLI: State] = [:]
+    private var askedAt: [AIProviderCLI: Date] = [:]
+    private static let freshFor: TimeInterval = 5 * 60
+
+    /// Whether Lamp has any way to ask this provider.
+    static func reports(_ provider: AIProviderCLI) -> Bool { true }
+
+    func refreshIfStale(_ provider: AIProviderCLI) {
+        guard Self.reports(provider) else { return }
+        if let asked = askedAt[provider], Date().timeIntervalSince(asked) < Self.freshFor { return }
+        refresh(provider)
+    }
+
+    func refresh(_ provider: AIProviderCLI) {
+        guard Self.reports(provider), states[provider] != .loading else { return }
+        askedAt[provider] = Date()
+        if case .shown? = states[provider] {} else { states[provider] = .loading }
+        Task {
+            let report: AgentUsageReport?
+            switch provider {
+            case .claude: report = await Self.claudeUsage()
+            case .codex: report = await Self.codexUsage()
+            case .openCode: report = await Self.openCodeUsage()
+            }
+            states[provider] = report.map(State.shown) ?? .unavailable
+        }
+    }
+
+    /// `claude -p /usage`: answered by Claude Code itself, with no model turn.
+    private static func claudeUsage() async -> AgentUsageReport? {
+        let result = await AgentCLIProcessRunner().run(
+            executableName: AIProviderCLI.claude.executable,
+            arguments: ["-p", "/usage"],
+            workingDirectory: FileManager.default.temporaryDirectory
+        )
+        guard result.exitCode == 0 else { return nil }
+        return AgentUsageReading.claude(usageOutput: result.output)
+    }
+
+    /// OpenCode's own server, through `opencode api`, as Lamp already asks it
+    /// for its models. A release without the route answers 404, which shows
+    /// nothing.
+    private static func openCodeUsage() async -> AgentUsageReport? {
+        let result = await AgentCLIProcessRunner().run(
+            executableName: AIProviderCLI.openCode.executable,
+            arguments: ["api", "GET", "/api/experimental/usage/limits"],
+            workingDirectory: FileManager.default.temporaryDirectory
+        )
+        guard result.exitCode == 0,
+              let object = try? JSONSerialization.jsonObject(with: Data(result.output.utf8)) as? [String: Any]
+        else { return nil }
+        return AgentUsageReading.openCode(limitsResponse: object)
+    }
+
+    /// `account/rateLimits/read` on `codex app-server`, over its stdio
+    /// JSON-RPC: initialize, initialized, the one request, then gone.
+    private static func codexUsage() async -> AgentUsageReport? {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                continuation.resume(returning: readCodexRateLimits())
+            }
+        }
+    }
+
+    nonisolated private static func readCodexRateLimits() -> AgentUsageReport? {
+        guard let url = try? AgentCLIProcessRunner().resolveExecutable(named: AIProviderCLI.codex.executable)
+        else { return nil }
+        let process = Process()
+        let input = Pipe()
+        let output = Pipe()
+        process.executableURL = url
+        process.arguments = ["app-server"]
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        process.environment = AgentProcessEnvironment.cleaned(ProcessInfo.processInfo.environment)
+        guard (try? process.run()) != nil else { return nil }
+        defer {
+            try? input.fileHandleForWriting.close()
+            if process.isRunning { process.terminate() }
+        }
+        // An app-server that never answers is not waited on past this.
+        DispatchQueue.global().asyncAfter(deadline: .now() + 20) {
+            if process.isRunning { process.terminate() }
+        }
+        func send(_ message: [String: Any]) {
+            guard let data = try? JSONSerialization.data(withJSONObject: message) else { return }
+            input.fileHandleForWriting.write(data + Data([0x0A]))
+        }
+        var reader = AgentChatLineReader()
+        let handle = output.fileHandleForReading
+        func reply(to id: Int) -> [String: Any]? {
+            while true {
+                let chunk = handle.availableData
+                if chunk.isEmpty { return nil }
+                for line in reader.lines(from: chunk) {
+                    guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                          object["id"] as? Int == id
+                    else { continue }
+                    return object
+                }
+            }
+        }
+        send(["id": 1, "method": "initialize", "params": [
+            "clientInfo": ["name": "lamp-bible", "title": "Lamp Bible", "version": "1"],
+        ]])
+        guard reply(to: 1)?["result"] != nil else { return nil }
+        send(["method": "initialized"])
+        send(["id": 2, "method": "account/rateLimits/read", "params": [String: Any]()])
+        guard let result = reply(to: 2)?["result"] as? [String: Any] else { return nil }
+        return AgentUsageReading.codex(rateLimitsResult: result)
+    }
+}
+
+/// A provider's usage, in a caption's voice: shown where the account is.
+struct AgentUsageSummary: View {
+    let provider: AIProviderCLI
+    @ObservedObject private var service = AgentUsageService.shared
+
+    var body: some View {
+        Group {
+            switch service.states[provider] {
+            case .shown(let report)?:
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(report.lines, id: \.self) { line in
+                        Text(line)
+                    }
+                }
+            case .loading?:
+                Text("Checking usage…")
+            case .unavailable?, nil:
+                // Not `EmptyView`: a group with nothing in it never appears,
+                // so its `.task` never runs and nothing is ever asked.
+                Color.clear.frame(width: 0, height: 0)
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .textSelection(.enabled)
+        .task(id: provider) { service.refreshIfStale(provider) }
+    }
 }

@@ -417,21 +417,79 @@ struct AgentChatAccountTests {
     }
 
     @Test func secretsAreTakenOutOfAFailureBeforeItIsKept() {
+        // Made up, and put together here rather than written out, so a
+        // secret scanner reading the repository has nothing to match.
+        let bearer = "not" + "-a-real-" + "token-0000"
+        let key = "sk-" + "fake" + String(repeating: "0", count: 16)
+        let password = "not" + "-a-" + "password"
         let text = AgentChatSecrets.redacted(
-            "401 for Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.abc.def with sk-ant-api03-AAAABBBBCCCCDDDD and api_key=hunter2hunter2"
+            "401 for Authorization: Bearer \(bearer) with \(key) and api_key=\(password)"
         )
-        #expect(!text.contains("eyJhbGciOiJIUzI1NiJ9"))
-        #expect(!text.contains("AAAABBBBCCCCDDDD"))
-        #expect(!text.contains("hunter2hunter2"))
+        #expect(!text.contains(bearer))
+        #expect(!text.contains(key))
+        #expect(!text.contains(password))
         #expect(text.contains("Bearer [redacted]"))
+        #expect(text.contains("sk-[redacted]"))
         #expect(text.contains("api_key=[redacted]"))
         // Prose that only mentions a token is left alone.
         #expect(AgentChatSecrets.redacted("Your token expired.") == "Your token expired.")
         let failed = AgentChatRunDisposition.of(
-            output: "", exitCode: 1, launchError: "bad key sk-proj-ZZZZYYYYXXXXWWWW",
+            output: "", exitCode: 1, launchError: "bad key \(key)",
             wasStopped: false, provider: .codex, providerName: "Codex"
         )
         #expect(failed == .failed("bad key sk-[redacted]"))
+    }
+
+    // As Claude Code 2.1.327 answered `claude -p /usage`, trimmed.
+    private let claudeUsage = """
+    You are currently using your subscription to power your Claude Code usage
+
+    Current week (all models): 76% used · resets Nov 23 at 9pm (America/Vancouver)
+    Current week (Fable): 16% used · resets Nov 23 at 9pm (America/Vancouver)
+
+    What's contributing to your usage?
+    Last 24h · 2103 requests · 11 sessions
+      92%  Start fresh when you switch tasks · run /clear
+    """
+
+    @Test func claudesUsageLinesAreShownAsWritten() {
+        #expect(AgentUsageReading.claude(usageOutput: claudeUsage)?.lines == [
+            "Current week (all models): 76% used · resets Nov 23 at 9pm (America/Vancouver)",
+            "Current week (Fable): 16% used · resets Nov 23 at 9pm (America/Vancouver)",
+        ])
+        // An answer in some other shape shows nothing rather than a guess.
+        #expect(AgentUsageReading.claude(usageOutput: "Usage is unavailable right now.") == nil)
+    }
+
+    @Test func codexsWindowsAreReadFieldByField() throws {
+        // The shape codex-cli 0.170.0's app-server answered with.
+        let json = #"{"ordinaryUsageAllowed":true,"rateLimits":{"limitId":"codex","primary":{"usedPercent":54,"windowDurationMins":10080,"resetsAt":1795619830},"secondary":{"usedPercent":12.4,"windowDurationMins":300,"resetsAt":1795500000},"credits":{"hasCredits":false},"spendControlReached":false,"planType":"prolite"}}"#
+        let result = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        let lines = try #require(AgentUsageReading.codex(
+            rateLimitsResult: result, now: Date(timeIntervalSince1970: 1795400000)
+        )?.lines)
+        #expect(lines.count == 2)
+        #expect(lines[0].hasPrefix("Weekly limit: 54% used · resets "))
+        #expect(lines[1].hasPrefix("5-hour limit: 12% used · resets "))
+        // A schema that has moved on shows nothing.
+        #expect(AgentUsageReading.codex(rateLimitsResult: ["limits": [:]]) == nil)
+        #expect(AgentUsageReading.codex(rateLimitsResult: ["rateLimits": ["primary": ["used": 5]]]) == nil)
+    }
+
+    @Test func openCodeGosWindowsAreReadWhereTheRouteAnswers() throws {
+        // The shape of OpenCode's UsageLimits.Info (packages/schema, Oct 2026).
+        let json = #"{"location":{"directory":"/tmp"},"data":{"workspace":{"id":"w","usageURL":"https://opencode.ai"},"go":{"rolling":{"percent":30,"limited":false,"resetsAt":1795500000000},"weekly":{"percent":61.6,"limited":false,"resetsAt":1795600000000},"monthly":{"percent":100,"limited":true,"resetsAt":1797000000000}},"budgets":[]}}"#
+        let object = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        let lines = try #require(AgentUsageReading.openCode(
+            limitsResponse: object, now: Date(timeIntervalSince1970: 1795400000)
+        )?.lines)
+        #expect(lines.count == 3)
+        #expect(lines[0].hasPrefix("5-hour limit: 30% used · resets "))
+        #expect(lines[1].hasPrefix("Weekly limit: 62% used · resets "))
+        #expect(lines[2].hasPrefix("Monthly limit: 100% used, reached · resets "))
+        // Not signed in to a Console workspace, or no Go plan: nothing.
+        #expect(AgentUsageReading.openCode(limitsResponse: ["location": [:], "data": NSNull()]) == nil)
+        #expect(AgentUsageReading.openCode(limitsResponse: ["data": ["budgets": []]]) == nil)
     }
 
     @Test func aClaudeSessionsOwnVariablesAreNotHandedDown() {
