@@ -1130,11 +1130,12 @@ enum ToolbarLabelFit {
     static let writingEditor: CGFloat = 1_120
     /// Writing while reading: List alone.
     static let writingList: CGFloat = 400
-    /// The reader: History, the passage, Side by Side, Appearance, Read
-    /// Aloud, Chat and Study. With "BSB · Genesis 1" in the passage button,
-    /// fit at 1,005 (a 1,240pt window) and overflowed at 985; the button
-    /// grows with the book's name, "1 Thessalonians" by some 80, which the
-    /// figure leaves room for.
+    /// The reader: History, the passage, Appearance, Read Aloud, Chat and
+    /// Study. Measured when a Side by Side button stood there too: with
+    /// "BSB · Genesis 1" in the passage button, fit at 1,005 (a 1,240pt
+    /// window) and overflowed at 985; the button grows with the book's name,
+    /// "1 Thessalonians" by some 80, which the figure leaves room for. With
+    /// that button gone the figure is generous, not measured.
     static let reader: CGFloat = 1_090
     /// Books and the Book Reader window: Group, Add Book and the search
     /// field; Contents and Open in Window in a book. Fit at every width.

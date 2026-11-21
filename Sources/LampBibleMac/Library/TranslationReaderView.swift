@@ -909,8 +909,9 @@ struct TranslationReaderView: View, Equatable {
         )
     }
 
-    /// Whether the reader is side by side, for the toolbar's toggle: off, it
-    /// goes back to the layout side by side was chosen from.
+    /// Whether the reader is side by side, for the page's offer and a
+    /// column's close button: off, it goes back to the layout side by side
+    /// was chosen from.
     private var readsSideBySide: Binding<Bool> {
         Binding(
             get: { readerLayoutMode == .sideBySide },
@@ -1249,8 +1250,8 @@ struct TranslationReaderView: View, Equatable {
         workspace.openReference(readingPlace(in: chapter), translationID: id, switchingTranslation: true)
     }
 
-    /// A quiet way into reading side by side from the page itself, beside each
-    /// chapter's opening; the toolbar's toggle and the View menu do the same.
+    /// The way into reading side by side, from the page itself, beside each
+    /// chapter's opening; the toolbar's Appearance ▸ Layout does the same.
     /// Side by side has its own add button over the column titles, so this
     /// shows only on a single column.
     @ViewBuilder

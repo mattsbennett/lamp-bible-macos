@@ -1320,23 +1320,6 @@ struct LibraryRootView: View {
         )
     }
 
-    /// Whether the reader is side by side, for the toolbar's toggle: off, it
-    /// goes back to the layout side by side was chosen from.
-    private var readsSideBySide: Binding<Bool> {
-        Binding(
-            get: { readerLayoutMode == .sideBySide },
-            set: { isOn in
-                if isOn {
-                    readerLayoutSelection.wrappedValue = .sideBySide
-                } else if readerLayoutMode == .sideBySide {
-                    readerLayoutMode = layoutModeBeforeSideBySide == .sideBySide
-                        ? .continuousParagraphs
-                        : layoutModeBeforeSideBySide
-                }
-            }
-        )
-    }
-
     @ToolbarContentBuilder
     private var readerToolbar: some ToolbarContent {
         // One capsule for the whole of where you are and how to move from it,
@@ -1454,19 +1437,10 @@ struct LibraryRootView: View {
         }
 
         ToolbarItemGroup {
-            Toggle(isOn: readsSideBySide) {
-                Label(ReaderLayoutMode.sideBySide.title, systemImage: ReaderLayoutMode.sideBySide.systemImage)
-            }
-            .tint(Color.lampAccentMuted)
-            .toggleStyle(.button)
-            .fittingToolbarLabel()
-            .disabled(readerLayoutMode != .sideBySide && model.translations.count < 2)
-            .help(
-                readerLayoutMode == .sideBySide
-                    ? "Read this translation on its own"
-                    : "Read another translation beside this one"
-            )
-
+            // No Side by Side button here. The page offers it beside each
+            // chapter's opening, a column's close button leaves it, and
+            // Layout below holds it with the companions last read; a toggle
+            // as well was a fourth way to one thing, at the cost of room.
             Menu {
                 Picker("Layout", selection: readerLayoutSelection) {
                     ForEach(ReaderLayoutMode.allCases) { mode in
