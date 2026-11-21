@@ -3780,6 +3780,16 @@ struct DevotionalEditorView: View {
     /// and a carry asked for before a turn's marks were made must be done
     /// before them or it would take the turn's new marks back to the text
     /// before it.
+    /// The texts the writing's own marks are carried from.
+    ///
+    /// Not the session's: it follows whichever document is open, and a
+    /// prose save that took its texts from there would hand the outline's
+    /// words to the writing's carry and leave out the prose's own —
+    /// marks stranded at anchors nothing matches, and never retired.
+    private var knownProseTexts: [String] {
+        WritingReviewTexts.shared.known(for: WritingReviewKey(writingID: identifier))
+    }
+
     private func carryReviewMarks(
         ofDocument documentID: String, to saved: String, from previous: String
     ) {
@@ -3798,7 +3808,16 @@ struct DevotionalEditorView: View {
         WritingReviewTexts.shared.remember(saved, for: key)
         let store = LampWritingReviewStore(rootURL: model.library.rootURL)
         let writingID = identifier
+        let url = document.url
         WritingReviewWork.shared.run {
+            // Only while the file still holds what this save wrote. A
+            // carry waits its turn, and a sync pass can resolve a
+            // conflict meanwhile — keeping this body as a copy and
+            // putting the other device's at this name. Carried anyway,
+            // the marks of a body that is no longer here would retire
+            // the passages of the one that is.
+            guard let onDisk = try? String(contentsOf: url, encoding: .utf8), onDisk == saved
+            else { return }
             _ = try? LampWritingDocumentReview.carry(
                 saved, ofDocument: name, writingID: writingID, from: known, in: store
             )
@@ -4070,7 +4089,13 @@ struct DevotionalEditorView: View {
                     // same reason the history uses it — the files found
                     // when the editor opens are not a turn's work.
                     if workspaceDocumentsInitialized {
-                        marking.append((appearing, snapshot.contents))
+                        // From nothing, which is what happened. Offering
+                        // the document as it now stands gives the marking
+                        // the same text before and after, and core rightly
+                        // makes no mark of a change that is not one.
+                        var fromNothing = appearing
+                        fromNothing.persistedText = ""
+                        marking.append((fromNothing, snapshot.contents))
                     }
                     documents.append(appearing)
                 }
@@ -4403,7 +4428,7 @@ struct DevotionalEditorView: View {
             originalJSON: originalContentJSON,
             originalPlainContent: originalPlainContent,
             originalProjectedMarkdown: originalProjectedMarkdown,
-            reviewTexts: reviewSession.texts
+            reviewTexts: knownProseTexts
         )
     }
 
@@ -4566,10 +4591,10 @@ struct DevotionalEditorView: View {
             do {
                 let written = if let heldRevision {
                     try await model.savePersonalDevotional(
-                        devotional, reviewTexts: reviewSession.texts, ifNotNewerThan: heldRevision
+                        devotional, reviewTexts: knownProseTexts, ifNotNewerThan: heldRevision
                     )
                 } else {
-                    try await model.savePersonalDevotional(devotional, reviewTexts: reviewSession.texts)
+                    try await model.savePersonalDevotional(devotional, reviewTexts: knownProseTexts)
                 }
                 guard let saved = written else {
                     // A newer copy is stored; nothing was written over it.

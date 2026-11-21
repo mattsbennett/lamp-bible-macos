@@ -1227,6 +1227,7 @@ extension LibrarySyncController {
         // server for ever, and a later document of the same name would
         // wear another file's marks.
         let reviewStore = LampWritingReviewStore(rootURL: library.rootURL)
+        var reviewRemovals: [String: Int64] = [:]
         let writingIDsByFolder = Dictionary(
             writings.map { (LampWritingWorkspaceLayout.directoryName(for: $0.id), $0.id) },
             uniquingKeysWith: { first, _ in first }
@@ -1239,11 +1240,35 @@ extension LibrarySyncController {
             guard let document = LampWritingWorkspaceLayout.document(ofPath: path),
                   let writingID = writingIDsByFolder[document.folder]
             else { continue }
-            let swept = (try? LampWritingDocumentReview.removed(
-                document.name, writingID: writingID, in: reviewStore,
-                members: manifestTimes, now: Int64(Date().timeIntervalSince1970 * 1_000)
-            )) ?? [:]
-            result.gathered.deletedLocally.merge(swept) { max($0, $1) }
+            // Dated as the document's own deletion is, not now. A
+            // deletion still queued after a failed pass can lose to
+            // another device saving that document since: the document
+            // comes back, and a review deletion dated now would have
+            // beaten the record that came with it — the document alive
+            // and every mark and restoration on it gone everywhere. The
+            // two rise or fall together this way.
+            guard let reviewPath = try? LampSyncFolderLayout.writingReviewPath(
+                writingID: writingID, document: document.name
+            ) else { continue }
+            try? reviewStore.remove(writingID: writingID, document: document.name)
+            result.gathered.deletedLocally[reviewPath] = max(
+                removedAt, result.gathered.deletedLocally[reviewPath] ?? removedAt
+            )
+            // Written down beside the document's own removal, not left to
+            // this pass alone. A tombstone that only lives in this gather
+            // is gone if the pass fails or loses to a newer record, and
+            // the document's removal is forgotten once it succeeds — so
+            // nothing would ever sweep again, and the orphan would sit in
+            // the library as a live member, waiting to attach itself to
+            // the next document of that name.
+            reviewRemovals[reviewPath] = removedAt
+        }
+        if !reviewRemovals.isEmpty {
+            var records = LampSyncRemovedModules.load(
+                fromLibraryAt: library.rootURL, fileManager: fileManager
+            )
+            for (path, removedAt) in reviewRemovals { records.record(path, at: removedAt) }
+            try? records.save(toLibraryAt: library.rootURL, fileManager: fileManager)
         }
         // A highlight set's deletion is recorded per item; the file that
         // carried it is the module this source published it under.
