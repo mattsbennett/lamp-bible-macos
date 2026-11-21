@@ -313,6 +313,11 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     /// clear, and the page's own Markdown of the same document, unmarked,
     /// where the page sends it.
     var onReviewClear: ((TipTapReviewClear) -> Void)?
+    /// The page asking for passages to be put back as the assistant found
+    /// them, named by the id it was given with the marks. Sent before it
+    /// changes anything: the host works out the writing that results and
+    /// hands it back through `restoreWording`.
+    var onReviewRestore: ((TipTapReviewRestore) -> Void)?
     /// The page could not place the marks it was sent — its text was a
     /// moment ahead of the host's — so the host sends them again.
     var onReviewMarksRejected: (() -> Void)?
@@ -320,6 +325,7 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     /// so every load puts them back: a document loaded into the page starts
     /// with none.
     private var reviewMarks: String?
+    private var reviewChanges: [WritingReviewChange?] = []
     var usesCompactLayout = false
     /// Set before the first text, since it decides how that text is read.
     var usesLineBreaks = false
@@ -654,6 +660,18 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
             guard let clear = reviewClear(from: body) else { return }
             onReviewClear?(clear)
 
+        // An undo or a redo can bring back words a passage could be put
+        // back from, or a mark that was deleted, so what the page was told
+        // no longer describes it.
+        case "reviewMarksStale":
+            onReviewMarksRejected?()
+
+        case "reviewRestore":
+            guard let id = body["id"] as? String else { return }
+            onReviewRestore?(TipTapReviewRestore(
+                id: id, pageText: (body["plain"] as? String).map(portableMarkdown(from:))
+            ))
+
         default:
             break
         }
@@ -877,18 +895,90 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
 
     /// Shows the writing's review marks: its Markdown with a marker at each
     /// edge of what is still marked (`LampWritingReview.markedMarkdown`), or
-    /// nil for none. Kept, and put back after each load.
-    func setReviewMarks(_ marked: String?) {
-        guard marked != reviewMarks else { return }
+    /// nil for none, and what a restore of each would come to. Kept, and
+    /// put back after each load.
+    func setReviewMarks(_ marked: String?, changes: [WritingReviewChange?] = []) {
+        guard marked != reviewMarks || changes != reviewChanges else { return }
         reviewMarks = marked
+        reviewChanges = changes
         applyReviewMarks()
     }
 
     private func applyReviewMarks() {
         guard isReady, hasLoadedContent else { return }
         let argument = reviewMarks.map { Self.javascriptString(editorMarkdown(from: $0)) } ?? "null"
-        evaluate("window.editorAPI.setReviewMarks ? window.editorAPI.setReviewMarks(\(argument)) : true") { [weak self] placed in
+        // One to each marked passage, in the order the page finds them. A
+        // page from before this takes the marks and ignores the rest.
+        let changes = (try? JSONEncoder().encode(reviewChanges))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
+        evaluate(
+            "window.editorAPI.setReviewMarks ? window.editorAPI.setReviewMarks(\(argument), \(changes)) : true"
+        ) { [weak self] placed in
             if placed as? Bool == false { self?.onReviewMarksRejected?() }
+        }
+    }
+
+    /// Hands the page the writing a restore makes, for it to put in place
+    /// as one undoable edit of its own, and says what it holds afterwards.
+    ///
+    /// `expected` is the text the restore was worked out in: the page
+    /// refuses unless that is what it is showing, so a press that raced the
+    /// writer's typing changes nothing. Nil where it refused, or where the
+    /// page is older than this.
+    func restoreWording(
+        _ markdown: String, expected: String, completion: @escaping (TipTapRestore) -> Void
+    ) {
+        guard isReady else { return completion(.unsupported) }
+        let wanted = Self.javascriptString(editorMarkdown(from: markdown))
+        let base = Self.javascriptString(editorMarkdown(from: expected))
+        // Whether the page can do this at all is answered apart from
+        // whether it would: a page older than this cannot, and the writing
+        // is then put in place the way a turn's draft is, while a page that
+        // refuses has seen the text move, and nothing should go anywhere.
+        let script = "window.editorAPI.restoreWording"
+            + " ? { known: true, held: window.editorAPI.restoreWording(\(wanted), \(base)) }"
+            + " : { known: false }"
+        evaluate(script) { [weak self] answer in
+            guard let self, let answer = answer as? [String: Any],
+                  answer["known"] as? Bool == true else { return completion(.unsupported) }
+            guard let held = answer["held"] as? String else { return completion(.refused) }
+            completion(.done(self.portableMarkdown(from: held)))
+        }
+    }
+
+    /// What the page's own selection stands in, for a restore asked for
+    /// from the menu rather than from a passage's own button.
+    ///
+    /// The ids are the page's, given to it with the marks. A selection
+    /// that touches a passage the page was told nothing about is reported
+    /// as `unnamed`, and is then asked about by its text instead — the
+    /// record refuses the lot, with the reason, rather than quietly
+    /// putting back the half it can.
+    func reviewChangesForSelection(completion: @escaping (TipTapReviewSelection?) -> Void) {
+        guard isReady else { return completion(nil) }
+        evaluate(
+            "window.editorAPI.reviewChangesForSelection ? window.editorAPI.reviewChangesForSelection() : null"
+        ) { [weak self] result in
+            guard let self, let body = result as? [String: Any] else { return completion(nil) }
+            completion(TipTapReviewSelection(
+                ids: (body["ids"] as? [String]) ?? [],
+                unnamed: body["unnamed"] as? Bool ?? false,
+                isCaret: body["caret"] as? Bool ?? false,
+                marked: (body["markdown"] as? String).map(self.portableMarkdown(from:)),
+                pageText: (body["plain"] as? String).map(self.portableMarkdown(from:))
+            ))
+        }
+    }
+
+    /// Shows the next marked passage after the selection, or the one
+    /// before it, wrapping at either end; false where there are none or
+    /// the page is older than this.
+    func goToReviewMark(forward: Bool, completion: ((Bool) -> Void)? = nil) {
+        guard isReady else { return completion?(false) ?? () }
+        evaluate(
+            "window.editorAPI.goToReviewMark ? window.editorAPI.goToReviewMark(\(forward)) : false"
+        ) { moved in
+            completion?(moved as? Bool ?? false)
         }
     }
 
@@ -1072,8 +1162,46 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         'html body.dark .review-mark { background: rgba(240, 190, 70, 0.2); border-bottom-color: rgba(240, 190, 70, 0.75); }',
         'html body.dark .review-point { border-left-color: rgba(240, 190, 70, 0.75); }',
         'html body.dark .ProseMirror .review-clear { color: rgba(240, 190, 70, 0.85); }',
+        // Putting the assistant's wording back: a ↺ beside the ✓, the
+        // passage it would change shown stronger while its offer is open,
+        // and what it would do written out — for a passage the assistant
+        // only took words out of, that is the one way to see it.
+        'html .ProseMirror .review-restore { display: inline-block; vertical-align: baseline; width: 22px; height: 22px; margin: 0 8px 0 -8px; padding: 0; border: none; border-radius: 11px; background: transparent; color: rgba(178, 120, 0, 0.8); font: inherit; cursor: pointer; user-select: none; }',
+        'html .ProseMirror .review-restore::before { content: "\\u21BA"; font-size: 14px; line-height: 22px; }',
+        'html .ProseMirror .review-restore:hover { background: rgba(232, 176, 44, 0.22); }',
+        'html .review-mark.review-current { background: rgba(232, 176, 44, 0.42); border-bottom-style: solid; }',
+        'html .review-point.review-current { border-left-width: 3px; box-shadow: 0 0 0 2px rgba(232, 176, 44, 0.35); }',
+        // Placed by the page, which measures it and sets left and top
+        // against the document: absolute, and no transform or padding on
+        // anything it hangs from, or it lands somewhere else.
+        'html .review-popover { position: absolute; z-index: 20; max-width: 22em; padding: 10px 12px; border: 1px solid rgba(0, 0, 0, 0.14); border-radius: 10px; background: #FFFFFF; box-shadow: 0 6px 22px rgba(0, 0, 0, 0.18); font-size: 0.86em; line-height: 1.45; overflow-y: auto; }',
+        'html .review-popover-item + .review-popover-item { margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(0, 0, 0, 0.09); }',
+        'html .review-popover-label { font-size: 0.82em; letter-spacing: 0.04em; text-transform: uppercase; color: rgba(0, 0, 0, 0.5); }',
+        // The two sides hold real blocks — the previewed paragraphs, list
+        // items and quotations, serialised — so they are flattened to read
+        // as lines of a panel rather than as a document inside one.
+        'html .review-popover-text > * { margin: 0; font-size: inherit; line-height: inherit; padding-left: 0; border: none; }',
+        'html .review-popover-text > * + * { margin-top: 0.4em; }',
+        'html .review-popover-text.is-marked:not(.is-empty) > * { background: rgba(232, 176, 44, 0.22); }',
+        'html .review-popover-text.is-empty, html .review-popover-reason { font-style: italic; color: rgba(0, 0, 0, 0.55); }',
+        'html .review-popover-restore { margin-top: 8px; padding: 4px 12px; border: none; border-radius: 12px; background: rgba(232, 176, 44, 0.3); color: inherit; font: inherit; font-size: 0.95em; cursor: pointer; }',
+        'html .review-popover-restore:hover { background: rgba(232, 176, 44, 0.45); }',
+        'html body.dark .ProseMirror .review-restore { color: rgba(240, 190, 70, 0.85); }',
+        'html body.dark .review-mark.review-current { background: rgba(240, 190, 70, 0.38); }',
+        'html body.dark .review-popover { border-color: rgba(255, 255, 255, 0.16); background: #2A2A2C; box-shadow: 0 6px 22px rgba(0, 0, 0, 0.5); }',
+        'html body.dark .review-popover-item + .review-popover-item { border-top-color: rgba(255, 255, 255, 0.12); }',
+        'html body.dark .review-popover-label { color: rgba(255, 255, 255, 0.55); }',
+        'html body.dark .review-popover-text.is-marked:not(.is-empty) > * { background: rgba(240, 190, 70, 0.2); }',
+        'html body.dark .review-point.review-current { box-shadow: 0 0 0 2px rgba(240, 190, 70, 0.3); }',
+        'html body.dark .review-popover-text.is-empty, html body.dark .review-popover-reason { color: rgba(255, 255, 255, 0.6); }',
+        'html body.dark .review-popover-restore { background: rgba(240, 190, 70, 0.26); }',
+        'html body.dark .review-popover-restore:hover { background: rgba(240, 190, 70, 0.4); }',
         'html body.mode-present .review-mark { background: none; border-bottom: none; }',
-        'html body.mode-present .review-point, html body.mode-present .review-clear { display: none; }'
+        'html body.mode-present .review-mark.review-current { background: none; }',
+        'html body.mode-present .review-point, html body.mode-present .review-clear { display: none; }',
+        // Read mode saves nothing, so nothing there may change the writing.
+        'html body.mode-present .review-restore, html body:not(.mode-edit) .review-restore { display: none; }',
+        'html body.mode-present .review-popover, html body:not(.mode-edit) .review-popover { display: none; }'
       ].join('\\n');
       (document.head || document.documentElement).appendChild(style);
     })();
@@ -1433,6 +1561,33 @@ final class TipTapEditorPool {
 /// with markers round what to clear, and the page's Markdown of the same
 /// document without them, which is the text it was made in. Nil from a
 /// page that does not send it.
+/// What the page did with a restore: made it, and what it holds now;
+/// would not, because what it is showing is not what the restore was
+/// worked out in; or does not know how, being older than that API.
+enum TipTapRestore: Sendable {
+    case done(String)
+    case refused
+    case unsupported
+}
+
+/// What the page's selection stands in: the ids of the passages it
+/// touches, whether it also touches one the page was told nothing about,
+/// whether it is a caret rather than a selection, and its text.
+struct TipTapReviewSelection: Sendable {
+    let ids: [String]
+    let unnamed: Bool
+    let isCaret: Bool
+    let marked: String?
+    let pageText: String?
+}
+
+/// Passages the page asks to be put back, named by the id it was given
+/// with the marks, and its own text to work them out in.
+struct TipTapReviewRestore: Sendable {
+    let id: String
+    let pageText: String?
+}
+
 struct TipTapReviewClear: Sendable {
     let marked: String
     let pageText: String?

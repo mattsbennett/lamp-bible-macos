@@ -205,8 +205,14 @@ enum WritingChatTurns {
     nonisolated static func restorationLines(
         _ restorations: [LampWritingReview.Restoration]
     ) -> String? {
-        guard !restorations.isEmpty else { return nil }
-        let recent = restorations.sorted { $0.restoredAt > $1.restoredAt }
+        // Only while it is news. A restore is told so the assistant does
+        // not make the same change again on the turns just after it; an
+        // old one says nothing about this turn, and a record that reached
+        // this device late should not reopen it.
+        let since = Date().addingTimeInterval(-LampWritingReview.restorationWindow)
+        let recent = restorations.filter { $0.restoredAt >= since }
+            .sorted { $0.restoredAt > $1.restoredAt }
+        guard !recent.isEmpty else { return nil }
         var lines = [
             "The writer has put their own wording back where you had changed these, so leave them as they stand unless the message asks for them:",
         ]

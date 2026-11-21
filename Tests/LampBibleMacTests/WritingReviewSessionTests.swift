@@ -18,6 +18,99 @@ struct WritingReviewSessionTests {
         #expect(condition())
     }
 
+    // MARK: - What the page is told a restore would do
+
+    /// The crossing is positional: one entry to each range the marks are
+    /// drawn in, in the order they stand, because that is the order the
+    /// page finds its markers in. An entry that did not line up would put
+    /// one passage's wording under another's button.
+    private func changes(
+        _ review: LampWritingReview, in text: String
+    ) -> [WritingReviewChange?] {
+        WritingReviewSession.changes(
+            of: review, in: text, ranges: review.highlightedRanges(in: text)
+        )
+    }
+
+    @Test func thePageIsToldWhatComesBackAndWhatGoes() throws {
+        let review = LampWritingReview(writingID: "w")
+            .markingAssistantChange(from: "The quick brown fox.", to: "The slow red fox.")
+        let told = changes(review, in: "The slow red fox.")
+        #expect(told.count == 1)
+        #expect(told[0]?.now == "slow red")
+        #expect(told[0]?.before == "quick brown")
+        #expect(told[0]?.reason == nil)
+    }
+
+    /// What goes is the mark *and* the space the assistant put in with it,
+    /// so the page shows the writer the same thing the restore does.
+    @Test func whatGoesIncludesTheSpaceThatCameWithIt() throws {
+        let review = LampWritingReview(writingID: "w")
+            .markingAssistantChange(from: "One two.", to: "One alpha two.")
+        let told = changes(review, in: "One alpha two.")
+        #expect(told[0]?.now == "alpha ")
+        #expect(told[0]?.before == "")
+    }
+
+    /// Where the assistant only took words out there is nothing to see in
+    /// the text at all, which is why the page is told rather than left to
+    /// work it out from a zero-width marker.
+    @Test func aPlaceWordsWereTakenOutSaysWhatWouldComeBack() throws {
+        let old = "First sentence. Second sentence. Third sentence."
+        let review = LampWritingReview(writingID: "w")
+            .markingAssistantChange(from: old, to: "First sentence. Third sentence.")
+        let told = changes(review, in: "First sentence. Third sentence.")
+        #expect(told[0]?.now == "")
+        #expect(told[0]?.before == "Second sentence. ")
+    }
+
+    @Test func aPassageTypedIntoSaysWhyItCannotComeBack() throws {
+        let review = LampWritingReview(writingID: "w")
+            .markingAssistantChange(from: "One two three.", to: "One alpha beta three.")
+        let typed = "One alpha mine beta three."
+        let carried = review.carryingWriterEdit(from: "One alpha beta three.", to: typed)
+        let told = changes(carried, in: typed)
+        #expect(told.allSatisfy { $0?.before == nil })
+        #expect(told.contains { $0?.reason == "edited" })
+    }
+
+    /// A passage whose wording was never kept is not the writer's doing, so
+    /// the page is given nothing to say about it rather than a reason that
+    /// would read as an accusation.
+    @Test func aPassageWhoseWordingWasNeverKeptSaysNothing() throws {
+        var review = LampWritingReview(writingID: "w")
+            .markingAssistantChange(from: "The quick brown fox.", to: "The slow red fox.")
+        review.wordings = []
+        #expect(changes(review, in: "The slow red fox.") == [nil])
+    }
+
+    /// The page presses by this label, not by a range of the writing's
+    /// Markdown: it widens a range to a whole link when it writes markers,
+    /// which put two changes in one link label under one button.
+    @Test func eachEntryNamesTheMarksItsPassageStandsIn() throws {
+        let review = LampWritingReview(writingID: "w")
+            .markingAssistantChange(from: "The quick brown fox.", to: "The slow red fox.")
+        let told = changes(review, in: "The slow red fox.")
+        let id = try #require(review.marks.first?.id)
+        #expect(told[0]?.id == id.uuidString)
+    }
+
+    @Test func anEntryNamingSeveralMarksSortsThem() throws {
+        let one = UUID(uuidString: "FFFFFFFF-0000-0000-0000-000000000001")!
+        let two = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+        #expect(WritingReviewChange.id(of: [one, two]) == "\(two.uuidString),\(one.uuidString)")
+    }
+
+    @Test func thereIsOneEntryToEachDrawnPassageInTheOrderTheyStand() throws {
+        let old = "Alpha stands here.\n\nBeta stands here.\n\nGamma stands here."
+        let new = "Alpha sits here.\n\nBeta stands here.\n\nGamma rests here."
+        let review = LampWritingReview(writingID: "w").markingAssistantChange(from: old, to: new)
+        let told = changes(review, in: new)
+        #expect(told.count == review.highlightedRanges(in: new).count)
+        #expect(told.compactMap { $0?.before } == ["stands", "stands"])
+        #expect(told.compactMap { $0?.now } == ["sits", "rests"])
+    }
+
     @Test func theMarksAreReadAndCounted() async throws {
         let root = try library()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -337,7 +430,7 @@ struct WritingReviewSessionTests {
         )
         let session = WritingReviewSession()
         var sent: [String?] = []
-        session.onMarksChanged = { sent.append($0) }
+        session.onMarksChanged = { marked, _ in sent.append(marked) }
         await session.follow(writingID: "w", text: "a c", libraryRootURL: root, isShown: false)
         #expect(session.count == 0)
         #expect(sent == [nil])

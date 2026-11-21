@@ -154,6 +154,7 @@ struct MarkdownTextEditor: NSViewRepresentable {
     /// The edits come last first, so each range still means in the text what
     /// it meant when they were worked out.
     private static func apply(_ pending: WritingTextEdits, in textView: NSTextView) {
+        guard textView.string == pending.expected else { return }
         guard textView.isEditable, let storage = textView.textStorage,
               textView.shouldChangeText(
                   inRanges: pending.edits.map { NSValue(range: $0.range) },
@@ -258,13 +259,24 @@ struct WritingTextEdit: Equatable {
 }
 
 /// Edits a host asks the Markdown text view to make, as one undoable change.
+///
+/// Made only in the text they were worked out in. A token alone is not
+/// enough: the view is made again each time the writer comes back from the
+/// visual page, and its new coordinator has seen no token, so the last set
+/// would be made a second time — over the words it had already put there,
+/// or past the end of a document that is now shorter.
 struct WritingTextEdits: Equatable {
-    /// Raised for each new set, so the view makes each once.
+    /// Raised for each new set, so one view makes each once.
     let token: Int
     /// What the writer sees in Edit ▸ Undo.
     let actionName: String
     /// Last first.
     let edits: [WritingTextEdit]
+    /// The text these were worked out in; they are made in no other.
+    let expected: String
+    /// What the text becomes, so the host knows they have been made and
+    /// can put the command down.
+    let result: String
 }
 
 /// Finds in the Markdown text view, for the writing editor's find bar.
