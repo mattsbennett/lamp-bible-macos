@@ -2496,13 +2496,20 @@ struct DevotionalEditorView: View {
     /// as the writer's own, so the assistant is never told either. The
     /// record therefore goes last, and if nothing saves the surface is put
     /// back as it was.
+    /// `wasHolding` is the editor's own text when the restore began, which
+    /// is not always the text the restore was worked out in: the page
+    /// writes its own Markdown, and an untouched writing can be held here
+    /// with `*` list markers while the page reports `-`. Comparing against
+    /// the page's spelling refused every restore in such a document.
     private func keepRestore(
         _ restore: WritingReviewSession.PageRestore,
         held: String,
+        wasHolding: String,
         putInPlace: @escaping () -> Void,
         rollBack: @escaping () -> Void
     ) {
         guard newerCopy == nil else {
+            isRestoring = false
             refusedRestore = "A newer version of this writing arrived, so nothing was put back."
             rollBack()
             return
@@ -2514,22 +2521,23 @@ struct DevotionalEditorView: View {
         LampPendingWrites.shared.begin()
         Task {
             defer { LampPendingWrites.shared.end() }
-            // Only a save submitted from here on can say this restore was
-            // kept. One already in flight took its copy of the writing
-            // before the restore was made, and would otherwise report the
-            // old words as safely stored.
             defer { isRestoring = false }
-            var ours: [Int] = []
+            // Any save whose copy of the writing was taken after the
+            // restore was put in place will hold it, whether this asked
+            // for that save or the writer's own typing did. One already in
+            // flight took its copy before, and is numbered below the
+            // floor, so it cannot speak for this.
+            let floor = saveSubmissions
+            func landed() -> Bool { committedSubmissions.contains { $0 > floor } }
             var attempt = 0
-            func landed() -> Bool { ours.contains { committedSubmissions.contains($0) } }
             while attempt < 3, newerCopy == nil, !landed() {
                 if attempt > 0 { try? await Task.sleep(for: .seconds(1)) }
                 attempt += 1
                 // The surface may not have reported its edit yet, and a
-                // save started before it does would store the old words.
-                for _ in 0..<40 where content != held { try? await Task.sleep(for: .milliseconds(50)) }
-                guard content == held else { break }
-                if let started = save() { ours.append(started) }
+                // save that ran before it did would store the old words.
+                for _ in 0..<40 where content == wasHolding { try? await Task.sleep(for: .milliseconds(50)) }
+                guard content != wasHolding else { break }
+                save()
                 for _ in 0..<80 where saveState == .saving && !landed() {
                     try? await Task.sleep(for: .milliseconds(100))
                 }
@@ -2576,9 +2584,12 @@ struct DevotionalEditorView: View {
         }
         let base = restore.base
         let restored = restore.restored
+        // The editor's own text, which the page's may be spelled
+        // differently from while nothing has been typed.
+        let hostText = content
         guard activeEditorMode == .visual, let tipTapCoordinator else {
             isRestoring = true
-            keepRestore(restore, held: restored) {
+            keepRestore(restore, held: restored, wasHolding: hostText) {
                 // The text view makes the edits and reports the new text
                 // as it reports typing. Nothing sets the content here:
                 // assigning it first would leave the view already holding
@@ -2611,21 +2622,25 @@ struct DevotionalEditorView: View {
             return
         }
         isRestoring = true
+        // The page's answer is part of the restore, and nothing of it is
+        // written anywhere until the answer comes: quitting waits.
+        LampPendingWrites.shared.begin()
         tipTapCoordinator.restoreWording(restored, expected: base) { made in
+            LampPendingWrites.shared.end()
             switch made {
             case .done(let held):
                 // A turn can have landed in the writing while the page was
                 // working. The page's own check guards what it holds, not
                 // what arrived here in the meantime, and putting the page's
                 // answer in now would write over that draft.
-                guard content == base else {
+                guard content == hostText else {
                     isRestoring = false
                     refusedRestore = "A new draft arrived while that was being put back, so nothing was changed."
                     tipTapCoordinator.restoreWording(base, expected: held) { _ in }
                     reviewSession.marksRejected()
                     return
                 }
-                keepRestore(restore, held: held) {
+                keepRestore(restore, held: held, wasHolding: hostText) {
                     content = held
                 } rollBack: {
                     // Asked of the page, and taken only if the page did
@@ -2641,12 +2656,12 @@ struct DevotionalEditorView: View {
             case .unsupported:
                 // A page older than that API: the writing goes in the way
                 // a turn's draft does, and only ⌘Z does not cover it.
-                guard content == base else {
+                guard content == hostText else {
                     isRestoring = false
                     refusedRestore = "A new draft arrived while that was being put back, so nothing was changed."
                     return
                 }
-                keepRestore(restore, held: restored) {
+                keepRestore(restore, held: restored, wasHolding: hostText) {
                     content = restored
                 } rollBack: {
                     guard content == restored else { return }
@@ -4048,10 +4063,14 @@ struct DevotionalEditorView: View {
                 LampPendingWrites.shared.begin()
                 Task {
                     defer { LampPendingWrites.shared.end() }
-                    for _ in 0..<80 where saveState == .saving {
+                    // Until it is done, not for a fixed while: giving up
+                    // early left the last sentence in no file at all, and
+                    // the view is going, so nothing else will write it.
+                    // Quitting has its own deadline over this.
+                    for _ in 0..<1_200 where saveState == .saving {
                         try? await Task.sleep(for: .milliseconds(100))
                     }
-                    if isDirty, hasSavableContent, newerCopy == nil { save() }
+                    if isDirty, hasSavableContent, newerCopy == nil, saveState != .saving { save() }
                 }
             } else {
                 save()
@@ -4067,6 +4086,10 @@ struct DevotionalEditorView: View {
         guard hasSavableContent, saveState != .saving, newerCopy == nil else { return nil }
         saveSubmissions += 1
         let submission = saveSubmissions
+        // Taken here, not inside the task: between the two, a draft can
+        // arrive, and the submission would then stand for text it never
+        // meant.
+        let submitted = content
         saveState = .saving
         // Quitting waits on this count, so it is taken before the task is,
         // and has to come down on every way out of it, the failures too:
@@ -4075,7 +4098,7 @@ struct DevotionalEditorView: View {
         LampPendingWrites.shared.begin()
         Task {
             defer { LampPendingWrites.shared.end() }
-            let markdown = content
+            let markdown = submitted
             let body: StoredWritingBody
             do {
                 body = try await WritingChatTurns.storedBody(
