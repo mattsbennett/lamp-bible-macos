@@ -805,17 +805,8 @@ struct DevotionalEditorView: View {
     /// Several at once: restore a passage, let its save be overtaken,
     /// restore another, and the writing holds both while neither is
     /// written down. One slot lost the first.
-    @State private var owedRestores: [OwedRestore] = []
+    @State private var owedRestores: [WritingReviewSession.OwedRestore] = []
 
-    private struct OwedRestore: Identifiable {
-        let id = UUID()
-        let restore: WritingReviewSession.PageRestore
-        let held: String
-        /// Set once a save holding this restore has landed and only the
-        /// marks file is left: nothing else would come back for it, since
-        /// the writing is clean and no further save is owed.
-        var bodyCommitted = false
-    }
     /// A newer stored copy than the one held, arrived while this editor had
     /// edits of its own, and those edits not yet kept elsewhere. Nothing is
     /// saved while it is here.
@@ -1229,6 +1220,18 @@ struct DevotionalEditorView: View {
         }
         // The writing's review marks, followed while it is open and marks
         // are shown; another writing, or marks turned off, starts again.
+        // What an editor closed before its record could be written left
+        // behind. Nothing else is coming for these: the writing is saved.
+        .task(id: identifier) {
+            let waiting = WritingReviewObligations.shared.taken(for: identifier)
+            guard !waiting.isEmpty else { return }
+            owedRestores.append(contentsOf: waiting.map {
+                var owing = $0
+                owing.bodyCommitted = true
+                return owing
+            })
+            retryOwedRecords()
+        }
         .task(id: ReviewFollowing(writingID: identifier, isShown: showsReviewMarks)) {
             await reviewSession.follow(
                 writingID: identifier, text: content,
@@ -2605,7 +2608,7 @@ struct DevotionalEditorView: View {
         }
         reviewSession.holds(held)
         putInPlace()
-        let owing = OwedRestore(restore: restore, held: held)
+        let owing = WritingReviewSession.OwedRestore(restore: restore, held: held)
         // Counted, so quitting waits for it: this is the half of a restore
         // that is not yet written anywhere.
         LampPendingWrites.shared.begin()
@@ -2643,13 +2646,13 @@ struct DevotionalEditorView: View {
     /// and no generation, lineage or position would have noticed.
     private func settleOwedRestores(in saved: String) {
         guard !owedRestores.isEmpty else { return }
-        var remaining: [OwedRestore] = []
+        var remaining: [WritingReviewSession.OwedRestore] = []
         for owing in owedRestores {
-            guard reviewSession.restoreStands(owing.restore.plan, in: saved) else {
+            guard owing.restore.plan.stands(from: owing.held, in: saved) else {
                 // Not in this save. Either it was taken before the restore
                 // was made, or the writer has since undone it — and undone
                 // is the end of it.
-                if reviewSession.restoreStands(owing.restore.plan, in: content) {
+                if owing.restore.plan.stands(from: owing.held, in: content) {
                     remaining.append(owing)
                 }
                 continue
@@ -4202,9 +4205,15 @@ struct DevotionalEditorView: View {
             saveDirtyWorkspaceDocuments()
         }
         // A restore whose writing is saved and whose record would not go
-        // down needs no save of its own, so this is the last chance to
-        // write it.
+        // down needs no save of its own, so this is the last chance here
+        // to write it — and what is still owed after that is left where
+        // the next editor of this writing will find it, rather than going
+        // with the window.
         retryOwedRecords()
+        for owing in owedRestores {
+            WritingReviewObligations.shared.owe(owing, for: identifier)
+        }
+        owedRestores = []
     }
 
     /// Writes the writing now, and says whether that write landed in

@@ -14,6 +14,29 @@ import LampBibleMacSupport
 /// from the texts its own window held (`WritingReviewSession.texts`): a
 /// draft another window took in, not yet saved, is not this one's to
 /// carry, and carried from here its new words would be retired for good.
+/// Restores made and not yet written down, kept outside any one editor.
+///
+/// A record owed when the writer closes the window, or moves to another
+/// writing, was lost with the view that held it — and nothing was coming
+/// back for it, since the writing itself is saved. Kept here, it is tried
+/// again whenever that writing is open.
+@MainActor
+final class WritingReviewObligations {
+    static let shared = WritingReviewObligations()
+    private var owed: [String: [WritingReviewSession.OwedRestore]] = [:]
+
+    func owe(_ restore: WritingReviewSession.OwedRestore, for writingID: String) {
+        owed[writingID, default: []].append(restore)
+    }
+
+    func taken(for writingID: String) -> [WritingReviewSession.OwedRestore] {
+        defer { owed[writingID] = nil }
+        return owed[writingID] ?? []
+    }
+
+    func isEmpty(for writingID: String) -> Bool { (owed[writingID] ?? []).isEmpty }
+}
+
 @MainActor
 final class WritingReviewTexts {
     static let shared = WritingReviewTexts()
@@ -288,13 +311,6 @@ final class WritingReviewSession: ObservableObject {
     /// refusal is the record's own: a selection holding one passage the
     /// writer has typed into is refused, and that is not a thing the drawn
     /// list can say, holding only what can be put back.
-    /// Whether `text` still holds what a restore put back — the record's
-    /// own answer, from the passages rather than from any bookkeeping
-    /// the writer could undo without touching.
-    func restoreStands(_ plan: LampWritingReview.RestorePlan, in text: String) -> Bool {
-        review?.restoreStands(plan, in: text) ?? false
-    }
-
     func restoring(_ range: NSRange, in text: String? = nil) -> LampWritingReview.RestoreOutcome {
         let text = text ?? self.text
         return live(in: text)?.restoring(range, in: text) ?? .nothingTouched
@@ -373,6 +389,18 @@ final class WritingReviewSession: ObservableObject {
         // that one. The editor reports its text as it settles.
         let known = texts
         change({ $0.restoringWording(restore.plan, from: restore.base, to: held, carryingFrom: known) }, then: then)
+    }
+
+    /// A restore the surface made that no save has carried to storage
+    /// yet, and that is therefore not written down.
+    struct OwedRestore: Identifiable {
+        let id = UUID()
+        let restore: PageRestore
+        let held: String
+        /// Set once a save holding this restore has landed and only the
+        /// marks file is left: nothing else would come back for it, since
+        /// the writing is clean and no further save is owed.
+        var bodyCommitted = false
     }
 
     /// A restore worked out for the page, before the page has made it.
