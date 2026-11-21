@@ -353,14 +353,40 @@ struct LampMCPClientCompatibilityTests {
         }
     }
 
-    // Verbatim from Antigravity's `agy` 1.5.14. It speaks MCP 2026-07-28
-    // first and falls back to `initialize` only when told `server/discover`
-    // is unknown; left unanswered, it gave up after five seconds and ran
-    // without Lamp's tools.
-    private let agyDiscover = #"{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/clientCapabilities":{"elicitation":{"form":{},"url":{}},"roots":{"listChanged":true}},"io.modelcontextprotocol/clientInfo":{"name":"antigravity-client","version":"v1.0.0"},"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}"#
-    private let agyInitialize = #"{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"clientInfo":{"name":"antigravity-client","version":"v1.0.0"},"protocolVersion":"2025-11-25","capabilities":{"elicitation":{"form":{},"url":{}},"roots":{"listChanged":true}}}}"#
+    /// How a client on MCP 2026-07-28 opens: `server/discover` first, and
+    /// `initialize` only once told that is unknown. Left unanswered, `agy`
+    /// gave up after five seconds and ran without Lamp's tools; Claude Code
+    /// waited out its probe before falling back. Each pair is verbatim, as
+    /// `scripts/check-mcp-clients.py` recorded it.
+    struct Opening: Sendable, CustomTestStringConvertible {
+        let client: String
+        let discover: String
+        let initialize: String
+        var testDescription: String { client }
+    }
 
-    @Test func anewerClientIsToldDiscoveryIsUnknownAndThenInitializes() async throws {
+    static let newerOpenings = [
+        Opening(
+            client: "agy 1.5.14",
+            discover: #"{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/clientCapabilities":{"elicitation":{"form":{},"url":{}},"roots":{"listChanged":true}},"io.modelcontextprotocol/clientInfo":{"name":"antigravity-client","version":"v1.0.0"},"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}"#,
+            initialize: #"{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"clientInfo":{"name":"antigravity-client","version":"v1.0.0"},"protocolVersion":"2025-11-25","capabilities":{"elicitation":{"form":{},"url":{}},"roots":{"listChanged":true}}}}"#
+        ),
+        Opening(
+            client: "Claude Code 2.1.327",
+            discover: #"{"jsonrpc":"2.0","id":"server-discover-probe-1","method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"claude-code","title":"Claude Code","version":"2.1.327","description":"Anthropic's agentic coding tool","websiteUrl":"https://claude.com/claude-code"},"io.modelcontextprotocol/clientCapabilities":{"roots":{"listChanged":true},"elicitation":{"form":{},"url":{}},"extensions":{"io.modelcontextprotocol/tasks":{}}}}}}"#,
+            initialize: #"{"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{"roots":{"listChanged":true},"elicitation":{"form":{},"url":{}}},"clientInfo":{"name":"claude-code","title":"Claude Code","version":"2.1.327","description":"Anthropic's agentic coding tool","websiteUrl":"https://claude.com/claude-code"}},"jsonrpc":"2.0","id":0}"#
+        ),
+        // Not a client's: whatever the next revision opens with is answered
+        // too, so a client can fall back rather than wait.
+        Opening(
+            client: "a method no revision has yet",
+            discover: #"{"jsonrpc":"2.0","id":"probe","method":"server/handshake-of-the-future"}"#,
+            initialize: #"{"jsonrpc":"2.0","id":7,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"probe","version":"1"}}}"#
+        ),
+    ]
+
+    @Test(arguments: newerOpenings)
+    func anewerClientIsToldDiscoveryIsUnknownAndThenInitializes(_ opening: Opening) async throws {
         let fixture = FileManager.default.temporaryDirectory
             .appendingPathComponent("lamp-mcp-discover-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: fixture, withIntermediateDirectories: false)
@@ -377,24 +403,18 @@ struct LampMCPClientCompatibilityTests {
         }
         defer { reading.cancel() }
 
+        let discover = Data(opening.discover.utf8)
+        let initialize = Data(opening.initialize.utf8)
         // Both reach the SDK as sent: nothing in them needs mending.
-        for message in [agyDiscover, agyInitialize] {
-            let data = Data(message.utf8)
-            #expect(LampMCPServerFactory.compatibleClientMessage(data) == data)
-        }
+        #expect(LampMCPServerFactory.compatibleClientMessage(discover) == discover)
+        #expect(LampMCPServerFactory.compatibleClientMessage(initialize) == initialize)
 
-        try await client.send(Data(agyDiscover.utf8))
-        let discovery = try #require(await inbox.reply(to: 1).flatMap(Self.object))
+        try await client.send(discover)
+        let discovery = try #require(await inbox.reply(to: discover).flatMap(Self.object))
         #expect((discovery["error"] as? [String: Any])?["code"] as? Int == -32601)
 
-        // Not only that one method: whatever the next revision opens with is
-        // answered, so a client can fall back rather than wait.
-        try await client.send(Data(#"{"jsonrpc":"2.0","id":"probe","method":"server/handshake-of-the-future"}"#.utf8))
-        let unknown = try #require(await inbox.reply(to: "probe").flatMap(Self.object))
-        #expect((unknown["error"] as? [String: Any])?["code"] as? Int == -32601)
-
-        try await client.send(Data(agyInitialize.utf8))
-        let initialized = try #require(await inbox.reply(to: 2).flatMap(Self.object))
+        try await client.send(initialize)
+        let initialized = try #require(await inbox.reply(to: initialize).flatMap(Self.object))
         let result = try #require(initialized["result"] as? [String: Any])
         #expect((result["serverInfo"] as? [String: Any])?["name"] as? String == "lamp-bible")
 
@@ -402,25 +422,21 @@ struct LampMCPClientCompatibilityTests {
         await client.disconnect()
     }
 
-    /// What a client has been sent, so a reply can be waited for by id with a
+    /// What a client has been sent, so a reply can be waited for with a
     /// deadline: an unanswered request is the failure, and must not hang.
     private actor Inbox {
         private var messages: [Data] = []
 
         func add(_ message: Data) { messages.append(message) }
 
-        func reply(to id: Int, within seconds: Double = 5) async -> Data? {
-            await reply(within: seconds) { $0 as? Int == id }
-        }
-
-        func reply(to id: String, within seconds: Double = 5) async -> Data? {
-            await reply(within: seconds) { $0 as? String == id }
-        }
-
-        private func reply(within seconds: Double, matching: (Any?) -> Bool) async -> Data? {
+        /// The reply carrying `request`'s id, which may be a number or a string.
+        func reply(to request: Data, within seconds: Double = 5) async -> Data? {
+            guard let id = LampMCPClientCompatibilityTests.object(request)?["id"] as? NSObject else { return nil }
             let deadline = Date().addingTimeInterval(seconds)
             while Date() < deadline {
-                if let match = messages.first(where: { matching(LampMCPClientCompatibilityTests.object($0)?["id"]) }) {
+                if let match = messages.first(where: {
+                    (LampMCPClientCompatibilityTests.object($0)?["id"] as? NSObject)?.isEqual(id) == true
+                }) {
                     return match
                 }
                 try? await Task.sleep(for: .milliseconds(20))

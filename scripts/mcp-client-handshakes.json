@@ -1,0 +1,38 @@
+{
+  "agy": {
+    "methods": [
+      "server/discover",
+      "initialize"
+    ],
+    "protocolVersions": [
+      "2026-07-28",
+      "2025-11-25"
+    ]
+  },
+  "claude": {
+    "methods": [
+      "server/discover",
+      "initialize"
+    ],
+    "protocolVersions": [
+      "2026-07-28",
+      "2025-11-25"
+    ]
+  },
+  "codex": {
+    "methods": [
+      "initialize"
+    ],
+    "protocolVersions": [
+      "2025-06-18"
+    ]
+  },
+  "opencode": {
+    "methods": [
+      "initialize"
+    ],
+    "protocolVersions": [
+      "2025-11-25"
+    ]
+  }
+}
