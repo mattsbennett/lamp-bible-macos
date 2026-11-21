@@ -1225,11 +1225,10 @@ struct DevotionalEditorView: View {
         .task(id: identifier) {
             let waiting = WritingReviewObligations.shared.taken(for: identifier)
             guard !waiting.isEmpty else { return }
-            owedRestores.append(contentsOf: waiting.map {
-                var owing = $0
-                owing.bodyCommitted = true
-                return owing
-            })
+            // As they were left: reopening a writing says nothing about
+            // whether its body was ever saved, and claiming it did would
+            // record restores the writing never took.
+            owedRestores.append(contentsOf: waiting)
             retryOwedRecords()
         }
         .task(id: ReviewFollowing(writingID: identifier, isShown: showsReviewMarks)) {
@@ -2646,17 +2645,30 @@ struct DevotionalEditorView: View {
     /// and no generation, lineage or position would have noticed.
     private func settleOwedRestores(in saved: String) {
         guard !owedRestores.isEmpty else { return }
+        var settling: [WritingReviewSession.OwedRestore] = []
         var remaining: [WritingReviewSession.OwedRestore] = []
         for owing in owedRestores {
-            guard owing.restore.plan.stands(from: owing.held, in: saved) else {
-                // Not in this save. Either it was taken before the restore
-                // was made, or the writer has since undone it — and undone
-                // is the end of it.
-                if owing.restore.plan.stands(from: owing.held, in: content) {
+            switch owing.restore.plan.standing(from: owing.held, in: saved) {
+            case .stands:
+                settling.append(owing)
+            case .unknown:
+                // The words cannot say — the same passage stands twice —
+                // so nothing is recorded and nothing is given up.
+                remaining.append(owing)
+            case .gone:
+                // Not in this save: either it was taken before the
+                // restore was made, or the writer has undone it. Undone
+                // is the end of it; still in the writing is not.
+                if owing.restore.plan.standing(from: owing.held, in: content) != .gone {
                     remaining.append(owing)
                 }
-                continue
             }
+        }
+        // In place before any record is attempted: a write that fails at
+        // once — marks switched off — adds the obligation back, and
+        // assigning the list afterwards threw that away.
+        owedRestores = remaining
+        for owing in settling {
             reviewSession.recordRestore(owing.restore, held: owing.held) { kept in
                 guard !kept else { return }
                 // The writing has it; the marks file would not take it, or
@@ -2664,11 +2676,10 @@ struct DevotionalEditorView: View {
                 // owed on its own, since no further save is needed.
                 var again = owing
                 again.bodyCommitted = true
-                owedRestores.append(again)
+                owe(again)
                 refusedRestore = "The wording was put back, but Lamp couldn’t record it. It will try again."
             }
         }
-        owedRestores = remaining
     }
 
     /// Tries again to write down restores whose writing is already saved.
@@ -2682,8 +2693,21 @@ struct DevotionalEditorView: View {
         for owing in waiting {
             reviewSession.recordRestore(owing.restore, held: owing.held) { kept in
                 guard !kept else { return }
-                owedRestores.append(owing)
+                owe(owing)
             }
+        }
+    }
+
+    /// Owes a record somewhere that outlives this editor.
+    ///
+    /// Kept in the editor's own state it was lost when the window closed
+    /// — and these are written back from tasks that finish after it has
+    /// gone, so the editor is exactly the wrong owner.
+    private func owe(_ owing: WritingReviewSession.OwedRestore) {
+        if editorIsGone {
+            WritingReviewObligations.shared.owe(owing, for: identifier)
+        } else if !owedRestores.contains(where: { $0.id == owing.id }) {
+            owedRestores.append(owing)
         }
     }
 
