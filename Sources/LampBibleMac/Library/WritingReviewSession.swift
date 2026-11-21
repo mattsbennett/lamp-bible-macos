@@ -408,6 +408,10 @@ final class WritingReviewSession: ObservableObject {
                 try? store.updating(writingID: writingID, edit)
             }.value
             LampPendingWrites.shared.end()
+            // Said either way, and said here: the caller may be waiting to
+            // tell the writer that the writing took their restore and the
+            // marks file would not.
+            then(written != nil)
             // Not for a writing left since, nor once marks were turned off.
             guard let self, let written, self.writingID == writingID, self.store != nil else { return }
             self.apply(written.review, date: written.modified)

@@ -1704,7 +1704,17 @@ final class LibraryModel: ObservableObject {
             return nil
         }
         if let carry, let slot { carryReviewMarks(carry, to: saved, from: reviewTexts, in: slot) }
-        devotionals = try await library.devotionals()
+        // The writing is written. Reading the list again is how the rest
+        // of the app hears about it, and a failure there — some other
+        // writing that will not decode — is not this save failing: thrown
+        // from here it would tell the writer their work was not saved
+        // when it was, and a restore waiting on the answer would put the
+        // passage back as it was over a writing that had taken it.
+        do {
+            devotionals = try await library.devotionals()
+        } catch {
+            errorMessage = "Saved, but the list of writings could not be read again: \(error.localizedDescription)"
+        }
         await refreshManuscriptNotes(for: saved)
         return saved
     }

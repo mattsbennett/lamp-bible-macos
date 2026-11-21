@@ -2547,6 +2547,9 @@ struct DevotionalEditorView: View {
                 try? await Task.sleep(for: .milliseconds(50))
             }
             guard applied() else {
+                // Put down, or a Markdown view built later finds it still
+                // standing and makes it against text nothing is watching.
+                markdownEdits = nil
                 refusedRestore = "That passage couldn’t be put back: the writing had moved on. Nothing was changed."
                 return
             }
@@ -4264,14 +4267,22 @@ struct DevotionalEditorView: View {
     /// Saves what the editor holds now and waits for the answer, after
     /// any save already running has finished.
     private func saveAndWait() async -> Bool {
-        for _ in 0..<600 where saveState == .saving {
-            try? await Task.sleep(for: .milliseconds(100))
+        // A save gives up where the writing moved on while its body was
+        // being worked out — the edit that overtook it starts the next
+        // autosave, which is right for an autosave and not for a caller
+        // that has to know. Tried again while that is what happened.
+        for _ in 0..<3 {
+            for _ in 0..<600 where saveState == .saving {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            guard hasSavableContent, saveState != .saving, newerCopy == nil else { return false }
+            let submitted = content
+            saveState = .saving
+            LampPendingWrites.shared.begin()
+            if await saveNow(submitted) { return true }
+            guard content != submitted else { return false }
         }
-        guard hasSavableContent, saveState != .saving, newerCopy == nil else { return false }
-        let submitted = content
-        saveState = .saving
-        LampPendingWrites.shared.begin()
-        return await saveNow(submitted)
+        return false
     }
 
     /// Adds a footnote where the caret is: its marker in the prose, and an
