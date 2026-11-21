@@ -2826,8 +2826,13 @@ struct DevotionalEditorView: View {
             if kept, waiting.isEmpty {
                 WritingReviewObligations.shared.settled(owing.id, for: key.writingID)
             } else {
+                // Not committed where anything is still waiting: a
+                // passage the words could not answer for needs a save
+                // that can, and marking the remainder as committed had
+                // it written down later against the text it was made
+                // in, with nothing having proved it at all.
                 var again = owing.pending(kept ? waiting : pending)
-                again.bodyCommitted = true
+                again.bodyCommitted = waiting.isEmpty
                 again.cleared = cleared
                 WritingReviewObligations.shared.stillOwed(again, for: key.writingID)
                 if !kept {
@@ -3758,14 +3763,16 @@ struct DevotionalEditorView: View {
     /// the marker it left, which is proof rather than circumstance.
     private func markAssistantChange(
         inDocument document: DevotionalWorkspaceEditorDocument, to text: String,
-        declared: Set<String>
+        sinceSync: String?, declared: [String: String?]
     ) {
         // Said by the assistant, or shown by the editor. Declared, the
         // turn need not still be open: an assistant whose last act was
         // writing this file, and whose turn closed before the next poll,
         // wrote it just the same — and no rule about what was running
         // when the poll landed can know that.
-        let said = declared.contains(document.url.standardizedFileURL.path)
+        let standard = document.url.standardizedFileURL.path
+        let saidBody = declared[standard]
+        let said = saidBody != nil
         guard showsReviewMarks, said || agentChatTurn != nil,
               let name = reviewDocumentName(of: document),
               let path = try? LampWritingWorkspaceLayout.documentPath(
@@ -3779,16 +3786,21 @@ struct DevotionalEditorView: View {
         // device, and measuring from what the editor held would mark
         // those as the assistant's too — and a restore would offer to
         // take the writer's own words back out.
-        let before = WorkspaceDocumentsTakenIn.shared.lastTakenIn(at: path) ?? document.persistedText
-        guard before != text else { return }
+        let before = sinceSync ?? document.persistedText
+        // Up to what the assistant actually left, where its tool said so
+        // and the file has moved on since: the rest is the writer's,
+        // typed after, and the next save carries these marks onto it.
+        let to = (saidBody ?? nil) ?? text
+        guard before != to else { return }
         WritingReviewChanges(
             writingID: identifier, document: name,
             store: LampWritingReviewStore(rootURL: model.library.rootURL)
             // The turn if one is open, and none where the assistant said
             // so after its turn closed: the mark stands either way, and
             // an undo of that turn has nothing of this file to put back.
-        ).make([.assistantWrote(from: before, to: text, turnID: agentChatTurn)])
-        WritingReviewTexts.shared.remember(text, for: key)
+        ).make([.assistantWrote(from: before, to: to, turnID: agentChatTurn)])
+        WritingReviewTexts.shared.remember(to, for: key)
+        if to != text { WritingReviewTexts.shared.remember(text, for: key) }
     }
 
     /// Carries a document's marks onto the text its save wrote.
@@ -4062,10 +4074,7 @@ struct DevotionalEditorView: View {
             /// reached them: marked below, in the same stretch that applies
             /// them, for the reason `WritingReviewChanges` gives.
             var marking: [(document: DevotionalWorkspaceEditorDocument, text: String)] = []
-            // Taken once for the whole sweep, and taken away as it is
-            // read: a write is answered once, by the poll that first
-            // sees the file it names.
-            let declared = AgentDeclaredWrites.take(in: workspaceURL)
+
 
             for snapshot in allSnapshots {
                 let path = workspaceRelativePath(of: snapshot.url) ?? snapshot.id
@@ -4170,8 +4179,31 @@ struct DevotionalEditorView: View {
             // between: a save reserved before these marks saved the text
             // before them and runs first, and one reserved after saved the
             // text with them. See `WritingReviewChanges`.
+            // Asked for only the files this look saw change, so a
+            // declaration for one it did not see waits for the look
+            // that does rather than being thrown away.
+            let declared = AgentDeclaredWrites.take(
+                Set(marking.map(\.document.url.standardizedFileURL.path)), in: workspaceURL
+            )
             for (document, text) in marking {
-                markAssistantChange(inDocument: document, to: text, declared: declared)
+                // The body a pass left, taken as this look sees the
+                // file and taken whether or not a mark follows. Left
+                // until a mark is made, it stays as the baseline
+                // through the writer's own saves — and the next thing
+                // the assistant writes is then measured from a text
+                // several of the writer's edits ago, marking those as
+                // the assistant's.
+                let sinceSync = WorkspaceDocumentsTakenIn.shared.lastTakenIn(
+                    at: workspaceRelativePath(of: document.url).map {
+                        (try? LampWritingWorkspaceLayout.documentPath(
+                            folder: LampWritingWorkspaceLayout.directoryName(for: identifier),
+                            name: $0
+                        )) ?? $0
+                    } ?? document.relativePath
+                )
+                markAssistantChange(
+                    inDocument: document, to: text, sinceSync: sinceSync, declared: declared
+                )
             }
             for (path, revisions) in pending {
                 recordWorkspaceRevisions(

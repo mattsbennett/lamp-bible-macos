@@ -1244,7 +1244,25 @@ extension LibrarySyncController {
         // swept the records of documents whose own upload had failed.
         // The rule is modelled (`Verification/SyncMerge.lean`:
         // `reviewFate`) and the phone calls the same one.
-        for kept in (try? reviewStore.reviewed()) ?? [] {
+        // Every record here, and every record a deletion is already
+        // queued for. A record removed by an earlier gather is not in
+        // the folder any more, so looking only at the files there could
+        // never take its deletion back — and a document that came back
+        // after a failed pass would lose its marks on the server.
+        var toWeigh = ((try? reviewStore.reviewed()) ?? []).map {
+            (writingID: $0.writingID, documentKey: $0.documentKey)
+        }
+        let queued = Set(removals.keys).union(result.gathered.deletedLocally.keys)
+        for path in queued {
+            guard let target = LampSyncFolderLayout.reviewTarget(ofPath: path),
+                  target.documentKey != nil,
+                  !toWeigh.contains(where: {
+                      $0.writingID == target.writingID && $0.documentKey == target.documentKey
+                  })
+            else { continue }
+            toWeigh.append((target.writingID, target.documentKey))
+        }
+        for kept in toWeigh {
             guard let key = kept.documentKey,
                   let reviewPath = try? LampSyncFolderLayout.writingReviewPath(
                       writingID: kept.writingID, documentKey: key
@@ -1263,9 +1281,18 @@ extension LibrarySyncController {
             let entry = manifest.entry(at: documentPath)
             switch LampWritingDocumentReview.fate(
                 held: heldDocuments.contains(documentPath),
-                deletedHere: removals[documentPath].map { (at: $0, revision: nil) },
+                // The revision the deletion was of, which the manifest
+                // keeps: without it a deletion is weighed by time alone
+                // and the one distinction that settles it is lost.
+                deletedHere: removals[documentPath].map {
+                    (at: $0, revision: entry?.deletedRevision)
+                },
                 document: entry.map { (revision: $0.revision, isMember: $0.isMember) },
-                written: manifestTimes[reviewPath],
+                // The document's time, not the record's. A record may
+                // not have been touched for months while the document
+                // was saved yesterday, and it is the document's save
+                // that overtakes a deletion of the document.
+                documentWritten: entry?.presentSince,
                 asked: result.gathered.deletedLocally[reviewPath],
                 now: Int64(Date().timeIntervalSince1970 * 1_000)
             ) {
@@ -1278,8 +1305,12 @@ extension LibrarySyncController {
                 // would sweep again.
                 reviewRemovals[reviewPath] = dated
             case .cancelled:
-                result.gathered.deletedLocally[reviewPath] = nil
-                reviewRemovals[reviewPath] = nil
+                result.gathered.deletedLocally.removeValue(forKey: reviewPath)
+                // `updateValue`, not the subscript: assigning nil
+                // through the subscript of a dictionary of optionals
+                // takes the entry out instead of storing a nil, so the
+                // cancellations below found nothing to forget.
+                reviewRemovals.updateValue(nil, forKey: reviewPath)
             case .none:
                 break
             }

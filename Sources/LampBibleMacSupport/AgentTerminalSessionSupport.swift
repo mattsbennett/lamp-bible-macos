@@ -955,24 +955,46 @@ public enum AgentDeclaredWrites {
     /// Read whole each time rather than watched: these arrive a handful
     /// to a turn, and a directory of a few files costs nothing beside
     /// the poll that asks.
-    @discardableResult
-    public static func take(in workspace: URL, fileManager: FileManager = .default) -> Set<String> {
+    /// What the assistant said it wrote, for the paths asked about.
+    ///
+    /// Only those are taken away. A declaration for a file this look did
+    /// not see is left where it is: the poll that does see that file
+    /// needs it, and a declaration thrown away is a mark never made.
+    ///
+    /// The body comes with it where the tool reported one, which `Write`
+    /// does. That is what the assistant actually left, and it may not be
+    /// what stands in the file by the time anyone looks — the writer can
+    /// have typed since. Marking up to the declared body says what the
+    /// assistant did and leaves what the writer did alone.
+    public static func take(
+        _ paths: Set<String>, in workspace: URL, fileManager: FileManager = .default
+    ) -> [String: String?] {
         let directory = AgentTerminalLaunchPlanner.wroteDirectory(in: workspace)
         guard let names = try? fileManager.contentsOfDirectory(atPath: directory.path) else {
-            return []
+            return [:]
         }
-        var written: Set<String> = []
-        for name in names where !name.hasPrefix(".") {
+        var written: [String: String?] = [:]
+        for name in names.sorted() where !name.hasPrefix(".") {
             let url = directory.appendingPathComponent(name)
-            defer { try? fileManager.removeItem(at: url) }
             guard let data = try? Data(contentsOf: url),
                   let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let input = payload["tool_input"] as? [String: Any],
                   let path = input["file_path"] as? String
-            else { continue }
+            else {
+                // Nothing anyone can use, and keeping it would mean
+                // reading it again on every poll for ever.
+                try? fileManager.removeItem(at: url)
+                continue
+            }
             // Standardised, since a hook reports whatever path its tool
             // was given and the editor knows the file by its own.
-            written.insert(URL(fileURLWithPath: path).standardizedFileURL.path)
+            let standard = URL(fileURLWithPath: path).standardizedFileURL.path
+            guard paths.contains(standard) else { continue }
+            // The last one wins, read in name order, which is the order
+            // they were left: a file written twice in a turn is as the
+            // assistant last left it.
+            written[standard] = input["content"] as? String
+            try? fileManager.removeItem(at: url)
         }
         return written
     }

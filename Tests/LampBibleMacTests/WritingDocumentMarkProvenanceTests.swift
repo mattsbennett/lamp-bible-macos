@@ -76,7 +76,7 @@ struct WritingDocumentMarkProvenanceTests {
             """
         )
         #expect(
-            body.contains("declared.contains("),
+            body.contains("let saidBody = declared[standard]"),
             """
             The assistant says what it wrote through its own tool hook. Without \
             that, a write whose turn closed before the next poll is never marked, \
@@ -213,10 +213,11 @@ struct AgentDeclaredWritesTests {
         let file = root.appendingPathComponent("outline.md")
         try leave(["tool_name": "Write", "tool_input": ["file_path": file.path]], in: root)
 
-        #expect(AgentDeclaredWrites.take(in: root) == [file.standardizedFileURL.path])
+        #expect(AgentDeclaredWrites.take([file.standardizedFileURL.path], in: root).keys.sorted()
+            == [file.standardizedFileURL.path])
         // Taken away as it is read: one write is answered once, or every
         // later poll would mark the file again.
-        #expect(AgentDeclaredWrites.take(in: root).isEmpty)
+        #expect(AgentDeclaredWrites.take([file.standardizedFileURL.path], in: root).isEmpty)
     }
 
     /// A payload that is not what was expected is passed over rather than
@@ -225,13 +226,33 @@ struct AgentDeclaredWritesTests {
         let root = try workspace()
         defer { try? FileManager.default.removeItem(at: root) }
         try leave(["tool_name": "Bash", "tool_input": ["command": "ls"]], in: root)
-        #expect(AgentDeclaredWrites.take(in: root).isEmpty)
+        #expect(AgentDeclaredWrites.take(["/anywhere"], in: root).isEmpty)
     }
 
     @Test func aworkspaceTheAssistantNeverWroteInSaysNothing() throws {
         let root = try workspace()
         defer { try? FileManager.default.removeItem(at: root) }
-        #expect(AgentDeclaredWrites.take(in: root).isEmpty)
+        #expect(AgentDeclaredWrites.take(["/anywhere"], in: root).isEmpty)
+    }
+
+    /// A declaration for a file this look did not see is left where it
+    /// is: the look that does see it needs it, and one thrown away is a
+    /// mark never made.
+    @Test func adeclarationWaitsForTheLookThatCanUseIt() throws {
+        let root = try workspace()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("outline.md")
+        try leave([
+            "tool_name": "Write",
+            "tool_input": ["file_path": file.path, "content": "What the assistant left."],
+        ], in: root)
+
+        #expect(AgentDeclaredWrites.take(["/another/file.md"], in: root).isEmpty)
+        // Still there for the look that asks about it, with the body
+        // the tool reported.
+        let taken = AgentDeclaredWrites.take([file.standardizedFileURL.path], in: root)
+        #expect(taken[file.standardizedFileURL.path] == "What the assistant left.")
+        #expect(AgentDeclaredWrites.take([file.standardizedFileURL.path], in: root).isEmpty)
     }
 
     /// The hook is installed for the CLI that documents it, on the tools
