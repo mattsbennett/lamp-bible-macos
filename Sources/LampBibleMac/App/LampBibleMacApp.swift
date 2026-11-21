@@ -31,10 +31,34 @@ final class LampAppDelegate: NSObject, NSApplicationDelegate {
         _ sender: NSApplication
     ) -> NSApplication.TerminateReply {
         hasReplied = false
+        // An agent reply still running is stopped first. Its CLI is a child
+        // of Lamp only until Lamp exits; after that it goes on working, and
+        // spending the reader's usage, with nothing to show it to.
+        if KeptAgentChats.anyRunning {
+            Task { @MainActor [weak self] in
+                // The stop gives each CLI a few seconds to save its session
+                // before it and what it started are killed.
+                await KeptAgentChats.stopEveryReply(within: AgentCLIProcessRunner.stopGraceSeconds + 2)
+                // A writing pane collects what the stopped turn wrote on
+                // its next draft poll, every 400ms, and registers the save
+                // as a pending write; let that happen before flushing.
+                try? await Task.sleep(for: .milliseconds(1200))
+                guard let self else { return }
+                if self.flushPendingWrites(then: sender) { self.reply(to: sender) }
+            }
+            return .terminateLater
+        }
+        return flushPendingWrites(then: sender) ? .terminateNow : .terminateLater
+    }
+
+    /// Flushes outstanding writes and replies once they land, returning
+    /// whether there was nothing to wait for.
+    @MainActor
+    private func flushPendingWrites(then sender: NSApplication) -> Bool {
         let quiet = LampPendingWrites.shared.flushAll { [weak self] in
             self?.reply(to: sender)
         }
-        guard !quiet else { return .terminateNow }
+        guard !quiet else { return true }
 
         // Never trap someone in an app that will not quit. A write still
         // outstanding after five seconds is not going to land, and a person
@@ -43,7 +67,7 @@ final class LampAppDelegate: NSObject, NSApplicationDelegate {
             LampPendingWrites.shared.cancelQuietHandler()
             self?.reply(to: sender)
         }
-        return .terminateLater
+        return false
     }
 
     /// Answers once. Both the last write landing and the deadline can arrive,

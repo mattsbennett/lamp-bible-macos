@@ -992,6 +992,25 @@ enum KeptAgentChats {
         existing(provider: provider, workspace: workspace)?.requestRelease()
     }
 
+    /// Whether any kept chat has a reply running.
+    @MainActor
+    static var anyRunning: Bool { models.values.contains { $0.isRunning } }
+
+    /// Stops every reply still running, as Stop does, and waits until each
+    /// has ended or `seconds` pass. For quitting: a headless run otherwise
+    /// goes on working, and spending, after Lamp has gone. Through Stop, so a
+    /// writing turn ends the way it always does and what it wrote is still
+    /// collected and marked.
+    @MainActor
+    static func stopEveryReply(within seconds: Double) async {
+        let running = models.values.filter(\.isRunning)
+        running.forEach { $0.cancel() }
+        let deadline = Date().addingTimeInterval(seconds)
+        while running.contains(where: \.isRunning), Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+    }
+
     /// Takes a model out, by identity rather than by key, so a chat that
     /// has since been replaced under the same key is left alone.
     static func drop(_ model: NativeAgentChatModel) {
