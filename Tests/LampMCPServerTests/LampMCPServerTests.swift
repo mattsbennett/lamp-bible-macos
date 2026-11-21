@@ -353,6 +353,86 @@ struct LampMCPClientCompatibilityTests {
         }
     }
 
+    // Verbatim from Antigravity's `agy` 1.5.14. It speaks MCP 2026-07-28
+    // first and falls back to `initialize` only when told `server/discover`
+    // is unknown; left unanswered, it gave up after five seconds and ran
+    // without Lamp's tools.
+    private let agyDiscover = #"{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/clientCapabilities":{"elicitation":{"form":{},"url":{}},"roots":{"listChanged":true}},"io.modelcontextprotocol/clientInfo":{"name":"antigravity-client","version":"v1.0.0"},"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}"#
+    private let agyInitialize = #"{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"clientInfo":{"name":"antigravity-client","version":"v1.0.0"},"protocolVersion":"2025-11-25","capabilities":{"elicitation":{"form":{},"url":{}},"roots":{"listChanged":true}}}}"#
+
+    @Test func anewerClientIsToldDiscoveryIsUnknownAndThenInitializes() async throws {
+        let fixture = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-mcp-discover-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixture, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let server = await LampMCPServerFactory.makeServer(
+            library: LampAgentLibrary(libraryRootURL: fixture)
+        )
+        let (client, serverSide) = await InMemoryTransport.createConnectedPair()
+        try await server.start(transport: serverSide)
+        try await client.connect()
+        let inbox = Inbox()
+        let reading = Task {
+            for try await message in await client.receive() { await inbox.add(message) }
+        }
+        defer { reading.cancel() }
+
+        // Both reach the SDK as sent: nothing in them needs mending.
+        for message in [agyDiscover, agyInitialize] {
+            let data = Data(message.utf8)
+            #expect(LampMCPServerFactory.compatibleClientMessage(data) == data)
+        }
+
+        try await client.send(Data(agyDiscover.utf8))
+        let discovery = try #require(await inbox.reply(to: 1).flatMap(Self.object))
+        #expect((discovery["error"] as? [String: Any])?["code"] as? Int == -32601)
+
+        // Not only that one method: whatever the next revision opens with is
+        // answered, so a client can fall back rather than wait.
+        try await client.send(Data(#"{"jsonrpc":"2.0","id":"probe","method":"server/handshake-of-the-future"}"#.utf8))
+        let unknown = try #require(await inbox.reply(to: "probe").flatMap(Self.object))
+        #expect((unknown["error"] as? [String: Any])?["code"] as? Int == -32601)
+
+        try await client.send(Data(agyInitialize.utf8))
+        let initialized = try #require(await inbox.reply(to: 2).flatMap(Self.object))
+        let result = try #require(initialized["result"] as? [String: Any])
+        #expect((result["serverInfo"] as? [String: Any])?["name"] as? String == "lamp-bible")
+
+        await server.stop()
+        await client.disconnect()
+    }
+
+    /// What a client has been sent, so a reply can be waited for by id with a
+    /// deadline: an unanswered request is the failure, and must not hang.
+    private actor Inbox {
+        private var messages: [Data] = []
+
+        func add(_ message: Data) { messages.append(message) }
+
+        func reply(to id: Int, within seconds: Double = 5) async -> Data? {
+            await reply(within: seconds) { $0 as? Int == id }
+        }
+
+        func reply(to id: String, within seconds: Double = 5) async -> Data? {
+            await reply(within: seconds) { $0 as? String == id }
+        }
+
+        private func reply(within seconds: Double, matching: (Any?) -> Bool) async -> Data? {
+            let deadline = Date().addingTimeInterval(seconds)
+            while Date() < deadline {
+                if let match = messages.first(where: { matching(LampMCPClientCompatibilityTests.object($0)?["id"]) }) {
+                    return match
+                }
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+            return nil
+        }
+    }
+
+    private static func object(_ message: Data) -> [String: Any]? {
+        try? JSONSerialization.jsonObject(with: message) as? [String: Any]
+    }
+
     // MARK: - Writing from outside Lamp
 
     private struct WritingFixture {

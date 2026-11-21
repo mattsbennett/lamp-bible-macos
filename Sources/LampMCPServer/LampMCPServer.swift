@@ -44,7 +44,15 @@ public enum LampMCPServerFactory {
                 prompts: .init(listChanged: false),
                 tools: .init(listChanged: false)
             ),
-            configuration: .strict
+            // Not `.strict`. A client on MCP 2026-07-28 opens with
+            // `server/discover` and falls back to `initialize` only when it
+            // is told the method is unknown. Strict mode throws on any
+            // request before `initialize` and the SDK drops that error
+            // unanswered, so such a client waits, times out and goes on
+            // without Lamp's tools, saying nothing: Antigravity's `agy` did,
+            // and so will any other client once it moves to that revision.
+            // Lenient, an unknown method is answered as one, with its id.
+            configuration: .default
         )
         await server.withMethodHandler(ListTools.self) { _ in
             .init(tools: LampMCPToolCatalog.tools(workspace: workspaceURL != nil))
