@@ -1246,16 +1246,18 @@ extension LibrarySyncController {
         // `reviewFate`) and the phone calls the same one.
         for kept in (try? reviewStore.reviewed()) ?? [] {
             guard let key = kept.documentKey,
-                  let name = LampSyncFolderLayout.documentName(fromReviewKey: key)
-                      ?? ((try? reviewStore.review(
+                  let reviewPath = try? LampSyncFolderLayout.writingReviewPath(
+                      writingID: kept.writingID, documentKey: key
+                  ),
+                  let name = LampWritingDocumentReview.place(
+                      of: reviewPath,
+                      record: (try? reviewStore.review(
                           writingID: kept.writingID, documentKey: key
-                      )) ?? nil)?.document,
+                      )) ?? nil
+                  )?.document,
                   let documentPath = try? LampWritingWorkspaceLayout.documentPath(
                       folder: LampWritingWorkspaceLayout.directoryName(for: kept.writingID),
                       name: name
-                  ),
-                  let reviewPath = try? LampSyncFolderLayout.writingReviewPath(
-                      writingID: kept.writingID, documentKey: key
                   )
             else { continue }
             let entry = manifest.entry(at: documentPath)

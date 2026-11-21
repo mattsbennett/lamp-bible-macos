@@ -119,51 +119,26 @@ final class WritingReviewObligations {
     }
 }
 
-/// What a set of review marks is for: a writing, and one of the documents
-/// beside it or its own prose.
-///
-/// A type rather than the two joined into a string. Joined, a writing
-/// `"w"` with a document `"a.md"` and a writing `"wa"` with `".md"` are
-/// one key, and one document's texts would carry another's marks.
-struct WritingReviewKey: Hashable {
-    let writingID: String
-    /// Nil for the writing's own prose.
-    let document: String?
+/// What a set of review marks is for, which is core's
+/// (`LampWritingReviewPlace`): the phone keeps the same texts under the
+/// same key, so the key is one type rather than two that agree.
+typealias WritingReviewKey = LampWritingReviewPlace
 
-    init(writingID: String, document: String? = nil) {
-        self.writingID = writingID
-        self.document = document
-    }
+/// The texts this Mac has held, which core keeps
+/// (`LampWritingReviewTexts`). The shorthand for a writing's own prose
+/// stays here, since it is what every caller outside the editor means.
+enum WritingReviewTexts {
+    static let shared = LampWritingReviewTexts()
+    static let kept = LampWritingReviewTexts.kept
 }
 
-@MainActor
-final class WritingReviewTexts {
-    static let shared = WritingReviewTexts()
-    /// How many versions of a writing are kept: enough to span a clear and
-    /// the saves after it, few enough that a long manuscript costs little.
-    static let kept = 24
-
-    private var texts: [WritingReviewKey: [String]] = [:]
-
-    func remember(_ text: String, for key: WritingReviewKey) {
-        var kept = texts[key, default: []]
-        guard kept.last != text else { return }
-        kept.append(text)
-        texts[key] = Array(kept.suffix(Self.kept))
-    }
-
-    func known(for key: WritingReviewKey) -> [String] {
-        texts[key, default: []]
-    }
-
-    /// The writing's own prose, which is what every caller outside the
-    /// editor means.
+extension LampWritingReviewTexts {
     func remember(_ text: String, for writingID: String) {
-        remember(text, for: WritingReviewKey(writingID: writingID))
+        remember(text, for: LampWritingReviewPlace(writingID: writingID))
     }
 
     func known(for writingID: String) -> [String] {
-        known(for: WritingReviewKey(writingID: writingID))
+        known(for: LampWritingReviewPlace(writingID: writingID))
     }
 }
 

@@ -171,30 +171,15 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             // hold clears the server's copy has not seen. What differs from
             // the download goes back up, by the plan's comparison on the next
             // pass, or by `reconcile` when both sides changed.
-            guard let target = LampSyncFolderLayout.reviewTarget(ofPath: path) else {
-                throw PassError.unsupported(path)
-            }
+            // Which writing and document these marks are for, core's
+            // answer and not this pass's: both apps worked it out for
+            // themselves and both got it wrong once.
             let downloaded = try Data(contentsOf: url)
-            // Which document's marks these are. The name is in the file's
-            // own name, except where it was too long to keep — then the
-            // record carries it, and the record is the only place it is.
-            let document = try target.documentKey.map { key -> String in
-                if let name = LampSyncFolderLayout.documentName(fromReviewKey: key) { return name }
-                // A key that is a digest says nothing about the name, so
-                // the record's own is taken — and then checked against
-                // the key, or the check that a record arrived where it
-                // belongs would be the record agreeing with itself. A
-                // file put at another document's digest path would
-                // otherwise be merged into the document it names.
-                guard let name = try LampWritingReview.decoded(from: downloaded).document,
-                      LampSyncFolderLayout.reviewDocumentKey(
-                          writingID: target.writingID, document: name
-                      ) == key
-                else { throw PassError.unsupported(path) }
-                return name
-            }
+            guard let place = LampWritingDocumentReview.place(
+                of: path, record: try? LampWritingReview.decoded(from: downloaded)
+            ) else { throw PassError.unsupported(path) }
             try reviewStore.takeIn(
-                downloaded: downloaded, writingID: target.writingID, document: document
+                downloaded: downloaded, writingID: place.writingID, document: place.document
             )
             return nil
         case .writingDocument:
