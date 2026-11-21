@@ -768,7 +768,23 @@ final class WritingReviewSession: ObservableObject {
                 return (
                     ranges,
                     live.located(in: text).count,
-                    sendsMarks ? live.markedMarkdown(in: text) : nil,
+                    // Placed so the page's Markdown still reads as what
+                    // it is. A marker left inside a link's address or
+                    // between the stars of a run changes how the page
+                    // parses the copy it is sent, and the page — rightly
+                    // — refuses marks whose text is not the document it
+                    // holds. The passages this is about are exactly the
+                    // formatted ones, which simply went unmarked.
+                    //
+                    // Without numbering: the page refuses rather than
+                    // drawing from a copy a marker was dropped from, so
+                    // it can never be telling passages apart by their
+                    // order through a missing one.
+                    sendsMarks
+                        ? live.markedMarkdown(in: text).map {
+                            LampWritingReviewMarkdown.drawable($0, numbering: false)
+                        }
+                        : nil,
                     live.restorable(in: text),
                     sendsMarks ? live.changes(in: text, ranges: ranges) : []
                 )
