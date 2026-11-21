@@ -999,16 +999,18 @@ enum KeptAgentChats {
     /// Stops every reply still running, as Stop does, and waits until each
     /// has ended or `seconds` pass. For quitting: a headless run otherwise
     /// goes on working, and spending, after Lamp has gone. Through Stop, so a
-    /// writing turn ends the way it always does and what it wrote is still
-    /// collected and marked.
+    /// writing turn ends the way it always does. Returns the chats it
+    /// stopped, so what a writing turn wrote can be collected.
     @MainActor
-    static func stopEveryReply(within seconds: Double) async {
+    @discardableResult
+    static func stopEveryReply(within seconds: Double) async -> [NativeAgentChatModel] {
         let running = models.values.filter(\.isRunning)
         running.forEach { $0.cancel() }
         let deadline = Date().addingTimeInterval(seconds)
         while running.contains(where: \.isRunning), Date() < deadline {
             try? await Task.sleep(for: .milliseconds(50))
         }
+        return running
     }
 
     /// Takes a model out, by identity rather than by key, so a chat that
@@ -1486,6 +1488,11 @@ final class NativeAgentChatModel: ObservableObject {
 
     /// Why Lamp, rather than the person, stopped the running reply.
     private var stoppedByLamp: String?
+
+    /// The folder this chat runs in.
+    var workspaceURL: URL { workspace }
+    /// Whether this chat writes, as a writing's assistant does.
+    var isWritingChat: Bool { !mode.isReadOnly }
     private var askedCodexBilling = false
 
     func clearConversation() {

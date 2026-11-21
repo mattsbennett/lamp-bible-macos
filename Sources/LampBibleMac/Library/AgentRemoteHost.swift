@@ -807,6 +807,11 @@ final class AgentRemoteHost: ObservableObject {
         runs[device, default: []].append((open.model, turn))
         if let requestID { remember(requestID, asked: turn) }
         let collecting = collectWhileRunning(open)
+        // Counted from before the run to after its last collection, so a
+        // quit waits for what the turn wrote to be saved and marked rather
+        // than for a count that is zero between the marks and the save.
+        LampPendingWrites.shared.begin()
+        defer { LampPendingWrites.shared.end() }
         let taken = await open.model.send(text, contextualPrompt: prompt, messageID: turn, inConversation: conversation)
         // A poll part way through saving finishes before the last one looks,
         // or the last would read the writing from before that save.

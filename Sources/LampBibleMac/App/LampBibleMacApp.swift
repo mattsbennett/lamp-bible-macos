@@ -14,6 +14,9 @@ import SwiftUI
 /// cover for itself.
 final class LampAppDelegate: NSObject, NSApplicationDelegate {
     private var hasReplied = false
+    /// The library, for collecting what a stopped writing turn wrote when no
+    /// window is watching the writing. Set by the app as it starts.
+    weak var libraryModel: LibraryModel?
 
     /// Puts the daily reminder back if the switch is on and the system is not
     /// holding one.
@@ -38,12 +41,28 @@ final class LampAppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor [weak self] in
                 // The stop gives each CLI a few seconds to save its session
                 // before it and what it started are killed.
-                await KeptAgentChats.stopEveryReply(within: AgentCLIProcessRunner.stopGraceSeconds + 2)
-                // A writing pane collects what the stopped turn wrote on
-                // its next draft poll, every 400ms, and registers the save
-                // as a pending write; let that happen before flushing.
-                try? await Task.sleep(for: .milliseconds(1200))
+                let stopped = await KeptAgentChats.stopEveryReply(within: AgentCLIProcessRunner.stopGraceSeconds + 2)
                 guard let self else { return }
+                // What each stopped writing turn wrote is saved and marked
+                // before the flush counts what is left. A writing a window
+                // is watching is that window's to collect: it holds a
+                // pending write from the turn's start until its poll has
+                // taken the turn's end in, so the flush waits for it. A
+                // phone's run holds one the same way. Only a writing nobody
+                // is watching is collected here, and `collect` leaves a
+                // watched one alone.
+                if let libraryModel = self.libraryModel {
+                    for model in stopped where model.isWritingChat {
+                        guard let writingID = libraryModel.devotionals.first(where: {
+                            DevotionalAgentWorkspaceStore.workspaceURL(
+                                libraryRootURL: libraryModel.library.rootURL, devotionalID: $0.id
+                            ).standardizedFileURL == model.workspaceURL.standardizedFileURL
+                        })?.id else { continue }
+                        _ = try? await WritingChatTurns.collect(
+                            writingID: writingID, turnID: model.takeTurnForAttribution(), libraryModel: libraryModel
+                        )
+                    }
+                }
                 if self.flushPendingWrites(then: sender) { self.reply(to: sender) }
             }
             return .terminateLater
@@ -111,6 +130,7 @@ struct LampBibleMacApp: App {
                 // Chats from a paired phone, once there is a library to
                 // serve them from.
                 .onAppear {
+                    appDelegate.libraryModel = libraryModel
                     agentRemoteHost.attach(libraryModel) { [syncController, libraryModel] in
                         // A pass already running is let finish, then one
                         // run for this, so what it brings in is sure to be

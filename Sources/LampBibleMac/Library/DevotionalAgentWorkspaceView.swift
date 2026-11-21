@@ -997,6 +997,9 @@ struct DevotionalAgentWorkspaceView: View {
     /// reveal later instead, with the placeholder in its place.
     /// This pane's workspace jobs, in order, and the editor's live text.
     @State private var work = WritingWorkspaceWork()
+    /// Whether this pane holds a pending write for a turn in progress, so a
+    /// quit waits for the turn's end to be collected; see `holdQuitForTurn`.
+    @State private var turnHoldsQuit = false
     @State private var sessionCanMount = false
     @State private var providerConnection = AIProviderConnectionState.checking
     /// The setup was opened because the provider needed it,
@@ -1614,8 +1617,14 @@ struct DevotionalAgentWorkspaceView: View {
                         // question, whose undo then put the draft back past
                         // work it never did.
                         guard turn != chatTurn else { return }
+                        let ended = chatTurn != nil
                         schedulePoll()
                         chatTurn = turn
+                        if turn != nil {
+                            holdQuitForTurn()
+                        } else if ended {
+                            releaseQuitHoldAfterPoll()
+                        }
                     }
                 )
                 .workspaceTitle(devotionalTitle)
@@ -1628,6 +1637,7 @@ struct DevotionalAgentWorkspaceView: View {
                 .allowsHitTesting(sessionMode == .native)
                 .accessibilityHidden(sessionMode != .native)
                 .disabled(sessionMode != .native)
+                .onDisappear { releaseQuitHold() }
             }
             // The pane is drawn as soon as it is asked for, and its session
             // waits here while the workspace is made ready. Holding the
@@ -1795,6 +1805,32 @@ struct DevotionalAgentWorkspaceView: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// Counts a running turn as a pending write, so quitting waits until the
+    /// poll that takes in its end has saved and marked what it wrote. Timed
+    /// rather than counted, a quit behind a sync pass or a busy machine went
+    /// before that poll ran, and the turn's work was left unsaved.
+    private func holdQuitForTurn() {
+        guard !turnHoldsQuit else { return }
+        turnHoldsQuit = true
+        LampPendingWrites.shared.begin()
+    }
+
+    /// Lets the hold go once everything this pane has asked for — the poll
+    /// for the turn's end among it — has run. That poll's apply counts its
+    /// own marks and save in the same stretch, so nothing falls between.
+    private func releaseQuitHoldAfterPoll() {
+        Task { @MainActor in
+            await work.afterEverything {}
+            if chatTurn == nil { releaseQuitHold() }
+        }
+    }
+
+    private func releaseQuitHold() {
+        guard turnHoldsQuit else { return }
+        turnHoldsQuit = false
+        LampPendingWrites.shared.end()
     }
 
     /// Asks for a pass, behind whatever this pane has already asked for.
