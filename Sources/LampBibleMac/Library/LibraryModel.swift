@@ -1718,8 +1718,14 @@ final class LibraryModel: ObservableObject {
             // saved for the first time would open blank. The one that was
             // just written is put in by hand, and the rest wait for a
             // reload that works.
+            // To the second, and a tie left alone: what is cached came
+            // from the database, which keeps whole seconds, while this
+            // one still has its fractions — so an older save looked newer
+            // than a cached copy written later in the same second. A tie
+            // waits for a reload that works rather than guessing.
+            func second(_ date: Date?) -> TimeInterval { (date ?? .distantPast).timeIntervalSince1970.rounded(.down) }
             if let at = devotionals.firstIndex(where: { $0.id == saved.id }) {
-                if (devotionals[at].lastModified ?? .distantPast) <= (saved.lastModified ?? .distantPast) {
+                if second(devotionals[at].lastModified) < second(saved.lastModified) {
                     devotionals[at] = saved
                 }
             } else {

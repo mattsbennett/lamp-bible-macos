@@ -961,8 +961,17 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
             "window.editorAPI.reviewChangesForSelection ? window.editorAPI.reviewChangesForSelection() : null"
         ) { [weak self] result in
             guard let self, let body = result as? [String: Any] else { return completion(nil) }
+            // One string, comma separated, as the page names a passage
+            // everywhere else. Read as a list it was always empty, and
+            // the menu's restore said nothing was selected.
+            let ids: [String]
+            if let named = body["ids"] as? String {
+                ids = named.split(separator: ",").map(String.init)
+            } else {
+                ids = (body["ids"] as? [String]) ?? []
+            }
             completion(TipTapReviewSelection(
-                ids: (body["ids"] as? [String]) ?? [],
+                ids: ids,
                 unnamed: body["unnamed"] as? Bool ?? false,
                 isCaret: body["caret"] as? Bool ?? false,
                 marked: (body["markdown"] as? String).map(self.portableMarkdown(from:)),
