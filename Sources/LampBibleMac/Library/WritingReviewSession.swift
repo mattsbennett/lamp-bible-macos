@@ -503,6 +503,22 @@ final class WritingReviewSession: ObservableObject {
                   case .plan(let plan) = live.restoring(marks: wanted, in: base) else { continue }
             return PageRestore(base: base, restored: plan.applied(to: base), plan: plan)
         }
+        // Worked out in the writing as it is held, then carried into the
+        // page's own spelling of it.
+        //
+        // The page writes its own Markdown — `*firmly*` where the file
+        // says `_firmly_` — and carrying marks into that text reads the
+        // difference as the writer's edits, so the plan above is never
+        // made there. Made in the file and sent as it is, the page
+        // rightly refuses an edit against text it is not holding, and a
+        // passage nobody has touched cannot be put back at all.
+        if let pageText, let live = live(in: text),
+           case .plan(let plan) = live.restoring(marks: wanted, in: text),
+           let carried = plan.carried(from: text, to: pageText) {
+            return PageRestore(
+                base: pageText, restored: carried.applied(to: pageText), plan: carried
+            )
+        }
         return nil
     }
 
