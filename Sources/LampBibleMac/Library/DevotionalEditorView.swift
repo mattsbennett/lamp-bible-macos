@@ -794,6 +794,20 @@ struct DevotionalEditorView: View {
     @State private var documentLineage = 0
     /// The last set of edits the Markdown view said it had made.
     @State private var markdownEditsApplied = 0
+    /// A restore the surface made and no save has carried to storage yet.
+    ///
+    /// Its own save can be overtaken again and again — the writer typing
+    /// while each conversion runs — and giving up then left the passage
+    /// put back, the rollback rightly refusing to take their typing with
+    /// it, and nothing recorded at all. It is owed until some save of this
+    /// writing commits, and recorded then.
+    @State private var owedRestore: OwedRestore?
+
+    private struct OwedRestore {
+        let restore: WritingReviewSession.PageRestore
+        let held: String
+        let lineage: Int
+    }
     /// A newer stored copy than the one held, arrived while this editor had
     /// edits of its own, and those edits not yet kept elsewhere. Nothing is
     /// saved while it is here.
@@ -2563,12 +2577,25 @@ struct DevotionalEditorView: View {
             // storage is the only thing that may be recorded.
             let committed = await saveAndWait()
             guard committed, documentLineage == lineage else {
-                refusedRestore = newerCopy == nil
-                    ? "That passage couldn’t be put back: the writing wouldn’t save, so it has been left as it was."
-                    : "A newer version of this writing arrived, so nothing was put back."
+                // Where the writing still holds it — the rollback refuses
+                // over anything typed since — the restore is not undone,
+                // it is simply not recorded yet. Owed, and written as soon
+                // as any save of this writing lands.
                 rollBack()
+                if content != restore.base, documentLineage == lineage {
+                    owedRestore = OwedRestore(restore: restore, held: held, lineage: lineage)
+                    refusedRestore = """
+                        The wording is back, but the writing hasn’t saved yet, so it isn’t recorded. \
+                        Lamp will record it with the next save.
+                        """
+                } else {
+                    refusedRestore = newerCopy == nil
+                        ? "That passage couldn’t be put back: the writing wouldn’t save, so it has been left as it was."
+                        : "A newer version of this writing arrived, so nothing was put back."
+                }
                 return
             }
+            owedRestore = nil
             reviewSession.recordRestore(restore, held: held) { kept in
                 guard !kept else { return }
                 // The writing holds the restore; its marks do not. Said
@@ -2637,6 +2664,17 @@ struct DevotionalEditorView: View {
                     result: restored
                 )
             } rollBack: {
+                guard content == restored else { return }
+                guard activeEditorMode != .visual else {
+                    // The Markdown view has gone — the writer switched
+                    // while the save was running — so there is nobody to
+                    // make the command, and left standing it would be
+                    // made by whatever view is built next.
+                    markdownEdits = nil
+                    reviewSession.holds(base)
+                    content = base
+                    return
+                }
                 markdownEditsToken += 1
                 markdownEdits = WritingTextEdits(
                     token: markdownEditsToken,
@@ -4214,6 +4252,12 @@ struct DevotionalEditorView: View {
             return false
                 }
                 heldRevision = saved.lastModified
+                // A restore made but never carried to storage: this save
+                // took it, whoever asked for the save.
+                if let owed = owedRestore, owed.lineage == documentLineage {
+                    owedRestore = nil
+                    reviewSession.recordRestore(owed.restore, held: owed.held)
+                }
                 if writingHold == nil, !editorIsGone {
                     writingHold = WritingChatTurns.hold(
                         saved.id, revision: saved.lastModified ?? Date(),

@@ -1713,6 +1713,18 @@ final class LibraryModel: ObservableObject {
         do {
             devotionals = try await library.devotionals()
         } catch {
+            // The list is what the editor opens writings from, so leaving
+            // it as it was would show this one's old body, and a writing
+            // saved for the first time would open blank. The one that was
+            // just written is put in by hand, and the rest wait for a
+            // reload that works.
+            if let at = devotionals.firstIndex(where: { $0.id == saved.id }) {
+                if (devotionals[at].lastModified ?? .distantPast) <= (saved.lastModified ?? .distantPast) {
+                    devotionals[at] = saved
+                }
+            } else {
+                devotionals.append(saved)
+            }
             errorMessage = "Saved, but the list of writings could not be read again: \(error.localizedDescription)"
         }
         await refreshManuscriptNotes(for: saved)
