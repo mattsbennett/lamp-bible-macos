@@ -489,6 +489,14 @@ struct DevotionalsView: View {
     /// unlike every other list in the app.
     private func writingList(_ listSections: [WritingListSection]) -> some View {
         VStack(spacing: 0) {
+            // The search on a row of its own, at the height of the editor's
+            // format bar and the assistant's header: while a writing is
+            // edited the three stand side by side, and a list header that
+            // held everything ran its rule well below theirs.
+            searchField
+                .padding(.horizontal, 14)
+                .frame(height: LampMetrics.paneHeaderHeight)
+            Divider()
             writingListHeader
             Divider()
             writingListRows(listSections)
@@ -500,7 +508,6 @@ struct DevotionalsView: View {
     /// new one. In the window's toolbar they sat over the page, not the list.
     private var writingListHeader: some View {
         VStack(alignment: .leading, spacing: 10) {
-            searchField
             let categories = devotionalCategories
             if categories.count > 1 {
                 // One line that scrolls, not a row that wraps: wrapped, the
