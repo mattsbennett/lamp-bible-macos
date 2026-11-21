@@ -2470,9 +2470,13 @@ struct DevotionalEditorView: View {
             Button("Previous Change") { stepToMarkedPassage(forward: false) }
                 .disabled(reviewSession.ranges.isEmpty)
         } label: {
+            // Named for what it counts, and marked when none of it can
+            // be drawn where it belongs: a document that looks unchanged
+            // tells the writer the opposite of the truth.
             Label(
                 reviewSession.count == 1 ? "1 to Review" : "\(reviewSession.count) to Review",
-                systemImage: "checkmark.circle"
+                systemImage: reviewSession.isUnshown
+                    ? "exclamationmark.circle" : "checkmark.circle"
             )
         }
         .fittingToolbarLabel()
@@ -2482,7 +2486,15 @@ struct DevotionalEditorView: View {
     }
 
     private var reviewHelp: String {
-        isEditingPrimaryDocument
+        if reviewSession.isUnshown {
+            return """
+                \(reviewSession.count == 1 ? "A passage" : "Passages") the assistant changed \
+                that this editor cannot mark in place. Use Next Change to step through \
+                \(reviewSession.count == 1 ? "it" : "them"), or write in Markdown to see \
+                \(reviewSession.count == 1 ? "it" : "them") in the text.
+                """
+        }
+        return isEditingPrimaryDocument
             ? "Passages the assistant changed that you have not read yet"
             : "Passages the assistant changed in this document that you have not read yet"
     }

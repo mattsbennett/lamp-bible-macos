@@ -235,6 +235,19 @@ final class WritingReviewSession: ObservableObject {
     /// How many passages are still to read, places words were taken out
     /// among them.
     @Published private(set) var count = 0
+    /// Whether the surface showing the writing has refused the marks.
+    ///
+    /// The page draws marks by parsing a copy of the Markdown with
+    /// markers written into it, and refuses the lot where what it parsed
+    /// is not the document it is holding — which a marker inside a
+    /// link's address or a run of stars can cause. Refusing is right:
+    /// the alternative is marks drawn somewhere they do not belong.
+    ///
+    /// But refusing silently is not. A writer looking at a document with
+    /// nothing marked cannot tell "the assistant changed nothing" from
+    /// "the assistant changed this paragraph and nobody can show you".
+    /// That is the one thing marks exist to tell them.
+    @Published private(set) var isUnshown = false
     /// What of those can be put back as the assistant found it, in the
     /// order they stand. Worked out with what is drawn, off the main actor,
     /// so the editor can offer a restore without asking for it: short of
@@ -370,7 +383,13 @@ final class WritingReviewSession: ObservableObject {
     /// this one. They go again once the text settles.
     func marksRejected() {
         needsResend = true
-        guard resentFor != text else { return }
+        guard resentFor != text else {
+            // Refused twice for one text: it will not take them, and the
+            // writer is told rather than left with a document that looks
+            // unchanged.
+            if !isUnshown, count > 0 { isUnshown = true }
+            return
+        }
         resentFor = text
         scheduleDraw()
     }
@@ -498,28 +517,32 @@ final class WritingReviewSession: ObservableObject {
         let wanted = Set(ids.split(separator: ",").compactMap { UUID(uuidString: String($0)) })
         guard !wanted.isEmpty else { return nil }
         _ = review
-        for base in [pageText, text].compactMap({ $0 }) {
-            guard let live = live(in: base),
-                  case .plan(let plan) = live.restoring(marks: wanted, in: base) else { continue }
-            return PageRestore(base: base, restored: plan.applied(to: base), plan: plan)
+        // The page's own text first, since a plan made in it needs no
+        // carrying at all.
+        if let pageText, let live = live(in: pageText),
+           case .plan(let plan) = live.restoring(marks: wanted, in: pageText) {
+            return PageRestore(base: pageText, restored: plan.applied(to: pageText), plan: plan)
         }
-        // Worked out in the writing as it is held, then carried into the
-        // page's own spelling of it.
+        guard let live = live(in: text),
+              case .plan(let plan) = live.restoring(marks: wanted, in: text)
+        else { return nil }
+        // Then the writing as it is held, carried into the page's own
+        // spelling of it.
         //
         // The page writes its own Markdown — `*firmly*` where the file
         // says `_firmly_` — and carrying marks into that text reads the
-        // difference as the writer's edits, so the plan above is never
-        // made there. Made in the file and sent as it is, the page
-        // rightly refuses an edit against text it is not holding, and a
-        // passage nobody has touched cannot be put back at all.
-        if let pageText, let live = live(in: text),
-           case .plan(let plan) = live.restoring(marks: wanted, in: text),
-           let carried = plan.carried(from: text, to: pageText) {
+        // difference as the writer's edits, so no plan is made there.
+        // Sent as the file spells it, the page rightly refuses an edit
+        // against text it is not holding, and a passage nobody has
+        // touched cannot be put back at all. This was written to run
+        // after the plan in the file failed, which is never: the file's
+        // plan is exactly what succeeds in that case.
+        if let pageText, let carried = plan.carried(from: text, to: pageText) {
             return PageRestore(
                 base: pageText, restored: carried.applied(to: pageText), plan: carried
             )
         }
-        return nil
+        return PageRestore(base: text, restored: plan.applied(to: text), plan: plan)
     }
 
     /// A restore the page has made, recorded against the text it now holds.
@@ -768,23 +791,31 @@ final class WritingReviewSession: ObservableObject {
                 return (
                     ranges,
                     live.located(in: text).count,
-                    // Placed so the page's Markdown still reads as what
-                    // it is. A marker left inside a link's address or
-                    // between the stars of a run changes how the page
-                    // parses the copy it is sent, and the page — rightly
-                    // — refuses marks whose text is not the document it
-                    // holds. The passages this is about are exactly the
-                    // formatted ones, which simply went unmarked.
+                    // Not placed, until the page can be told which
+                    // passage is which.
                     //
-                    // Without numbering: the page refuses rather than
-                    // drawing from a copy a marker was dropped from, so
-                    // it can never be telling passages apart by their
-                    // order through a missing one.
-                    sendsMarks
-                        ? live.markedMarkdown(in: text).map {
-                            LampWritingReviewMarkdown.drawable($0, numbering: false)
-                        }
-                        : nil,
+                    // Placing moves a marker to where the Markdown still
+                    // reads as the writing — out of a link's address,
+                    // outside a split run of stars. That can put two
+                    // passages in the other order: a change to a link's
+                    // words and a change to where it points come back
+                    // reversed. The page pairs what it is sent with the
+                    // passages it finds, in order, so the label would
+                    // carry the destination's restore and the
+                    // destination the label's — and a writer putting one
+                    // back would get the other.
+                    //
+                    // Its own check cannot see this. It proves the text
+                    // it parsed is the document it holds, which is true
+                    // either way; the order of the passages inside it is
+                    // another question. `numbered` answers that, and
+                    // waits on the page reading the places it writes.
+                    //
+                    // Unplaced, a marker in an address makes the copy
+                    // parse as something else and the page refuses the
+                    // lot: those passages go unmarked, which is poor but
+                    // honest. Marks against the wrong changes are not.
+                    sendsMarks ? live.markedMarkdown(in: text) : nil,
                     live.restorable(in: text),
                     sendsMarks ? live.changes(in: text, ranges: ranges) : []
                 )
@@ -814,6 +845,8 @@ final class WritingReviewSession: ObservableObject {
         marked: String?, changes: [LampWritingReview.Change?], note: String?, sendsMarks: Bool
     ) {
         if self.ranges != ranges { self.ranges = ranges }
+        // Shown again, so whatever could not be drawn before can be now.
+        if isUnshown, !ranges.isEmpty || count == 0 { isUnshown = false }
         if self.count != count { self.count = count }
         if self.restorable != restorable { self.restorable = restorable }
         if agentNote != note { agentNote = note }
