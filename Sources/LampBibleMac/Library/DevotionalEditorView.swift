@@ -3777,13 +3777,20 @@ struct DevotionalEditorView: View {
               said || !WorkspaceDocumentsTakenIn.shared.tookIn(text, at: path)
         else { return }
         let key = WritingReviewKey(writingID: identifier, document: name)
+        // From the pass's own body where one landed since this editor
+        // last looked: the writer's changes arrived in it from another
+        // device, and measuring from what the editor held would mark
+        // those as the assistant's too — and a restore would offer to
+        // take the writer's own words back out.
+        let before = WorkspaceDocumentsTakenIn.shared.lastTakenIn(at: path) ?? document.persistedText
+        guard before != text else { return }
         WritingReviewChanges(
             writingID: identifier, document: name,
             store: LampWritingReviewStore(rootURL: model.library.rootURL)
-        // The turn if one is open, and none where the assistant said so
-        // after its turn closed: the mark stands either way, and an undo
-        // of that turn simply has nothing of this file to put back.
-        ).make([.assistantWrote(from: document.persistedText, to: text, turnID: agentChatTurn)])
+            // The turn if one is open, and none where the assistant said
+            // so after its turn closed: the mark stands either way, and
+            // an undo of that turn has nothing of this file to put back.
+        ).make([.assistantWrote(from: before, to: text, turnID: agentChatTurn)])
         WritingReviewTexts.shared.remember(text, for: key)
     }
 

@@ -1041,6 +1041,16 @@ public final class WorkspaceDocumentsTakenIn: @unchecked Sendable {
 
     private let lock = NSLock()
     private var digests: [String: [String]] = [:]
+    /// The last body a pass put at each path, kept whole.
+    ///
+    /// A digest answers "was this the pass's?", which is not enough: the
+    /// editor can poll after a pass installed one body and the assistant
+    /// then wrote over it, and the change it sees is the two together.
+    /// Marked from the text the editor last held, the writer's own words
+    /// — arrived from another device — are marked as the assistant's,
+    /// and a restore would offer to take them out again. The pass's body
+    /// is where the assistant's change actually begins.
+    private var bodies: [String: String] = [:]
     /// Enough to cover a poll that fell behind a pass; small enough that a
     /// workspace of documents costs nothing to remember.
     private static let kept = 8
@@ -1049,10 +1059,22 @@ public final class WorkspaceDocumentsTakenIn: @unchecked Sendable {
     /// server path.
     public func tookIn(_ data: Data, at path: String) {
         let digest = Self.digest(of: data)
+        let body = String(decoding: data, as: UTF8.self)
         lock.withLock {
             var kept = digests[path, default: []].filter { $0 != digest }
             kept.append(digest)
             digests[path] = Array(kept.suffix(Self.kept))
+            bodies[path] = body
+        }
+    }
+
+    /// The last body a pass put at this path, for a caller working out
+    /// what changed since. Taken away as it is read, so the next change
+    /// is measured from what the editor holds again.
+    public func lastTakenIn(at path: String) -> String? {
+        lock.withLock {
+            defer { bodies[path] = nil }
+            return bodies[path]
         }
     }
 

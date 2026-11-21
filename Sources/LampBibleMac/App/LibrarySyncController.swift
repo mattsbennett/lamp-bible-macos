@@ -1227,59 +1227,76 @@ extension LibrarySyncController {
         // server for ever, and a later document of the same name would
         // wear another file's marks.
         let reviewStore = LampWritingReviewStore(rootURL: library.rootURL)
-        var reviewRemovals: [String: Int64] = [:]
+        var reviewRemovals: [String: Int64?] = [:]
         let manifestTimes = Dictionary(
             manifest.members.map { ($0.path, $0.presentSince ?? 0) }, uniquingKeysWith: max
         )
         for (path, removedAt) in removals where !heldDocuments.contains(path) {
             result.gathered.deletedLocally[path] = removedAt
         }
-        // A document's marks go when the document is gone, and not when
-        // its deletion is merely asked for.
-        //
-        // Dated from the document's own deletion they still lost: the
-        // two files are dated independently, and a document whose
-        // deletion loses to another device's later edit comes back while
-        // its marks — untouched since, and so older than either — are
-        // swept everywhere. So nothing is derived from a deletion that
-        // has not happened. A record is swept once its document is
-        // neither held here nor named by the library on the server,
-        // which is the point at which the document really is gone.
-        let serverPaths = Set(manifest.members.map(\.path))
+        // What becomes of each document's review record, decided by
+        // core (`LampWritingDocumentReview.fate`) and by nothing here.
+        // The Mac answered this three times and was wrong three times,
+        // each costing a live document every mark on it: a tombstone
+        // dated now beat another device's later save; dated from the
+        // document's own deletion it still beat a record older than
+        // both; and sweeping a record whose document was merely absent
+        // swept the records of documents whose own upload had failed.
+        // The rule is modelled (`Verification/SyncMerge.lean`:
+        // `reviewFate`) and the phone calls the same one.
         for kept in (try? reviewStore.reviewed()) ?? [] {
             guard let key = kept.documentKey,
                   let name = LampSyncFolderLayout.documentName(fromReviewKey: key)
                       ?? ((try? reviewStore.review(
                           writingID: kept.writingID, documentKey: key
-                      )) ?? nil)?.document
-            else { continue }
-            let folder = LampWritingWorkspaceLayout.directoryName(for: kept.writingID)
-            guard let documentPath = try? LampWritingWorkspaceLayout.documentPath(
-                      folder: folder, name: name
+                      )) ?? nil)?.document,
+                  let documentPath = try? LampWritingWorkspaceLayout.documentPath(
+                      folder: LampWritingWorkspaceLayout.directoryName(for: kept.writingID),
+                      name: name
                   ),
-                  !heldDocuments.contains(documentPath), !serverPaths.contains(documentPath),
                   let reviewPath = try? LampSyncFolderLayout.writingReviewPath(
                       writingID: kept.writingID, documentKey: key
                   )
             else { continue }
-            try? reviewStore.remove(writingID: kept.writingID, documentKey: key)
-            let at = manifestTimes[reviewPath]
-                .map { max(Int64(Date().timeIntervalSince1970 * 1_000), $0 + 1) }
-                ?? Int64(Date().timeIntervalSince1970 * 1_000)
-            result.gathered.deletedLocally[reviewPath] = at
-            // Written down beside the documents' own removals, so a pass
-            // that fails does not lose the only thing that would sweep
-            // again: the record would sit in the library as a live
-            // member, waiting to attach itself to the next document of
-            // that name.
-            reviewRemovals[reviewPath] = at
+            let entry = manifest.entry(at: documentPath)
+            switch LampWritingDocumentReview.fate(
+                held: heldDocuments.contains(documentPath),
+                deletedHere: removals[documentPath].map { (at: $0, revision: nil) },
+                document: entry.map { (revision: $0.revision, isMember: $0.isMember) },
+                written: manifestTimes[reviewPath],
+                asked: result.gathered.deletedLocally[reviewPath],
+                now: Int64(Date().timeIntervalSince1970 * 1_000)
+            ) {
+            case .deleted(let at):
+                try? reviewStore.remove(writingID: kept.writingID, documentKey: key)
+                let dated = manifestTimes[reviewPath].map { max(at, $0 + 1) } ?? at
+                result.gathered.deletedLocally[reviewPath] = dated
+                // Written down beside the documents' own removals, so a
+                // pass that fails does not lose the only thing that
+                // would sweep again.
+                reviewRemovals[reviewPath] = dated
+            case .cancelled:
+                result.gathered.deletedLocally[reviewPath] = nil
+                reviewRemovals[reviewPath] = nil
+            case .none:
+                break
+            }
         }
         if !reviewRemovals.isEmpty {
             var records = LampSyncRemovedModules.load(
                 fromLibraryAt: library.rootURL, fileManager: fileManager
             )
-            for (path, removedAt) in reviewRemovals { records.record(path, at: removedAt) }
+            for (path, removedAt) in reviewRemovals {
+                guard let removedAt else { continue }
+                records.record(path, at: removedAt)
+            }
             try? records.save(toLibraryAt: library.rootURL, fileManager: fileManager)
+            let cancelled = reviewRemovals.filter { $0.value == nil }.map(\.key)
+            if !cancelled.isEmpty {
+                try? LampSyncRemovedModules.forget(
+                    cancelled, inLibraryAt: library.rootURL, fileManager: fileManager
+                )
+            }
         }
         // A highlight set's deletion is recorded per item; the file that
         // carried it is the module this source published it under.
