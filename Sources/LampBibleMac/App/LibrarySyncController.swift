@@ -1228,40 +1228,51 @@ extension LibrarySyncController {
         // wear another file's marks.
         let reviewStore = LampWritingReviewStore(rootURL: library.rootURL)
         var reviewRemovals: [String: Int64] = [:]
-        let writingIDsByFolder = Dictionary(
-            writings.map { (LampWritingWorkspaceLayout.directoryName(for: $0.id), $0.id) },
-            uniquingKeysWith: { first, _ in first }
-        )
         let manifestTimes = Dictionary(
             manifest.members.map { ($0.path, $0.presentSince ?? 0) }, uniquingKeysWith: max
         )
         for (path, removedAt) in removals where !heldDocuments.contains(path) {
             result.gathered.deletedLocally[path] = removedAt
-            guard let document = LampWritingWorkspaceLayout.document(ofPath: path),
-                  let writingID = writingIDsByFolder[document.folder]
+        }
+        // A document's marks go when the document is gone, and not when
+        // its deletion is merely asked for.
+        //
+        // Dated from the document's own deletion they still lost: the
+        // two files are dated independently, and a document whose
+        // deletion loses to another device's later edit comes back while
+        // its marks — untouched since, and so older than either — are
+        // swept everywhere. So nothing is derived from a deletion that
+        // has not happened. A record is swept once its document is
+        // neither held here nor named by the library on the server,
+        // which is the point at which the document really is gone.
+        let serverPaths = Set(manifest.members.map(\.path))
+        for kept in (try? reviewStore.reviewed()) ?? [] {
+            guard let key = kept.documentKey,
+                  let name = LampSyncFolderLayout.documentName(fromReviewKey: key)
+                      ?? ((try? reviewStore.review(
+                          writingID: kept.writingID, documentKey: key
+                      )) ?? nil)?.document
             else { continue }
-            // Dated as the document's own deletion is, not now. A
-            // deletion still queued after a failed pass can lose to
-            // another device saving that document since: the document
-            // comes back, and a review deletion dated now would have
-            // beaten the record that came with it — the document alive
-            // and every mark and restoration on it gone everywhere. The
-            // two rise or fall together this way.
-            guard let reviewPath = try? LampSyncFolderLayout.writingReviewPath(
-                writingID: writingID, document: document.name
-            ) else { continue }
-            try? reviewStore.remove(writingID: writingID, document: document.name)
-            result.gathered.deletedLocally[reviewPath] = max(
-                removedAt, result.gathered.deletedLocally[reviewPath] ?? removedAt
-            )
-            // Written down beside the document's own removal, not left to
-            // this pass alone. A tombstone that only lives in this gather
-            // is gone if the pass fails or loses to a newer record, and
-            // the document's removal is forgotten once it succeeds — so
-            // nothing would ever sweep again, and the orphan would sit in
-            // the library as a live member, waiting to attach itself to
-            // the next document of that name.
-            reviewRemovals[reviewPath] = removedAt
+            let folder = LampWritingWorkspaceLayout.directoryName(for: kept.writingID)
+            guard let documentPath = try? LampWritingWorkspaceLayout.documentPath(
+                      folder: folder, name: name
+                  ),
+                  !heldDocuments.contains(documentPath), !serverPaths.contains(documentPath),
+                  let reviewPath = try? LampSyncFolderLayout.writingReviewPath(
+                      writingID: kept.writingID, documentKey: key
+                  )
+            else { continue }
+            try? reviewStore.remove(writingID: kept.writingID, documentKey: key)
+            let at = manifestTimes[reviewPath]
+                .map { max(Int64(Date().timeIntervalSince1970 * 1_000), $0 + 1) }
+                ?? Int64(Date().timeIntervalSince1970 * 1_000)
+            result.gathered.deletedLocally[reviewPath] = at
+            // Written down beside the documents' own removals, so a pass
+            // that fails does not lose the only thing that would sweep
+            // again: the record would sit in the library as a live
+            // member, waiting to attach itself to the next document of
+            // that name.
+            reviewRemovals[reviewPath] = at
         }
         if !reviewRemovals.isEmpty {
             var records = LampSyncRemovedModules.load(

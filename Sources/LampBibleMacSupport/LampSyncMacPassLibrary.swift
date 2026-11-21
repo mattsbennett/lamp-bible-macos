@@ -652,7 +652,26 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
         guard case .writingDocument = LampSyncLocalDeletion.target(of: path) else {
             return try await deleteLocally(path)
         }
-        try documentStore.remove(path: path, agreedDigest: agreedDigest, localDevice: Self.deviceName)
+        // The same where a deletion from elsewhere keeps this Mac's
+        // edits: the copy holds the writer's own body, and the poll must
+        // not read it as a document the assistant wrote.
+        let keeping = (try? LampWritingWorkspaceLayout.document(ofPath: path))
+            .flatMap { named -> (folder: String, name: String, text: String)? in
+                let url = documentStore.rootURL
+                    .appendingPathComponent(named.folder, isDirectory: true)
+                    .appendingPathComponent(named.name)
+                guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+                return (named.folder, named.name, text)
+            }
+        let copyName = try documentStore.remove(
+            path: path, agreedDigest: agreedDigest, localDevice: Self.deviceName
+        )
+        if let copyName, let keeping,
+           let copyPath = try? LampWritingWorkspaceLayout.documentPath(
+               folder: keeping.folder, name: copyName
+           ) {
+            WorkspaceDocumentsTakenIn.shared.tookIn(Data(keeping.text.utf8), at: copyPath)
+        }
         noteSynced(path)
     }
 
@@ -691,6 +710,13 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
         // sides changed this document, that body is the one kept as a
         // copy, and the record's marks are made of its words.
         let named = LampWritingWorkspaceLayout.document(ofPath: path)
+        // Said before the body lands, not after. The editor's poll sees
+        // only that a file changed, and between a write and its
+        // provenance being recorded it would read a pass's work as the
+        // assistant's — marking the writer's own words from another
+        // device. Said for a body never written, the next poll simply
+        // finds nothing to compare it with.
+        WorkspaceDocumentsTakenIn.shared.tookIn(body, at: path)
         let held = named
             .map { documentStore.rootURL
                 .appendingPathComponent($0.folder, isDirectory: true)
@@ -713,6 +739,18 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
         // writer there — and no record of two merged copies can say
         // which came from which. This takes away what is certainly
         // wrong, not everything that might be.
+        // A copy this pass made holds the body that was already here,
+        // which is the writer's. The poll finds it as a document that
+        // appeared from nothing and would mark the whole of it as the
+        // assistant's — words they wrote, and words they had already
+        // read and cleared.
+        if case .takeKeepingHeldAs(let copyName) = decision, let document = named,
+           let was = held,
+           let copyPath = try? LampWritingWorkspaceLayout.documentPath(
+               folder: document.folder, name: copyName
+           ) {
+            WorkspaceDocumentsTakenIn.shared.tookIn(Data(was.utf8), at: copyPath)
+        }
         if case .takeKeepingHeldAs = decision, let document = named, let was = held,
            let writingID = await writingID(ofWorkspaceFolder: document.folder) {
             _ = try? LampWritingDocumentReview.carry(
@@ -737,11 +775,6 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
         // now stands there. The copy carries none, which loses the marks
         // on a body the writer is about to merge by hand — a smaller
         // wrong than marks that say the wrong person wrote the words.
-        // Said so the editor's poll can tell this from the assistant
-        // writing the document: it sees only that the file changed, and
-        // marking what a pass wrote would mark the writer's own phone
-        // edits as the assistant's.
-        WorkspaceDocumentsTakenIn.shared.tookIn(body, at: path)
         noteSynced(path)
     }
 

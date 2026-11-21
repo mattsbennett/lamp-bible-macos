@@ -1272,7 +1272,10 @@ struct DevotionalEditorView: View {
         // are shown; another writing, or marks turned off, starts again.
         // What an editor closed before its record could be written left
         // behind. Nothing else is coming for these: the writing is saved.
-        .task(id: identifier) {
+        // Keyed on what is open as well as the writing: a restore left
+        // owed in one document is tried again when the writer comes back
+        // to it, not only when they open the writing afresh.
+        .task(id: reviewKey) {
             retryOwedRecords()
         }
         .task(id: reviewFollowing) { await followReviewMarks() }
@@ -2817,15 +2820,22 @@ struct DevotionalEditorView: View {
         }
         // Written against the whole plan, so each passage is put back where
         // the plan actually put it, and only these passages are recorded.
+        // Read now, not as it was when the proving started: a writer who
+        // cleared while it ran cleared these passages, and a record
+        // written with the captured flag would make fresh marks their
+        // clear could not have retired.
+        let cleared = owing.cleared || WritingReviewObligations.shared
+            .owing(for: key).first { $0.id == owing.id }?.cleared == true
         reviewSession.recordRestore(
             owing.restore, held: owing.held, for: key, only: stands,
-            remarkingUnread: !owing.cleared
+            remarkingUnread: !cleared
         ) { kept in
             if kept, waiting.isEmpty {
                 WritingReviewObligations.shared.settled(owing.id, for: key.writingID)
             } else {
                 var again = owing.pending(kept ? waiting : pending)
                 again.bodyCommitted = true
+                again.cleared = cleared
                 WritingReviewObligations.shared.stillOwed(again, for: key.writingID)
                 if !kept {
                     refusedRestore = "The wording was put back, but Lamp couldn’t record it. It will try again."
@@ -3821,6 +3831,18 @@ struct DevotionalEditorView: View {
             _ = try? LampWritingDocumentReview.carry(
                 saved, ofDocument: name, writingID: writingID, from: known, in: store
             )
+            // And again if the file moved on while that was running: a
+            // pass can replace the body between the check above and the
+            // record being written, and the record would then describe a
+            // body nobody holds — passages still plainly there, their
+            // marks retired. Carried forward instead, from the text this
+            // carry just wrote to the one that stands now.
+            if let now = try? String(contentsOf: url, encoding: .utf8), now != saved {
+                _ = try? LampWritingDocumentReview.carry(
+                    now, ofDocument: name, writingID: writingID,
+                    from: known + [saved], in: store
+                )
+            }
         }
     }
 
