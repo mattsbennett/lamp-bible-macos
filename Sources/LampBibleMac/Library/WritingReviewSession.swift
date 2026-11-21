@@ -358,7 +358,10 @@ final class WritingReviewSession: ObservableObject {
         guard writingID != nil else { return }
         remember(restore.base)
         remember(held)
-        text = held
+        // Not `text = held`: this runs after the writing was saved, and
+        // the writer may have typed since. Setting it back would draw the
+        // marks in a text nobody is holding, and tell the assistant about
+        // that one. The editor reports its text as it settles.
         let known = texts
         change { $0.restoringWording(restore.plan, from: restore.base, to: held, carryingFrom: known) }
     }

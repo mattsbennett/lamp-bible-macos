@@ -769,12 +769,16 @@ struct DevotionalEditorView: View {
     /// newer one sync brings in while the writing is open is never written
     /// over by the editor's older text. Nil for a writing not stored yet.
     @State private var heldRevision: Date?
-    /// Raised each time a save lands in this writing — not when one is
-    /// kept as a copy beside a newer version, which is another writing.
-    /// A restore waits on it: the record and the writing are two files,
-    /// and the record must not say a wording was put back in a writing
-    /// that never took it.
-    @State private var savesCommitted = 0
+    /// Each save of this writing is numbered as it is submitted, and the
+    /// number of the last one that landed is kept.
+    ///
+    /// A restore waits for a save **it** submitted: the record and the
+    /// writing are two files, and the record must not say a wording was
+    /// put back in a writing that never took it — nor take a save that
+    /// was already in flight as its own, since that one copied the
+    /// writing before the restore was made.
+    @State private var saveSubmissions = 0
+    @State private var committedSubmission = 0
     /// A newer stored copy than the one held, arrived while this editor had
     /// edits of its own, and those edits not yet kept elsewhere. Nothing is
     /// saved while it is here.
@@ -1193,12 +1197,7 @@ struct DevotionalEditorView: View {
                 libraryRootURL: model.library.rootURL, isShown: showsReviewMarks
             )
         }
-        .onChange(of: content) { _, text in
-            // Put down once the text holds what it asked for, so a
-            // Markdown view made again does not find it still standing.
-            if let edits = markdownEdits, text == edits.result { markdownEdits = nil }
-            reviewSession.textChanged(text)
-        }
+        .onChange(of: content) { _, text in reviewSession.textChanged(text) }
         .confirmationDialog(
             "Restore the original wording?",
             isPresented: Binding(
@@ -1857,7 +1856,10 @@ struct DevotionalEditorView: View {
                 reviewRanges: isEditingPrimaryDocument ? reviewSession.ranges : [],
                 onMarkAsReviewed: isEditingPrimaryDocument ? { reviewSession.clear(range: $0) } : nil,
                 onRestoreWording: isEditingPrimaryDocument ? { offerRestore(of: $0) } : nil,
-                pendingEdits: markdownEdits
+                pendingEdits: markdownEdits,
+                onEditsConsidered: { token in
+                    if markdownEdits?.token == token { markdownEdits = nil }
+                }
             )
             // The text view draws no background of its own, so without this it
             // shows whatever happens to be behind the window — which is close to
@@ -2328,6 +2330,12 @@ struct DevotionalEditorView: View {
             case range(NSRange)
             case pageMarks(ids: String, pageText: String?)
         }
+        /// The passages the writer was shown. A plan made again at the
+        /// same selection can be a different passage's: a turn landing
+        /// between the offer and the yes can take out text before it and
+        /// move another mark into that place. What was shown is what is
+        /// put back, or nothing is.
+        let marks: Set<UUID>
         let passages: Int
         let words: String
         let restored: String
@@ -2435,6 +2443,7 @@ struct DevotionalEditorView: View {
         }
         restoreOffer = RestoreOffer(
             target: target,
+            marks: Set(offered.map(\.markID)),
             passages: offered.count,
             words: offered.count == 1 ? offered[0].words : "",
             restored: offered.count == 1 ? offered[0].restored : "",
@@ -2463,6 +2472,7 @@ struct DevotionalEditorView: View {
         let offered = reviewSession.restorable.filter { plan.marks.contains($0.markID) }
         restoreOffer = RestoreOffer(
             target: .range(selection),
+            marks: Set(plan.marks),
             passages: plan.edits.count,
             words: offered.count == 1 ? offered[0].words : "",
             restored: offered.count == 1 ? offered[0].restored : "",
@@ -2482,34 +2492,46 @@ struct DevotionalEditorView: View {
     /// record therefore goes last, and if nothing saves the surface is put
     /// back as it was.
     private func keepRestore(
-        _ restore: WritingReviewSession.PageRestore, held: String, rollBack: @escaping () -> Void
+        _ restore: WritingReviewSession.PageRestore,
+        held: String,
+        putInPlace: @escaping () -> Void,
+        rollBack: @escaping () -> Void
     ) {
         guard newerCopy == nil else {
-            rollBack()
             refusedRestore = "A newer version of this writing arrived, so nothing was put back."
+            rollBack()
             return
         }
-        // The surface holds it; this makes the writing agree before the
-        // save reads it.
         reviewSession.holds(held)
-        content = held
+        putInPlace()
+        // Counted, so quitting waits for it: this is the half of a restore
+        // that is not yet written anywhere.
+        LampPendingWrites.shared.begin()
         Task {
-            let before = savesCommitted
+            defer { LampPendingWrites.shared.end() }
+            // Only a save submitted from here on can say this restore was
+            // kept. One already in flight took its copy of the writing
+            // before the restore was made, and would otherwise report the
+            // old words as safely stored.
+            var ours: Int?
             var attempt = 0
-            while savesCommitted == before, attempt < 3, newerCopy == nil {
+            while attempt < 3, newerCopy == nil, !(ours.map { committedSubmission >= $0 } ?? false) {
                 if attempt > 0 { try? await Task.sleep(for: .seconds(1)) }
                 attempt += 1
-                save()
-                // Wait out this save, and any that was already running.
-                for _ in 0..<40 where savesCommitted == before && saveState == .saving {
+                // The surface may not have reported its edit yet, and a
+                // save started before it does would store the old words.
+                for _ in 0..<40 where content != held { try? await Task.sleep(for: .milliseconds(50)) }
+                guard content == held else { break }
+                if let started = save() { ours = ours ?? started }
+                for _ in 0..<80 where saveState == .saving && !(ours.map { committedSubmission >= $0 } ?? false) {
                     try? await Task.sleep(for: .milliseconds(100))
                 }
             }
-            guard savesCommitted > before else {
-                rollBack()
+            guard let ours, committedSubmission >= ours else {
                 refusedRestore = newerCopy == nil
                     ? "That passage couldn’t be put back: the writing wouldn’t save, so it has been left as it was."
                     : "A newer version of this writing arrived, so nothing was put back."
+                rollBack()
                 return
             }
             reviewSession.recordRestore(restore, held: held)
@@ -2533,12 +2555,17 @@ struct DevotionalEditorView: View {
             switch made {
             case .done(let held):
                 keepRestore(restore, held: held) {
-                    // Only where the page still holds what this put there:
-                    // the check inside makes it a no-op over anything typed
-                    // since.
-                    tipTapCoordinator.restoreWording(restore.base, expected: held) { _ in }
-                    reviewSession.holds(restore.base)
-                    content = restore.base
+                    content = held
+                } rollBack: {
+                    // Asked of the page, and taken only if the page did
+                    // it: where the writer has typed since, it is holding
+                    // their words as well, and putting the old text over
+                    // the top would take those with it.
+                    tipTapCoordinator.restoreWording(restore.base, expected: held) { undone in
+                        guard case .done(let back) = undone else { return }
+                        reviewSession.holds(back)
+                        content = back
+                    }
                 }
             case .refused, .unsupported:
                 refusedRestore = "That passage couldn’t be put back: the writing had moved on. Nothing was changed."
@@ -2562,7 +2589,8 @@ struct DevotionalEditorView: View {
         }
         guard case .range(let selection) = offer.target else { return }
         let text = content
-        guard case .plan(let plan) = reviewSession.restoring(selection, in: text) else {
+        guard case .plan(let plan) = reviewSession.restoring(selection, in: text),
+              Set(plan.marks) == offer.marks else {
             refusedRestore = "The writing changed while that was open, so nothing was put back."
             return
         }
@@ -2583,11 +2611,17 @@ struct DevotionalEditorView: View {
                     )
                 case .unsupported:
                     // A page older than that API: the writing goes in the
-                    // way a turn's draft does. The restore is made, and
-                    // only ⌘Z does not cover it.
-                    reviewSession.holds(restored)
-                    content = restored
-                    reviewSession.restored(plan, in: text, to: restored)
+                    // way a turn's draft does, and only ⌘Z does not cover
+                    // it. Kept the same way as any other restore.
+                    keepRestore(
+                        WritingReviewSession.PageRestore(base: text, restored: restored, plan: plan),
+                        held: restored
+                    ) {
+                        content = restored
+                    } rollBack: {
+                        reviewSession.holds(text)
+                        content = text
+                    }
                 case .refused:
                     refusedRestore = "That passage couldn’t be put back: the writing had moved on. Nothing was changed."
                     reviewSession.marksRejected()
@@ -2595,21 +2629,24 @@ struct DevotionalEditorView: View {
             }
             return
         }
-        // The Markdown view: its own text view makes the edits, for the
-        // same reason — one entry in the writer's Undo.
-        markdownEditsToken += 1
-        markdownEdits = WritingTextEdits(
-            token: markdownEditsToken,
-            actionName: "Restore Original Wording",
-            edits: plan.edits.map { WritingTextEdit(range: $0.range, replacement: $0.replacement) },
-            expected: text,
-            result: restored
-        )
         keepRestore(
             WritingReviewSession.PageRestore(base: text, restored: restored, plan: plan),
             held: restored
         ) {
-            // Back the way it came, and only over what this put there.
+            // The text view makes it, and reports the new text as it
+            // reports typing. Nothing sets the content here: assigning it
+            // first would leave the view already holding the result, and
+            // the edits — made only in the text they were worked out in —
+            // would be dropped, taking the writer's Undo entry with them.
+            markdownEditsToken += 1
+            markdownEdits = WritingTextEdits(
+                token: markdownEditsToken,
+                actionName: "Restore Original Wording",
+                edits: plan.edits.map { WritingTextEdit(range: $0.range, replacement: $0.replacement) },
+                expected: text,
+                result: restored
+            )
+        } rollBack: {
             markdownEditsToken += 1
             markdownEdits = WritingTextEdits(
                 token: markdownEditsToken,
@@ -3983,8 +4020,11 @@ struct DevotionalEditorView: View {
         }
     }
 
-    private func save() {
-        guard hasSavableContent, saveState != .saving, newerCopy == nil else { return }
+    @discardableResult
+    private func save() -> Int? {
+        guard hasSavableContent, saveState != .saving, newerCopy == nil else { return nil }
+        saveSubmissions += 1
+        let submission = saveSubmissions
         saveState = .saving
         // Quitting waits on this count, so it is taken before the task is,
         // and has to come down on every way out of it, the failures too:
@@ -4071,7 +4111,7 @@ struct DevotionalEditorView: View {
                     return
                 }
                 heldRevision = saved.lastModified
-                savesCommitted += 1
+                committedSubmission = max(committedSubmission, submission)
                 if writingHold == nil, !editorIsGone {
                     writingHold = WritingChatTurns.hold(
                         saved.id, revision: saved.lastModified ?? Date(),
@@ -4108,6 +4148,7 @@ struct DevotionalEditorView: View {
                 saveState = .failed(error.localizedDescription)
             }
         }
+        return submission
     }
 
     /// Adds a footnote where the caret is: its marker in the prose, and an

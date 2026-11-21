@@ -41,6 +41,12 @@ struct MarkdownTextEditor: NSViewRepresentable {
     /// takes back. Asked for by token, so a view made again does not make
     /// them a second time.
     var pendingEdits: WritingTextEdits?
+    /// Told the token once this view has dealt with a command, whether it
+    /// made the edits or found the text was not the one they were worked
+    /// out in. Either way the command is spent: left standing, a refused
+    /// one is made later by a view built fresh, against text that has come
+    /// back round to matching.
+    var onEditsConsidered: ((Int) -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -132,6 +138,11 @@ struct MarkdownTextEditor: NSViewRepresentable {
         if let pendingEdits, context.coordinator.appliedEditsToken != pendingEdits.token {
             context.coordinator.appliedEditsToken = pendingEdits.token
             Self.apply(pendingEdits, in: textView)
+            let considered = onEditsConsidered
+            let token = pendingEdits.token
+            // After this update rather than inside it: the host puts the
+            // command down by changing its own state.
+            DispatchQueue.main.async { considered?(token) }
         }
 
         // Asked for by a host that has just moved the selection somewhere the
