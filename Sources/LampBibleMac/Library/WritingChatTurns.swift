@@ -193,6 +193,47 @@ enum WritingChatTurns {
         return lines.joined(separator: "\n")
     }
 
+    /// What the agent is told of the marks in the documents beside the
+    /// writing, each named.
+    ///
+    /// Without this an agent is told of the prose's marks alone and reads
+    /// the rest as cleared, so it rewrites passages the writer has not
+    /// looked at yet — and anything it is told without a name it takes
+    /// for the writing's own, which is worse than silence: it would look
+    /// for those words in the draft and not find them.
+    ///
+    /// Each document is its own record, read and carried as the prose's
+    /// is. Nil where no document has a mark, so nothing is said of a
+    /// writing whose documents are all clear.
+    nonisolated static func documentReviewNotes(
+        _ documents: [(name: String, review: LampWritingReview, text: String, known: [String])]
+    ) -> String? {
+        var lines: [String] = []
+        for document in documents.sorted(by: { $0.name < $1.name }) {
+            let live = document.review.carryingToText(document.text, from: document.known)
+            let ranges = live.highlightedRanges(in: document.text)
+            guard !ranges.isEmpty else { continue }
+            let source = document.text as NSString
+            let passages = ranges.filter { $0.length > 0 }
+            let removals = ranges.count - passages.count
+            lines.append("In \(document.name), these are still marked as not yet read:")
+            for range in passages.prefix(reviewPassageLimit) {
+                let text = source.substring(with: range).replacingOccurrences(of: "\n", with: " ")
+                let shown = text.count > reviewPassageCharacters
+                    ? String(text.prefix(reviewPassageCharacters)) + "…"
+                    : text
+                lines.append("- \"\(shown)\"")
+            }
+            if passages.count > reviewPassageLimit {
+                lines.append("- and \(passages.count - reviewPassageLimit) more")
+            }
+            if removals > 0 {
+                lines.append("- and \(removals) place\(removals == 1 ? "" : "s") where words were taken out")
+            }
+        }
+        return lines.isEmpty ? nil : lines.joined(separator: "\n")
+    }
+
     nonisolated static let restorationLimit = 10
 
     /// What the writer has lately put back, which nothing else here says.

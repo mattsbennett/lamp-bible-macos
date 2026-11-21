@@ -3,6 +3,7 @@ import AppKit
 import LampBibleMacSupport
 #endif
 import LampCore
+import LampModuleKit
 import MetalKit
 import SwiftTerm
 import SwiftUI
@@ -1564,10 +1565,35 @@ struct DevotionalAgentWorkspaceView: View {
                             (try? await DevotionalAgentWorkspaceStore.readDraft(from: workspaceURL)) ?? ""
                         }
                         let read = await review
-                        let note = await Task.detached(priority: .userInitiated) {
-                            WritingChatTurns.reviewNote(read, marksAreOn: store != nil, in: draft, known: known)
+                        // The documents beside the writing have marks of
+                        // their own. Told of the prose's alone, an agent
+                        // reads the rest as cleared and rewrites passages
+                        // the writer has not looked at yet.
+                        let documents = await Task.detached(priority: .userInitiated) { () -> [(
+                            name: String, review: LampWritingReview, text: String, known: [String]
+                        )] in
+                            guard let store else { return [] }
+                            let files = (try? DevotionalAgentWorkspaceFiles.companions(in: workspaceURL)) ?? []
+                            return files.compactMap { file in
+                                let name = file.url.lastPathComponent
+                                guard LampWritingWorkspaceLayout.isDocumentName(name),
+                                      let review = try? store.review(writingID: devotionalID, document: name),
+                                      !review.marks.isEmpty
+                                else { return nil }
+                                return (name, review, file.contents, [])
+                            }
                         }.value
-                        return WritingChatTurns.prompt(for: message, focus: editorFocus, note: note)
+                        let note = await Task.detached(priority: .userInitiated) {
+                            [
+                                WritingChatTurns.reviewNote(
+                                    read, marksAreOn: store != nil, in: draft, known: known
+                                ),
+                                WritingChatTurns.documentReviewNotes(documents),
+                            ].compactMap { $0 }.joined(separator: "\n")
+                        }.value
+                        return WritingChatTurns.prompt(
+                            for: message, focus: editorFocus, note: note.isEmpty ? nil : note
+                        )
                     },
                     onRunningChanged: { chatIsReplying = $0 },
                     revertTurn: { await undoTurn($0) },

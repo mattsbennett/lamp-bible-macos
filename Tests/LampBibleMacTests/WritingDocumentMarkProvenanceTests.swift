@@ -116,3 +116,68 @@ struct WritingDocumentMarkProvenanceTests {
         )
     }
 }
+
+/// What the agent is told of the marks in the documents beside a writing.
+///
+/// Told of the prose's alone, an agent reads the rest as cleared and
+/// rewrites passages the writer has not looked at yet. Told of them
+/// without a name, it takes them for the writing's own and looks for
+/// those words in a draft that does not hold them.
+struct WritingDocumentAgentNoteTests {
+    private func review(from old: String, to new: String) -> LampWritingReview {
+        LampWritingReview(writingID: "w").markingAssistantChange(from: old, to: new)
+    }
+
+    @Test func thenoteNamesTheDocumentEachMarkedPassageIsIn() throws {
+        let outline = "One. The flood came suddenly, without warning."
+        let notes = "A note the assistant rewrote completely here."
+        let note = try #require(WritingChatTurns.documentReviewNotes([
+            (
+                name: "outline.md",
+                review: review(from: "One. The flood came.", to: outline),
+                text: outline, known: []
+            ),
+            (
+                name: "notes.md",
+                review: review(from: "A note.", to: notes),
+                text: notes, known: []
+            ),
+        ]))
+        #expect(note.contains("In outline.md, these are still marked as not yet read:"))
+        #expect(note.contains("In notes.md, these are still marked as not yet read:"))
+        #expect(note.contains("suddenly, without warning"))
+        // By name, so one turn's note reads in the same order as the next.
+        let outlineAt = try #require(note.range(of: "In outline.md"))
+        let notesAt = try #require(note.range(of: "In notes.md"))
+        #expect(notesAt.lowerBound < outlineAt.lowerBound)
+    }
+
+    /// Nothing is said of a writing whose documents are all clear, rather
+    /// than a line saying so for each: the prose's note already tells the
+    /// agent what the marks mean.
+    @Test func adocumentWithNothingMarkedIsNotMentioned() {
+        let text = "Nothing here was changed by anyone."
+        #expect(WritingChatTurns.documentReviewNotes([
+            (name: "outline.md", review: LampWritingReview(writingID: "w"), text: text, known: [])
+        ]) == nil)
+    }
+
+    /// A mark whose words the writer has since rewritten is carried before
+    /// it is said, as the prose's are, so the agent is never given a
+    /// passage it cannot find.
+    @Test func amarkIsCarriedIntoTheTextBeforeItIsSaid() throws {
+        let marked = "One. The flood came suddenly, without warning."
+        let typed = "One. The flood came suddenly, without any warning at all."
+        let note = try #require(WritingChatTurns.documentReviewNotes([
+            (
+                name: "outline.md",
+                review: review(from: "One. The flood came.", to: marked),
+                text: typed, known: [marked]
+            )
+        ]))
+        let quoted = note.components(separatedBy: "\"")
+        for passage in quoted.enumerated().filter({ $0.offset % 2 == 1 }).map(\.element) {
+            #expect(typed.contains(passage), "The agent is given \"\(passage)\", which is not in the file")
+        }
+    }
+}
