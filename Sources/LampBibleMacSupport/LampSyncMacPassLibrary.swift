@@ -171,15 +171,26 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             // hold clears the server's copy has not seen. What differs from
             // the download goes back up, by the plan's comparison on the next
             // pass, or by `reconcile` when both sides changed.
-            guard let writingID = LampSyncFolderLayout.writingID(ofReviewPath: path) else {
+            guard let target = LampSyncFolderLayout.reviewTarget(ofPath: path) else {
                 throw PassError.unsupported(path)
             }
-            try reviewStore.takeIn(downloaded: try Data(contentsOf: url), writingID: writingID)
+            let downloaded = try Data(contentsOf: url)
+            // Which document's marks these are. The name is in the file's
+            // own name, except where it was too long to keep — then the
+            // record carries it, and the record is the only place it is.
+            let document = try target.documentKey.map { key in
+                try LampSyncFolderLayout.documentName(fromReviewKey: key)
+                    ?? LampWritingReview.decoded(from: downloaded).document
+                    ?? { throw PassError.unsupported(path) }()
+            }
+            try reviewStore.takeIn(
+                downloaded: downloaded, writingID: target.writingID, document: document
+            )
             return nil
         case .writingDocument:
             // Asked without knowing what was last agreed: an edit held here
             // is kept as a copy, which loses nothing.
-            try takeInDocument(path, from: url, agreedDigest: nil)
+            try await takeInDocument(path, from: url, agreedDigest: nil)
             return nil
         case .workspaceFile:
             // Staged, not installed: a workspace is a tree with one importer,
@@ -411,7 +422,7 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
                 // this Mac's edits kept beside it, which the next pass sends.
                 // Nothing goes back up at this path, which now holds what
                 // was downloaded.
-                try takeInDocument(path, from: url, agreedDigest: nil)
+                try await takeInDocument(path, from: url, agreedDigest: nil)
             } else {
                 try await install(path, from: url)
             }
@@ -579,8 +590,11 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             try removeFile(named: filename, from: deckStore.decksDirectoryURL)
         case .deckAsset(let filename):
             try removeFile(named: filename, from: deckStore.assetsDirectoryURL)
-        case .writingReview(let writingID):
-            try reviewStore.remove(writingID: writingID)
+        case .writingReview(let writingID, let documentKey):
+            // By the key, which is what the file here is named: a
+            // document's record whose name was too long to keep has a
+            // digest for a name, and no name to look it up by.
+            try reviewStore.remove(writingID: writingID, documentKey: documentKey)
         case .writingDocument:
             // Asked without knowing what was last agreed: kept as a copy if
             // it is there at all, which loses nothing.
@@ -601,6 +615,18 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
         }
     }
 
+    /// The writing a workspace folder belongs to.
+    ///
+    /// A folder's name is its writing's id made safe and shortened, with a
+    /// digest of the id after it, so it cannot be read back: the writings
+    /// are asked instead, and the one whose id makes this name is it.
+    /// Held for the pass, since a workspace of documents would otherwise
+    /// ask once for each.
+    private func writingID(ofWorkspaceFolder folder: String) async -> String? {
+        let ids = (try? await library.personalDevotionals().map(\.id)) ?? []
+        return ids.first { LampWritingWorkspaceLayout.directoryName(for: $0) == folder }
+    }
+
     /// A deletion made on another device, told what this Mac last agreed
     /// with the server on: a document edited here since is kept as a copy
     /// rather than removed (`LampWritingDocumentStore.remove`).
@@ -619,14 +645,14 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
         guard LampSyncFolderLayout.kind(of: path) == .writingDocument else {
             return try await install(path, from: url)
         }
-        try takeInDocument(path, from: url, agreedDigest: agreedDigest)
+        try await takeInDocument(path, from: url, agreedDigest: agreedDigest)
         return nil
     }
 
     /// One of a writing's documents, taken in by core's rule, and noted in
     /// the workspace's ledger as synced, so that removing it here later is
     /// seen as this Mac's own deletion.
-    private func takeInDocument(_ path: String, from url: URL, agreedDigest: String?) throws {
+    private func takeInDocument(_ path: String, from url: URL, agreedDigest: String?) async throws {
         // Here at the last sync and gone now: deleted on this Mac since the
         // pass gathered, which the next pass records. Taken in, it would come
         // back, and the ledger would forget it was ever deleted. Thrown, not
@@ -643,9 +669,31 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             }
         }
         let body = try Data(contentsOf: url)
-        try documentStore.takeIn(
+        let decision = try documentStore.takeIn(
             downloaded: body, path: path, agreedDigest: agreedDigest, localDevice: Self.deviceName
         )
+        // Both sides changed it, so this Mac's body went to a copy. The
+        // marks here were made of the words in that body, so they go with
+        // it; the server's body is now at the document's own name, and
+        // the server's marks come down to it on the pass that follows.
+        //
+        // Right here because a pass takes documents in before review
+        // files — `Workspaces` sorts before `WritingReview` — so the
+        // record still holds this Mac's marks alone. Were the review
+        // merged first, it would hold the arriving body's marks too, and
+        // moving the lot would put the other device's marks on this one's
+        // copy and leave its own body unmarked everywhere.
+        if case .takeKeepingHeldAs(let copyName) = decision,
+           let document = LampWritingWorkspaceLayout.document(ofPath: path),
+           let writingID = await writingID(ofWorkspaceFolder: document.folder) {
+            // No deletion recorded for the name left behind: the server
+            // holds a record there for the body that now stands there,
+            // and this Mac wants it.
+            _ = try? LampWritingDocumentReview.moved(
+                document.name, to: copyName, writingID: writingID,
+                in: reviewStore, now: Int64(Date().timeIntervalSince1970 * 1000)
+            )
+        }
         // Said so the editor's poll can tell this from the assistant
         // writing the document: it sees only that the file changed, and
         // marking what a pass wrote would mark the writer's own phone
