@@ -319,9 +319,16 @@ final class WritingReviewSession: ObservableObject {
     /// Keeps the writing's marks current until the task is cancelled: the
     /// editor's `.task(id:)`, keyed on the writing and on whether marks are
     /// shown at all. Shown off, everything is cleared and nothing is read.
+    /// `hasMarks` false is a file that is none of the writing's
+    /// documents — one opened by hand from a subdirectory — which is not
+    /// the same as marks being turned off. Marks off still holds the
+    /// texts, so an edit made while they were hidden is carried back to
+    /// them when they return; a file that is nothing of the writing's
+    /// must leave no trace at all, or its words are offered as a source
+    /// when the writing's own marks are carried.
     func follow(
         writingID: String, document: String? = nil, text: String,
-        libraryRootURL: URL, isShown: Bool
+        libraryRootURL: URL, isShown: Bool, hasMarks: Bool = true
     ) async {
         // Nothing drawn for what was followed before may land now.
         settleTask?.cancel()
@@ -333,6 +340,20 @@ final class WritingReviewSession: ObservableObject {
         if self.writingID != writingID || self.document != document { texts = [] }
         self.writingID = writingID
         self.document = document
+        guard hasMarks else {
+            self.text = text
+            review = nil
+            fileDate = nil
+            hasRead = false
+            needsResend = false
+            resentFor = nil
+            store = nil
+            publish(
+                ranges: [], count: 0, restorable: [], marked: nil, changes: [],
+                note: nil, sendsMarks: true
+            )
+            return
+        }
         self.text = text
         remember(text)
         review = nil

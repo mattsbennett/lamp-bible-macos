@@ -2377,7 +2377,7 @@ struct DevotionalEditorView: View {
         await reviewSession.follow(
             writingID: identifier, document: key?.document, text: activeText,
             libraryRootURL: model.library.rootURL,
-            isShown: showsReviewMarks && key != nil
+            isShown: showsReviewMarks && key != nil, hasMarks: key != nil
         )
     }
 
@@ -3783,8 +3783,14 @@ struct DevotionalEditorView: View {
     private func carryReviewMarks(
         ofDocument documentID: String, to saved: String, from previous: String
     ) {
-        guard showsReviewMarks,
-              let document = workspaceDocuments.first(where: { $0.id == documentID }),
+        // Not `showsReviewMarks`: a record already written must be
+        // carried onto every save whether or not its marks are being
+        // drawn. Left behind while they were hidden, it stays anchored in
+        // a body that no longer exists — passages gone from review
+        // without ever being retired, and stale marks waking on wording
+        // that happens to match. Core writes nothing where there is no
+        // record, so a document nobody marked costs a file check.
+        guard let document = workspaceDocuments.first(where: { $0.id == documentID }),
               let name = reviewDocumentName(of: document)
         else { return }
         let key = WritingReviewKey(writingID: identifier, document: name)
@@ -4050,12 +4056,23 @@ struct DevotionalEditorView: View {
                             turnID: agentChatTurn
                         )]
                     }
-                    documents.append(DevotionalWorkspaceEditorDocument(
+                    let appearing = DevotionalWorkspaceEditorDocument(
                         url: snapshot.url,
                         relativePath: path,
                         text: snapshot.contents,
                         persistedText: snapshot.contents
-                    ))
+                    )
+                    // A document the assistant wrote from nothing is all
+                    // of it unread. It arrives already persisted, so no
+                    // later poll ever sees it change: unmarked here, a
+                    // whole file of the assistant's words would be read
+                    // as cleared. `workspaceDocumentsInitialized` for the
+                    // same reason the history uses it — the files found
+                    // when the editor opens are not a turn's work.
+                    if workspaceDocumentsInitialized {
+                        marking.append((appearing, snapshot.contents))
+                    }
+                    documents.append(appearing)
                 }
             }
 
