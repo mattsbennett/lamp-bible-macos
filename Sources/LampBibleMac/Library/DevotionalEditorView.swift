@@ -784,6 +784,15 @@ struct DevotionalEditorView: View {
     @State private var committedSubmissions: [Int] = []
     /// Whether a restore is being made and kept. One at a time.
     @State private var isRestoring = false
+    /// Raised whenever the writing is replaced wholesale by something that
+    /// is not the writer's own editing: a turn's draft, a newer copy from
+    /// another device, a version put back from the history. A restore
+    /// waiting for a save watches this, because a save of *some* later
+    /// text is not a save of the restore — the draft that replaced it
+    /// would otherwise report it as safely stored.
+    @State private var documentLineage = 0
+    /// The last set of edits the Markdown view said it had made.
+    @State private var markdownEditsApplied = 0
     /// A newer stored copy than the one held, arrived while this editor had
     /// edits of its own, and those edits not yet kept elsewhere. Nothing is
     /// saved while it is here.
@@ -1057,6 +1066,7 @@ struct DevotionalEditorView: View {
                                 // otherwise keep it from this editor's
                                 // carries and clears.
                                 reviewSession.holds(importedDraft)
+                                documentLineage += 1
                                 content = importedDraft
                                 // Saved now rather than on the next
                                 // autosave. A crash in between left
@@ -1862,7 +1872,8 @@ struct DevotionalEditorView: View {
                 onMarkAsReviewed: isEditingPrimaryDocument ? { reviewSession.clear(range: $0) } : nil,
                 onRestoreWording: isEditingPrimaryDocument ? { offerRestore(of: $0) } : nil,
                 pendingEdits: markdownEdits,
-                onEditsConsidered: { token in
+                onEditsConsidered: { token, applied in
+                    if applied { markdownEditsApplied = token }
                     if markdownEdits?.token == token { markdownEdits = nil }
                 }
             )
@@ -2505,6 +2516,7 @@ struct DevotionalEditorView: View {
         _ restore: WritingReviewSession.PageRestore,
         held: String,
         wasHolding: String,
+        applied: @escaping () -> Bool,
         putInPlace: @escaping () -> Void,
         rollBack: @escaping () -> Void
     ) {
@@ -2523,22 +2535,35 @@ struct DevotionalEditorView: View {
             defer { LampPendingWrites.shared.end() }
             defer { isRestoring = false }
             // Any save whose copy of the writing was taken after the
-            // restore was put in place will hold it, whether this asked
-            // for that save or the writer's own typing did. One already in
-            // flight took its copy before, and is numbered below the
-            // floor, so it cannot speak for this.
+            // restore was put in place will hold it — the writer's own
+            // autosave as much as one this asked for — so long as the
+            // writing is still the one it was put into. A save already in
+            // flight is numbered below the floor and cannot speak for it;
+            // a draft that replaced the document raises the lineage, and
+            // then no save speaks for it either.
             let floor = saveSubmissions
-            func landed() -> Bool { committedSubmissions.contains { $0 > floor } }
+            let lineage = documentLineage
+            func landed() -> Bool {
+                documentLineage == lineage && committedSubmissions.contains { $0 > floor }
+            }
             var attempt = 0
-            while attempt < 3, newerCopy == nil, !landed() {
+            while attempt < 3, newerCopy == nil, documentLineage == lineage, !landed() {
                 if attempt > 0 { try? await Task.sleep(for: .seconds(1)) }
                 attempt += 1
-                // The surface may not have reported its edit yet, and a
-                // save that ran before it did would store the old words.
-                for _ in 0..<40 where content == wasHolding { try? await Task.sleep(for: .milliseconds(50)) }
-                guard content != wasHolding else { break }
+                // Until the surface says it made the edit: a save before
+                // that would store the old words, and a surface that
+                // refused is not a restore at all.
+                for _ in 0..<40 where !applied() { try? await Task.sleep(for: .milliseconds(50)) }
+                guard applied() else { break }
                 save()
                 for _ in 0..<80 where saveState == .saving && !landed() {
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+            }
+            // A save can outlive the waiting: settle it before deciding,
+            // or the writing ends up holding a restore this called failed.
+            if !landed(), saveState == .saving {
+                for _ in 0..<600 where saveState == .saving && !landed() {
                     try? await Task.sleep(for: .milliseconds(100))
                 }
             }
@@ -2589,7 +2614,11 @@ struct DevotionalEditorView: View {
         let hostText = content
         guard activeEditorMode == .visual, let tipTapCoordinator else {
             isRestoring = true
-            keepRestore(restore, held: restored, wasHolding: hostText) {
+            let token = markdownEditsToken + 1
+            keepRestore(
+                restore, held: restored, wasHolding: hostText,
+                applied: { markdownEditsApplied == token }
+            ) {
                 // The text view makes the edits and reports the new text
                 // as it reports typing. Nothing sets the content here:
                 // assigning it first would leave the view already holding
@@ -2626,7 +2655,10 @@ struct DevotionalEditorView: View {
         // written anywhere until the answer comes: quitting waits.
         LampPendingWrites.shared.begin()
         tipTapCoordinator.restoreWording(restored, expected: base) { made in
-            LampPendingWrites.shared.end()
+            // Let go only once whatever comes next has taken its own
+            // count: at zero, quitting goes, and between the two there
+            // would be nothing to wait for.
+            defer { LampPendingWrites.shared.end() }
             switch made {
             case .done(let held):
                 // A turn can have landed in the writing while the page was
@@ -2640,7 +2672,9 @@ struct DevotionalEditorView: View {
                     reviewSession.marksRejected()
                     return
                 }
-                keepRestore(restore, held: held, wasHolding: hostText) {
+                keepRestore(
+                    restore, held: held, wasHolding: hostText, applied: { true }
+                ) {
                     content = held
                 } rollBack: {
                     // Asked of the page, and taken only if the page did
@@ -2661,7 +2695,9 @@ struct DevotionalEditorView: View {
                     refusedRestore = "A new draft arrived while that was being put back, so nothing was changed."
                     return
                 }
-                keepRestore(restore, held: restored, wasHolding: hostText) {
+                keepRestore(
+                    restore, held: restored, wasHolding: hostText, applied: { true }
+                ) {
                     content = restored
                 } rollBack: {
                     guard content == restored else { return }
@@ -2868,6 +2904,7 @@ struct DevotionalEditorView: View {
                     // Do not overwrite an edit made immediately after switching
                     // into the Markdown surface.
                     if let latestMarkdown, content == textBefore {
+                        documentLineage += 1
                         content = latestMarkdown
                     }
                 }
@@ -3266,6 +3303,7 @@ struct DevotionalEditorView: View {
                     markdown,
                     in: workspace
                 )
+                documentLineage += 1
                 content = markdown
                 save()
             } catch {
@@ -3765,6 +3803,7 @@ struct DevotionalEditorView: View {
         seriesName = devotional.seriesName ?? ""
         seriesOrder = devotional.seriesOrder ?? 0
         summary = devotional.summary ?? ""
+        documentLineage += 1
         content = devotional.displayMarkdown
         originalContentJSON = devotional.contentJSON
         originalPlainContent = devotional.content

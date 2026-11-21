@@ -46,7 +46,7 @@ struct MarkdownTextEditor: NSViewRepresentable {
     /// out in. Either way the command is spent: left standing, a refused
     /// one is made later by a view built fresh, against text that has come
     /// back round to matching.
-    var onEditsConsidered: ((Int) -> Void)?
+    var onEditsConsidered: ((Int, Bool) -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -137,12 +137,12 @@ struct MarkdownTextEditor: NSViewRepresentable {
 
         if let pendingEdits, context.coordinator.appliedEditsToken != pendingEdits.token {
             context.coordinator.appliedEditsToken = pendingEdits.token
-            Self.apply(pendingEdits, in: textView)
+            let applied = Self.apply(pendingEdits, in: textView)
             let considered = onEditsConsidered
             let token = pendingEdits.token
             // After this update rather than inside it: the host puts the
             // command down by changing its own state.
-            DispatchQueue.main.async { considered?(token) }
+            DispatchQueue.main.async { considered?(token, applied) }
         }
 
         // Asked for by a host that has just moved the selection somewhere the
@@ -164,14 +164,15 @@ struct MarkdownTextEditor: NSViewRepresentable {
     ///
     /// The edits come last first, so each range still means in the text what
     /// it meant when they were worked out.
-    private static func apply(_ pending: WritingTextEdits, in textView: NSTextView) {
-        guard textView.string == pending.expected else { return }
+    @discardableResult
+    private static func apply(_ pending: WritingTextEdits, in textView: NSTextView) -> Bool {
+        guard textView.string == pending.expected else { return false }
         guard textView.isEditable, let storage = textView.textStorage,
               textView.shouldChangeText(
                   inRanges: pending.edits.map { NSValue(range: $0.range) },
                   replacementStrings: pending.edits.map(\.replacement)
               )
-        else { return }
+        else { return false }
         storage.beginEditing()
         for edit in pending.edits {
             storage.replaceCharacters(in: edit.range, with: edit.replacement)
@@ -179,6 +180,7 @@ struct MarkdownTextEditor: NSViewRepresentable {
         storage.endEditing()
         textView.undoManager?.setActionName(pending.actionName)
         textView.didChangeText()
+        return true
     }
 
     /// The column's width in points: a monospaced character is 0.6 of the
