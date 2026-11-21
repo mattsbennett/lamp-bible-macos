@@ -1166,8 +1166,12 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         // a check in the margin to clear a paragraph, none while presenting.
         'html .review-mark { background: rgba(232, 176, 44, 0.22); border-bottom: 1px dotted rgba(178, 120, 0, 0.7); }',
         'html .review-point { display: inline-block; width: 0; height: 1.1em; vertical-align: text-bottom; border-left: 2px solid rgba(178, 120, 0, 0.7); margin: 0 1px; }',
-        'html .ProseMirror .review-clear { display: inline-block; vertical-align: baseline; width: 22px; height: 22px; margin: 0 8px 0 -30px; padding: 0; border: none; border-radius: 11px; background: transparent; color: rgba(178, 120, 0, 0.8); font: inherit; cursor: pointer; user-select: none; }',
-        'html .ProseMirror .review-clear::before { content: "\\u2713"; font-size: 14px; line-height: 22px; }',
+        // Centred by the box itself rather than by a line height: the
+        // tick is one glyph in a 22px circle, and `inline-block` with a
+        // line height leaves it where the font's metrics put it — up and
+        // to the left of the middle, which is where it sat.
+        'html .ProseMirror .review-clear { display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; width: 22px; height: 22px; margin: 0 8px 0 -30px; padding: 0; border: none; border-radius: 11px; background: transparent; color: rgba(178, 120, 0, 0.8); font: inherit; cursor: pointer; user-select: none; }',
+        'html .ProseMirror .review-clear::before { content: "\\u2713"; font-size: 14px; line-height: 1; }',
         'html .ProseMirror .review-clear:hover { background: rgba(232, 176, 44, 0.22); }',
         'html body.dark .review-mark { background: rgba(240, 190, 70, 0.2); border-bottom-color: rgba(240, 190, 70, 0.75); }',
         'html body.dark .review-point { border-left-color: rgba(240, 190, 70, 0.75); }',
@@ -1176,8 +1180,9 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         // passage it would change shown stronger while its offer is open,
         // and what it would do written out — for a passage the assistant
         // only took words out of, that is the one way to see it.
-        'html .ProseMirror .review-restore { display: inline-block; vertical-align: baseline; width: 22px; height: 22px; margin: 0 8px 0 -8px; padding: 0; border: none; border-radius: 11px; background: transparent; color: rgba(178, 120, 0, 0.8); font: inherit; cursor: pointer; user-select: none; }',
-        'html .ProseMirror .review-restore::before { content: "\\u21BA"; font-size: 14px; line-height: 22px; }',
+        // Centred the same way as the tick, and for the same reason.
+        'html .ProseMirror .review-restore { display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; width: 22px; height: 22px; margin: 0 8px 0 -8px; padding: 0; border: none; border-radius: 11px; background: transparent; color: rgba(178, 120, 0, 0.8); font: inherit; cursor: pointer; user-select: none; }',
+        'html .ProseMirror .review-restore::before { content: "\\u21BA"; font-size: 14px; line-height: 1; }',
         'html .ProseMirror .review-restore:hover { background: rgba(232, 176, 44, 0.22); }',
         'html .review-mark.review-current { background: rgba(232, 176, 44, 0.42); border-bottom-style: solid; }',
         'html .review-point.review-current { border-left-width: 3px; box-shadow: 0 0 0 2px rgba(232, 176, 44, 0.35); }',
