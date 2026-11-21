@@ -1222,8 +1222,28 @@ extension LibrarySyncController {
         if !restored.isEmpty {
             try LampSyncRemovedModules.forget(restored, inLibraryAt: library.rootURL, fileManager: fileManager)
         }
+        // A document deleted on its own, rather than with its writing.
+        // Its marks go with it: a record left behind is fetched from the
+        // server for ever, and a later document of the same name would
+        // wear another file's marks.
+        let reviewStore = LampWritingReviewStore(rootURL: library.rootURL)
+        let writingIDsByFolder = Dictionary(
+            writings.map { (LampWritingWorkspaceLayout.directoryName(for: $0.id), $0.id) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let manifestTimes = Dictionary(
+            manifest.members.map { ($0.path, $0.presentSince ?? 0) }, uniquingKeysWith: max
+        )
         for (path, removedAt) in removals where !heldDocuments.contains(path) {
             result.gathered.deletedLocally[path] = removedAt
+            guard let document = LampWritingWorkspaceLayout.document(ofPath: path),
+                  let writingID = writingIDsByFolder[document.folder]
+            else { continue }
+            let swept = (try? LampWritingDocumentReview.removed(
+                document.name, writingID: writingID, in: reviewStore,
+                members: manifestTimes, now: Int64(Date().timeIntervalSince1970 * 1_000)
+            )) ?? [:]
+            result.gathered.deletedLocally.merge(swept) { max($0, $1) }
         }
         // A highlight set's deletion is recorded per item; the file that
         // carried it is the module this source published it under.

@@ -178,10 +178,20 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             // Which document's marks these are. The name is in the file's
             // own name, except where it was too long to keep — then the
             // record carries it, and the record is the only place it is.
-            let document = try target.documentKey.map { key in
-                try LampSyncFolderLayout.documentName(fromReviewKey: key)
-                    ?? LampWritingReview.decoded(from: downloaded).document
-                    ?? { throw PassError.unsupported(path) }()
+            let document = try target.documentKey.map { key -> String in
+                if let name = LampSyncFolderLayout.documentName(fromReviewKey: key) { return name }
+                // A key that is a digest says nothing about the name, so
+                // the record's own is taken — and then checked against
+                // the key, or the check that a record arrived where it
+                // belongs would be the record agreeing with itself. A
+                // file put at another document's digest path would
+                // otherwise be merged into the document it names.
+                guard let name = try LampWritingReview.decoded(from: downloaded).document,
+                      LampSyncFolderLayout.reviewDocumentKey(
+                          writingID: target.writingID, document: name
+                      ) == key
+                else { throw PassError.unsupported(path) }
+                return name
             }
             try reviewStore.takeIn(
                 downloaded: downloaded, writingID: target.writingID, document: document
