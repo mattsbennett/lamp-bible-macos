@@ -26,10 +26,8 @@ struct WritingReviewSessionTests {
     /// one passage's wording under another's button.
     private func changes(
         _ review: LampWritingReview, in text: String
-    ) -> [WritingReviewChange?] {
-        WritingReviewSession.changes(
-            of: review, in: text, ranges: review.highlightedRanges(in: text)
-        )
+    ) -> [LampWritingReview.Change?] {
+        review.changes(in: text, ranges: review.highlightedRanges(in: text))
     }
 
     @Test func thePageIsToldWhatComesBackAndWhatGoes() throws {
@@ -98,7 +96,7 @@ struct WritingReviewSessionTests {
     @Test func anEntryNamingSeveralMarksSortsThem() throws {
         let one = UUID(uuidString: "FFFFFFFF-0000-0000-0000-000000000001")!
         let two = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
-        #expect(WritingReviewChange.id(of: [one, two]) == "\(two.uuidString),\(one.uuidString)")
+        #expect(LampWritingReview.Change.id(of: [one, two]) == "\(two.uuidString),\(one.uuidString)")
     }
 
     @Test func thereIsOneEntryToEachDrawnPassageInTheOrderTheyStand() throws {

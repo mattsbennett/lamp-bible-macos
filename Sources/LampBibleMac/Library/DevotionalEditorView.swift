@@ -517,6 +517,9 @@ struct WritingEditorWindow: View {
             HStack(spacing: 0) {
                 library
                     .frame(width: 304)
+                    // A side pane, so it recedes one step from the writing,
+                    // as the in-place writing list does.
+                    .background(Color.lampPaneGround)
                 Divider()
             }
             .lampPaneWidth(showsLibrary ? 305 : 0)
@@ -536,6 +539,12 @@ struct WritingEditorWindow: View {
         // own turn of the run loop, outside that transaction. See
         // `Animation.lampPaneReveal`.
         .animation(.lampPaneReveal, value: showsLibrary)
+        // The pane separators run from here to the bottom of the window and,
+        // with nothing across the top, stopped in mid-air under the toolbar.
+        // The main window closes them off on its content
+        // (`LibraryRootView.detail`); this window has no sidebar, so the rule
+        // goes across all of it.
+        .overlay(alignment: .top) { Divider() }
         .toolbar {
             ToolbarItem(placement: .navigation) {
                 Button(showsLibrary ? "Hide Writing List" : "Show Writing List", systemImage: "sidebar.left") {
@@ -571,10 +580,11 @@ struct WritingEditorWindow: View {
                 .help("Create new writing")
             }
             .padding(.horizontal, 12)
-            .padding(.top, 10)
-            .padding(.bottom, LampWritingCategory.kindsHeld(model.devotionals.map(\.category)).count > 1 ? 8 : 10)
-            categoryChips
+            // The format bar and the assistant's header stand beside this
+            // row, so it takes their height and its rule meets theirs.
+            .frame(height: LampMetrics.paneHeaderHeight)
             Divider()
+            categoryChips
             List(selection: Binding(
                 get: { shown.devotionalID },
                 set: { id in if let id, id != shown.devotionalID { request = DevotionalEditorRequest(devotionalID: id) } }
@@ -586,11 +596,14 @@ struct WritingEditorWindow: View {
                 }
             }
             .listStyle(.inset)
+            // A `List` paints a ground of its own, over the pane's step.
+            .scrollContentBackground(.hidden)
         }
     }
 
     /// The library's category chips, so the list is filtered here as it is
-    /// there.
+    /// there. Under the search row's rule, closed off from the rows by one
+    /// of their own.
     @ViewBuilder
     private var categoryChips: some View {
         let categories = LampWritingCategory.kindsHeld(model.devotionals.map(\.category))
@@ -610,7 +623,8 @@ struct WritingEditorWindow: View {
                 }
                 .padding(.horizontal, 12)
             }
-            .padding(.bottom, 10)
+            .padding(.vertical, 8)
+            Divider()
         }
     }
 
@@ -2718,7 +2732,7 @@ struct DevotionalEditorView: View {
             return
         }
         makeRestore(WritingReviewSession.PageRestore(
-            base: text, restored: WritingReviewSession.applying(plan, to: text), plan: plan
+            base: text, restored: plan.applied(to: text), plan: plan
         ))
     }
 

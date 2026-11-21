@@ -1,4 +1,5 @@
 import Foundation
+import LampCore
 #if canImport(LampBibleMacSupport)
 import LampBibleMacSupport
 #endif
@@ -325,7 +326,7 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     /// so every load puts them back: a document loaded into the page starts
     /// with none.
     private var reviewMarks: String?
-    private var reviewChanges: [WritingReviewChange?] = []
+    private var reviewChanges: [LampWritingReview.Change?] = []
     var usesCompactLayout = false
     /// Set before the first text, since it decides how that text is read.
     var usesLineBreaks = false
@@ -897,7 +898,7 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     /// edge of what is still marked (`LampWritingReview.markedMarkdown`), or
     /// nil for none, and what a restore of each would come to. Kept, and
     /// put back after each load.
-    func setReviewMarks(_ marked: String?, changes: [WritingReviewChange?] = []) {
+    func setReviewMarks(_ marked: String?, changes: [LampWritingReview.Change?] = []) {
         guard marked != reviewMarks || changes != reviewChanges else { return }
         reviewMarks = marked
         reviewChanges = changes

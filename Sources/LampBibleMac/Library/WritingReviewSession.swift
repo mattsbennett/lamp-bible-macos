@@ -144,12 +144,12 @@ final class WritingReviewSession: ObservableObject {
     /// the writing's Markdown with markers, or nil for none, and what a
     /// restore of each marked passage would come to. The page keeps them
     /// through the writer's typing itself, so typing sends nothing.
-    var onMarksChanged: ((String?, [WritingReviewChange?]) -> Void)?
+    var onMarksChanged: ((String?, [LampWritingReview.Change?]) -> Void)?
     /// The marks last sent, for an editor that is ready late.
     private(set) var markedMarkdown: String?
     /// What was sent with them, one to each marked passage, in the order
     /// they stand — which is the order the page finds its markers in.
-    private(set) var markedChanges: [WritingReviewChange?] = []
+    private(set) var markedChanges: [LampWritingReview.Change?] = []
 
     private var writingID: String?
     private var store: LampWritingReviewStore?
@@ -344,7 +344,7 @@ final class WritingReviewSession: ObservableObject {
         for base in [pageText, text].compactMap({ $0 }) {
             guard let live = live(in: base),
                   case .plan(let plan) = live.restoring(marks: wanted, in: base) else { continue }
-            return PageRestore(base: base, restored: Self.applying(plan, to: base), plan: plan)
+            return PageRestore(base: base, restored: plan.applied(to: base), plan: plan)
         }
         return nil
     }
@@ -373,70 +373,6 @@ final class WritingReviewSession: ObservableObject {
         let base: String
         let restored: String
         let plan: LampWritingReview.RestorePlan
-    }
-
-    /// What a restore of each drawn passage would come to, for the page to
-    /// draw its offer and say what it would do.
-    ///
-    /// One to each drawn range, in the order they stand, which is the order
-    /// the page finds its markers in. A range can cover more than one mark
-    /// — touching marks are drawn as one — so this asks about the range
-    /// rather than the mark, and a range holding one passage that cannot be
-    /// put back offers nothing for the pair rather than half of it.
-    ///
-    /// `nil` is nothing to offer and nothing to say: the wording was never
-    /// kept, which is not the writer's doing and not theirs to fix.
-    nonisolated static func changes(
-        of review: LampWritingReview, in text: String, ranges: [NSRange]
-    ) -> [WritingReviewChange?] {
-        let source = text as NSString
-        // Asked about every range at once: one at a time finds every mark
-        // again for each, which is quadratic in the marks.
-        return review.restoring(ranges, in: text).enumerated().map { index, answer in
-            let range = ranges[index]
-            switch answer.outcome {
-            case .plan(let plan):
-                let ordered = plan.edits.sorted { $0.range.location < $1.range.location }
-                guard let first = ordered.first, let last = ordered.last else { return nil }
-                let span = NSRange(
-                    location: first.range.location,
-                    length: NSMaxRange(last.range) - first.range.location
-                )
-                var before = ""
-                var at = span.location
-                for edit in ordered {
-                    before += source.substring(
-                        with: NSRange(location: at, length: edit.range.location - at)
-                    )
-                    before += edit.replacement
-                    at = NSMaxRange(edit.range)
-                }
-                before += source.substring(
-                    with: NSRange(location: at, length: NSMaxRange(span) - at)
-                )
-                return WritingReviewChange(
-                    id: WritingReviewChange.id(of: answer.marks),
-                    now: source.substring(with: span), before: before, reason: nil
-                )
-            case .notExact:
-                return WritingReviewChange(
-                    id: WritingReviewChange.id(of: answer.marks),
-                    now: source.substring(with: range), before: nil, reason: "edited"
-                )
-            case .notKept, .nothingTouched:
-                return nil
-            }
-        }
-    }
-
-    /// A plan's edits put in place. They come last first, so each range
-    /// still means in the text what it meant when the plan was made.
-    static func applying(_ plan: LampWritingReview.RestorePlan, to text: String) -> String {
-        let result = NSMutableString(string: text)
-        for edit in plan.edits {
-            result.replaceCharacters(in: edit.range, with: edit.replacement)
-        }
-        return result as String
     }
 
     // MARK: - Internals
@@ -550,7 +486,7 @@ final class WritingReviewSession: ObservableObject {
                     live.located(in: text).count,
                     sendsMarks ? live.markedMarkdown(in: text) : nil,
                     live.restorable(in: text),
-                    sendsMarks ? Self.changes(of: live, in: text, ranges: ranges) : []
+                    sendsMarks ? live.changes(in: text, ranges: ranges) : []
                 )
             }.value
             guard let self, self.drawGeneration == generation else { return }
@@ -575,7 +511,7 @@ final class WritingReviewSession: ObservableObject {
 
     private func publish(
         ranges: [NSRange], count: Int, restorable: [LampWritingReview.Restorable],
-        marked: String?, changes: [WritingReviewChange?], note: String?, sendsMarks: Bool
+        marked: String?, changes: [LampWritingReview.Change?], note: String?, sendsMarks: Bool
     ) {
         if self.ranges != ranges { self.ranges = ranges }
         if self.count != count { self.count = count }
@@ -586,28 +522,6 @@ final class WritingReviewSession: ObservableObject {
             markedChanges = changes
             onMarksChanged?(marked, changes)
         }
-    }
-}
-
-/// What a restore of one drawn passage would come to, as the visual page
-/// is told it: the words that stand there now, the words that would stand
-/// there instead, and — where there is nothing to offer but something to
-/// say — why not.
-struct WritingReviewChange: Equatable, Encodable, Sendable {
-    /// The marks this passage stands in, as the page names them when it
-    /// presses: their ids sorted and joined, since what the page can hand
-    /// back is this label, not a range of the writing's Markdown.
-    let id: String
-    let now: String
-    /// Nil where there is nothing to put back here.
-    let before: String?
-    /// `edited` where the passage can no longer be put back exactly because
-    /// the writer has been at it. Never said of a passage whose wording was
-    /// simply never kept: they did nothing to that one.
-    let reason: String?
-
-    static func id(of marks: [UUID]) -> String {
-        marks.map(\.uuidString).sorted().joined(separator: ",")
     }
 }
 
