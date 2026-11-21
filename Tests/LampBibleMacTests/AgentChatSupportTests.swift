@@ -343,3 +343,132 @@ struct AgentChatSupportTests {
         ))
     }
 }
+
+/// What a run says about the account it ran on, and what Lamp does with it.
+struct AgentChatAccountTests {
+    @Test func claudeSaysWhetherASubscriptionOrAKeyPays() {
+        let subscription = #"{"type":"system","subtype":"init","apiKeySource":"none","session_id":"s"}"#
+        let key = #"{"type":"system","subtype":"init","apiKeySource":"ANTHROPIC_API_KEY","session_id":"s"}"#
+        #expect(AgentChatWireParser.parse(subscription, provider: .claude)
+            .contains(.billing(AgentChatBilling(source: "none"))))
+        #expect(AgentChatBilling(source: "none").isAPIKey == false)
+        #expect(AgentChatBilling(source: "oauth").isAPIKey == false)
+        #expect(AgentChatWireParser.parse(key, provider: .claude)
+            .contains(.billing(AgentChatBilling(source: "ANTHROPIC_API_KEY"))))
+        #expect(AgentChatBilling(source: "ANTHROPIC_API_KEY").isAPIKey)
+        #expect(AgentChatBilling(source: "/login managed key").isAPIKey)
+    }
+
+    @Test func codexSaysItInItsLoginStatus() {
+        #expect(AgentChatBilling.codex(loginStatus: "Logged in using ChatGPT")?.isAPIKey == false)
+        #expect(AgentChatBilling.codex(loginStatus: "Logged in using an API key - sk-ab***")?.isAPIKey == true)
+        #expect(AgentChatBilling.codex(loginStatus: "Not logged in") == nil)
+    }
+
+    // As Claude Code 2.1.327 sent it, undocumented fields and all: only the
+    // documented ones are read.
+    private let warning = #"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":1795492800,"rateLimitType":"seven_day","utilization":0.75,"overageStatus":"rejected","overageDisabledReason":"out_of_credits","isUsingOverage":false,"surpassedThreshold":0.75,"unifiedWindows":{"seven_day":{"utilization":0.75,"resetsAt":1795492800,"status":"allowed_warning","surpassedThreshold":0.75}},"overageEnabled":true},"uuid":"282fada3-ca8b-48ff-a6a3-233cfa75295a","session_id":"fe6b53c0-6a3a-491e-9c16-6c3e09fb618a"}"#
+
+    @Test func aUsageLimitIsReadFromItsDocumentedFields() throws {
+        let events = AgentChatWireParser.parse(warning, provider: .claude)
+        let limit = try #require(events.compactMap { event -> AgentChatUsageLimit? in
+            if case .usageLimit(let limit) = event { return limit }
+            return nil
+        }.first)
+        #expect(limit.status == .allowedWarning)
+        #expect(limit.utilization == 0.75)
+        #expect(limit.resetsAt == Date(timeIntervalSince1970: 1795492800))
+        #expect(limit.needsCredits == false)
+        // The session id it carries still starts the session.
+        #expect(events.contains(.sessionStarted("fe6b53c0-6a3a-491e-9c16-6c3e09fb618a")))
+    }
+
+    @Test func aRejectionIsSaidPlainlyWithItsReset() {
+        let now = Date(timeIntervalSince1970: 1795400000)
+        let rejected = AgentChatUsageLimit(
+            status: .rejected, resetsAt: now.addingTimeInterval(3600), utilization: 1, needsCredits: false
+        )
+        let text = AgentChatUsageLimitText.reached(rejected, provider: "Claude", now: now)
+        #expect(text.hasPrefix("Claude\u{2019}s usage limit is reached. It resets at "))
+        #expect(text.hasSuffix("Lamp stopped the reply rather than leave it waiting."))
+        let credits = AgentChatUsageLimit(status: .rejected, resetsAt: nil, utilization: nil, needsCredits: true)
+        #expect(AgentChatUsageLimitText.reached(credits, provider: "Claude").contains("usage credits"))
+    }
+
+    @Test func onlyAWarningIsWarnedOf() {
+        let base = AgentChatUsageLimit(status: .allowed, resetsAt: nil, utilization: 0.2, needsCredits: false)
+        #expect(AgentChatUsageLimitText.warning(base, provider: "Claude") == nil)
+        let near = AgentChatUsageLimit(status: .allowedWarning, resetsAt: nil, utilization: 0.75, needsCredits: false)
+        #expect(AgentChatUsageLimitText.warning(near, provider: "Claude") == "You\u{2019}ve used 75% of a Claude usage limit.")
+    }
+
+    @Test func aFailureSaysWhyWhereTheResultDoes() {
+        let overloaded = #"{"type":"result","subtype":"error_during_execution","is_error":true,"api_error_status":529,"result":"API Error: Overloaded"}"#
+        #expect(AgentChatWireParser.parse(overloaded, provider: .claude).contains(
+            .failure("Claude is overloaded right now. Try again in a minute. API Error: Overloaded")
+        ))
+        let tooLong = #"{"type":"result","is_error":true,"terminal_reason":"prompt_too_long","errors":["Prompt is too long"]}"#
+        #expect(AgentChatWireParser.parse(tooLong, provider: .claude).contains(
+            .failure("This conversation has grown too long for the model. Start a new chat to carry on. Prompt is too long")
+        ))
+        // Anything else is left in the provider's words.
+        let other = #"{"type":"result","is_error":true,"result":"Something else"}"#
+        #expect(AgentChatWireParser.parse(other, provider: .claude).contains(.failure("Something else")))
+    }
+
+    @Test func secretsAreTakenOutOfAFailureBeforeItIsKept() {
+        let text = AgentChatSecrets.redacted(
+            "401 for Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.abc.def with sk-ant-api03-AAAABBBBCCCCDDDD and api_key=hunter2hunter2"
+        )
+        #expect(!text.contains("eyJhbGciOiJIUzI1NiJ9"))
+        #expect(!text.contains("AAAABBBBCCCCDDDD"))
+        #expect(!text.contains("hunter2hunter2"))
+        #expect(text.contains("Bearer [redacted]"))
+        #expect(text.contains("api_key=[redacted]"))
+        // Prose that only mentions a token is left alone.
+        #expect(AgentChatSecrets.redacted("Your token expired.") == "Your token expired.")
+        let failed = AgentChatRunDisposition.of(
+            output: "", exitCode: 1, launchError: "bad key sk-proj-ZZZZYYYYXXXXWWWW",
+            wasStopped: false, provider: .codex, providerName: "Codex"
+        )
+        #expect(failed == .failed("bad key sk-[redacted]"))
+    }
+
+    @Test func aClaudeSessionsOwnVariablesAreNotHandedDown() {
+        let cleaned = AgentProcessEnvironment.cleaned([
+            "CLAUDECODE": "1",
+            "CLAUDE_CODE_SESSION_ID": "abc",
+            "CLAUDE_CODE_MESSAGING_TOKEN": "t",
+            "CLAUDE_CONFIG_DIR": "/Users/x/.claude-work",
+            "LAMP_CAPTURE_DIR": "/tmp/capture",
+            "PATH": "/usr/bin",
+        ])
+        #expect(cleaned == [
+            "CLAUDE_CONFIG_DIR": "/Users/x/.claude-work",
+            "LAMP_CAPTURE_DIR": "/tmp/capture",
+            "PATH": "/usr/bin",
+        ])
+    }
+
+    @Test func aStopReachesWhatTheRunStarted() throws {
+        // A shell that starts a child which outlives it unless killed.
+        let shell = Process()
+        shell.executableURL = URL(fileURLWithPath: "/bin/sh")
+        shell.arguments = ["-c", "sleep 60 & wait"]
+        try shell.run()
+        defer { if shell.isRunning { shell.terminate() } }
+        var children: [AgentProcessTree.Member] = []
+        for _ in 0..<50 where children.isEmpty {
+            children = AgentProcessTree.descendants(of: shell.processIdentifier)
+            if children.isEmpty { Thread.sleep(forTimeInterval: 0.05) }
+        }
+        let child = try #require(children.first)
+        AgentProcessTree.kill([child])
+        var gone = false
+        for _ in 0..<50 where !gone {
+            gone = Darwin.kill(child.pid, 0) != 0
+            if !gone { Thread.sleep(forTimeInterval: 0.05) }
+        }
+        #expect(gone)
+    }
+}

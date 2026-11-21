@@ -714,6 +714,93 @@ public enum AgentChatWireEvent: Equatable, Sendable {
     case failure(String)
     /// Progress, while the run is still running. Not part of the reply.
     case activity(AgentChatActivity)
+    /// Where the run's usage is billed, as the provider reports it.
+    case billing(AgentChatBilling)
+    /// Where the account stands against a usage limit, as the provider
+    /// reports it during the run.
+    case usageLimit(AgentChatUsageLimit)
+}
+
+/// Where a run's usage is billed: the reader's subscription, or an API key
+/// charged by the token.
+///
+/// Claude Code says on every run, as `apiKeySource` on its `system/init`
+/// event (documented in the Agent SDK reference as `ApiKeySource`). "none"
+/// is no key at all — the subscription the reader signed in with — and
+/// "oauth" is a subscription token. Every other source is a key, and a key
+/// left in someone's environment by another tool would otherwise bill them
+/// per token for a chat they thought their plan covered.
+public struct AgentChatBilling: Equatable, Sendable {
+    public let source: String
+
+    public init(source: String) { self.source = source }
+
+    public var isAPIKey: Bool { !["none", "oauth"].contains(source) }
+
+    /// What `codex login status` says, which is how Codex reports it:
+    /// "Logged in using ChatGPT" for a subscription, "Logged in using an API
+    /// key" for a key. Nil when it says neither.
+    public static func codex(loginStatus output: String) -> AgentChatBilling? {
+        let text = output.lowercased()
+        if text.contains("api key") { return AgentChatBilling(source: "API key") }
+        if text.contains("chatgpt") { return AgentChatBilling(source: "none") }
+        return nil
+    }
+}
+
+/// A usage limit's state, from Claude Code's documented `rate_limit_event`.
+///
+/// Only the documented fields are read. The event carries more (which
+/// window, whether overage is in use) that the reference does not promise,
+/// and a field that is not promised can go without notice.
+public struct AgentChatUsageLimit: Equatable, Sendable {
+    public enum Status: String, Sendable {
+        case allowed
+        case allowedWarning = "allowed_warning"
+        case rejected
+    }
+
+    public let status: Status
+    public let resetsAt: Date?
+    /// The share of the limit used, 0 to 1, when the event says.
+    public let utilization: Double?
+    /// The rejection is a subscription whose included usage is spent, which
+    /// only buying usage credits gets past.
+    public let needsCredits: Bool
+
+    public init(status: Status, resetsAt: Date?, utilization: Double?, needsCredits: Bool) {
+        self.status = status
+        self.resetsAt = resetsAt
+        self.utilization = utilization
+        self.needsCredits = needsCredits
+    }
+}
+
+/// Takes credentials out of text before it is shown, recorded or synced.
+///
+/// A provider's error can quote the request that failed, header and all, and
+/// a failure is written into the chat's transcript, which goes to every Mac
+/// and phone the library syncs with.
+public enum AgentChatSecrets {
+    private static let patterns: [(NSRegularExpression, String)] = [
+        // `Authorization: Bearer …`, and a bare bearer token.
+        (try! NSRegularExpression(pattern: #"(?i)\b(bearer)\s+[A-Za-z0-9._~+/=-]{8,}"#), "$1 [redacted]"),
+        // Anthropic and OpenAI keys, and other `sk-` keys.
+        (try! NSRegularExpression(pattern: #"\bsk-[A-Za-z0-9_-]{12,}"#), "sk-[redacted]"),
+        // `api_key=…`, `token: …`, `"secret": "…"`, keeping the name.
+        (try! NSRegularExpression(
+            pattern: #"(?i)\b((?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password)["']?\s*[:=]\s*["']?)[^\s"',;]{6,}"#
+        ), "$1[redacted]"),
+    ]
+
+    public static func redacted(_ text: String) -> String {
+        var result = text
+        for (pattern, template) in patterns {
+            let range = NSRange(result.startIndex..<result.endIndex, in: result)
+            result = pattern.stringByReplacingMatches(in: result, range: range, withTemplate: template)
+        }
+        return result
+    }
 }
 
 public enum AgentChatWireParser {
@@ -800,6 +887,19 @@ public enum AgentChatWireParser {
                 events.append(.activity(.thinking(
                     estimatedTokens: object.int("estimated_tokens")
                 )))
+            } else if object.string("subtype") == "init",
+                      let source = object.string("apiKeySource"), !source.isEmpty {
+                events.append(.billing(AgentChatBilling(source: source)))
+            }
+        case "rate_limit_event":
+            if let info = object.dictionary("rate_limit_info"),
+               let status = info.string("status").flatMap(AgentChatUsageLimit.Status.init(rawValue:)) {
+                events.append(.usageLimit(AgentChatUsageLimit(
+                    status: status,
+                    resetsAt: info.number("resetsAt").map { Date(timeIntervalSince1970: $0) },
+                    utilization: info.number("utilization"),
+                    needsCredits: info.string("errorCode") == "credits_required"
+                )))
             }
         case "assistant":
             // A finished assistant message, which is where a tool call's input
@@ -820,15 +920,30 @@ public enum AgentChatWireParser {
             }
         case "result":
             if object.bool("is_error") == true {
+                // Said plainly first where the result says why, in the
+                // documented `api_error_status` and `terminal_reason`; the
+                // provider's own words follow.
+                let why = claudeFailureExplanation(
+                    apiErrorStatus: object.int("api_error_status"),
+                    terminalReason: object.string("terminal_reason")
+                )
+                func explained(_ message: String) -> String {
+                    why.map { "\($0) \(message)" } ?? message
+                }
                 if let message = object.string("result"), !message.isEmpty {
-                    events.append(.failure(message))
+                    events.append(.failure(explained(message)))
                 } else if let message = (object["errors"] as? [String])?
                     .first(where: { !$0.isEmpty }) {
                     // How Claude Code reports a failure that happened before any
                     // turn ran, such as resuming a session it doesn't have.
-                    events.append(.failure(message))
+                    events.append(.failure(explained(message)))
+                } else if let why, failureEvents(in: object).isEmpty {
+                    events.append(.failure(why))
                 } else {
-                    events.append(contentsOf: failureEvents(in: object))
+                    events.append(contentsOf: failureEvents(in: object).map { event -> AgentChatWireEvent in
+                        if case .failure(let message) = event { return .failure(explained(message)) }
+                        return event
+                    })
                 }
             } else if let text = object.string("result"), !text.isEmpty {
                 events.append(.finalText(text))
@@ -860,6 +975,25 @@ public enum AgentChatWireParser {
         return events
     }
 
+    /// A plain sentence for the failures a reader can do something about,
+    /// read from the result's documented fields.
+    static func claudeFailureExplanation(apiErrorStatus: Int?, terminalReason: String?) -> String? {
+        switch (apiErrorStatus, terminalReason) {
+        case (529?, _):
+            return "Claude is overloaded right now. Try again in a minute."
+        case (429?, _):
+            return "Claude's usage limit is reached for now."
+        case (_, "prompt_too_long"?):
+            return "This conversation has grown too long for the model. Start a new chat to carry on."
+        case (_, "budget_exhausted"?):
+            return "This run reached its spending limit."
+        case (_, "model_error"?):
+            return "The model couldn\u{2019}t answer. Choosing another model may help."
+        default:
+            return nil
+        }
+    }
+
     private static func failureEvents(in object: [String: Any]) -> [AgentChatWireEvent] {
         let message = object.string("message")
             ?? object.dictionary("error")?.string("message")
@@ -874,6 +1008,8 @@ private extension Dictionary where Key == String, Value == Any {
     func string(_ key: String) -> String? { self[key] as? String }
     func bool(_ key: String) -> Bool? { self[key] as? Bool }
     func int(_ key: String) -> Int? { self[key] as? Int }
+    /// A number written as either an integer or a fraction.
+    func number(_ key: String) -> Double? { (self[key] as? NSNumber)?.doubleValue }
     func dictionary(_ key: String) -> [String: Any]? { self[key] as? [String: Any] }
     /// The content blocks of a whole message event.
     func contentBlocks() -> [[String: Any]] {
@@ -917,7 +1053,7 @@ public enum AgentChatRunDisposition: Equatable, Sendable {
                 ?? summary.failure
                 ?? readableCLIError(in: output)
                 ?? "\(providerName) exited with status \(exitCode)."
-            return .failed(failure)
+            return .failed(AgentChatSecrets.redacted(failure))
         }
         return .silent("\(providerName) finished without returning a message.")
     }
@@ -969,5 +1105,123 @@ public enum AgentProviderCredentialListing {
         // what every other provider is judged by.
         if let count = reportedCount(in: output) { return count > 0 }
         return exitCode == 0
+    }
+}
+
+/// What a chat says about a usage limit, from the documented fields alone.
+public enum AgentChatUsageLimitText {
+    /// Why Lamp stopped a reply the provider was holding at a limit.
+    public static func reached(_ limit: AgentChatUsageLimit, provider: String, now: Date = Date()) -> String {
+        var text = limit.needsCredits
+            ? "\(provider)\u{2019}s included usage is spent, and the session can\u{2019}t continue until usage credits are bought for the account."
+            : "\(provider)\u{2019}s usage limit is reached."
+        if let resetsAt = limit.resetsAt { text += " It resets \(when(resetsAt, now: now))." }
+        return text + " Lamp stopped the reply rather than leave it waiting."
+    }
+
+    /// A word of warning as the account nears a limit, or nil when there is
+    /// nothing to warn of.
+    public static func warning(_ limit: AgentChatUsageLimit, provider: String, now: Date = Date()) -> String? {
+        guard limit.status == .allowedWarning else { return nil }
+        var text = limit.utilization.map {
+            "You\u{2019}ve used \(Int(($0 * 100).rounded()))% of a \(provider) usage limit."
+        } ?? "You\u{2019}re nearing a \(provider) usage limit."
+        if let resetsAt = limit.resetsAt { text += " It resets \(when(resetsAt, now: now))." }
+        return text
+    }
+
+    private static func when(_ date: Date, now: Date) -> String {
+        let style: Date.FormatStyle = Calendar.current.isDate(date, inSameDayAs: now)
+            ? .dateTime.hour().minute()
+            : .dateTime.weekday(.wide).hour().minute()
+        let prefix = Calendar.current.isDate(date, inSameDayAs: now) ? "at " : ""
+        return prefix + date.formatted(style)
+    }
+}
+
+/// The environment a provider CLI is started with.
+public enum AgentProcessEnvironment {
+    /// What a Claude Code session exports to the commands it runs. A `claude`
+    /// started with them acts as part of that session — its id, messaging
+    /// socket and token, its effort — rather than as the reader's own run,
+    /// which is what Lamp started from a Claude Code shell during development
+    /// would hand down. Named one by one rather than by prefix, so a
+    /// reader's own `CLAUDE_CONFIG_DIR` and Lamp's `LAMP_*` variables pass.
+    public static let hostSessionVariables: Set<String> = [
+        "CLAUDECODE",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_CODE_HOST_SESSION_ID",
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_SESSION_ATTENDED",
+        "CLAUDE_CODE_MESSAGING_SOCKET",
+        "CLAUDE_CODE_MESSAGING_TOKEN",
+        "CLAUDE_CODE_EXECPATH",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_DESKTOP_APP_VERSION",
+        "CLAUDE_EFFORT",
+        "CLAUDE_PID",
+        "CLAUDE_AGENT_SDK_VERSION",
+    ]
+
+    public static func cleaned(_ environment: [String: String]) -> [String: String] {
+        environment.filter { !hostSessionVariables.contains($0.key) }
+    }
+}
+
+/// A provider run's processes, so a stop reaches all of them.
+///
+/// Terminating the CLI alone is not enough: what it started (an MCP server,
+/// a shell command) can hold its output open after it exits, so the read
+/// never ends and the reply never finishes, and a CLI can go on working
+/// after its pipes close.
+public enum AgentProcessTree {
+    public struct Member: Equatable, Sendable {
+        public let pid: pid_t
+        /// When it started, so a number reused by a new process is not
+        /// mistaken for it.
+        public let started: timeval
+
+        public static func == (lhs: Member, rhs: Member) -> Bool {
+            lhs.pid == rhs.pid && lhs.started.tv_sec == rhs.started.tv_sec
+                && lhs.started.tv_usec == rhs.started.tv_usec
+        }
+    }
+
+    /// Every process descended from `root`, from the kernel's process table.
+    public static func descendants(of root: pid_t) -> [Member] {
+        let table = processTable()
+        var children: [pid_t: [Member]] = [:]
+        for (member, parent) in table { children[parent, default: []].append(member) }
+        var result: [Member] = []
+        var frontier = [root]
+        while let next = frontier.popLast() {
+            for child in children[next] ?? [] where child.pid != next {
+                result.append(child)
+                frontier.append(child.pid)
+            }
+        }
+        return result
+    }
+
+    /// Sends SIGKILL to each that is still the process it was.
+    public static func kill(_ members: [Member]) {
+        let alive = Dictionary(processTable().map { ($0.0.pid, $0.0) }, uniquingKeysWith: { first, _ in first })
+        for member in members where alive[member.pid] == member {
+            Darwin.kill(member.pid, SIGKILL)
+        }
+    }
+
+    private static func processTable() -> [(Member, pid_t)] {
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
+        var size = 0
+        guard sysctl(&mib, 4, nil, &size, nil, 0) == 0 else { return [] }
+        let stride = MemoryLayout<kinfo_proc>.stride
+        // Room for processes started between the two calls.
+        var processes = [kinfo_proc](repeating: kinfo_proc(), count: size / stride + 32)
+        size = processes.count * stride
+        guard sysctl(&mib, 4, &processes, &size, nil, 0) == 0 else { return [] }
+        return processes.prefix(size / stride).map { process in
+            (Member(pid: process.kp_proc.p_pid, started: process.kp_proc.p_un.__p_starttime), process.kp_eproc.e_ppid)
+        }
     }
 }

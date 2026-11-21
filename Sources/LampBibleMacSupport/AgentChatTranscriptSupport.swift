@@ -837,9 +837,9 @@ public struct AgentChatRunSummary: Equatable, Sendable {
                 case .textFragment(let value): fragments += value
                 case .finalText(let value): finalText = value
                 case .failure(let value): summary.failure = value
-                // What the run was doing while it ran. It was shown then; a
-                // finished run is read for what it said.
-                case .activity: break
+                // What the run was doing while it ran, and the account it
+                // ran on. Shown then; a finished run is read for what it said.
+                case .activity, .billing, .usageLimit: break
                 }
             }
         }

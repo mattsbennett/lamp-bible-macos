@@ -51,6 +51,8 @@ struct AgentCLIProcessResult: Sendable {
     let exitCode: Int32
     let output: String
     let launchError: String?
+    /// Lamp stopped it for saying nothing for too long.
+    var stalled = false
 
     /// Stopped in the moment before the provider was launched, so it never
     /// ran at all. Read as a stop rather than a failure: nothing went
@@ -64,6 +66,27 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
     private let lock = NSLock()
     private var activeProcess: Process?
     private var cancelled = false
+    /// When the running provider last said anything.
+    private var lastOutput = Date()
+    /// Whether the running reply is waiting on the person, to answer a tool
+    /// call, which is not stalling however long it takes.
+    private var waitingOnPerson = false
+    private var stalled = false
+
+    /// How long a run may say nothing before Lamp stops it. A provider in
+    /// trouble — retrying an overloaded API, or held at a usage limit — can
+    /// otherwise keep a reply spinning for hours.
+    static let stallMinutes = 10
+    /// How long a stopped provider has to exit on its own before it and
+    /// everything it started are killed.
+    static let stopGraceSeconds = 5.0
+
+    func setWaitingOnPerson(_ waiting: Bool) {
+        lock.lock()
+        waitingOnPerson = waiting
+        lastOutput = Date()
+        lock.unlock()
+    }
 
     /// Runs the provider, handing `onLine` each line of its output as it
     /// arrives. `onLine` is called off the main thread, in the order the lines
@@ -97,7 +120,23 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
         cancelled = true
         let process = activeProcess
         lock.unlock()
-        if process?.isRunning == true { process?.terminate() }
+        if let process, process.isRunning { Self.stop(process) }
+    }
+
+    /// Asks the provider to stop, then kills it and everything it started if
+    /// it has not exited a few seconds later. The ask comes first so a CLI
+    /// can save its session, which the next message resumes.
+    private static func stop(_ process: Process) {
+        let root = process.processIdentifier
+        let started = AgentProcessTree.descendants(of: root)
+        process.terminate()
+        DispatchQueue.global().asyncAfter(deadline: .now() + stopGraceSeconds) {
+            // Whatever it started that is still there, then or since; those
+            // whose parent has already gone are found from the first look.
+            let members = started + AgentProcessTree.descendants(of: root)
+            if process.isRunning { Darwin.kill(root, SIGKILL) }
+            AgentProcessTree.kill(members)
+        }
     }
 
     /// Readies the runner for a run, clearing the last one's stop.
@@ -108,6 +147,9 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
     func prepareForRun() {
         lock.lock()
         cancelled = false
+        stalled = false
+        waitingOnPerson = false
+        lastOutput = Date()
         lock.unlock()
     }
 
@@ -139,7 +181,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             // `codex exec` announces "Reading additional input from stdin…"
             // and blocks on it forever — the chat pane spinning with no reply.
             process.standardInput = FileHandle.nullDevice
-            var environment = ProcessInfo.processInfo.environment
+            var environment = AgentProcessEnvironment.cleaned(ProcessInfo.processInfo.environment)
             // As a shell would. OpenCode takes its project from `PWD`, and
             // Lamp's own may name another directory entirely — in which case
             // `opencode run --session` waits forever on a session it can't see.
@@ -162,7 +204,9 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             // unstarted process and killed nothing, so the provider ran on
             // — doing, for a writing agent, work on the person's draft
             // after they had said stop.
-            if isCancelled { process.terminate() }
+            if isCancelled { Self.stop(process) }
+            let watchdog = watchForStall(in: process)
+            defer { watchdog.cancel() }
             // Read the pipe as it fills rather than at the end. Reading to the
             // end of the file first is what left a chat with nothing to show
             // but its spinner: every event had already happened by the time
@@ -173,20 +217,57 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             while true {
                 let chunk = handle.availableData
                 if chunk.isEmpty { break }
+                lock.lock()
+                lastOutput = Date()
+                lock.unlock()
                 collected += chunk
                 guard let onLine else { continue }
                 for line in reader.lines(from: chunk) { onLine(line) }
             }
             if let onLine, let last = reader.flush() { onLine(last) }
             process.waitUntilExit()
+            lock.lock()
+            let wasStalled = stalled
+            lock.unlock()
             return AgentCLIProcessResult(
                 exitCode: process.terminationStatus,
                 output: String(decoding: collected, as: UTF8.self),
-                launchError: nil
+                launchError: nil,
+                stalled: wasStalled
             )
         } catch {
             return AgentCLIProcessResult(exitCode: -1, output: "", launchError: error.localizedDescription)
         }
+    }
+
+    /// Ends a helper launch that has not finished in `seconds`, so reading
+    /// its output returns.
+    private static func giveUp(on process: Process, after seconds: Double) {
+        DispatchQueue.global().asyncAfter(deadline: .now() + seconds) {
+            if process.isRunning { process.terminate() }
+        }
+    }
+
+    /// Stops the run once it has said nothing for `stallMinutes`, except
+    /// while it waits on the person.
+    private func watchForStall(in process: Process) -> DispatchSourceTimer {
+        lock.lock()
+        lastOutput = Date()
+        lock.unlock()
+        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        timer.schedule(deadline: .now() + 15, repeating: 15)
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            if self.waitingOnPerson { self.lastOutput = Date() }
+            let quiet = Date().timeIntervalSince(self.lastOutput)
+            let stall = !self.stalled && quiet > Double(Self.stallMinutes * 60)
+            if stall { self.stalled = true }
+            self.lock.unlock()
+            if stall, process.isRunning { Self.stop(process) }
+        }
+        timer.resume()
+        return timer
     }
 
     /// The major version the installed CLI reports, or nil when it will not
@@ -207,6 +288,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
         process.standardError = FileHandle.nullDevice
         process.standardInput = FileHandle.nullDevice
         guard (try? process.run()) != nil else { return nil }
+        Self.giveUp(on: process, after: 20)
         let data = output.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         let major = AgentChatCLIVersion.major(
@@ -233,6 +315,9 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
         process.standardError = FileHandle.nullDevice
         process.standardInput = FileHandle.nullDevice
         try process.run()
+        // A login shell runs the reader's own startup files, and one that
+        // waits on something would hold every chat to that provider.
+        Self.giveUp(on: process, after: 20)
         let data = output.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         let path = String(decoding: data, as: UTF8.self)
@@ -970,6 +1055,17 @@ final class NativeAgentChatModel: ObservableObject {
     /// The reply so far while it arrives, as the pane shows it: for a paired
     /// phone following this chat (`AgentRemoteHost`). Empty between runs.
     @Published private(set) var arrivingReply = ""
+    /// Set when the provider reports this chat is billed to an API key,
+    /// charged by the token, rather than the subscription the reader signed
+    /// in with. Stays up while that is so.
+    @Published private(set) var billingNotice: String?
+    /// Where the account last stood against a usage limit, as the provider
+    /// reported it during a run. Claude only.
+    @Published private(set) var usageLimit: AgentChatUsageLimit?
+    /// Set while waiting messages are held back after a run that failed or
+    /// that Lamp stopped, so a usage limit or a lapsed sign-in does not send
+    /// every one of them to fail in turn. Sending a message lets them go.
+    @Published private(set) var queueHeld = false
 
     let provider: AIProviderCLI
     private let workspace: URL
@@ -1282,6 +1378,7 @@ final class NativeAgentChatModel: ObservableObject {
         stoppedNotice = nil
         isRunning = true
         cancelRequested = false
+        stoppedByLamp = nil
         // Before the work is scheduled: cleared inside the worker, a Stop
         // pressed in between was wiped by the run it was meant to stop.
         runner.prepareForRun()
@@ -1357,6 +1454,21 @@ final class NativeAgentChatModel: ObservableObject {
         runner.cancel()
     }
 
+    /// Stops the reply the way Stop does, so a writing turn still ends
+    /// through the same collection of what it wrote, and says why.
+    private func stopForLamp(because reason: String) {
+        guard isRunning, stoppedByLamp == nil else { return }
+        stoppedByLamp = reason
+        cancel()
+    }
+
+    /// Lets messages held back after a failure go, as sending one does.
+    func releaseQueue() { queueHeld = false }
+
+    /// Why Lamp, rather than the person, stopped the running reply.
+    private var stoppedByLamp: String?
+    private var askedCodexBilling = false
+
     func clearConversation() {
         guard !isRunning else { return }
         // A new identity, so the clear reaches other Macs rather than being
@@ -1427,8 +1539,22 @@ final class NativeAgentChatModel: ObservableObject {
             channel?.close()
             approvalChannel = nil
             pendingApprovals = []
+            runner.setWaitingOnPerson(false)
         }
         let wire = provider.wireProvider
+        // Codex does not say in its stream how it is billed; its login status
+        // does. Asked once per chat, before the first run.
+        if provider == .codex, !askedCodexBilling {
+            askedCodexBilling = true
+            let status = await AgentCLIProcessRunner().run(
+                executableName: provider.executable,
+                arguments: ["login", "status"],
+                workingDirectory: workspace
+            )
+            if let billing = AgentChatBilling.codex(loginStatus: status.output) {
+                absorb([.billing(billing)])
+            }
+        }
         let chatChoices = AgentChatChoicesStore.load(in: workspace)
         // Through a stream rather than a task per line: separate tasks are not
         // ordered, and a reply whose fragments arrive out of order is a reply
@@ -1505,6 +1631,8 @@ final class NativeAgentChatModel: ObservableObject {
                 let pending = await Task.detached { channel.pendingRequests() }.value
                 guard let self, !Task.isCancelled else { return }
                 if pending != self.pendingApprovals { self.pendingApprovals = pending }
+                // A reply waiting on the person's answer is not a stalled one.
+                self.runner.setWaitingOnPerson(!pending.isEmpty)
                 try? await Task.sleep(for: .milliseconds(250))
             }
         }
@@ -1526,6 +1654,17 @@ final class NativeAgentChatModel: ObservableObject {
                 activity = activity?.succeeded(by: value) ?? value
             case .textFragment(let text):
                 streamedReply += text
+            case .billing(let billing):
+                billingNotice = billing.isAPIKey
+                    ? "\(provider.shortName) reports this chat uses an API key (\(billing.source)), so it is billed by the token rather than to your subscription."
+                    : nil
+            case .usageLimit(let limit):
+                usageLimit = limit
+                if limit.status == .rejected {
+                    // Claude holds a limited turn open until the window
+                    // reopens, which can be hours of a spinner.
+                    stopForLamp(because: AgentChatUsageLimitText.reached(limit, provider: provider.shortName))
+                }
             case .sessionStarted, .finalText, .failure:
                 break
             }
@@ -1600,7 +1739,10 @@ final class NativeAgentChatModel: ObservableObject {
         }
         loadingMessageID = nil
 
-        let wasStopped = cancelRequested
+        let lampReason = stoppedByLamp
+            ?? (result.stalled ? "No word from \(provider.shortName) for \(AgentCLIProcessRunner.stallMinutes) minutes, so Lamp stopped the reply." : nil)
+        stoppedByLamp = nil
+        let wasStopped = cancelRequested || result.stalled
         cancelRequested = false
         let summary = AgentChatRunSummary.summarize(
             output: result.output,
@@ -1628,12 +1770,19 @@ final class NativeAgentChatModel: ObservableObject {
 
         switch disposition {
         case .replied(let reply):
+            queueHeld = false
             appendAgentMarkdown(reply)
         case .stopped(let partialReply):
             if !partialReply.isEmpty { appendAgentMarkdown(partialReply) }
-            stoppedNotice = partialReply.isEmpty
-                ? "That reply was stopped. \(provider.shortName) still has the conversation, so your next message carries on from it."
-                : "That reply was stopped partway through."
+            if let lampReason {
+                record(AgentChatTranscript.Event.failed, text: lampReason)
+                errorMessage = lampReason
+                queueHeld = true
+            } else {
+                stoppedNotice = partialReply.isEmpty
+                    ? "That reply was stopped. \(provider.shortName) still has the conversation, so your next message carries on from it."
+                    : "That reply was stopped partway through."
+            }
         case .failed(let failure):
             record(AgentChatTranscript.Event.failed, text: failure)
             let setupVerdict = AgentChatSetupRequirement.verdict(
@@ -1646,6 +1795,7 @@ final class NativeAgentChatModel: ObservableObject {
             // nobody answered; it is only called one when the output says so,
             // because a network error is not a sign-in problem.
             needsProviderSetup = setupVerdict != .none
+            queueHeld = true
             errorMessage = setupVerdict == .indicated
                 ? "\(AgentChatSetupRequirement.message(provider: provider.shortName)) \(failure)"
                 : failure
@@ -2193,7 +2343,7 @@ struct NativeAgentChatView: View {
 
     /// Sends the next waiting message, if this pane is free to.
     private func drainQueue() {
-        guard !isPreparing, !model.isRunning, model.hasWaitingMessage else { return }
+        guard !isPreparing, !model.isRunning, !model.queueHeld, model.hasWaitingMessage else { return }
         guard let next = model.reserveNextQueued() else { return }
         startSending(next.text, queued: next.id)
     }
@@ -2202,6 +2352,9 @@ struct NativeAgentChatView: View {
     /// sent when the reply before it lands.
     @discardableResult
     private func startSending(_ prompt: String, queued: UUID? = nil) -> Bool {
+        // A message the person sends is their word to carry on, so whatever
+        // was held back after a failure goes after it.
+        if queued == nil { model.releaseQueue() }
         guard !isPreparing else {
             if let queued { model.releaseQueued(queued) }
             return false
@@ -2301,6 +2454,38 @@ struct NativeAgentChatView: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
                     .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if let notice = model.billingNotice {
+                Label(notice, systemImage: "creditcard")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if let limit = model.usageLimit,
+               let warning = AgentChatUsageLimitText.warning(limit, provider: provider.shortName) {
+                Label(warning, systemImage: "gauge.with.dots.needle.67percent")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if model.queueHeld, model.hasWaitingMessage, !model.isRunning {
+                HStack(spacing: 8) {
+                    Label("Waiting messages are held after that.", systemImage: "pause.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                    Button("Send Them") {
+                        model.releaseQueue()
+                        drainQueue()
+                    }
+                    .buttonStyle(.lampSecondary)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
             }
             if model.isRunning, let activity = model.activity {
                 AgentActivityLine(activity: activity)
