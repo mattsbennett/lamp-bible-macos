@@ -421,10 +421,14 @@ extension LampSyncLocalFiles {
         inLibraryAt libraryRoot: URL,
         fileManager: FileManager = .default
     ) -> [Candidate] {
+        // The paths are core's (`LampWritingReviewStore.paths`), which
+        // the phone sends from too: a record is sent under the path the
+        // layout makes for it, never under the name a file happens to
+        // have in the folder.
         let store = LampWritingReviewStore(rootURL: libraryRoot)
-        return plainFiles(in: store.directoryURL, fileManager: fileManager).compactMap { url in
-            let path = "\(LampSyncFolderLayout.writingReviewDirectory)/\(url.lastPathComponent)"
-            guard LampSyncFolderLayout.kind(of: path) == .writingReview else { return nil }
+        return ((try? store.paths()) ?? []).compactMap { path in
+            let url = libraryRoot.appendingPathComponent(path)
+            guard fileManager.fileExists(atPath: url.path) else { return nil }
             return Candidate(path: path, kind: .writingReview, url: url)
         }
     }

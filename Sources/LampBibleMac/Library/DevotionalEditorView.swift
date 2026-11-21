@@ -2798,16 +2798,13 @@ struct DevotionalEditorView: View {
         current: [UUID: LampWritingReview.RestorePlan.Standing],
         for key: WritingReviewKey
     ) {
+        // Core's decision, which the phone makes too
+        // (`RestorePlan.settlement`): what this save proves, and what
+        // waits for a save that can answer for it.
         let pending = owing.pendingMarks
-        let stands = pending.filter { answers[$0] == .stands }
-        // What the words cannot answer waits; what is not in this save but
-        // is still in the writing waits too — that save was taken before
-        // the restore was made. What is in neither has been undone, and is
-        // the end of it.
-        let waiting = pending.filter { mark in
-            guard answers[mark] != .stands else { return false }
-            return answers[mark] == .unknown || current[mark] != .gone
-        }
+        let (stands, waiting) = LampWritingReview.RestorePlan.settlement(
+            pending: pending, inSaved: answers, inCurrent: current
+        )
         guard !stands.isEmpty else {
             if waiting.count != pending.count {
                 WritingReviewObligations.shared.stillOwed(owing.pending(waiting), for: key.writingID)

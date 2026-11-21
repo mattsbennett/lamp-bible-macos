@@ -626,8 +626,10 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
     /// a digest of the id after it, so it cannot be read back: the
     /// writings are asked, and the one whose id makes this name is it.
     private func writingID(ofWorkspaceFolder folder: String) async -> String? {
-        let ids = (try? await library.personalDevotionals().map(\.id)) ?? []
-        return ids.first { LampWritingWorkspaceLayout.directoryName(for: $0) == folder }
+        LampWritingWorkspaceLayout.writingID(
+            ofFolder: folder,
+            among: (try? await library.personalDevotionals().map(\.id)) ?? []
+        )
     }
 
     /// A deletion made on another device, told what this Mac last agreed
