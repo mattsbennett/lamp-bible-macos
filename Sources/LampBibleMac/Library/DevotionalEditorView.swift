@@ -4052,6 +4052,15 @@ struct DevotionalEditorView: View {
                     // there leaves a retry writing to this copy.
                     keptCopyRevision = written.lastModified
                     try await carryReviewMarks(of: snapshot, to: id)
+                    // The body that went into the copy is the one holding
+                    // any restore not yet written down — the original's
+                    // winning version may never have held it — so what is
+                    // owed goes with it, to be settled against the copy.
+                    for owing in owedRestores {
+                        WritingReviewObligations.shared.owe(owing, for: id)
+                    }
+                    owedRestores = []
+                    WritingReviewObligations.shared.move(from: identifier, to: id)
                     // Typed while this pass was saving: another pass.
                     await readPage()
                 } else {
