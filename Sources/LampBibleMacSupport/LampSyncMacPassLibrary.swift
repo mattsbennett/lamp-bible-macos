@@ -456,8 +456,17 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
                 // file itself: the pass takes a URL it gathered as leave to
                 // reuse the digest it took then, before the merge, and would
                 // record the bytes it sent under the old one.
-                guard let writingID = LampSyncFolderLayout.writingID(ofReviewPath: path) else { continue }
-                let local = try reviewStore.url(writingID: writingID)
+                // By the whole of what the path names. Taking the writing
+                // alone sent the prose's record up under a document's
+                // path: other devices rightly refuse a record that says
+                // it is another's, so that document's marks and clears
+                // would stop syncing altogether.
+                guard let target = LampSyncFolderLayout.reviewTarget(ofPath: path) else { continue }
+                let local = reviewStore.rootURL.appendingPathComponent(
+                    try LampSyncFolderLayout.writingReviewPath(
+                        writingID: target.writingID, documentKey: target.documentKey
+                    )
+                )
                 if let held = try? Data(contentsOf: local), let arrived = downloaded[path], held != (try Data(contentsOf: arrived)) {
                     let copy = workspace.appendingPathComponent("review-\(UUID().uuidString).json")
                     try held.write(to: copy, options: .atomic)
@@ -615,17 +624,6 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
         }
     }
 
-    /// The writing a workspace folder belongs to.
-    ///
-    /// A folder's name is its writing's id made safe and shortened, with a
-    /// digest of the id after it, so it cannot be read back: the writings
-    /// are asked instead, and the one whose id makes this name is it.
-    /// Held for the pass, since a workspace of documents would otherwise
-    /// ask once for each.
-    private func writingID(ofWorkspaceFolder folder: String) async -> String? {
-        let ids = (try? await library.personalDevotionals().map(\.id)) ?? []
-        return ids.first { LampWritingWorkspaceLayout.directoryName(for: $0) == folder }
-    }
 
     /// A deletion made on another device, told what this Mac last agreed
     /// with the server on: a document edited here since is kept as a copy
@@ -669,31 +667,26 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             }
         }
         let body = try Data(contentsOf: url)
-        let decision = try documentStore.takeIn(
+        try documentStore.takeIn(
             downloaded: body, path: path, agreedDigest: agreedDigest, localDevice: Self.deviceName
         )
-        // Both sides changed it, so this Mac's body went to a copy. The
-        // marks here were made of the words in that body, so they go with
-        // it; the server's body is now at the document's own name, and
-        // the server's marks come down to it on the pass that follows.
+        // The marks are not moved to a body kept as a copy, though they
+        // were made of its words.
         //
-        // Right here because a pass takes documents in before review
-        // files — `Workspaces` sorts before `WritingReview` — so the
-        // record still holds this Mac's marks alone. Were the review
-        // merged first, it would hold the arriving body's marks too, and
-        // moving the lot would put the other device's marks on this one's
-        // copy and leave its own body unmarked everywhere.
-        if case .takeKeepingHeldAs(let copyName) = decision,
-           let document = LampWritingWorkspaceLayout.document(ofPath: path),
-           let writingID = await writingID(ofWorkspaceFolder: document.folder) {
-            // No deletion recorded for the name left behind: the server
-            // holds a record there for the body that now stands there,
-            // and this Mac wants it.
-            _ = try? LampWritingDocumentReview.moved(
-                document.name, to: copyName, writingID: writingID,
-                in: reviewStore, now: Int64(Date().timeIntervalSince1970 * 1000)
-            )
-        }
+        // By the time this runs they are no longer this device's alone. A
+        // pass takes every download in first and reconciles what both
+        // sides changed after, and a review record only the other device
+        // changed is a download — so it has already been merged into the
+        // record here. Nothing in a merged record says which marks came
+        // from which body, and the two bodies are alike by definition, so
+        // dividing them would be a guess. Moving the lot would put the
+        // other device's marks on this one's copy and leave the body that
+        // arrived unmarked everywhere.
+        //
+        // So the record stays at the document's name, with the body that
+        // now stands there. The copy carries none, which loses the marks
+        // on a body the writer is about to merge by hand — a smaller
+        // wrong than marks that say the wrong person wrote the words.
         // Said so the editor's poll can tell this from the assistant
         // writing the document: it sees only that the file changed, and
         // marking what a pass wrote would mark the writer's own phone

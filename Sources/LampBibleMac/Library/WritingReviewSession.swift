@@ -501,11 +501,42 @@ final class WritingReviewSession: ObservableObject {
     /// `held` is the page's own Markdown afterwards, not what the plan
     /// worked out: the page writes its own spelling, and a word of it may
     /// come back another way. Only the marks put back change either way.
+    /// `for` is what the restore was made in, which is not always what
+    /// this session is following now: the proof of a restore is worked
+    /// out off the main actor, and the writer can open another document
+    /// while it runs. Written through the session regardless, the
+    /// outline's restorations and marks would land in the notes.
     func recordRestore(
-        _ restore: PageRestore, held: String, only marks: Set<UUID>? = nil,
+        _ restore: PageRestore, held: String, for key: WritingReviewKey,
+        only marks: Set<UUID>? = nil,
         remarkingUnread: Bool = true, then: @escaping (Bool) -> Void = { _ in }
     ) {
-        guard writingID != nil else { return then(false) }
+        guard let store, key.writingID == writingID || self.key != key else {
+            return then(false)
+        }
+        guard key == self.key else {
+            // Another document is open. The record is written straight to
+            // its own file, off the actor as `change` does, and nothing
+            // of this session's state is touched: none of it is that
+            // document's.
+            let known = WritingReviewTexts.shared.known(for: key)
+            WritingReviewTexts.shared.remember(restore.base, for: key)
+            WritingReviewTexts.shared.remember(held, for: key)
+            LampPendingWrites.shared.begin()
+            Task {
+                let written = await Task.detached(priority: .userInitiated) {
+                    try? store.update(writingID: key.writingID, document: key.document) {
+                        $0.restoringWording(
+                            restore.plan, from: restore.base, to: held, only: marks,
+                            remarkingUnread: remarkingUnread, carryingFrom: known
+                        )
+                    }
+                }.value
+                LampPendingWrites.shared.end()
+                then(written != nil)
+            }
+            return
+        }
         remember(restore.base)
         remember(held)
         // Not `text = held`: this runs after the writing was saved, and

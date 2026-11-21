@@ -2721,7 +2721,16 @@ struct DevotionalEditorView: View {
             }
             WritingReviewObligations.shared.stillOwed(owing, for: identifier)
             restoresMadeHere.insert(owing.id)
-            _ = await saveAndWait()
+            // The writing's save, which is the one that commits the prose.
+            // A restore made in a document is saved by that document's own
+            // save, which settles it there; this still runs, and settles
+            // nothing of the document's, which is why the obligation is
+            // kept rather than dropped when this returns.
+            if reviewKey?.document == nil {
+                _ = await saveAndWait()
+            } else if let id = activeWorkspaceDocument?.id {
+                saveWorkspaceDocument(id)
+            }
             guard let key = reviewKey,
                   WritingReviewObligations.shared.owing(for: key)
                     .contains(where: { $0.id == owing.id })
@@ -2747,7 +2756,13 @@ struct DevotionalEditorView: View {
         // Taken now, not when the proving finishes: a restore made after
         // this save is no business of this save's, and a settle that read
         // the list later would claim it.
-        settleOwedRestores(in: saved, for: reviewKey, held: activeText)
+        // The writing's own, whatever document is open. A save of the
+        // prose is proof of the prose's text and of nothing else: taking
+        // the open document's key here settled its restores against a
+        // body that is not its own.
+        settleOwedRestores(
+            in: saved, for: WritingReviewKey(writingID: identifier), held: content
+        )
     }
 
     /// The same for one document's restores, named rather than taken from
@@ -2803,7 +2818,7 @@ struct DevotionalEditorView: View {
         // Written against the whole plan, so each passage is put back where
         // the plan actually put it, and only these passages are recorded.
         reviewSession.recordRestore(
-            owing.restore, held: owing.held, only: stands,
+            owing.restore, held: owing.held, for: key, only: stands,
             remarkingUnread: !owing.cleared
         ) { kept in
             if kept, waiting.isEmpty {
@@ -2826,7 +2841,7 @@ struct DevotionalEditorView: View {
         guard let key = reviewKey else { return }
         for owing in WritingReviewObligations.shared.owing(for: key) where owing.bodyCommitted {
             reviewSession.recordRestore(
-                owing.restore, held: owing.held, only: owing.pendingMarks,
+                owing.restore, held: owing.held, for: key, only: owing.pendingMarks,
                 remarkingUnread: !owing.cleared
             ) { kept in
                 guard kept else { return }
