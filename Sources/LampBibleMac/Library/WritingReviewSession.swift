@@ -22,19 +22,61 @@ import LampBibleMacSupport
 /// again whenever that writing is open.
 @MainActor
 final class WritingReviewObligations {
-    static let shared = WritingReviewObligations()
-    private var owed: [String: [WritingReviewSession.OwedRestore]] = [:]
+    static let shared = WritingReviewObligations(
+        fileURL: (LampAgentDescriptorStore.defaultApplicationSupportURL()
+            ?? FileManager.default.temporaryDirectory)
+            .appendingPathComponent("owed-restores.json")
+    )
+
+    private let fileURL: URL
+    private var owed: [String: [WritingReviewSession.OwedRestore]]
+
+    init(fileURL: URL) {
+        self.fileURL = fileURL
+        owed = (try? JSONDecoder().decode(
+            [String: [WritingReviewSession.OwedRestore]].self, from: Data(contentsOf: fileURL)
+        )) ?? [:]
+    }
 
     func owe(_ restore: WritingReviewSession.OwedRestore, for writingID: String) {
         owed[writingID, default: []].append(restore)
+        write()
     }
 
     func taken(for writingID: String) -> [WritingReviewSession.OwedRestore] {
-        defer { owed[writingID] = nil }
+        defer {
+            owed[writingID] = nil
+            write()
+        }
         return owed[writingID] ?? []
     }
 
+    /// Moves what is owed to the copy the edits were kept as: the body
+    /// holding the restore went there, and the original's winning copy
+    /// may never have held it.
+    func move(from writingID: String, to copyID: String) {
+        guard let moving = owed[writingID], !moving.isEmpty else { return }
+        owed[copyID, default: []].append(contentsOf: moving)
+        owed[writingID] = nil
+        write()
+    }
+
     func isEmpty(for writingID: String) -> Bool { (owed[writingID] ?? []).isEmpty }
+
+    /// Kept on disk, because the whole point of them is the record that
+    /// has not been written yet: quitting took the lot.
+    private func write() {
+        owed = owed.filter { !$0.value.isEmpty }
+        do {
+            try FileManager.default.createDirectory(
+                at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            try JSONEncoder().encode(owed).write(to: fileURL, options: .atomic)
+        } catch {
+            // Nothing to be done about it here: the records are still
+            // owed in memory for as long as this run lasts.
+        }
+    }
 }
 
 @MainActor
@@ -393,18 +435,32 @@ final class WritingReviewSession: ObservableObject {
 
     /// A restore the surface made that no save has carried to storage
     /// yet, and that is therefore not written down.
-    struct OwedRestore: Identifiable {
-        let id = UUID()
+    struct OwedRestore: Identifiable, Codable {
+        var id = UUID()
         let restore: PageRestore
         let held: String
         /// Set once a save holding this restore has landed and only the
         /// marks file is left: nothing else would come back for it, since
         /// the writing is clean and no further save is owed.
         var bodyCommitted = false
+
+        /// The same obligation for some of its passages, where the others
+        /// have been answered.
+        func with(edits: [LampWritingReview.Edit]) -> OwedRestore {
+            OwedRestore(
+                id: id,
+                restore: PageRestore(
+                    base: restore.base, restored: restore.restored,
+                    plan: LampWritingReview.RestorePlan(edits: edits)
+                ),
+                held: held,
+                bodyCommitted: bodyCommitted
+            )
+        }
     }
 
     /// A restore worked out for the page, before the page has made it.
-    struct PageRestore {
+    struct PageRestore: Codable {
         let base: String
         let restored: String
         let plan: LampWritingReview.RestorePlan

@@ -2648,20 +2648,24 @@ struct DevotionalEditorView: View {
         var settling: [WritingReviewSession.OwedRestore] = []
         var remaining: [WritingReviewSession.OwedRestore] = []
         for owing in owedRestores {
-            switch owing.restore.plan.standing(from: owing.held, in: saved) {
-            case .stands:
-                settling.append(owing)
-            case .unknown:
-                // The words cannot say — the same passage stands twice —
-                // so nothing is recorded and nothing is given up.
-                remaining.append(owing)
-            case .gone:
-                // Not in this save: either it was taken before the
-                // restore was made, or the writer has undone it. Undone
-                // is the end of it; still in the writing is not.
-                if owing.restore.plan.standing(from: owing.held, in: content) != .gone {
-                    remaining.append(owing)
-                }
+            // One passage at a time. A plan can put several back at once,
+            // and a later restore over one of them says nothing about the
+            // others — answered whole, they lost their records with it.
+            let answers = owing.restore.plan.standingByMark(from: owing.held, in: saved)
+            let stands = owing.restore.plan.edits.filter { answers[$0.markID] == .stands }
+            let waiting = owing.restore.plan.edits.filter { answers[$0.markID] == .unknown }
+            let gone = owing.restore.plan.edits.filter { answers[$0.markID] == .gone }
+            if !stands.isEmpty {
+                settling.append(owing.with(edits: stands))
+            }
+            // What the words could not answer is still owed, and so is
+            // what is not in this save but is still in the writing — that
+            // save was taken before the restore was made.
+            let undecided = waiting + gone.filter {
+                owing.restore.plan.only($0).standing(from: owing.held, in: content) != .gone
+            }
+            if !undecided.isEmpty {
+                remaining.append(owing.with(edits: undecided))
             }
         }
         // In place before any record is attempted: a write that fails at
