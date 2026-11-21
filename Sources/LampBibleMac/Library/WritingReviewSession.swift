@@ -288,6 +288,13 @@ final class WritingReviewSession: ObservableObject {
     /// refusal is the record's own: a selection holding one passage the
     /// writer has typed into is refused, and that is not a thing the drawn
     /// list can say, holding only what can be put back.
+    /// Whether `text` still holds what a restore put back — the record's
+    /// own answer, from the passages rather than from any bookkeeping
+    /// the writer could undo without touching.
+    func restoreStands(_ plan: LampWritingReview.RestorePlan, in text: String) -> Bool {
+        review?.restoreStands(plan, in: text) ?? false
+    }
+
     func restoring(_ range: NSRange, in text: String? = nil) -> LampWritingReview.RestoreOutcome {
         let text = text ?? self.text
         return live(in: text)?.restoring(range, in: text) ?? .nothingTouched

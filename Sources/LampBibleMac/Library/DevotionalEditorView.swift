@@ -811,9 +811,10 @@ struct DevotionalEditorView: View {
         let id = UUID()
         let restore: WritingReviewSession.PageRestore
         let held: String
-        /// The writing it was made in. A draft replacing the writing
-        /// takes its obligations with it: those passages are gone.
-        let lineage: Int
+        /// Set once a save holding this restore has landed and only the
+        /// marks file is left: nothing else would come back for it, since
+        /// the writing is clean and no further save is owed.
+        var bodyCommitted = false
     }
     /// A newer stored copy than the one held, arrived while this editor had
     /// edits of its own, and those edits not yet kept elsewhere. Nothing is
@@ -1235,6 +1236,9 @@ struct DevotionalEditorView: View {
             )
         }
         .onChange(of: content) { _, text in reviewSession.textChanged(text) }
+        // Marks off and on again: a record that could not be written
+        // while they were off can be written now.
+        .onChange(of: showsReviewMarks) { _, shown in if shown { retryOwedRecords() } }
         // The same page shows the writing and the documents beside it;
         // the marks are the writing's alone.
         .onChange(of: selectedWorkspaceDocumentID) { _, _ in
@@ -1904,7 +1908,11 @@ struct DevotionalEditorView: View {
                 reviewRanges: isEditingPrimaryDocument ? reviewSession.ranges : [],
                 onMarkAsReviewed: isEditingPrimaryDocument ? { reviewSession.clear(range: $0) } : nil,
                 onRestoreWording: isEditingPrimaryDocument ? { offerRestore(of: $0) } : nil,
-                pendingEdits: markdownEdits,
+                // The writing's own surface only. Handed to a companion
+                // document's view as well, a restore's edits were made in
+                // whichever file was open — and one holding the same text
+                // passed the check and had its own words replaced.
+                pendingEdits: isEditingPrimaryDocument ? markdownEdits : nil,
                 onEditsConsidered: { token, applied in
                     if applied { markdownEditsApplied = token }
                     if markdownEdits?.token == token { markdownEdits = nil }
@@ -2554,41 +2562,50 @@ struct DevotionalEditorView: View {
         )
     }
 
-    /// Keeps a restore the surface has made, once the writing holding it
-    /// has been saved.
+    /// Keeps a restore the surface has made, until the writing that holds
+    /// it has been saved.
     ///
     /// The marks live in their own file beside the writing. Recorded
     /// first and then not saved — the app quits, the save fails, a newer
     /// version arrives — the writing still holds the assistant's words
     /// while the record says they were put back: the marks are gone, so
     /// nothing offers them again, and the next autosave carries the words
-    /// as the writer's own, so the assistant is never told either. The
-    /// record therefore goes last, and if nothing saves the surface is put
-    /// back as it was.
-    /// `wasHolding` is the editor's own text when the restore began, which
-    /// is not always the text the restore was worked out in: the page
-    /// writes its own Markdown, and an untouched writing can be held here
-    /// with `*` list markers while the page reports `-`. Comparing against
-    /// the page's spelling refused every restore in such a document.
+    /// as the writer's own, so the assistant is never told either.
+    ///
+    /// So nothing is recorded here. The restore becomes something owed,
+    /// and `settleOwedRestores` writes it down when a save whose text
+    /// provably holds it has landed. One path for every restore: the
+    /// first attempt, the one overtaken by typing, and the one whose
+    /// marks file would not take it were three sets of rules, and each
+    /// round of review found another place they disagreed.
+    ///
+    /// Nothing is rolled back either. Putting the old wording back over
+    /// a writing the writer has since typed into is how a rollback took
+    /// their sentences, replaced a companion document, and left commands
+    /// standing for views that had gone — and it was only ever a
+    /// courtesy, since the record now waits for proof rather than
+    /// needing the text put back. A restore that cannot be saved stays
+    /// in the writing, and the writer is told it is not recorded yet.
+    ///
+    /// `wasHolding` is the editor's own text when the restore began,
+    /// which is not always the text the restore was worked out in: the
+    /// page writes its own Markdown, and an untouched writing can be held
+    /// here with `*` list markers while the page reports `-`.
     private func keepRestore(
         _ restore: WritingReviewSession.PageRestore,
         held: String,
         wasHolding: String,
         applied: @escaping () -> Bool,
-        putInPlace: @escaping () -> Void,
-        rollBack: @escaping () -> Void
+        putInPlace: @escaping () -> Void
     ) {
         guard newerCopy == nil else {
             isRestoring = false
             refusedRestore = "A newer version of this writing arrived, so nothing was put back."
-            rollBack()
             return
         }
         reviewSession.holds(held)
         putInPlace()
-        // Read here, before anything can be scheduled between putting the
-        // restore in and noticing what the writing is.
-        let lineage = documentLineage
+        let owing = OwedRestore(restore: restore, held: held)
         // Counted, so quitting waits for it: this is the half of a restore
         // that is not yet written anywhere.
         LampPendingWrites.shared.begin()
@@ -2600,9 +2617,7 @@ struct DevotionalEditorView: View {
             // Until the surface says it made the edit. A command it
             // refused is not a restore, and saving before it has made one
             // would store the old words.
-            for _ in 0..<40 where !applied() && documentLineage == lineage {
-                try? await Task.sleep(for: .milliseconds(50))
-            }
+            for _ in 0..<40 where !applied() { try? await Task.sleep(for: .milliseconds(50)) }
             guard applied() else {
                 // Put down, or a Markdown view built later finds it still
                 // standing and makes it against text nothing is watching.
@@ -2610,52 +2625,65 @@ struct DevotionalEditorView: View {
                 refusedRestore = "That passage couldn’t be put back: the writing had moved on. Nothing was changed."
                 return
             }
-            guard documentLineage == lineage else {
-                refusedRestore = "A new draft arrived while that was being put back, so nothing was changed."
-                rollBack()
-                return
-            }
-            // This writes the writing itself and waits for the answer,
-            // rather than reading one off the autosave: what reached
-            // storage is the only thing that may be recorded.
-            let committed = await saveAndWait()
-            guard committed, documentLineage == lineage else {
-                // Where the writing still holds it — the rollback refuses
-                // over anything typed since — the restore is not undone,
-                // it is simply not recorded yet. Owed, and written as soon
-                // as any save of this writing lands.
-                rollBack()
-                // What the rollback actually did, not what it was asked
-                // to do: the page refuses over anything typed since, and
-                // the Markdown view may not have made it yet. Asked of
-                // the writing rather than reported, so a rollback that
-                // succeeded leaves nothing owed and one that could not
-                // leaves the restore standing and owed.
-                for _ in 0..<20 where content != restore.base && content != held {
-                    try? await Task.sleep(for: .milliseconds(50))
+            owedRestores.append(owing)
+            _ = await saveAndWait()
+            guard owedRestores.contains(where: { $0.id == owing.id }) else { return }
+            refusedRestore = """
+                The wording is back, but the writing hasn’t saved yet, so it isn’t recorded. \
+                Lamp will record it with the next save.
+                """
+        }
+    }
+
+    /// Writes down the restores that `saved` is proof of.
+    ///
+    /// Proof, not bookkeeping: a restore takes the assistant's words out,
+    /// so while none of the marks it put back can be found in a text, that
+    /// text holds it. Undo puts those words back and the marks with them,
+    /// and no generation, lineage or position would have noticed.
+    private func settleOwedRestores(in saved: String) {
+        guard !owedRestores.isEmpty else { return }
+        var remaining: [OwedRestore] = []
+        for owing in owedRestores {
+            guard reviewSession.restoreStands(owing.restore.plan, in: saved) else {
+                // Not in this save. Either it was taken before the restore
+                // was made, or the writer has since undone it — and undone
+                // is the end of it.
+                if reviewSession.restoreStands(owing.restore.plan, in: content) {
+                    remaining.append(owing)
                 }
-                if content != restore.base, documentLineage == lineage {
-                    owedRestores.append(OwedRestore(restore: restore, held: held, lineage: lineage))
-                    refusedRestore = """
-                        The wording is back, but the writing hasn’t saved yet, so it isn’t recorded. \
-                        Lamp will record it with the next save.
-                        """
-                } else {
-                    refusedRestore = newerCopy == nil
-                        ? "That passage couldn’t be put back: the writing wouldn’t save, so it has been left as it was."
-                        : "A newer version of this writing arrived, so nothing was put back."
-                }
-                return
+                continue
             }
-            reviewSession.recordRestore(restore, held: held) { kept in
+            reviewSession.recordRestore(owing.restore, held: owing.held) { kept in
                 guard !kept else { return }
-                // The writing holds the restore; its marks do not. Said
-                // rather than swallowed: the passage is no longer offered,
-                // and the assistant has not been told it was put back.
-                refusedRestore = "The wording was put back, but Lamp couldn’t record it. The assistant may change it again."
+                // The writing has it; the marks file would not take it, or
+                // marks were switched off in between. Still owed, and now
+                // owed on its own, since no further save is needed.
+                var again = owing
+                again.bodyCommitted = true
+                owedRestores.append(again)
+                refusedRestore = "The wording was put back, but Lamp couldn’t record it. It will try again."
+            }
+        }
+        owedRestores = remaining
+    }
+
+    /// Tries again to write down restores whose writing is already saved.
+    ///
+    /// They need no save of their own, so nothing else would ever come
+    /// back for them: the editor is clean, and leaving it writes nothing.
+    private func retryOwedRecords() {
+        let waiting = owedRestores.filter(\.bodyCommitted)
+        guard !waiting.isEmpty else { return }
+        owedRestores.removeAll(where: \.bodyCommitted)
+        for owing in waiting {
+            reviewSession.recordRestore(owing.restore, held: owing.held) { kept in
+                guard !kept else { return }
+                owedRestores.append(owing)
             }
         }
     }
+
     /// Puts back the passages the page named.
     ///
     /// `offered` is what the writer was shown, where they were shown
@@ -2714,29 +2742,6 @@ struct DevotionalEditorView: View {
                     expected: base,
                     result: restored
                 )
-            } rollBack: {
-                guard content == restored else { return }
-                guard activeEditorMode != .visual else {
-                    // The Markdown view has gone — the writer switched
-                    // while the save was running — so there is nobody to
-                    // make the command, and left standing it would be
-                    // made by whatever view is built next.
-                    markdownEdits = nil
-                    reviewSession.holds(base)
-                    content = base
-                    return
-                }
-                markdownEditsToken += 1
-                markdownEdits = WritingTextEdits(
-                    token: markdownEditsToken,
-                    actionName: "Restore Original Wording",
-                    edits: [WritingTextEdit(
-                        range: NSRange(location: 0, length: (restored as NSString).length),
-                        replacement: base
-                    )],
-                    expected: restored,
-                    result: base
-                )
             }
             return
         }
@@ -2758,7 +2763,6 @@ struct DevotionalEditorView: View {
                 guard content == hostText else {
                     isRestoring = false
                     refusedRestore = "A new draft arrived while that was being put back, so nothing was changed."
-                    tipTapCoordinator.restoreWording(base, expected: held) { _ in }
                     reviewSession.marksRejected()
                     return
                 }
@@ -2766,16 +2770,6 @@ struct DevotionalEditorView: View {
                     restore, held: held, wasHolding: hostText, applied: { true }
                 ) {
                     content = held
-                } rollBack: {
-                    // Asked of the page, and taken only if the page did
-                    // it: where the writer has typed since, it is holding
-                    // their words as well, and putting the old text over
-                    // the top would take those with it.
-                    tipTapCoordinator.restoreWording(base, expected: held) { undone in
-                        guard case .done(let back) = undone, content == held else { return }
-                        reviewSession.holds(back)
-                        content = back
-                    }
                 }
             case .unsupported:
                 // A page older than that API: the writing goes in the way
@@ -2789,10 +2783,6 @@ struct DevotionalEditorView: View {
                     restore, held: restored, wasHolding: hostText, applied: { true }
                 ) {
                     content = restored
-                } rollBack: {
-                    guard content == restored else { return }
-                    reviewSession.holds(base)
-                    content = base
                 }
             case .refused:
                 isRestoring = false
@@ -2803,6 +2793,7 @@ struct DevotionalEditorView: View {
             }
         }
     }
+
 
     /// Puts the wording back, in the surface the writer is working in, so
     /// that ⌘Z takes it back as it takes back their own typing.
@@ -4210,6 +4201,10 @@ struct DevotionalEditorView: View {
         if workspaceDocuments.contains(where: { $0.isDirty && !$0.hasExternalConflict }) {
             saveDirtyWorkspaceDocuments()
         }
+        // A restore whose writing is saved and whose record would not go
+        // down needs no save of its own, so this is the last chance to
+        // write it.
+        retryOwedRecords()
     }
 
     /// Writes the writing now, and says whether that write landed in
@@ -4222,10 +4217,10 @@ struct DevotionalEditorView: View {
     /// did — a count, a high-water mark, a floor — took five rounds of
     /// review and was wrong every time.
     @discardableResult
-    private func saveNow(_ submitted: String, carrying owed: [OwedRestore] = []) async -> Bool {
+    private func saveNow(_ submittedText: String) async -> Bool {
         defer { LampPendingWrites.shared.end() }
         var committed = false
-            let markdown = submitted
+            let markdown = submittedText
             let body: StoredWritingBody
             do {
                 body = try await WritingChatTurns.storedBody(
@@ -4303,22 +4298,8 @@ struct DevotionalEditorView: View {
             return false
                 }
                 heldRevision = saved.lastModified
-                // The restores this save's own copy of the writing held.
-                // Named when it was submitted, not looked up now: a draft
-                // arriving while the database worked would otherwise make
-                // this skip them, and nothing would ever come back for
-                // them.
-                for owing in owed {
-                    owedRestores.removeAll { $0.id == owing.id }
-                    reviewSession.recordRestore(owing.restore, held: owing.held) { kept in
-                        guard !kept else { return }
-                        // Still owed: the marks file would not take it,
-                        // or marks were turned off between the two.
-                        if !owedRestores.contains(where: { $0.id == owing.id }) {
-                            owedRestores.append(owing)
-                        }
-                    }
-                }
+                // What this save's own copy of the writing is proof of.
+                settleOwedRestores(in: submittedText)
                 if writingHold == nil, !editorIsGone {
                     writingHold = WritingChatTurns.hold(
                         saved.id, revision: saved.lastModified ?? Date(),
@@ -4362,12 +4343,11 @@ struct DevotionalEditorView: View {
     private func save() {
         guard hasSavableContent, saveState != .saving, newerCopy == nil else { return }
         let submitted = content
-        let owed = owedRestores.filter { $0.lineage == documentLineage }
         saveState = .saving
         // Counted before the task, so a save started on the way out is
         // already something for quitting to wait on.
         LampPendingWrites.shared.begin()
-        Task { await saveNow(submitted, carrying: owed) }
+        Task { await saveNow(submitted) }
     }
 
     /// Saves what the editor holds now and waits for the answer, after
@@ -4383,10 +4363,9 @@ struct DevotionalEditorView: View {
             }
             guard hasSavableContent, saveState != .saving, newerCopy == nil else { return false }
             let submitted = content
-            let owed = owedRestores.filter { $0.lineage == documentLineage }
             saveState = .saving
             LampPendingWrites.shared.begin()
-            if await saveNow(submitted, carrying: owed) { return true }
+            if await saveNow(submitted) { return true }
             guard content != submitted else { return false }
         }
         return false
