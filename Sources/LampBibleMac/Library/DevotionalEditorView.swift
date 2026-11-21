@@ -805,7 +805,9 @@ struct DevotionalEditorView: View {
     /// Several at once: restore a passage, let its save be overtaken,
     /// restore another, and the writing holds both while neither is
     /// written down. One slot lost the first.
-    @State private var owedRestores: [WritingReviewSession.OwedRestore] = []
+    /// The ids of restores this editor made, so that the copy its edits
+    /// are kept as takes those and not another window's.
+    @State private var restoresMadeHere: Set<UUID> = []
 
     /// A newer stored copy than the one held, arrived while this editor had
     /// edits of its own, and those edits not yet kept elsewhere. Nothing is
@@ -1223,12 +1225,6 @@ struct DevotionalEditorView: View {
         // What an editor closed before its record could be written left
         // behind. Nothing else is coming for these: the writing is saved.
         .task(id: identifier) {
-            let waiting = WritingReviewObligations.shared.taken(for: identifier)
-            guard !waiting.isEmpty else { return }
-            // As they were left: reopening a writing says nothing about
-            // whether its body was ever saved, and claiming it did would
-            // record restores the writing never took.
-            owedRestores.append(contentsOf: waiting)
             retryOwedRecords()
         }
         .task(id: ReviewFollowing(writingID: identifier, isShown: showsReviewMarks)) {
@@ -2627,9 +2623,11 @@ struct DevotionalEditorView: View {
                 refusedRestore = "That passage couldn’t be put back: the writing had moved on. Nothing was changed."
                 return
             }
-            owedRestores.append(owing)
+            WritingReviewObligations.shared.stillOwed(owing, for: identifier)
+            restoresMadeHere.insert(owing.id)
             _ = await saveAndWait()
-            guard owedRestores.contains(where: { $0.id == owing.id }) else { return }
+            guard WritingReviewObligations.shared.owing(for: identifier)
+                .contains(where: { $0.id == owing.id }) else { return }
             refusedRestore = """
                 The wording is back, but the writing hasn’t saved yet, so it isn’t recorded. \
                 Lamp will record it with the next save.
@@ -2639,79 +2637,63 @@ struct DevotionalEditorView: View {
 
     /// Writes down the restores that `saved` is proof of.
     ///
-    /// Proof, not bookkeeping: a restore takes the assistant's words out,
-    /// so while none of the marks it put back can be found in a text, that
-    /// text holds it. Undo puts those words back and the marks with them,
-    /// and no generation, lineage or position would have noticed.
+    /// Proof, not bookkeeping: a restore takes the assistant's words
+    /// out, so while the words it put back are still there, that text
+    /// holds it. Undo puts them back and no generation, lineage or
+    /// position would have noticed.
+    ///
+    /// The holder owns them throughout. Held in the editor instead, an
+    /// obligation went with the window — and these are settled from
+    /// tasks that outlive it.
     private func settleOwedRestores(in saved: String) {
-        guard !owedRestores.isEmpty else { return }
-        var settling: [WritingReviewSession.OwedRestore] = []
-        var remaining: [WritingReviewSession.OwedRestore] = []
-        for owing in owedRestores {
-            // One passage at a time. A plan can put several back at once,
-            // and a later restore over one of them says nothing about the
-            // others — answered whole, they lost their records with it.
+        for owing in WritingReviewObligations.shared.owing(for: identifier) {
             let answers = owing.restore.plan.standingByMark(from: owing.held, in: saved)
-            let stands = owing.restore.plan.edits.filter { answers[$0.markID] == .stands }
-            let waiting = owing.restore.plan.edits.filter { answers[$0.markID] == .unknown }
-            let gone = owing.restore.plan.edits.filter { answers[$0.markID] == .gone }
-            if !stands.isEmpty {
-                settling.append(owing.with(edits: stands))
+            let pending = owing.pendingMarks
+            let stands = pending.filter { answers[$0] == .stands }
+            // What the words cannot answer waits; what is not in this
+            // save but is still in the writing waits too — that save was
+            // taken before the restore was made. What is in neither has
+            // been undone, and is the end of it.
+            let current = owing.restore.plan.standingByMark(from: owing.held, in: content)
+            let waiting = pending.filter { mark in
+                guard answers[mark] != .stands else { return false }
+                return answers[mark] == .unknown || current[mark] != .gone
             }
-            // What the words could not answer is still owed, and so is
-            // what is not in this save but is still in the writing — that
-            // save was taken before the restore was made.
-            let undecided = waiting + gone.filter {
-                owing.restore.plan.only($0).standing(from: owing.held, in: content) != .gone
+            guard !stands.isEmpty else {
+                if waiting.count != pending.count {
+                    WritingReviewObligations.shared.stillOwed(owing.pending(waiting), for: identifier)
+                }
+                continue
             }
-            if !undecided.isEmpty {
-                remaining.append(owing.with(edits: undecided))
-            }
-        }
-        // In place before any record is attempted: a write that fails at
-        // once — marks switched off — adds the obligation back, and
-        // assigning the list afterwards threw that away.
-        owedRestores = remaining
-        for owing in settling {
-            reviewSession.recordRestore(owing.restore, held: owing.held) { kept in
-                guard !kept else { return }
-                // The writing has it; the marks file would not take it, or
-                // marks were switched off in between. Still owed, and now
-                // owed on its own, since no further save is needed.
-                var again = owing
-                again.bodyCommitted = true
-                owe(again)
-                refusedRestore = "The wording was put back, but Lamp couldn’t record it. It will try again."
+            // Written against the whole plan, so each passage is put
+            // back where the plan actually put it, and only these
+            // passages are recorded.
+            reviewSession.recordRestore(owing.restore, held: owing.held, only: stands) { kept in
+                if kept, waiting.isEmpty {
+                    WritingReviewObligations.shared.settled(owing.id, for: identifier)
+                } else {
+                    var again = owing.pending(kept ? waiting : pending)
+                    again.bodyCommitted = true
+                    WritingReviewObligations.shared.stillOwed(again, for: identifier)
+                    if !kept {
+                        refusedRestore = "The wording was put back, but Lamp couldn’t record it. It will try again."
+                    }
+                }
             }
         }
     }
 
-    /// Tries again to write down restores whose writing is already saved.
-    ///
-    /// They need no save of their own, so nothing else would ever come
+    /// Tries again to write down restores whose writing is already
+    /// saved. They need no save of their own, so nothing else would come
     /// back for them: the editor is clean, and leaving it writes nothing.
     private func retryOwedRecords() {
-        let waiting = owedRestores.filter(\.bodyCommitted)
-        guard !waiting.isEmpty else { return }
-        owedRestores.removeAll(where: \.bodyCommitted)
-        for owing in waiting {
-            reviewSession.recordRestore(owing.restore, held: owing.held) { kept in
-                guard !kept else { return }
-                owe(owing)
+        for owing in WritingReviewObligations.shared.owing(for: identifier) where owing.bodyCommitted {
+            reviewSession.recordRestore(
+                owing.restore, held: owing.held, only: owing.pendingMarks
+            ) { kept in
+                guard kept else { return }
+                WritingReviewObligations.shared.settled(owing.id, for: identifier)
             }
-        }
-    }
-
-    /// Owes a record somewhere that outlives this editor.
-    ///
-    /// Kept in the editor's own state it was lost when the window closed
-    /// — and these are written back from tasks that finish after it has
-    /// gone, so the editor is exactly the wrong owner.
-    private func owe(_ owing: WritingReviewSession.OwedRestore) {
-        if editorIsGone {
-            WritingReviewObligations.shared.owe(owing, for: identifier)
-        } else if !owedRestores.contains(where: { $0.id == owing.id }) {
-            owedRestores.append(owing)
         }
     }
 
@@ -4056,11 +4038,10 @@ struct DevotionalEditorView: View {
                     // any restore not yet written down — the original's
                     // winning version may never have held it — so what is
                     // owed goes with it, to be settled against the copy.
-                    for owing in owedRestores {
-                        WritingReviewObligations.shared.owe(owing, for: id)
-                    }
-                    owedRestores = []
-                    WritingReviewObligations.shared.move(from: identifier, to: id)
+                    WritingReviewObligations.shared.move(
+                        restoresMadeHere, from: identifier, to: id
+                    )
+                    restoresMadeHere = []
                     // Typed while this pass was saving: another pass.
                     await readPage()
                 } else {
@@ -4247,10 +4228,6 @@ struct DevotionalEditorView: View {
         // the next editor of this writing will find it, rather than going
         // with the window.
         retryOwedRecords()
-        for owing in owedRestores {
-            WritingReviewObligations.shared.owe(owing, for: identifier)
-        }
-        owedRestores = []
     }
 
     /// Writes the writing now, and says whether that write landed in

@@ -43,21 +43,46 @@ final class WritingReviewObligations {
         write()
     }
 
-    func taken(for writingID: String) -> [WritingReviewSession.OwedRestore] {
-        defer {
-            owed[writingID] = nil
-            write()
-        }
-        return owed[writingID] ?? []
+    /// What is owed for a writing, left on disk until it is written
+    /// down. Taking it away here and holding the only copy in an editor
+    /// lost it to a crash, a quit, or a failure after the window had
+    /// gone — which is the whole case these exist for.
+    func owing(for writingID: String) -> [WritingReviewSession.OwedRestore] {
+        owed[writingID] ?? []
     }
 
-    /// Moves what is owed to the copy the edits were kept as: the body
-    /// holding the restore went there, and the original's winning copy
-    /// may never have held it.
-    func move(from writingID: String, to copyID: String) {
-        guard let moving = owed[writingID], !moving.isEmpty else { return }
+    /// Said once a record is safely written.
+    func settled(_ id: UUID, for writingID: String) {
+        owed[writingID]?.removeAll { $0.id == id }
+        write()
+    }
+
+    /// Said when some of an obligation's passages are written and the
+    /// rest are not.
+    func stillOwed(_ owing: WritingReviewSession.OwedRestore, for writingID: String) {
+        var list = owed[writingID] ?? []
+        if let at = list.firstIndex(where: { $0.id == owing.id }) {
+            list[at] = owing
+        } else {
+            list.append(owing)
+        }
+        owed[writingID] = list
+        write()
+    }
+
+    /// Moves the named obligations to the copy the edits were kept as:
+    /// the body holding those restores went there, and the original's
+    /// winning version may never have held them.
+    ///
+    /// Named, not the writing's whole bucket: another window's restore
+    /// can be parked under the same writing, and its body is not this
+    /// copy's.
+    func move(_ ids: Set<UUID>, from writingID: String, to copyID: String) {
+        guard !ids.isEmpty, let list = owed[writingID] else { return }
+        let moving = list.filter { ids.contains($0.id) }
+        guard !moving.isEmpty else { return }
         owed[copyID, default: []].append(contentsOf: moving)
-        owed[writingID] = nil
+        owed[writingID] = list.filter { !ids.contains($0.id) }
         write()
     }
 
@@ -420,7 +445,8 @@ final class WritingReviewSession: ObservableObject {
     /// worked out: the page writes its own spelling, and a word of it may
     /// come back another way. Only the marks put back change either way.
     func recordRestore(
-        _ restore: PageRestore, held: String, then: @escaping (Bool) -> Void = { _ in }
+        _ restore: PageRestore, held: String, only marks: Set<UUID>? = nil,
+        then: @escaping (Bool) -> Void = { _ in }
     ) {
         guard writingID != nil else { return then(false) }
         remember(restore.base)
@@ -430,7 +456,12 @@ final class WritingReviewSession: ObservableObject {
         // marks in a text nobody is holding, and tell the assistant about
         // that one. The editor reports its text as it settles.
         let known = texts
-        change({ $0.restoringWording(restore.plan, from: restore.base, to: held, carryingFrom: known) }, then: then)
+        change(
+            { $0.restoringWording(
+                restore.plan, from: restore.base, to: held, only: marks, carryingFrom: known
+            ) },
+            then: then
+        )
     }
 
     /// A restore the surface made that no save has carried to storage
@@ -444,18 +475,18 @@ final class WritingReviewSession: ObservableObject {
         /// the writing is clean and no further save is owed.
         var bodyCommitted = false
 
-        /// The same obligation for some of its passages, where the others
-        /// have been answered.
-        func with(edits: [LampWritingReview.Edit]) -> OwedRestore {
-            OwedRestore(
-                id: id,
-                restore: PageRestore(
-                    base: restore.base, restored: restore.restored,
-                    plan: LampWritingReview.RestorePlan(edits: edits)
-                ),
-                held: held,
-                bodyCommitted: bodyCommitted
-            )
+        /// The passages still to be written down. The plan is kept
+        /// whole however many of them are left, because where each one
+        /// ended up depends on every edit before it: a plan with the
+        /// others taken out gives the wrong places.
+        var pending: Set<UUID>?
+
+        var pendingMarks: Set<UUID> { pending ?? Set(restore.plan.marks) }
+
+        func pending(_ marks: Set<UUID>) -> OwedRestore {
+            var copy = self
+            copy.pending = marks
+            return copy
         }
     }
 
