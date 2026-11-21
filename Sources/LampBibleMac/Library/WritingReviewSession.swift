@@ -416,7 +416,13 @@ final class WritingReviewSession: ObservableObject {
     /// autolink, `<url>` becomes `[url](url)`), so that is text the page
     /// never held. A page that sends no text of its own clears only where
     /// it matches the writing here.
-    func clear(markedMarkdown marked: String, pageText: String? = nil) {
+    /// `askedIn` is the document the page was asked about. The page
+    /// answers after a turn of its own, and the writer can open another
+    /// meanwhile: an answer let through then clears a passage of a file
+    /// nobody touched, which matching the text does not catch — two
+    /// documents can begin with the same words.
+    func clear(markedMarkdown marked: String, pageText: String? = nil, askedIn: WritingReviewKey? = nil) {
+        if let askedIn, askedIn != key { return }
         if let range = LampWritingReview.markedRange(in: marked, of: text) {
             clear(range: range, in: text)
         } else if let pageText, let range = LampWritingReview.markedRange(in: marked, of: pageText) {

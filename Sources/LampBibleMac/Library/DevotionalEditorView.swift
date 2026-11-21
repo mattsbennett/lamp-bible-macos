@@ -2418,13 +2418,23 @@ struct DevotionalEditorView: View {
             }
             coordinator?.setReviewMarks(marked, changes: changes)
         }
+        // Each answer carries the document it was asked about, and is
+        // dropped if the writer has moved to another since. The page
+        // answers after a turn of its own, and two documents can begin
+        // with the same words — matching the text is not enough to know
+        // an answer is this document's, and one landing in the wrong
+        // file writes or clears a passage nobody touched.
         coordinator.onReviewRestore = { asked in
-            guard reviewKey != nil else { return }
-            restoreFromPage(ids: asked.id, pageText: asked.pageText)
+            let askedIn = reviewKey
+            guard askedIn != nil else { return }
+            restoreFromPage(ids: asked.id, pageText: asked.pageText, askedIn: askedIn)
         }
         coordinator.onReviewClear = { [weak reviewSession] clear in
-            guard reviewKey != nil else { return }
-            reviewSession?.clear(markedMarkdown: clear.marked, pageText: clear.pageText)
+            let askedIn = reviewKey
+            guard askedIn != nil else { return }
+            reviewSession?.clear(
+                markedMarkdown: clear.marked, pageText: clear.pageText, askedIn: askedIn
+            )
         }
         coordinator.onReviewMarksRejected = { [weak reviewSession] in
             guard reviewKey != nil else { return }
@@ -2548,7 +2558,11 @@ struct DevotionalEditorView: View {
             offerRestore(of: activeSelection)
             return
         }
+        // The document asked about, since the page answers after a turn
+        // of its own and the writer can open another meanwhile.
+        let askedIn = reviewKey
         tipTapCoordinator.reviewChangesForSelection { answer in
+            guard askedIn == reviewKey else { return }
             guard let answer else {
                 // A page older than that call: the selection in whatever
                 // is open is the best this has.
@@ -2863,7 +2877,16 @@ struct DevotionalEditorView: View {
     /// `offered` is what the writer was shown, where they were shown
     /// something: the page's own list can have moved on between the offer
     /// and the yes, and only what was shown may be put back.
-    private func restoreFromPage(ids: String, pageText: String?, offered: Set<UUID>? = nil) {
+    private func restoreFromPage(
+        ids: String, pageText: String?, offered: Set<UUID>? = nil,
+        askedIn: WritingReviewKey? = nil
+    ) {
+        if let askedIn, askedIn != reviewKey {
+            // Asked in a document the writer has left. The answer is
+            // that document's, and putting it into this one would write
+            // one file's words into another.
+            return
+        }
         guard let restore = reviewSession.pageRestore(ids: ids, pageText: pageText) else {
             // The page has changed nothing, so saying so is the whole of
             // it: it asked about passages this cannot place.
