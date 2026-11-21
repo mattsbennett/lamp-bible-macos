@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import LampCore
 import LampModuleKit
@@ -1018,5 +1019,51 @@ public enum SyncConflictSummary {
             : "Your copies are the ones being kept"
         return "\(capitalised) \(verb) changed on two devices at the same moment, "
             + "so sync cannot tell which came later. \(kept) until you choose."
+    }
+}
+
+/// The document bodies a sync pass has installed in a workspace, by digest.
+///
+/// The editor's poll sees any change to a document on disk, and cannot tell
+/// the assistant writing one from a pass taking the phone's copy in: both
+/// are a file that changed under it. Marking what the pass wrote would mark
+/// the writer's own edits, made on their phone, as the assistant's.
+///
+/// A time would not settle it — the pass and the poll are not in step, and
+/// a slow pass's write looks like a fast agent's. The pass knows the bytes
+/// it writes, so it says so here, and the poll compares what it found with
+/// them. Content is exact; it holds however late the poll is.
+///
+/// A few are kept for each document rather than one, so a poll that was
+/// behind two of the pass's writes still recognises the older of them.
+public final class WorkspaceDocumentsTakenIn: @unchecked Sendable {
+    public static let shared = WorkspaceDocumentsTakenIn()
+
+    private let lock = NSLock()
+    private var digests: [String: [String]] = [:]
+    /// Enough to cover a poll that fell behind a pass; small enough that a
+    /// workspace of documents costs nothing to remember.
+    private static let kept = 8
+
+    /// Said by a pass when it writes a document's body, by the document's
+    /// server path.
+    public func tookIn(_ data: Data, at path: String) {
+        let digest = Self.digest(of: data)
+        lock.withLock {
+            var kept = digests[path, default: []].filter { $0 != digest }
+            kept.append(digest)
+            digests[path] = Array(kept.suffix(Self.kept))
+        }
+    }
+
+    /// Whether this is a body a pass put here, rather than something that
+    /// was written in the workspace.
+    public func tookIn(_ text: String, at path: String) -> Bool {
+        let digest = Self.digest(of: Data(text.utf8))
+        return lock.withLock { digests[path, default: []].contains(digest) }
+    }
+
+    private static func digest(of data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 }

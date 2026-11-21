@@ -47,21 +47,27 @@ final class WritingReviewObligations {
     /// down. Taking it away here and holding the only copy in an editor
     /// lost it to a crash, a quit, or a failure after the window had
     /// gone — which is the whole case these exist for.
-    func owing(for writingID: String) -> [WritingReviewSession.OwedRestore] {
-        owed[writingID] ?? []
+    func owing(for key: WritingReviewKey) -> [WritingReviewSession.OwedRestore] {
+        (owed[key.writingID] ?? []).filter { $0.document == key.document }
     }
 
     /// Said when the writer clears, so a record written later does not put
     /// a mark back over a passage they have answered.
-    func wasCleared(for writingID: String) {
-        guard var list = owed[writingID], !list.isEmpty else { return }
-        for index in list.indices { list[index].cleared = true }
-        owed[writingID] = list
+    func wasCleared(for key: WritingReviewKey) {
+        guard var list = owed[key.writingID], !list.isEmpty else { return }
+        var changed = false
+        for index in list.indices where list[index].document == key.document && !list[index].cleared {
+            list[index].cleared = true
+            changed = true
+        }
+        guard changed else { return }
+        owed[key.writingID] = list
         write()
     }
 
     /// Said once a record is safely written.
     func settled(_ id: UUID, for writingID: String) {
+        guard owed[writingID]?.contains(where: { $0.id == id }) == true else { return }
         owed[writingID]?.removeAll { $0.id == id }
         write()
     }
@@ -113,6 +119,23 @@ final class WritingReviewObligations {
     }
 }
 
+/// What a set of review marks is for: a writing, and one of the documents
+/// beside it or its own prose.
+///
+/// A type rather than the two joined into a string. Joined, a writing
+/// `"w"` with a document `"a.md"` and a writing `"wa"` with `".md"` are
+/// one key, and one document's texts would carry another's marks.
+struct WritingReviewKey: Hashable {
+    let writingID: String
+    /// Nil for the writing's own prose.
+    let document: String?
+
+    init(writingID: String, document: String? = nil) {
+        self.writingID = writingID
+        self.document = document
+    }
+}
+
 @MainActor
 final class WritingReviewTexts {
     static let shared = WritingReviewTexts()
@@ -120,17 +143,27 @@ final class WritingReviewTexts {
     /// the saves after it, few enough that a long manuscript costs little.
     static let kept = 24
 
-    private var texts: [String: [String]] = [:]
+    private var texts: [WritingReviewKey: [String]] = [:]
 
-    func remember(_ text: String, for writingID: String) {
-        var kept = texts[writingID, default: []]
+    func remember(_ text: String, for key: WritingReviewKey) {
+        var kept = texts[key, default: []]
         guard kept.last != text else { return }
         kept.append(text)
-        texts[writingID] = Array(kept.suffix(Self.kept))
+        texts[key] = Array(kept.suffix(Self.kept))
+    }
+
+    func known(for key: WritingReviewKey) -> [String] {
+        texts[key, default: []]
+    }
+
+    /// The writing's own prose, which is what every caller outside the
+    /// editor means.
+    func remember(_ text: String, for writingID: String) {
+        remember(text, for: WritingReviewKey(writingID: writingID))
     }
 
     func known(for writingID: String) -> [String] {
-        texts[writingID, default: []]
+        known(for: WritingReviewKey(writingID: writingID))
     }
 }
 
@@ -251,6 +284,14 @@ final class WritingReviewSession: ObservableObject {
     private(set) var markedChanges: [LampWritingReview.Change?] = []
 
     private var writingID: String?
+    /// The document beside the writing whose marks these are, or nil for
+    /// the writing's own prose. The session follows whichever document the
+    /// editor has open.
+    private var document: String?
+    /// What the session is following, for the holders that are keyed by it.
+    private var key: WritingReviewKey? {
+        writingID.map { WritingReviewKey(writingID: $0, document: document) }
+    }
     private var store: LampWritingReviewStore?
     private var review: LampWritingReview?
     private var text = ""
@@ -278,15 +319,20 @@ final class WritingReviewSession: ObservableObject {
     /// Keeps the writing's marks current until the task is cancelled: the
     /// editor's `.task(id:)`, keyed on the writing and on whether marks are
     /// shown at all. Shown off, everything is cleared and nothing is read.
-    func follow(writingID: String, text: String, libraryRootURL: URL, isShown: Bool) async {
-        // Nothing drawn for the writing before may land now.
+    func follow(
+        writingID: String, document: String? = nil, text: String,
+        libraryRootURL: URL, isShown: Bool
+    ) async {
+        // Nothing drawn for what was followed before may land now.
         settleTask?.cancel()
         drawGeneration += 1
-        // The texts held are kept while the writing stays the same (marks
+        // The texts held are kept while the same thing is followed (marks
         // turned off and on again): an edit made meanwhile is carried from
-        // them back to the marks.
-        if self.writingID != writingID { texts = [] }
+        // them back to the marks. A different document is a different set
+        // of marks made of different words, so nothing carries across.
+        if self.writingID != writingID || self.document != document { texts = [] }
         self.writingID = writingID
+        self.document = document
         self.text = text
         remember(text)
         review = nil
@@ -344,7 +390,7 @@ final class WritingReviewSession: ObservableObject {
     /// some other passage.
     private func clear(range: NSRange, in text: String) {
         guard let writingID else { return }
-        WritingReviewObligations.shared.wasCleared(for: writingID)
+        if let key { WritingReviewObligations.shared.wasCleared(for: key) }
         remember(text)
         let known = texts
         change { $0.clearing(range, in: text, carryingFrom: known) }
@@ -375,7 +421,7 @@ final class WritingReviewSession: ObservableObject {
     }
 
     func clearAll() {
-        if let writingID { WritingReviewObligations.shared.wasCleared(for: writingID) }
+        if let key { WritingReviewObligations.shared.wasCleared(for: key) }
         change { $0.clearingAll() }
     }
 
@@ -495,6 +541,13 @@ final class WritingReviewSession: ObservableObject {
 
         var pendingMarks: Set<UUID> { pending ?? Set(restore.plan.marks) }
 
+        /// The document beside the writing this restore was made in, or
+        /// nil for its own prose. Kept inside the record rather than in
+        /// the key it is filed under, so the file on disk keeps the shape
+        /// it has: a writing's obligations are one bucket, and each knows
+        /// its own document.
+        var document: String?
+
         /// Whether the writer cleared while this was owed.
         ///
         /// Putting back wording they had not yet read marks it, since they
@@ -531,7 +584,9 @@ final class WritingReviewSession: ObservableObject {
     /// Remembers a text this editor holds, here and among every window's.
     private func remember(_ text: String) {
         guard let writingID else { return }
-        WritingReviewTexts.shared.remember(text, for: writingID)
+        WritingReviewTexts.shared.remember(
+            text, for: WritingReviewKey(writingID: writingID, document: document)
+        )
         guard texts.last != text else { return }
         texts.append(text)
         texts = Array(texts.suffix(WritingReviewTexts.kept))
@@ -546,18 +601,22 @@ final class WritingReviewSession: ObservableObject {
         then: @escaping (Bool) -> Void = { _ in }
     ) {
         guard let store, let writingID else { return then(false) }
+        let document = document
         LampPendingWrites.shared.begin()
         Task { [weak self] in
             let written = await Task.detached(priority: .userInitiated) {
-                try? store.updating(writingID: writingID, edit)
+                try? store.updating(writingID: writingID, document: document, edit)
             }.value
             LampPendingWrites.shared.end()
             // Said either way, and said here: the caller may be waiting to
             // tell the writer that the writing took their restore and the
             // marks file would not.
             then(written != nil)
-            // Not for a writing left since, nor once marks were turned off.
-            guard let self, let written, self.writingID == writingID, self.store != nil else { return }
+            // Not for a writing or document left since, nor once marks
+            // were turned off.
+            guard let self, let written, self.writingID == writingID,
+                  self.document == document, self.store != nil
+            else { return }
             self.apply(written.review, date: written.modified)
         }
     }
@@ -568,10 +627,12 @@ final class WritingReviewSession: ObservableObject {
     /// for the same reason as `change`.
     private func reloadIfMoved() async {
         guard let store, let writingID else { return }
+        let document = document
         let read = await Task.detached(priority: .utility) {
-            try? store.snapshot(writingID: writingID)
+            try? store.snapshot(writingID: writingID, document: document)
         }.value
-        guard self.writingID == writingID, !Task.isCancelled else { return }
+        guard self.writingID == writingID, self.document == document, !Task.isCancelled
+        else { return }
         guard let read else {
             // Unreadable now, though it was read before: the agent is told
             // so rather than what was read then, until a read succeeds.
@@ -624,7 +685,7 @@ final class WritingReviewSession: ObservableObject {
         // the text it is anchored in: typed into since they were saved, a
         // marked passage would otherwise be found nowhere, and not counted,
         // until the next save carries it.
-        let known = writingID.map { WritingReviewTexts.shared.known(for: $0) } ?? []
+        let known = key.map { WritingReviewTexts.shared.known(for: $0) } ?? []
         Task { [weak self] in
             let drawn = await Task.detached(priority: .userInitiated) {
                 let live = review.carryingToText(text, from: known)
@@ -689,14 +750,21 @@ final class WritingReviewSession: ObservableObject {
 @MainActor
 struct WritingReviewChanges {
     let writingID: String
+    /// The document the pass's changes were made in, or nil for the
+    /// writing's own prose.
+    var document: String?
     let store: LampWritingReviewStore?
+
+    private var key: WritingReviewKey {
+        WritingReviewKey(writingID: writingID, document: document)
+    }
 
     func make(_ changes: [DevotionalAgentDraftReconciler.ReviewChange]) {
         for change in changes {
             switch change {
             case .assistantWrote(let from, let to, let turnID):
                 update { $0.markingAssistantChange(from: from, to: to, turnID: turnID) }
-                WritingReviewTexts.shared.remember(to, for: writingID)
+                WritingReviewTexts.shared.remember(to, for: key)
             case .turnsUndone(let turns, let from, let to):
                 update { $0.undoingTurns(turns, from: from, to: to) }
             }
@@ -708,8 +776,11 @@ struct WritingReviewChanges {
     ) {
         guard let store else { return }
         let writingID = writingID
+        let document = document
         // In line with the saves' carries, off the main actor
         // (`WritingReviewWork`).
-        WritingReviewWork.shared.run { _ = try? store.update(writingID: writingID, change) }
+        WritingReviewWork.shared.run {
+            _ = try? store.update(writingID: writingID, document: document, change)
+        }
     }
 }

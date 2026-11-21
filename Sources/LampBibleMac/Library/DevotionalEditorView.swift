@@ -918,6 +918,34 @@ struct DevotionalEditorView: View {
         activeWorkspaceDocument?.text ?? content
     }
 
+    /// Which marks the editor is showing: the writing's own prose, one of
+    /// the documents beside it, or none at all.
+    ///
+    /// None is not the prose. A file the writer opened by hand from a
+    /// subdirectory is not one of the writing's documents — it does not
+    /// sync to the phone and has no record of its own — and showing the
+    /// prose's marks over it would draw them against text they were never
+    /// made of.
+    private var reviewKey: WritingReviewKey? {
+        guard let document = activeWorkspaceDocument else {
+            return WritingReviewKey(writingID: identifier)
+        }
+        return reviewDocumentName(of: document)
+            .map { WritingReviewKey(writingID: identifier, document: $0) }
+    }
+
+    /// The name a document's marks are kept under: the name the library
+    /// syncs it by, which is its name in the workspace's `Documents`. Nil
+    /// for a file that is none of the writing's documents — one opened by
+    /// hand from a subdirectory, which has a path for a name, does not
+    /// reach the phone and has no record of its own.
+    private func reviewDocumentName(of document: DevotionalWorkspaceEditorDocument) -> String? {
+        guard !document.relativePath.contains("/"),
+              LampWritingWorkspaceLayout.isDocumentName(document.relativePath)
+        else { return nil }
+        return document.relativePath.precomposedStringWithCanonicalMapping
+    }
+
     /// Whether the open document can be written visually: the writing itself
     /// or any Markdown file beside it. A plain text file isn't Markdown, so it
     /// stays in the Markdown editor, which keeps it exactly as written.
@@ -1227,18 +1255,15 @@ struct DevotionalEditorView: View {
         .task(id: identifier) {
             retryOwedRecords()
         }
-        .task(id: ReviewFollowing(writingID: identifier, isShown: showsReviewMarks)) {
-            await reviewSession.follow(
-                writingID: identifier, text: content,
-                libraryRootURL: model.library.rootURL, isShown: showsReviewMarks
-            )
-        }
-        .onChange(of: content) { _, text in reviewSession.textChanged(text) }
+        .task(id: reviewFollowing) { await followReviewMarks() }
+        .onChange(of: activeText) { _, text in reviewSession.textChanged(text) }
         // Marks off and on again: a record that could not be written
         // while they were off can be written now.
         .onChange(of: showsReviewMarks) { _, shown in if shown { retryOwedRecords() } }
-        // The same page shows the writing and the documents beside it;
-        // the marks are the writing's alone.
+        // The same page shows the writing and the Markdown documents
+        // beside it. The page draws the writing's marks only: a document's
+        // are drawn in the Markdown editor, where the words the marks were
+        // made of are the words on screen.
         .onChange(of: selectedWorkspaceDocumentID) { _, _ in
             guard let tipTapCoordinator else { return }
             showReviewMarks(isEditingPrimaryDocument && showsReviewMarks, on: tipTapCoordinator)
@@ -1903,9 +1928,9 @@ struct DevotionalEditorView: View {
                 fontSize: editorFontSize,
                 finder: markdownFinder,
                 measure: 76,
-                reviewRanges: isEditingPrimaryDocument ? reviewSession.ranges : [],
-                onMarkAsReviewed: isEditingPrimaryDocument ? { reviewSession.clear(range: $0) } : nil,
-                onRestoreWording: isEditingPrimaryDocument ? { offerRestore(of: $0) } : nil,
+                reviewRanges: reviewKey != nil ? reviewSession.ranges : [],
+                onMarkAsReviewed: reviewKey != nil ? { reviewSession.clear(range: $0) } : nil,
+                onRestoreWording: reviewKey != nil ? { offerRestore(of: $0) } : nil,
                 // The writing's own surface only. Handed to a companion
                 // document's view as well, a restore's edits were made in
                 // whichever file was open — and one holding the same text
@@ -2291,7 +2316,7 @@ struct DevotionalEditorView: View {
             .tint(Color.primary.opacity(0.55))
         }
 
-        if showsReviewMarks, reviewSession.count > 0, isEditingPrimaryDocument {
+        if showsReviewMarks, reviewSession.count > 0 {
             ToolbarItem {
                 reviewToolbarControl
             }
@@ -2316,8 +2341,32 @@ struct DevotionalEditorView: View {
         aiFeaturesEnabled && reviewMarksEnabled
     }
 
+    private var reviewFollowing: ReviewFollowing {
+        let key = reviewKey
+        return ReviewFollowing(
+            writingID: identifier, document: key?.document,
+            hasMarks: key != nil, isShown: showsReviewMarks
+        )
+    }
+
+    private func followReviewMarks() async {
+        let key = reviewKey
+        await reviewSession.follow(
+            writingID: identifier, document: key?.document, text: activeText,
+            libraryRootURL: model.library.rootURL,
+            isShown: showsReviewMarks && key != nil
+        )
+    }
+
     private struct ReviewFollowing: Equatable {
         let writingID: String
+        /// The document open, or nil for the writing's prose. A document of
+        /// its own is followed when the writer opens it, since its marks
+        /// are its own words'.
+        let document: String?
+        /// Whether anything is followed at all: a file opened by hand is
+        /// none of the writing's documents and has no marks.
+        let hasMarks: Bool
         let isShown: Bool
     }
 
@@ -2387,7 +2436,23 @@ struct DevotionalEditorView: View {
             )
         }
         .fittingToolbarLabel()
-        .help("Passages the assistant changed that you have not read yet")
+        .help(reviewHelp)
+    }
+
+    /// A document's marks are drawn in the Markdown editor, where the words
+    /// they were made of are the words on screen; the page writes its own
+    /// Markdown, and a passage marked in the file is not a passage it can
+    /// find. So the count stands for a document being written visually —
+    /// the writer is told there is something to read, and where to read
+    /// it — rather than the control quietly going away with the marks.
+    private var reviewHelp: String {
+        guard !isEditingPrimaryDocument, isEditingVisually else {
+            return "Passages the assistant changed that you have not read yet"
+        }
+        return """
+            Passages the assistant changed in this document that you have not read \
+            yet. Switch this document to Markdown to see them in the text.
+            """
     }
 
     /// What a restore would do, shown before it does it.
@@ -2626,8 +2691,10 @@ struct DevotionalEditorView: View {
             WritingReviewObligations.shared.stillOwed(owing, for: identifier)
             restoresMadeHere.insert(owing.id)
             _ = await saveAndWait()
-            guard WritingReviewObligations.shared.owing(for: identifier)
-                .contains(where: { $0.id == owing.id }) else { return }
+            guard let key = reviewKey,
+                  WritingReviewObligations.shared.owing(for: key)
+                    .contains(where: { $0.id == owing.id })
+            else { return }
             refusedRestore = """
                 The wording is back, but the writing hasn’t saved yet, so it isn’t recorded. \
                 Lamp will record it with the next save.
@@ -2649,7 +2716,8 @@ struct DevotionalEditorView: View {
         // Taken now, not when the proving finishes: a restore made after
         // this save is no business of this save's, and a settle that read
         // the list later would claim it.
-        let owing = WritingReviewObligations.shared.owing(for: identifier)
+        guard let key = reviewKey else { return }
+        let owing = WritingReviewObligations.shared.owing(for: key)
         guard !owing.isEmpty else { return }
         let held = content
         Task {
@@ -2717,7 +2785,8 @@ struct DevotionalEditorView: View {
     /// saved. They need no save of their own, so nothing else would come
     /// back for them: the editor is clean, and leaving it writes nothing.
     private func retryOwedRecords() {
-        for owing in WritingReviewObligations.shared.owing(for: identifier) where owing.bodyCommitted {
+        guard let key = reviewKey else { return }
+        for owing in WritingReviewObligations.shared.owing(for: key) where owing.bodyCommitted {
             reviewSession.recordRestore(
                 owing.restore, held: owing.held, only: owing.pendingMarks,
                 remarkingUnread: !owing.cleared
@@ -3601,6 +3670,78 @@ struct DevotionalEditorView: View {
         return pending
     }
 
+    /// Marks what the assistant wrote in a document beside the writing.
+    ///
+    /// The one place in the editor that decides this, and it decides it
+    /// from what can be shown rather than from what is likely:
+    ///
+    /// - A turn must be open. The documents are written by whatever the
+    ///   writer has running in the workspace, and nothing writes them
+    ///   unasked.
+    /// - The body must not be one a sync pass installed. The poll sees
+    ///   only that a file changed, and the writer's own edits arriving
+    ///   from their phone change it exactly as the assistant does. The
+    ///   pass says which bodies are its own
+    ///   (`WorkspaceDocumentsTakenIn`), by their content, so this holds
+    ///   however far behind the poll is.
+    ///
+    /// Where neither can be shown, nothing is marked. An unmarked change
+    /// the assistant made is a miss the writer can see for themselves in
+    /// the document's history; a mark on their own sentence is a lie
+    /// about who wrote it, and they would have to clear it to be rid of
+    /// it. The writing's own prose is not decided here at all — the
+    /// reconciler proves the assistant wrote a draft from the note and
+    /// the marker it left, which is proof rather than circumstance.
+    private func markAssistantChange(
+        inDocument document: DevotionalWorkspaceEditorDocument, to text: String
+    ) {
+        guard showsReviewMarks,
+              let turnID = agentChatTurn,
+              let name = reviewDocumentName(of: document),
+              let path = try? LampWritingWorkspaceLayout.documentPath(
+                  folder: LampWritingWorkspaceLayout.directoryName(for: identifier), name: name
+              ),
+              !WorkspaceDocumentsTakenIn.shared.tookIn(text, at: path)
+        else { return }
+        let key = WritingReviewKey(writingID: identifier, document: name)
+        WritingReviewChanges(
+            writingID: identifier, document: name,
+            store: LampWritingReviewStore(rootURL: model.library.rootURL)
+        ).make([.assistantWrote(from: document.persistedText, to: text, turnID: turnID)])
+        WritingReviewTexts.shared.remember(text, for: key)
+    }
+
+    /// Carries a document's marks onto the text its save wrote.
+    ///
+    /// Every save of the writing's prose does this through the library;
+    /// nothing did it for the documents beside it, so the first keystroke
+    /// after a mark would stray every one of them. The rule is core's
+    /// (`LampWritingDocumentReview.carry`), which the phone calls too.
+    ///
+    /// In line with the saves' carries and off the main actor, for the
+    /// reason `WritingReviewWork` exists: the whole document is compared,
+    /// and a carry asked for before a turn's marks were made must be done
+    /// before them or it would take the turn's new marks back to the text
+    /// before it.
+    private func carryReviewMarks(
+        ofDocument documentID: String, to saved: String, from previous: String
+    ) {
+        guard showsReviewMarks,
+              let document = workspaceDocuments.first(where: { $0.id == documentID }),
+              let name = reviewDocumentName(of: document)
+        else { return }
+        let key = WritingReviewKey(writingID: identifier, document: name)
+        let known = WritingReviewTexts.shared.known(for: key) + [previous]
+        WritingReviewTexts.shared.remember(saved, for: key)
+        let store = LampWritingReviewStore(rootURL: model.library.rootURL)
+        let writingID = identifier
+        WritingReviewWork.shared.run {
+            _ = try? LampWritingDocumentReview.carry(
+                saved, ofDocument: name, writingID: writingID, from: known, in: store
+            )
+        }
+    }
+
     private func saveWorkspaceDocument(
         _ documentID: String,
         force: Bool = false,
@@ -3643,6 +3784,7 @@ struct DevotionalEditorView: View {
             workspaceDocuments[savedIndex].externalText = nil
             workspaceDocuments[savedIndex].wasRemovedExternally = false
             workspaceDocuments[savedIndex].errorMessage = nil
+            carryReviewMarks(ofDocument: documentID, to: submittedText, from: persistedText)
 
             guard supportsRevisionHistory(fileURL) else { return }
             // The document is saved and the tab already says so. Its history is
@@ -3788,6 +3930,10 @@ struct DevotionalEditorView: View {
 
             var documents = workspaceDocuments
             var pending: [String: [PendingWorkspaceRevision]] = [:]
+            /// The documents an external change reached, with the text that
+            /// reached them: marked below, in the same stretch that applies
+            /// them, for the reason `WritingReviewChanges` gives.
+            var marking: [(document: DevotionalWorkspaceEditorDocument, text: String)] = []
 
             for snapshot in allSnapshots {
                 let path = workspaceRelativePath(of: snapshot.url) ?? snapshot.id
@@ -3797,6 +3943,7 @@ struct DevotionalEditorView: View {
                         documents[index].wasRemovedExternally = false
                     } else if snapshot.contents == document.text {
                         pending[path] = externalRevisions(for: document, after: snapshot.contents)
+                        marking.append((document, snapshot.contents))
                         documents[index].persistedText = snapshot.contents
                         documents[index].externalText = nil
                         documents[index].wasRemovedExternally = false
@@ -3809,12 +3956,14 @@ struct DevotionalEditorView: View {
                         // put that back, and left this change in place
                         // while taking away the question that made it.
                         pending[path] = externalRevisions(for: document, after: snapshot.contents)
+                        marking.append((document, snapshot.contents))
                         documents[index].persistedText = snapshot.contents
                         documents[index].externalText = snapshot.contents
                         documents[index].wasRemovedExternally = false
                         documents[index].errorMessage = nil
                     } else {
                         pending[path] = externalRevisions(for: document, after: snapshot.contents)
+                        marking.append((document, snapshot.contents))
                         documents[index].text = snapshot.contents
                         documents[index].persistedText = snapshot.contents
                         documents[index].externalText = nil
@@ -3868,6 +4017,13 @@ struct DevotionalEditorView: View {
             }
             if documents != workspaceDocuments { workspaceDocuments = documents }
             if !workspaceDocumentsInitialized { workspaceDocumentsInitialized = true }
+            // In the same stretch that applied them, with no await
+            // between: a save reserved before these marks saved the text
+            // before them and runs first, and one reserved after saved the
+            // text with them. See `WritingReviewChanges`.
+            for (document, text) in marking {
+                markAssistantChange(inDocument: document, to: text)
+            }
             for (path, revisions) in pending {
                 recordWorkspaceRevisions(
                     revisions,

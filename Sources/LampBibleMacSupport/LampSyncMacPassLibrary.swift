@@ -642,9 +642,15 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
                 throw PassError.deletedHereDuringThePass(path)
             }
         }
+        let body = try Data(contentsOf: url)
         try documentStore.takeIn(
-            downloaded: try Data(contentsOf: url), path: path, agreedDigest: agreedDigest, localDevice: Self.deviceName
+            downloaded: body, path: path, agreedDigest: agreedDigest, localDevice: Self.deviceName
         )
+        // Said so the editor's poll can tell this from the assistant
+        // writing the document: it sees only that the file changed, and
+        // marking what a pass wrote would mark the writer's own phone
+        // edits as the assistant's.
+        WorkspaceDocumentsTakenIn.shared.tookIn(body, at: path)
         noteSynced(path)
     }
 
