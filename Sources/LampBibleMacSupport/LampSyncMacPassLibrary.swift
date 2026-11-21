@@ -635,6 +635,16 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
     }
 
 
+    /// The writing a workspace folder belongs to.
+    ///
+    /// A folder's name is its writing's id made safe and shortened with
+    /// a digest of the id after it, so it cannot be read back: the
+    /// writings are asked, and the one whose id makes this name is it.
+    private func writingID(ofWorkspaceFolder folder: String) async -> String? {
+        let ids = (try? await library.personalDevotionals().map(\.id)) ?? []
+        return ids.first { LampWritingWorkspaceLayout.directoryName(for: $0) == folder }
+    }
+
     /// A deletion made on another device, told what this Mac last agreed
     /// with the server on: a document edited here since is kept as a copy
     /// rather than removed (`LampWritingDocumentStore.remove`).
@@ -677,9 +687,39 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             }
         }
         let body = try Data(contentsOf: url)
-        try documentStore.takeIn(
+        // What stands here now, before the intake replaces it: if both
+        // sides changed this document, that body is the one kept as a
+        // copy, and the record's marks are made of its words.
+        let named = LampWritingWorkspaceLayout.document(ofPath: path)
+        let held = named
+            .map { documentStore.rootURL
+                .appendingPathComponent($0.folder, isDirectory: true)
+                .appendingPathComponent($0.name)
+            }
+            .flatMap { try? String(contentsOf: $0, encoding: .utf8) }
+        let decision = try documentStore.takeIn(
             downloaded: body, path: path, agreedDigest: agreedDigest, localDevice: Self.deviceName
         )
+        // This device's body went to a copy and the other device's now
+        // stands at the name. The record stays here, but it was made of
+        // the words that left: carried onto the body that arrived, a
+        // mark whose words are not in it is retired rather than left to
+        // match some later wording, and one kept only by the same words
+        // standing elsewhere loses its wording, so nothing offers to put
+        // back a sentence out of a body nobody here is reading.
+        //
+        // What is left is still not provably the arriving body's — the
+        // same sentence can be written by the assistant here and by the
+        // writer there — and no record of two merged copies can say
+        // which came from which. This takes away what is certainly
+        // wrong, not everything that might be.
+        if case .takeKeepingHeldAs = decision, let document = named, let was = held,
+           let writingID = await writingID(ofWorkspaceFolder: document.folder) {
+            _ = try? LampWritingDocumentReview.carry(
+                String(decoding: body, as: UTF8.self), ofDocument: document.name,
+                writingID: writingID, from: [was], in: reviewStore
+            )
+        }
         // The marks are not moved to a body kept as a copy, though they
         // were made of its words.
         //

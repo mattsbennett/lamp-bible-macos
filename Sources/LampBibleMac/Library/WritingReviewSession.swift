@@ -293,6 +293,10 @@ final class WritingReviewSession: ObservableObject {
         writingID.map { WritingReviewKey(writingID: $0, document: document) }
     }
     private var store: LampWritingReviewStore?
+    /// Where the records are, kept whether or not this session is reading
+    /// them: a restore made in one document is still owed its record when
+    /// the writer opens something that has none.
+    private var libraryRoot: URL?
     private var review: LampWritingReview?
     private var text = ""
     private var fileDate: Date?
@@ -340,6 +344,10 @@ final class WritingReviewSession: ObservableObject {
         if self.writingID != writingID || self.document != document { texts = [] }
         self.writingID = writingID
         self.document = document
+        // Before the guard: a restore owed in a document must be
+        // recordable while the writer has something open that has none,
+        // and that must not depend on a previous follow having set it.
+        libraryRoot = libraryRootURL
         guard hasMarks else {
             self.text = text
             review = nil
@@ -532,14 +540,24 @@ final class WritingReviewSession: ObservableObject {
         only marks: Set<UUID>? = nil,
         remarkingUnread: Bool = true, then: @escaping (Bool) -> Void = { _ in }
     ) {
-        guard let store, key.writingID == writingID || self.key != key else {
-            return then(false)
+        guard key != self.key else {
+            guard store != nil else { return then(false) }
+            return recordRestoreHere(
+                restore, held: held, only: marks, remarkingUnread: remarkingUnread, then: then
+            )
         }
-        guard key == self.key else {
-            // Another document is open. The record is written straight to
+        do {
+            // Something else is open. The record is written straight to
             // its own file, off the actor as `change` does, and nothing
             // of this session's state is touched: none of it is that
             // document's.
+            //
+            // Its own store, not this session's, which is nil whenever
+            // the writer has something open that has no marks at all. A
+            // restore already made is owed its record whatever they look
+            // at next, and nothing else would come back for it.
+            guard let root = libraryRoot else { return then(false) }
+            let store = LampWritingReviewStore(rootURL: root)
             let known = WritingReviewTexts.shared.known(for: key)
             WritingReviewTexts.shared.remember(restore.base, for: key)
             WritingReviewTexts.shared.remember(held, for: key)
@@ -558,6 +576,14 @@ final class WritingReviewSession: ObservableObject {
             }
             return
         }
+    }
+
+    /// The same for the document this session is following, which can use
+    /// everything it holds.
+    private func recordRestoreHere(
+        _ restore: PageRestore, held: String, only marks: Set<UUID>?,
+        remarkingUnread: Bool, then: @escaping (Bool) -> Void
+    ) {
         remember(restore.base)
         remember(held)
         // Not `text = held`: this runs after the writing was saved, and
