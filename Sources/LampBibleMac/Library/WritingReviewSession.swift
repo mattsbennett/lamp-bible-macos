@@ -51,6 +51,15 @@ final class WritingReviewObligations {
         owed[writingID] ?? []
     }
 
+    /// Said when the writer clears, so a record written later does not put
+    /// a mark back over a passage they have answered.
+    func wasCleared(for writingID: String) {
+        guard var list = owed[writingID], !list.isEmpty else { return }
+        for index in list.indices { list[index].cleared = true }
+        owed[writingID] = list
+        write()
+    }
+
     /// Said once a record is safely written.
     func settled(_ id: UUID, for writingID: String) {
         owed[writingID]?.removeAll { $0.id == id }
@@ -334,7 +343,8 @@ final class WritingReviewSession: ObservableObject {
     /// into it, a mark with no words there would be retired by a clear of
     /// some other passage.
     private func clear(range: NSRange, in text: String) {
-        guard writingID != nil else { return }
+        guard let writingID else { return }
+        WritingReviewObligations.shared.wasCleared(for: writingID)
         remember(text)
         let known = texts
         change { $0.clearing(range, in: text, carryingFrom: known) }
@@ -365,6 +375,7 @@ final class WritingReviewSession: ObservableObject {
     }
 
     func clearAll() {
+        if let writingID { WritingReviewObligations.shared.wasCleared(for: writingID) }
         change { $0.clearingAll() }
     }
 
@@ -446,7 +457,7 @@ final class WritingReviewSession: ObservableObject {
     /// come back another way. Only the marks put back change either way.
     func recordRestore(
         _ restore: PageRestore, held: String, only marks: Set<UUID>? = nil,
-        then: @escaping (Bool) -> Void = { _ in }
+        remarkingUnread: Bool = true, then: @escaping (Bool) -> Void = { _ in }
     ) {
         guard writingID != nil else { return then(false) }
         remember(restore.base)
@@ -458,7 +469,8 @@ final class WritingReviewSession: ObservableObject {
         let known = texts
         change(
             { $0.restoringWording(
-                restore.plan, from: restore.base, to: held, only: marks, carryingFrom: known
+                restore.plan, from: restore.base, to: held, only: marks,
+                remarkingUnread: remarkingUnread, carryingFrom: known
             ) },
             then: then
         )
@@ -482,6 +494,16 @@ final class WritingReviewSession: ObservableObject {
         var pending: Set<UUID>?
 
         var pendingMarks: Set<UUID> { pending ?? Set(restore.plan.marks) }
+
+        /// Whether the writer cleared while this was owed.
+        ///
+        /// Putting back wording they had not yet read marks it, since they
+        /// have taken back words they never reviewed. But the record is
+        /// only written once a save proves the text, and a writer who
+        /// cleared in between cleared a passage that carried no mark at
+        /// the time — so a mark appearing after that is one they have
+        /// already answered.
+        var cleared = false
 
         func pending(_ marks: Set<UUID>) -> OwedRestore {
             var copy = self

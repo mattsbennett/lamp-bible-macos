@@ -2646,38 +2646,68 @@ struct DevotionalEditorView: View {
     /// obligation went with the window — and these are settled from
     /// tasks that outlive it.
     private func settleOwedRestores(in saved: String) {
-        for owing in WritingReviewObligations.shared.owing(for: identifier) {
-            let answers = owing.restore.plan.standingByMark(from: owing.held, in: saved)
-            let pending = owing.pendingMarks
-            let stands = pending.filter { answers[$0] == .stands }
-            // What the words cannot answer waits; what is not in this
-            // save but is still in the writing waits too — that save was
-            // taken before the restore was made. What is in neither has
-            // been undone, and is the end of it.
-            let current = owing.restore.plan.standingByMark(from: owing.held, in: content)
-            let waiting = pending.filter { mark in
-                guard answers[mark] != .stands else { return false }
-                return answers[mark] == .unknown || current[mark] != .gone
-            }
-            guard !stands.isEmpty else {
-                if waiting.count != pending.count {
-                    WritingReviewObligations.shared.stillOwed(owing.pending(waiting), for: identifier)
+        // Taken now, not when the proving finishes: a restore made after
+        // this save is no business of this save's, and a settle that read
+        // the list later would claim it.
+        let owing = WritingReviewObligations.shared.owing(for: identifier)
+        guard !owing.isEmpty else { return }
+        let held = content
+        Task {
+            // Off the main actor. Proving a restore aligns the whole
+            // writing against the text it was made in, which iOS measured
+            // at about 2.7 seconds for a writing of twelve thousand
+            // words — a save's worth of frames the window could not draw.
+            let proofs = await Task.detached(priority: .userInitiated) {
+                owing.map { owed in
+                    (
+                        owed,
+                        owed.restore.plan.standingByMark(from: owed.held, in: saved),
+                        owed.restore.plan.standingByMark(from: owed.held, in: held)
+                    )
                 }
-                continue
+            }.value
+            for (owed, answers, current) in proofs {
+                settle(owed, answers: answers, current: current)
             }
-            // Written against the whole plan, so each passage is put
-            // back where the plan actually put it, and only these
-            // passages are recorded.
-            reviewSession.recordRestore(owing.restore, held: owing.held, only: stands) { kept in
-                if kept, waiting.isEmpty {
-                    WritingReviewObligations.shared.settled(owing.id, for: identifier)
-                } else {
-                    var again = owing.pending(kept ? waiting : pending)
-                    again.bodyCommitted = true
-                    WritingReviewObligations.shared.stillOwed(again, for: identifier)
-                    if !kept {
-                        refusedRestore = "The wording was put back, but Lamp couldn’t record it. It will try again."
-                    }
+        }
+    }
+
+    /// Writes down what `answers` is proof of, and leaves the rest owed.
+    private func settle(
+        _ owing: WritingReviewSession.OwedRestore,
+        answers: [UUID: LampWritingReview.RestorePlan.Standing],
+        current: [UUID: LampWritingReview.RestorePlan.Standing]
+    ) {
+        let pending = owing.pendingMarks
+        let stands = pending.filter { answers[$0] == .stands }
+        // What the words cannot answer waits; what is not in this save but
+        // is still in the writing waits too — that save was taken before
+        // the restore was made. What is in neither has been undone, and is
+        // the end of it.
+        let waiting = pending.filter { mark in
+            guard answers[mark] != .stands else { return false }
+            return answers[mark] == .unknown || current[mark] != .gone
+        }
+        guard !stands.isEmpty else {
+            if waiting.count != pending.count {
+                WritingReviewObligations.shared.stillOwed(owing.pending(waiting), for: identifier)
+            }
+            return
+        }
+        // Written against the whole plan, so each passage is put back where
+        // the plan actually put it, and only these passages are recorded.
+        reviewSession.recordRestore(
+            owing.restore, held: owing.held, only: stands,
+            remarkingUnread: !owing.cleared
+        ) { kept in
+            if kept, waiting.isEmpty {
+                WritingReviewObligations.shared.settled(owing.id, for: identifier)
+            } else {
+                var again = owing.pending(kept ? waiting : pending)
+                again.bodyCommitted = true
+                WritingReviewObligations.shared.stillOwed(again, for: identifier)
+                if !kept {
+                    refusedRestore = "The wording was put back, but Lamp couldn’t record it. It will try again."
                 }
             }
         }
@@ -2689,7 +2719,8 @@ struct DevotionalEditorView: View {
     private func retryOwedRecords() {
         for owing in WritingReviewObligations.shared.owing(for: identifier) where owing.bodyCommitted {
             reviewSession.recordRestore(
-                owing.restore, held: owing.held, only: owing.pendingMarks
+                owing.restore, held: owing.held, only: owing.pendingMarks,
+                remarkingUnread: !owing.cleared
             ) { kept in
                 guard kept else { return }
                 WritingReviewObligations.shared.settled(owing.id, for: identifier)
