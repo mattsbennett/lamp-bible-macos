@@ -769,19 +769,6 @@ struct DevotionalEditorView: View {
     /// newer one sync brings in while the writing is open is never written
     /// over by the editor's older text. Nil for a writing not stored yet.
     @State private var heldRevision: Date?
-    /// Each save of this writing is numbered as it is submitted, and the
-    /// number of the last one that landed is kept.
-    ///
-    /// A restore waits for a save **it** submitted: the record and the
-    /// writing are two files, and the record must not say a wording was
-    /// put back in a writing that never took it — nor take a save that
-    /// was already in flight as its own, since that one copied the
-    /// writing before the restore was made.
-    @State private var saveSubmissions = 0
-    /// The numbers of the saves that landed, most recent last. A
-    /// high-water mark was not enough: a later save of some other text
-    /// says nothing about whether the restore's own save went in.
-    @State private var committedSubmissions: [Int] = []
     /// Whether a restore is being made and kept. One at a time.
     @State private var isRestoring = false
     /// Raised whenever the writing is replaced wholesale by something that
@@ -2528,53 +2515,50 @@ struct DevotionalEditorView: View {
         }
         reviewSession.holds(held)
         putInPlace()
+        // Read here, before anything can be scheduled between putting the
+        // restore in and noticing what the writing is.
+        let lineage = documentLineage
         // Counted, so quitting waits for it: this is the half of a restore
         // that is not yet written anywhere.
         LampPendingWrites.shared.begin()
         Task {
-            defer { LampPendingWrites.shared.end() }
-            defer { isRestoring = false }
-            // Any save whose copy of the writing was taken after the
-            // restore was put in place will hold it — the writer's own
-            // autosave as much as one this asked for — so long as the
-            // writing is still the one it was put into. A save already in
-            // flight is numbered below the floor and cannot speak for it;
-            // a draft that replaced the document raises the lineage, and
-            // then no save speaks for it either.
-            let floor = saveSubmissions
-            let lineage = documentLineage
-            func landed() -> Bool {
-                documentLineage == lineage && committedSubmissions.contains { $0 > floor }
+            defer {
+                LampPendingWrites.shared.end()
+                isRestoring = false
             }
-            var attempt = 0
-            while attempt < 3, newerCopy == nil, documentLineage == lineage, !landed() {
-                if attempt > 0 { try? await Task.sleep(for: .seconds(1)) }
-                attempt += 1
-                // Until the surface says it made the edit: a save before
-                // that would store the old words, and a surface that
-                // refused is not a restore at all.
-                for _ in 0..<40 where !applied() { try? await Task.sleep(for: .milliseconds(50)) }
-                guard applied() else { break }
-                save()
-                for _ in 0..<80 where saveState == .saving && !landed() {
-                    try? await Task.sleep(for: .milliseconds(100))
-                }
+            // Until the surface says it made the edit. A command it
+            // refused is not a restore, and saving before it has made one
+            // would store the old words.
+            for _ in 0..<40 where !applied() && documentLineage == lineage {
+                try? await Task.sleep(for: .milliseconds(50))
             }
-            // A save can outlive the waiting: settle it before deciding,
-            // or the writing ends up holding a restore this called failed.
-            if !landed(), saveState == .saving {
-                for _ in 0..<600 where saveState == .saving && !landed() {
-                    try? await Task.sleep(for: .milliseconds(100))
-                }
+            guard applied() else {
+                refusedRestore = "That passage couldn’t be put back: the writing had moved on. Nothing was changed."
+                return
             }
-            guard landed() else {
+            guard documentLineage == lineage else {
+                refusedRestore = "A new draft arrived while that was being put back, so nothing was changed."
+                rollBack()
+                return
+            }
+            // This writes the writing itself and waits for the answer,
+            // rather than reading one off the autosave: what reached
+            // storage is the only thing that may be recorded.
+            let committed = await saveAndWait()
+            guard committed, documentLineage == lineage else {
                 refusedRestore = newerCopy == nil
                     ? "That passage couldn’t be put back: the writing wouldn’t save, so it has been left as it was."
                     : "A newer version of this writing arrived, so nothing was put back."
                 rollBack()
                 return
             }
-            reviewSession.recordRestore(restore, held: held)
+            reviewSession.recordRestore(restore, held: held) { kept in
+                guard !kept else { return }
+                // The writing holds the restore; its marks do not. Said
+                // rather than swallowed: the passage is no longer offered,
+                // and the assistant has not been told it was put back.
+                refusedRestore = "The wording was put back, but Lamp couldn’t record it. The assistant may change it again."
+            }
         }
     }
     /// Puts back the passages the page named.
@@ -2904,7 +2888,9 @@ struct DevotionalEditorView: View {
                     // Do not overwrite an edit made immediately after switching
                     // into the Markdown surface.
                     if let latestMarkdown, content == textBefore {
-                        documentLineage += 1
+                        // The writer's own edits, read back off the page as
+                        // the surface changes. Not a replacement of the
+                        // writing, so a restore in flight is not disturbed.
                         content = latestMarkdown
                     }
                 }
@@ -4120,23 +4106,19 @@ struct DevotionalEditorView: View {
         }
     }
 
+    /// Writes the writing now, and says whether that write landed in
+    /// **this** writing.
+    ///
+    /// The autosave starts it and lets it run. A restore awaits it,
+    /// because it has to know: the marks live in another file, and
+    /// recording a restore the writing never took leaves the two
+    /// disagreeing for good. Inferring the answer from what other saves
+    /// did — a count, a high-water mark, a floor — took five rounds of
+    /// review and was wrong every time.
     @discardableResult
-    private func save() -> Int? {
-        guard hasSavableContent, saveState != .saving, newerCopy == nil else { return nil }
-        saveSubmissions += 1
-        let submission = saveSubmissions
-        // Taken here, not inside the task: between the two, a draft can
-        // arrive, and the submission would then stand for text it never
-        // meant.
-        let submitted = content
-        saveState = .saving
-        // Quitting waits on this count, so it is taken before the task is,
-        // and has to come down on every way out of it, the failures too:
-        // counted inside, a save started on the way out was not yet counted
-        // when quitting looked.
-        LampPendingWrites.shared.begin()
-        Task {
-            defer { LampPendingWrites.shared.end() }
+    private func saveNow(_ submitted: String) async -> Bool {
+        defer { LampPendingWrites.shared.end() }
+        var committed = false
             let markdown = submitted
             let body: StoredWritingBody
             do {
@@ -4148,14 +4130,14 @@ struct DevotionalEditorView: View {
                 )
             } catch {
                 saveState = .failed(error.localizedDescription)
-                return
+            return false
             }
             // The writing moved on while the body was being worked out, so this
             // save would write one document and record another as saved. The
             // edit that overtook it has already started the next autosave.
             guard content == markdown else {
                 saveState = .idle
-                return
+            return false
             }
 
             let submitted = editedFields
@@ -4212,11 +4194,9 @@ struct DevotionalEditorView: View {
                         }
                     }
                     saveState = .idle
-                    return
+            return false
                 }
                 heldRevision = saved.lastModified
-                committedSubmissions.append(submission)
-                committedSubmissions = Array(committedSubmissions.suffix(32))
                 if writingHold == nil, !editorIsGone {
                     writingHold = WritingChatTurns.hold(
                         saved.id, revision: saved.lastModified ?? Date(),
@@ -4244,6 +4224,7 @@ struct DevotionalEditorView: View {
                 persistedFields[0] = saved.title
                 savedFields = persistedFields
                 saveState = .saved
+                committed = true
                 lookForNewerCopy(in: model.devotionals)
                 await recordPrimaryUserRevision(
                     before: previouslySavedContent,
@@ -4252,8 +4233,31 @@ struct DevotionalEditorView: View {
             } catch {
                 saveState = .failed(error.localizedDescription)
             }
+        return committed
+    }
+
+    /// Starts a save and does not wait: the autosave's way in.
+    private func save() {
+        guard hasSavableContent, saveState != .saving, newerCopy == nil else { return }
+        let submitted = content
+        saveState = .saving
+        // Counted before the task, so a save started on the way out is
+        // already something for quitting to wait on.
+        LampPendingWrites.shared.begin()
+        Task { await saveNow(submitted) }
+    }
+
+    /// Saves what the editor holds now and waits for the answer, after
+    /// any save already running has finished.
+    private func saveAndWait() async -> Bool {
+        for _ in 0..<600 where saveState == .saving {
+            try? await Task.sleep(for: .milliseconds(100))
         }
-        return submission
+        guard hasSavableContent, saveState != .saving, newerCopy == nil else { return false }
+        let submitted = content
+        saveState = .saving
+        LampPendingWrites.shared.begin()
+        return await saveNow(submitted)
     }
 
     /// Adds a footnote where the caret is: its marker in the prose, and an

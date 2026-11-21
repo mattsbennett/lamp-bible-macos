@@ -354,8 +354,10 @@ final class WritingReviewSession: ObservableObject {
     /// `held` is the page's own Markdown afterwards, not what the plan
     /// worked out: the page writes its own spelling, and a word of it may
     /// come back another way. Only the marks put back change either way.
-    func recordRestore(_ restore: PageRestore, held: String) {
-        guard writingID != nil else { return }
+    func recordRestore(
+        _ restore: PageRestore, held: String, then: @escaping (Bool) -> Void = { _ in }
+    ) {
+        guard writingID != nil else { return then(false) }
         remember(restore.base)
         remember(held)
         // Not `text = held`: this runs after the writing was saved, and
@@ -363,7 +365,7 @@ final class WritingReviewSession: ObservableObject {
         // marks in a text nobody is holding, and tell the assistant about
         // that one. The editor reports its text as it settles.
         let known = texts
-        change { $0.restoringWording(restore.plan, from: restore.base, to: held, carryingFrom: known) }
+        change({ $0.restoringWording(restore.plan, from: restore.base, to: held, carryingFrom: known) }, then: then)
     }
 
     /// A restore worked out for the page, before the page has made it.
@@ -459,8 +461,11 @@ final class WritingReviewSession: ObservableObject {
     /// its lock for as long as a long manuscript takes to compare — and
     /// takes up what was written, with the file's date read under the same
     /// lock. Counted as a pending write, so quitting waits for a clear.
-    private func change(_ edit: @escaping @Sendable (LampWritingReview) -> LampWritingReview) {
-        guard let store, let writingID else { return }
+    private func change(
+        _ edit: @escaping @Sendable (LampWritingReview) -> LampWritingReview,
+        then: @escaping (Bool) -> Void = { _ in }
+    ) {
+        guard let store, let writingID else { return then(false) }
         LampPendingWrites.shared.begin()
         Task { [weak self] in
             let written = await Task.detached(priority: .userInitiated) {
