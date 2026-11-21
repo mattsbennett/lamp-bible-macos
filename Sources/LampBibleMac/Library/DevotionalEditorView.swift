@@ -836,6 +836,11 @@ struct DevotionalEditorView: View {
     /// Edits asked of the Markdown surface, so they are one entry in the
     /// writer's own Undo rather than a new text set over the old.
     @State private var markdownEdits: WritingTextEdits?
+    /// What those edits were worked out in. One surface draws whatever is
+    /// open, so edits meant for a document must not be made in another —
+    /// and a file holding the same text would pass a check on the text
+    /// alone and have its own words replaced.
+    @State private var markdownEditsKey: WritingReviewKey?
     @State private var markdownEditsToken = 0
     /// Why a restore was not offered, said rather than left to be guessed:
     /// the control is there while anything can come back, so a selection it
@@ -912,6 +917,21 @@ struct DevotionalEditorView: View {
 
     private var isEditingPrimaryDocument: Bool {
         activeWorkspaceDocument == nil
+    }
+
+    /// Where the caret sits in whatever is open, which is the document's
+    /// own when one is: the writing's selection means nothing in it, and
+    /// moving the writing's caret moves nothing the writer can see.
+    private var activeSelection: NSRange {
+        get { activeWorkspaceDocument?.selection ?? contentSelection }
+        nonmutating set {
+            guard let id = activeWorkspaceDocument?.id else {
+                contentSelection = newValue
+                return
+            }
+            guard let index = workspaceDocuments.firstIndex(where: { $0.id == id }) else { return }
+            workspaceDocuments[index].selection = newValue
+        }
     }
 
     private var activeText: String {
@@ -1931,14 +1951,17 @@ struct DevotionalEditorView: View {
                 reviewRanges: reviewKey != nil ? reviewSession.ranges : [],
                 onMarkAsReviewed: reviewKey != nil ? { reviewSession.clear(range: $0) } : nil,
                 onRestoreWording: reviewKey != nil ? { offerRestore(of: $0) } : nil,
-                // The writing's own surface only. Handed to a companion
-                // document's view as well, a restore's edits were made in
-                // whichever file was open — and one holding the same text
-                // passed the check and had its own words replaced.
-                pendingEdits: isEditingPrimaryDocument ? markdownEdits : nil,
+                // Only in what they were worked out in. One surface draws
+                // whatever is open, so edits for a document handed to
+                // another file — one holding the same text passes a check
+                // on the text alone — would replace its words instead.
+                pendingEdits: markdownEditsKey == reviewKey ? markdownEdits : nil,
                 onEditsConsidered: { token, applied in
                     if applied { markdownEditsApplied = token }
-                    if markdownEdits?.token == token { markdownEdits = nil }
+                    if markdownEdits?.token == token {
+                        markdownEdits = nil
+                        markdownEditsKey = nil
+                    }
                 }
             )
             // The text view draws no background of its own, so without this it
@@ -2523,14 +2546,14 @@ struct DevotionalEditorView: View {
     /// selection, and this does not.
     private func offerRestoreForSelection() {
         guard activeEditorMode == .visual, let tipTapCoordinator else {
-            offerRestore(of: contentSelection)
+            offerRestore(of: activeSelection)
             return
         }
         tipTapCoordinator.reviewChangesForSelection { answer in
             guard let answer else {
-                // A page older than that call: the writing's own selection
-                // is the best this has.
-                offerRestore(of: contentSelection)
+                // A page older than that call: the selection in whatever
+                // is open is the best this has.
+                offerRestore(of: activeSelection)
                 return
             }
             if answer.unnamed {
@@ -2560,7 +2583,7 @@ struct DevotionalEditorView: View {
     /// passage it is drawing — so it reads as the general refusal.
     private func reasonRestoreRefused(of marked: String?, in pageText: String?) -> String {
         guard let marked else { return Self.restoreNotExactReason }
-        for base in [pageText, content].compactMap({ $0 }) {
+        for base in [pageText, activeText].compactMap({ $0 }) {
             guard let range = LampWritingReview.markedRange(in: marked, of: base) else { continue }
             switch reviewSession.restoring(range, in: base) {
             case .notKept: return Self.restoreNotKeptReason
@@ -2597,7 +2620,11 @@ struct DevotionalEditorView: View {
     }
 
     private func offerRestore(of selection: NSRange) {
-        let text = content
+        // The text the selection is in, which for a document beside the
+        // writing is its own. Against the writing's prose a document's
+        // range means nothing — it was refused every time, whatever the
+        // writer had picked.
+        let text = activeText
         let outcome = reviewSession.restoring(selection, in: text)
         guard case .plan(let plan) = outcome else {
             restoreOffer = nil
@@ -2668,7 +2695,11 @@ struct DevotionalEditorView: View {
         }
         reviewSession.holds(held)
         putInPlace()
-        let owing = WritingReviewSession.OwedRestore(restore: restore, held: held)
+        // Filed under the document it was made in, or the settle that
+        // looks for it under that document never finds it and the record
+        // is owed for ever.
+        var owing = WritingReviewSession.OwedRestore(restore: restore, held: held)
+        owing.document = reviewKey?.document
         // Counted, so quitting waits for it: this is the half of a restore
         // that is not yet written anywhere.
         LampPendingWrites.shared.begin()
@@ -2716,10 +2747,16 @@ struct DevotionalEditorView: View {
         // Taken now, not when the proving finishes: a restore made after
         // this save is no business of this save's, and a settle that read
         // the list later would claim it.
-        guard let key = reviewKey else { return }
+        settleOwedRestores(in: saved, for: reviewKey, held: activeText)
+    }
+
+    /// The same for one document's restores, named rather than taken from
+    /// whatever is open: a writer who saved a document and moved to
+    /// another would otherwise leave the first one's owed for ever.
+    private func settleOwedRestores(in saved: String, for key: WritingReviewKey?, held: String) {
+        guard let key else { return }
         let owing = WritingReviewObligations.shared.owing(for: key)
         guard !owing.isEmpty else { return }
-        let held = content
         Task {
             // Off the main actor. Proving a restore aligns the whole
             // writing against the text it was made in, which iOS measured
@@ -2735,7 +2772,7 @@ struct DevotionalEditorView: View {
                 }
             }.value
             for (owed, answers, current) in proofs {
-                settle(owed, answers: answers, current: current)
+                settle(owed, answers: answers, current: current, for: key)
             }
         }
     }
@@ -2744,7 +2781,8 @@ struct DevotionalEditorView: View {
     private func settle(
         _ owing: WritingReviewSession.OwedRestore,
         answers: [UUID: LampWritingReview.RestorePlan.Standing],
-        current: [UUID: LampWritingReview.RestorePlan.Standing]
+        current: [UUID: LampWritingReview.RestorePlan.Standing],
+        for key: WritingReviewKey
     ) {
         let pending = owing.pendingMarks
         let stands = pending.filter { answers[$0] == .stands }
@@ -2758,7 +2796,7 @@ struct DevotionalEditorView: View {
         }
         guard !stands.isEmpty else {
             if waiting.count != pending.count {
-                WritingReviewObligations.shared.stillOwed(owing.pending(waiting), for: identifier)
+                WritingReviewObligations.shared.stillOwed(owing.pending(waiting), for: key.writingID)
             }
             return
         }
@@ -2769,11 +2807,11 @@ struct DevotionalEditorView: View {
             remarkingUnread: !owing.cleared
         ) { kept in
             if kept, waiting.isEmpty {
-                WritingReviewObligations.shared.settled(owing.id, for: identifier)
+                WritingReviewObligations.shared.settled(owing.id, for: key.writingID)
             } else {
                 var again = owing.pending(kept ? waiting : pending)
                 again.bodyCommitted = true
-                WritingReviewObligations.shared.stillOwed(again, for: identifier)
+                WritingReviewObligations.shared.stillOwed(again, for: key.writingID)
                 if !kept {
                     refusedRestore = "The wording was put back, but Lamp couldn’t record it. It will try again."
                 }
@@ -2831,7 +2869,7 @@ struct DevotionalEditorView: View {
         let restored = restore.restored
         // The editor's own text, which the page's may be spelled
         // differently from while nothing has been typed.
-        let hostText = content
+        let hostText = activeText
         guard activeEditorMode == .visual, let tipTapCoordinator else {
             isRestoring = true
             let token = markdownEditsToken + 1
@@ -2846,6 +2884,7 @@ struct DevotionalEditorView: View {
                 // were worked out in — would be dropped, taking the
                 // writer's Undo entry with them.
                 markdownEditsToken += 1
+                markdownEditsKey = reviewKey
                 markdownEdits = WritingTextEdits(
                     token: markdownEditsToken,
                     actionName: "Restore Original Wording",
@@ -2921,7 +2960,10 @@ struct DevotionalEditorView: View {
             return
         }
         guard case .range(let selection) = offer.target else { return }
-        let text = content
+        // The text the offer was made in — a document's own, where one is
+        // open. Against the writing's prose the plan would be worked out
+        // in text the writer is not looking at.
+        let text = activeText
         guard case .plan(let plan) = reviewSession.restoring(selection, in: text),
               Set(plan.marks) == offer.marks else {
             refusedRestore = "The writing changed while that was open, so nothing was put back."
@@ -2945,11 +2987,11 @@ struct DevotionalEditorView: View {
             return
         }
         if forward {
-            let after = NSMaxRange(contentSelection)
-            contentSelection = ranges.first { $0.location > after } ?? ranges[0]
+            let after = NSMaxRange(activeSelection)
+            activeSelection = ranges.first { $0.location > after } ?? ranges[0]
         } else {
-            let before = contentSelection.location
-            contentSelection = ranges.last { NSMaxRange($0) < before } ?? ranges[ranges.count - 1]
+            let before = activeSelection.location
+            activeSelection = ranges.last { NSMaxRange($0) < before } ?? ranges[ranges.count - 1]
         }
     }
 
@@ -2960,7 +3002,7 @@ struct DevotionalEditorView: View {
                 reviewSession.clear(markedMarkdown: clear.marked, pageText: clear.pageText)
             }
         } else {
-            reviewSession.clear(range: contentSelection)
+            reviewSession.clear(range: activeSelection)
         }
     }
 
@@ -3785,6 +3827,17 @@ struct DevotionalEditorView: View {
             workspaceDocuments[savedIndex].wasRemovedExternally = false
             workspaceDocuments[savedIndex].errorMessage = nil
             carryReviewMarks(ofDocument: documentID, to: submittedText, from: persistedText)
+            // What this save's own copy of the document is proof of. The
+            // writing's save settles the prose's; nothing settled a
+            // document's, so a restore made in one stayed owed for ever.
+            if let document = workspaceDocuments.first(where: { $0.id == documentID }),
+               let name = reviewDocumentName(of: document) {
+                settleOwedRestores(
+                    in: submittedText,
+                    for: WritingReviewKey(writingID: identifier, document: name),
+                    held: submittedText
+                )
+            }
 
             guard supportsRevisionHistory(fileURL) else { return }
             // The document is saved and the tab already says so. Its history is
