@@ -1430,12 +1430,15 @@ enum KeptAgentChats {
     /// device: between Send and the model saying it runs, a turn is already
     /// bound to its provider's model, so the chat may not be moved to
     /// another provider under it (`AgentRemoteHost.setChoices`).
+    @MainActor
     private static var turnsInHand: [String: Int] = [:]
 
+    @MainActor
     static func beginTurn(in workspace: URL) {
         turnsInHand[workspace.standardizedFileURL.path, default: 0] += 1
     }
 
+    @MainActor
     static func endTurn(in workspace: URL) {
         let key = workspace.standardizedFileURL.path
         guard let count = turnsInHand[key] else { return }
@@ -1443,6 +1446,7 @@ enum KeptAgentChats {
     }
 
     /// A turn is being prepared or a reply is arriving on this workspace.
+    @MainActor
     static func isBusy(in workspace: URL) -> Bool {
         turnsInHand[workspace.standardizedFileURL.path] != nil || isRunning(in: workspace)
     }

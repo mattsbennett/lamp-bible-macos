@@ -855,6 +855,9 @@ final class AgentRemoteHost: ObservableObject {
     /// its new choices, which for another provider is that provider's side of
     /// the conversation, as a window shows it.
     private func setChoices(_ message: LampAgentRemoteMessage, from peer: Peer) {
+        // Writes the chat's file and the app's defaults: only for a device
+        // still trusted, as a turn is.
+        guard mayAct(peer) else { return }
         guard let change = message.choices, let chatID = message.chatID,
               let chat = LampAgentRemoteHosting.Chat(id: chatID), let root = libraryRootURL,
               summary(of: chat) != nil || peer.open?.chat == chat
@@ -873,6 +876,9 @@ final class AgentRemoteHost: ObservableObject {
         }
         do {
             try applyChoices(change, for: chat, in: workspace)
+        } catch LampAgentRemoteHosting.ChoiceRefusal.unusableName {
+            send(.failed(LampAgentRemoteFailure.notAllowed, "That name can't be used for a model or effort.", requestID: message.requestID, chatID: chatID), to: peer)
+            return
         } catch LampAgentRemoteHosting.ChoiceRefusal.effortNeedsModel {
             let name = AIProviderCLI(rawValue: change.provider ?? continuingProvider(for: chat, in: workspace).rawValue)?.shortName ?? "This provider"
             send(.failed(LampAgentRemoteFailure.notAllowed, "Name a model first: \(name) sets effort as a variant of the model.", requestID: message.requestID, chatID: chatID), to: peer)
@@ -900,10 +906,14 @@ final class AgentRemoteHost: ObservableObject {
     private func choicesSaved(inWorkspaceAt path: String) {
         for peer in peers.values where isConnected(peer) {
             guard let open = peer.open, open.workspace.standardizedFileURL.path == path else { continue }
-            // A chat cleared while followed is still the one followed.
-            let summary = summary(of: open.chat)
-                ?? untitled(open.chat, workspace: open.workspace, isRunning: open.model.isRunning)
-            if Self.choices(of: summary) != open.toldChoices {
+            // From the choices file alone, as a summary would say them, so a
+            // window's every pick doesn't read the chat's transcripts here.
+            let provider = continuingProvider(for: open.chat, in: open.workspace)
+            let chosen = LampAgentRemoteHosting.chosen(
+                in: AgentChatChoicesStore.load(in: open.workspace), provider: provider.wireProvider,
+                appDefault: { UserDefaults.standard.string(forKey: $0) }
+            )
+            if [provider.rawValue, chosen.model, chosen.effort] != open.toldChoices {
                 refollow(open.chat, for: peer, requestID: nil)
             }
         }
@@ -930,6 +940,13 @@ final class AgentRemoteHost: ObservableObject {
         let first = newChat.firstMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !first.isEmpty else {
             send(.failed(LampAgentRemoteFailure.notAllowed, "Write something to start the chat.", requestID: message.requestID), to: peer)
+            return
+        }
+        // Before anything is saved: a refused name leaves the chat as it was.
+        guard [newChat.model, newChat.effort].allSatisfy({ name in
+            name.map { LampAgentRemoteHosting.isUsableName($0.trimmingCharacters(in: .whitespacesAndNewlines)) } ?? true
+        }) else {
+            send(.failed(LampAgentRemoteFailure.notAllowed, "That name can't be used for a model or effort.", requestID: message.requestID), to: peer)
             return
         }
         guard let root = libraryRootURL else { return }
@@ -985,6 +1002,8 @@ final class AgentRemoteHost: ObservableObject {
                 choices.set(provider.rawValue, for: AgentChatChoices.providerKey)
                 try AgentChatChoicesStore.save(choices, in: workspace)
                 _ = AgentChatOwnChoices.pinned(in: workspace, appProviderID: provider.rawValue)
+                // A pane open on the empty chat follows it to that provider.
+                AgentChatChoicesStore.announceChange(in: workspace)
             }
             // And the model and effort the phone opened it on, as though
             // picked in the chat's menus once it was made: a writing's too,

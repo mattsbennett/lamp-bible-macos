@@ -89,6 +89,17 @@ struct LampAgentRemoteChoicesHostingTests {
         #expect(result.choices.value(for: "chat.model.codex") == nil)
     }
 
+    @Test func aNameNoProviderWouldUseIsRefused() throws {
+        for name in ["--dangerously-skip-permissions", "high\" other=\"x", "a\\b", "gpt\n5", String(repeating: "x", count: 201)] {
+            #expect(throws: LampAgentRemoteHosting.ChoiceRefusal.unusableName) { try apply(.init(model: name)) }
+            #expect(throws: LampAgentRemoteHosting.ChoiceRefusal.unusableName) { try apply(.init(effort: name)) }
+        }
+        // What providers do name passes.
+        for name in ["opus", "openai/gpt-5#high", "gemini-3.8-flash", "claude-sonnet-4-5-20250929", ""] {
+            #expect(throws: Never.self) { try apply(.init(model: name)) }
+        }
+    }
+
     @Test func anUnknownProviderIsRefused() {
         #expect(throws: LampAgentRemoteHosting.ChoiceRefusal.unknownProvider) { try apply(.init(provider: "nobody")) }
     }

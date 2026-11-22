@@ -276,6 +276,22 @@ public extension LampAgentRemoteHosting {
         /// An effort for a provider that writes it on a model, with no model.
         case effortNeedsModel
         case unknownProvider
+        /// A model or effort no provider would name: too long, or holding
+        /// what a command line or a config value would read as its own.
+        case unusableName
+    }
+
+    /// Whether a name typed on a phone can go to a provider's CLI as its
+    /// model or effort. A phone is a new source of these, and they end up as
+    /// arguments (`--model <name>`) and in a config value
+    /// (`model_reasoning_effort="<level>"`), so what a provider would never
+    /// name is refused rather than passed on: a control character, a quote
+    /// or backslash, a leading dash, or more than 200 characters.
+    static func isUsableName(_ name: String) -> Bool {
+        guard name.count <= 200, !name.hasPrefix("-") else { return false }
+        return !name.unicodeScalars.contains { scalar in
+            CharacterSet.controlCharacters.contains(scalar) || scalar == "\"" || scalar == "\\"
+        }
     }
 
     /// A phone's choice taken into a chat's own choices, as the menus take
@@ -313,6 +329,10 @@ public extension LampAgentRemoteHosting {
                 updated, providerID: chosenProvider, provider: provider,
                 model: appDefault(modelKey) ?? "", effort: appDefault(effortKey) ?? ""
             ).choices
+        }
+        for name in [change.model, change.effort].compactMap({ $0?.trimmingCharacters(in: .whitespacesAndNewlines) })
+        where !isUsableName(name) {
+            throw .unusableName
         }
         if let model = change.model {
             let written = model.trimmingCharacters(in: .whitespacesAndNewlines)
