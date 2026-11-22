@@ -88,6 +88,31 @@ against the code rather than by assertion:
 - **iOS `origin/main` builds and tests green against core 13dcafd**
   (569 tests), which removed `takingInDelimiters`,
   `takingInSyntaxAndDelimiters` and their helpers.
+- **The phone's marks were seen drawn**, on an iOS 27.2 simulator
+  rather than only in tests (2026-11-22). `WritingFileView` with
+  `showsMarks: true`, against a record written through
+  `LibrarySyncPass.reviewStore`, on a document carrying a code span, a
+  table, bold delimiters, an escaped backtick and a fenced block — the
+  same mix the Mac was checked against. Three passages were marked, at
+  exactly the assistant's insertions and nowhere else: the table, the
+  fence, the code span and the escaped backtick were left alone.
+  Clearing one passage by range removed that passage's highlight only:
+  three marked, two left.
+
+  The shot of that run shows a count pill of 5, then 4, which is an
+  artefact of the harness and not the app: it wrote to the real store
+  under a fixed writing id without clearing it first, so a second run
+  marked the same change on top of the record the first had left
+  behind. The extra marks land under the existing highlights, so the
+  pill rose while three passages still showed. A reused harness should
+  take a fresh id or remove the record first. Found by the iOS session
+  from the two runs' logs, after this was first written down here as
+  the pill counting points, which was a guess.
+
+  Seen on the way: the phone's side-file reader **breaks a paragraph at
+  a soft-wrapped source newline**, where the editor joins it. This is
+  the block-level divergence class recorded below, caught on screen
+  rather than by reading.
 
 **The parser, as adopted (iOS a56bf48 on core 573a593):** the phone's
 `WritingDocumentText` reads code blocks and tables through
@@ -97,12 +122,33 @@ the same model through `drawable`, the block readers and the clear's
 reach, and its editor page is the phone's built bundle, so neither app
 can drift from the other on what the page does.
 
-`NoteMarkdownRenderer` on the phone is **deliberately not on the
-model**, and should stay that way: its inline reading is already
-Foundation's `AttributedString(markdown:)`, which is cmark, and its
-blocks are read line by line on purpose, to match the notes editor's
-line-break setting. CommonMark would join lines a note's writer typed
-apart.
+`NoteMarkdownRenderer` on the phone is **not on the model**: its
+inline reading is Foundation's `AttributedString(markdown:)`, which is
+cmark, and its blocks are read line by line, which matches the notes
+editor's line-break setting.
+
+That was first written down here as deliberate and settled. A review
+on 2026-11-22 found it is neither, and the reason is worth keeping:
+the line-by-line split is **one markdown-it option** (`breaks: true`,
+which both note editors set), not a second grammar. Four hand-written
+block grammars stand in for it across the two apps —
+`NoteMarkdown.Block`, `DevotionalProseParser`,
+`DevotionalMarkdownParser`, and the phone's side-file cutter — and the
+reader that does *not* honour the option is the Mac's, not the phone's:
+`DevotionalProseParser` joins consecutive lines with a space
+(`ReaderSupport.swift:1298`, pinned by `wrappedLinesStayInOneParagraph`),
+and the Mac reading card draws notes through it
+(`StudyInspectorView.swift:839`). So a Mac note typed as three plain
+lines is read back as one joined line, where its own editor
+(`lineBreaks: true`, `StudyInspectorView.swift:1345`) and the phone
+both show three.
+
+Every divergence a writer actually meets is block-level in this way —
+line breaks, quote lines joining, lists renumbering from 1, nesting
+drawn two levels deep. The inline layer is already shared, all three
+native readers using Foundation's parser. Nothing is decided here
+about unifying them; what is decided is that "the phone renders
+differently" was the wrong way round.
 
 Equally deliberate in core: `keepingEscapes` stays a single regex,
 being exactly the spec's rule; and `movingMarksOutOfLinks` stays
