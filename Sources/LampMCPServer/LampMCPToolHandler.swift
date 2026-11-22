@@ -307,6 +307,33 @@ public actor LampMCPToolHandler {
             try requirePersonalContent()
             return try result(try readWriting(arguments))
 
+        case "list_chats":
+            try requirePersonalContent()
+            return try result(ChatList(chats: LampAgentChatHistory.list(
+                libraryRootURL: try writingLibraryRoot(),
+                thisReaderChat: readerChatID,
+                thisWorkspace: workspaceURL,
+                kind: arguments["kind"]?.stringValue,
+                limit: arguments["limit"]?.intValue ?? 30
+            )))
+
+        case "read_chat":
+            try requirePersonalContent()
+            let chatID = try requiredString("chat_id", in: arguments)
+            do {
+                return try result(try LampAgentChatHistory.read(
+                    chatID: chatID,
+                    provider: arguments["provider"]?.stringValue,
+                    libraryRootURL: try writingLibraryRoot(),
+                    offset: arguments["offset"]?.intValue,
+                    limit: arguments["limit"]?.intValue ?? 30
+                ))
+            } catch LampAgentChatHistory.Failure.unknownChat {
+                throw LampMCPToolError.invalidArgument("chat_id", "no chat \(chatID); see list_chats")
+            } catch LampAgentChatHistory.Failure.noSuchProvider(let provider) {
+                throw LampMCPToolError.invalidArgument("provider", "\(chatID) has no conversation with \(provider)")
+            }
+
         case "write_writing_draft":
             return try await writeWritingDraft(arguments)
 
@@ -727,6 +754,11 @@ public actor LampMCPToolHandler {
             )
         }
         return SkillReading(available: names, skill: skill, file: relative, text: text)
+    }
+
+    /// `list_chats`' answer: an object, as MCP requires of structured content.
+    private struct ChatList: Codable, Sendable {
+        let chats: [LampAgentChatHistory.Summary]
     }
 
     /// Reading or changing a writing is reading or changing personal content,

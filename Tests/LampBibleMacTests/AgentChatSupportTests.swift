@@ -764,3 +764,92 @@ struct AgentACPContainmentTests {
         #expect(AgentProcessTree.descendants(of: impostor).isEmpty)
     }
 }
+
+/// Asking about another Lamp chat, from Lamp's own transcripts.
+struct LampAgentChatHistoryTests {
+    private struct Library {
+        let root: URL
+        let readerChat: UUID
+        let otherReaderChat: UUID
+    }
+
+    private func library() throws -> Library {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("chat-history-\(UUID().uuidString)", isDirectory: true)
+        let readerChat = UUID()
+        let otherReaderChat = UUID()
+        let start = Date(timeIntervalSince1970: 1_795_000_000)
+        func transcript(_ lines: [(AgentChatTranscript.Role, String)], from: Date) -> AgentChatTranscript {
+            var transcript = AgentChatTranscript()
+            transcript.messages = lines.enumerated().map { index, line in
+                .init(role: line.0, text: line.1, date: from.addingTimeInterval(Double(index) * 60))
+            }
+            return transcript
+        }
+        try AgentChatTranscriptStore.save(
+            transcript([(.user, "What does hesed mean in Ruth 1?"), (.assistant, "Loyal, covenant love.")], from: start),
+            providerID: "claude",
+            in: ReaderChatWorkspaceStore.workspaceURL(libraryRootURL: root, chatID: readerChat)
+        )
+        try AgentChatTranscriptStore.save(
+            transcript((0..<50).map { ($0 % 2 == 0 ? .user : .assistant, "message \($0)") }, from: start.addingTimeInterval(3600)),
+            providerID: "codex",
+            in: ReaderChatWorkspaceStore.workspaceURL(libraryRootURL: root, chatID: otherReaderChat)
+        )
+        let writing = LampWritingWorkspace.url(libraryRootURL: root, writingID: "w1")
+        try FileManager.default.createDirectory(at: writing, withIntermediateDirectories: true)
+        try "# Patience in James\n\nText.".write(
+            to: writing.appendingPathComponent(LampWritingWorkspace.draftFilename), atomically: true, encoding: .utf8
+        )
+        try "w1".write(
+            to: writing.appendingPathComponent(LampWritingWorkspace.identifierFilename), atomically: true, encoding: .utf8
+        )
+        try AgentChatTranscriptStore.save(
+            transcript([(.user, "Tighten the opening."), (.assistant, "Done.")], from: start.addingTimeInterval(7200)),
+            providerID: "antigravity",
+            in: writing
+        )
+        return Library(root: root, readerChat: readerChat, otherReaderChat: otherReaderChat)
+    }
+
+    @Test func everyChatIsListedNewestFirstWithThisOneMarked() throws {
+        let fixture = try library()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let chats = LampAgentChatHistory.list(libraryRootURL: fixture.root, thisReaderChat: fixture.readerChat)
+        #expect(chats.map(\.chatID) == [
+            "writing:w1", "reader:\(fixture.otherReaderChat.uuidString)", "reader:\(fixture.readerChat.uuidString)",
+        ])
+        #expect(chats[0].title == "Patience in James")
+        #expect(chats[0].providers == ["antigravity"])
+        #expect(chats[2].title == "What does hesed mean in Ruth 1?")
+        #expect(chats[2].isThisChat)
+        #expect(!chats[1].isThisChat)
+        #expect(LampAgentChatHistory.list(libraryRootURL: fixture.root, kind: "writing").count == 1)
+    }
+
+    @Test func aChatIsReadAsItsMostRecentMessagesOrFromAnOffset() throws {
+        let fixture = try library()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let id = "reader:\(fixture.otherReaderChat.uuidString)"
+        let recent = try LampAgentChatHistory.read(chatID: id, libraryRootURL: fixture.root, limit: 10)
+        #expect(recent.totalMessages == 50)
+        #expect(recent.offset == 40)
+        #expect(recent.messages.first?.text == "message 40")
+        #expect(recent.provider == "codex")
+        let earlier = try LampAgentChatHistory.read(chatID: id, libraryRootURL: fixture.root, offset: 0, limit: 2)
+        #expect(earlier.messages.map(\.text) == ["message 0", "message 1"])
+        #expect(throws: LampAgentChatHistory.Failure.noSuchProvider("claude")) {
+            try LampAgentChatHistory.read(chatID: id, provider: "claude", libraryRootURL: fixture.root)
+        }
+    }
+
+    @Test func aChatIDNamesOnlyAChatNeverAFolder() throws {
+        let fixture = try library()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        for id in ["writing:../../etc", "writing:nope", "reader:not-a-uuid", "../w1", "reader:\(UUID().uuidString)"] {
+            #expect(throws: LampAgentChatHistory.Failure.unknownChat(id)) {
+                try LampAgentChatHistory.read(chatID: id, libraryRootURL: fixture.root)
+            }
+        }
+    }
+}

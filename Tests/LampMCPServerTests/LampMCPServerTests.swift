@@ -21,7 +21,9 @@ struct LampMCPServerTests {
         #expect(LampMCPToolCatalog.writingTools.count == 2)
         #expect(LampMCPToolCatalog.writeTools.count == 3)
         #expect(LampMCPToolCatalog.writingImportTools.count == 3)
-        #expect(all.count == 30)
+        // Both read-only: chats are read, never changed.
+        #expect(LampMCPToolCatalog.chatTools.count == 2)
+        #expect(all.count == 32)
         #expect(Set(all.map(\.name)).count == all.count)
 
         // import_writings asks Lamp to show files for review, and what the
@@ -281,6 +283,28 @@ struct LampMCPServerTests {
         )
         let response = try await handler.call(name: tool, arguments: arguments)
         #expect(response.structuredContent?.objectValue != nil, "\(tool) must answer with an object")
+    }
+
+    @Test func otherChatsAreReadOnlyWithPersonalContentShared() async throws {
+        let fixture = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-mcp-chats-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixture, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let closed = LampMCPToolHandler(library: LampAgentLibrary(libraryRootURL: fixture), libraryRootURL: fixture)
+        await #expect(throws: (any Error).self) {
+            _ = try await closed.call(name: "list_chats", arguments: nil)
+        }
+        let open = LampMCPToolHandler(
+            library: LampAgentLibrary(libraryRootURL: fixture),
+            libraryRootURL: fixture,
+            policy: LampAgentAccessPolicy(includesPersonalContent: true)
+        )
+        let listed = try await open.call(name: "list_chats", arguments: nil)
+        #expect(listed.isError == false)
+        #expect(listed.structuredContent == .object(["chats": .array([])]))
+        await #expect(throws: (any Error).self) {
+            _ = try await open.call(name: "read_chat", arguments: ["chat_id": .string("writing:../../etc")])
+        }
     }
 
     @Test func rejectsUnknownToolsAndMissingArguments() async throws {

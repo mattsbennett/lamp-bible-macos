@@ -336,3 +336,234 @@ public enum LampFileModification {
         (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
     }
 }
+
+/// Lamp's own record of its chats — reader chats and writings' assistant
+/// chats — for an agent asked about another conversation.
+///
+/// Read from Lamp's transcripts, whichever provider carried each chat, so
+/// asking works the same from every provider and never touches a CLI's own
+/// session files. Chats are personal, so the tools that use this answer to
+/// the same setting as personal writing.
+///
+/// Self-contained, because the helper's own build compiles this file and
+/// not the chat stores: it reads Lamp's transcript files with a decoder of
+/// its own, and `LampAgentChatHistoryTests` writes them with the real store
+/// so the two cannot drift apart unnoticed.
+public enum LampAgentChatHistory {
+    /// Where `AgentChatTranscriptStore` keeps a workspace's transcripts and
+    /// how it names them, and where reader chats' workspaces are.
+    static let transcriptFolder = ".lamp"
+    static let transcriptPrefix = "native-chat-"
+    static let readerFolder = "AgentWorkspaces/Reader"
+
+    private struct StoredTranscript: Decodable {
+        struct Message: Decodable {
+            let role: String
+            let text: String
+            let date: Date
+        }
+        let messages: [Message]
+    }
+    public struct Summary: Codable, Equatable, Sendable {
+        /// `reader:<id>` or `writing:<writing id>`: what `read_chat` takes.
+        public let chatID: String
+        public let kind: String
+        /// How the reader would know it: a reader chat by its opening
+        /// question, a writing's chat by the writing's title.
+        public let title: String
+        public let providers: [String]
+        public let messageCount: Int
+        public let lastSpoken: Date?
+        /// The chat this question is being asked in.
+        public let isThisChat: Bool
+
+        // In the tools' own spelling: `read_chat` takes a `chat_id`.
+        enum CodingKeys: String, CodingKey {
+            case chatID = "chat_id", kind, title, providers
+            case messageCount = "message_count", lastSpoken = "last_spoken", isThisChat = "is_this_chat"
+        }
+    }
+
+    public struct Line: Codable, Equatable, Sendable {
+        public let role: String
+        public let text: String
+        public let date: Date
+    }
+
+    public struct Reading: Codable, Equatable, Sendable {
+        public let chatID: String
+        public let title: String
+        public let provider: String
+        public let providers: [String]
+        public let totalMessages: Int
+        /// Where `messages` starts in the conversation, counted from its
+        /// first message; ask again with a smaller offset for earlier ones.
+        public let offset: Int
+        public let messages: [Line]
+
+        enum CodingKeys: String, CodingKey {
+            case chatID = "chat_id", title, provider, providers
+            case totalMessages = "total_messages", offset, messages
+        }
+    }
+
+    public enum Failure: Error, Equatable {
+        case unknownChat(String)
+        case noSuchProvider(String)
+    }
+
+    /// The longest a single message is given back, so one long reply can't
+    /// crowd out the rest of the window.
+    static let longestMessage = 4000
+
+    public static func list(
+        libraryRootURL: URL,
+        thisReaderChat: UUID? = nil,
+        thisWorkspace: URL? = nil,
+        kind: String? = nil,
+        limit: Int = 30
+    ) -> [Summary] {
+        var summaries: [Summary] = []
+        if kind == nil || kind == "reader" {
+            let folder = libraryRootURL.appendingPathComponent(readerFolder, isDirectory: true)
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+            for name in names {
+                guard let id = UUID(uuidString: name) else { continue }
+                let transcripts = transcripts(in: folder.appendingPathComponent(name, isDirectory: true))
+                guard !transcripts.isEmpty else { continue }
+                summaries.append(Summary(
+                    chatID: "reader:\(id.uuidString)",
+                    kind: "reader",
+                    title: opening(of: transcripts) ?? "Reader chat",
+                    providers: transcripts.map(\.provider),
+                    messageCount: transcripts.reduce(0) { $0 + $1.transcript.messages.count },
+                    lastSpoken: transcripts.compactMap { $0.transcript.messages.last?.date }.max(),
+                    isThisChat: id == thisReaderChat
+                ))
+            }
+        }
+        if kind == nil || kind == "writing" {
+            for writing in LampWritingWorkspace.listed(libraryRootURL: libraryRootURL) {
+                let workspace = LampWritingWorkspace.url(libraryRootURL: libraryRootURL, writingID: writing.id)
+                let transcripts = transcripts(in: workspace)
+                guard !transcripts.isEmpty else { continue }
+                summaries.append(Summary(
+                    chatID: "writing:\(writing.id)",
+                    kind: "writing",
+                    title: writing.title ?? "Untitled writing",
+                    providers: transcripts.map(\.provider),
+                    messageCount: transcripts.reduce(0) { $0 + $1.transcript.messages.count },
+                    lastSpoken: transcripts.compactMap { $0.transcript.messages.last?.date }.max(),
+                    isThisChat: thisWorkspace.map {
+                        $0.standardizedFileURL.path == workspace.standardizedFileURL.path
+                    } ?? false
+                ))
+            }
+        }
+        return Array(summaries.sorted {
+            ($0.lastSpoken ?? .distantPast) > ($1.lastSpoken ?? .distantPast)
+        }.prefix(max(1, limit)))
+    }
+
+    /// A window of one chat's conversation with one provider: by default the
+    /// most recent messages, or from `offset` counted from the first.
+    public static func read(
+        chatID: String,
+        provider: String? = nil,
+        libraryRootURL: URL,
+        offset: Int? = nil,
+        limit: Int = 30
+    ) throws -> Reading {
+        guard let workspace = workspace(for: chatID, libraryRootURL: libraryRootURL) else {
+            throw Failure.unknownChat(chatID)
+        }
+        let transcripts = transcripts(in: workspace)
+        guard !transcripts.isEmpty else { throw Failure.unknownChat(chatID) }
+        let chosen: (provider: String, transcript: StoredTranscript)
+        if let provider {
+            guard let match = transcripts.first(where: { $0.provider == provider }) else {
+                throw Failure.noSuchProvider(provider)
+            }
+            chosen = match
+        } else {
+            // The provider spoken with last, when the reader doesn't say.
+            chosen = transcripts.max {
+                ($0.transcript.messages.last?.date ?? .distantPast) < ($1.transcript.messages.last?.date ?? .distantPast)
+            }!
+        }
+        let messages = chosen.transcript.messages
+        let size = min(max(1, limit), 100)
+        let start = min(max(0, offset ?? max(0, messages.count - size)), messages.count)
+        let window = messages[start..<min(messages.count, start + size)]
+        return Reading(
+            chatID: chatID,
+            title: title(chatID: chatID, libraryRootURL: libraryRootURL, transcripts: transcripts),
+            provider: chosen.provider,
+            providers: transcripts.map(\.provider),
+            totalMessages: messages.count,
+            offset: start,
+            messages: window.map { message in
+                Line(
+                    role: message.role,
+                    text: message.text.count > longestMessage
+                        ? String(message.text.prefix(longestMessage)) + " …"
+                        : message.text,
+                    date: message.date
+                )
+            }
+        )
+    }
+
+    /// The workspace a chat ID names, or nil when it names none. Reader
+    /// chats by a UUID, writings by an identifier the writing workspaces
+    /// list, so no caller can steer this at an arbitrary folder.
+    static func workspace(for chatID: String, libraryRootURL: URL) -> URL? {
+        if chatID.hasPrefix("reader:"), let id = UUID(uuidString: String(chatID.dropFirst("reader:".count))) {
+            return libraryRootURL.appendingPathComponent(readerFolder, isDirectory: true)
+                .appendingPathComponent(id.uuidString, isDirectory: true)
+        }
+        if chatID.hasPrefix("writing:") {
+            let writingID = String(chatID.dropFirst("writing:".count))
+            guard LampWritingWorkspace.listed(libraryRootURL: libraryRootURL).contains(where: { $0.id == writingID })
+            else { return nil }
+            return LampWritingWorkspace.url(libraryRootURL: libraryRootURL, writingID: writingID)
+        }
+        return nil
+    }
+
+    private static func title(
+        chatID: String, libraryRootURL: URL,
+        transcripts: [(provider: String, transcript: StoredTranscript)]
+    ) -> String {
+        if chatID.hasPrefix("writing:") {
+            let writingID = String(chatID.dropFirst("writing:".count))
+            return LampWritingWorkspace.listed(libraryRootURL: libraryRootURL)
+                .first { $0.id == writingID }?.title ?? "Untitled writing"
+        }
+        return opening(of: transcripts) ?? "Reader chat"
+    }
+
+    /// The first thing the reader said, over every provider's transcript.
+    private static func opening(of transcripts: [(provider: String, transcript: StoredTranscript)]) -> String? {
+        transcripts.flatMap(\.transcript.messages)
+            .filter { $0.role == "user" }.min { $0.date < $1.date }
+            .map { String($0.text.prefix(120)) }
+    }
+
+    /// Each provider's transcript in a workspace that holds any messages.
+    private static func transcripts(in workspace: URL) -> [(provider: String, transcript: StoredTranscript)] {
+        let folder = workspace.appendingPathComponent(transcriptFolder, isDirectory: true)
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+        return names.filter { $0.hasPrefix(transcriptPrefix) && $0.hasSuffix(".json") }.sorted().compactMap { name in
+            let provider = String(name.dropFirst(transcriptPrefix.count).dropLast(".json".count))
+            // A provider name of letters, digits, hyphens and underscores,
+            // as the store writes them.
+            guard !provider.isEmpty, provider.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }),
+                  let data = try? Data(contentsOf: folder.appendingPathComponent(name)),
+                  let transcript = try? JSONDecoder().decode(StoredTranscript.self, from: data),
+                  !transcript.messages.isEmpty
+            else { return nil }
+            return (provider, transcript)
+        }
+    }
+}
