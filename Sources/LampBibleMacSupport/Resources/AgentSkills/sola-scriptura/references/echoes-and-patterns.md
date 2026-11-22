@@ -103,13 +103,20 @@ Give the grade with its reasons, so the writer can see what moved it.
 | **Faint** | One distinctive resemblance — a rare word, a specific detail — with nothing else in support. Possible, not shown. | Inferred, faint |
 | **Not shown** | Only features common enough to occur anyway: for an echo, nothing that identifies its source; for a pattern, a shape too general to fit these accounts rather than any account. Unsupported, with the scope. If the link needs an outside key, it is Imported instead. | Unsupported or Imported |
 
-A link that overturns a plain statement is Contrary to that statement, whatever
-its grade would otherwise be.
+An undrawn link that would overturn a plain statement is Contrary to that
+statement, whatever its grade would otherwise be. A drawn link is itself scripture
+speaking. Where it seems to conflict with another text, that is an apparent tension
+between texts. Work it from both sides, as *The standard* in `SKILL.md` says, and
+do not rank one below the other.
 
 Grade the link and the claim built on it separately. A drawn or strong link can
 still be pressed past what it shows: a type corresponds at the points the texts
-make correspond, not at every point. Detail the earlier passage never had is the
-writer's addition, and it is Inferred or Imported on its own terms.
+make correspond, not at every point. Before you call a detail the writer's
+addition, check whether another text states it. Later scripture can state what an
+earlier account leaves unsaid: Hebrews 11:19 gives Abraham's reasoning, which
+Genesis 22 does not narrate. A detail some text states is Stated, cited to that
+text. Only a detail that no text checked supplies is the writer's addition. Take it
+through the verdict ladder on its own terms.
 
 Without the evidence a test needs, such as no original-language text for test 1,
 call the grade provisional and say which test was not run. Do not keep searching

@@ -109,6 +109,26 @@ struct SolaScripturaStandardTests {
         #expect(echoes.contains("Grade the link and the claim built on it separately"))
         #expect(echoes.contains("The finding is never that a writer reasoned from a pattern"))
     }
+
+    /// The grading itself, each clause from a review round that found it
+    /// missing: a pattern reaches Strong without shared wording, its
+    /// recurrence counts for it, Faint needs one distinctive resemblance,
+    /// and only an undrawn link yields to a statement.
+    @Test func theGradesAdmitPatternsAndKeepTheirBoundaries() throws {
+        let echoes = try instructions("references/echoes-and-patterns.md")
+        #expect(echoes.contains("| Drawn | A writer of scripture makes the link."))
+        #expect(echoes.contains("recurring in contexts not composed together, with no shared wording at all"))
+        #expect(echoes.contains("recurrence across many contexts is the evidence, so many matches count for it"))
+        #expect(echoes.contains("A shape so general it would fit almost any account is a commonplace, not a pattern"))
+        #expect(echoes.contains("| Faint | One distinctive resemblance"))
+        #expect(echoes.contains("| Not shown | Only features common enough to occur anyway"))
+        #expect(echoes.contains("An undrawn link that would overturn a plain statement is Contrary"))
+        #expect(echoes.contains("A drawn link is itself scripture speaking."))
+        #expect(echoes.contains("A detail some text states is Stated, cited to that text."))
+        let skill = try instructions()
+        #expect(skill.contains("It takes Imported when it needs a key from outside scripture"))
+        #expect(skill.contains("It takes Contrary when it would overturn a plain statement, whatever its grade"))
+    }
 }
 
 struct ScriptureAnswerDisciplineTests {
