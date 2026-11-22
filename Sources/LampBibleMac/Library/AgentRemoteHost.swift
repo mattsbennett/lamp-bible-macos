@@ -263,12 +263,14 @@ final class AgentRemoteHost: ObservableObject {
     }
 
     private func stop() {
-        guard listener != nil || !peers.isEmpty else { return }
-        listener?.cancel()
-        listener = nil
+        // Before anything else: a listener that could not be made leaves the
+        // monitor running with nothing else to stop.
         pathMonitor?.cancel()
         pathMonitor = nil
         tailnetAddresses = []
+        guard listener != nil || !peers.isEmpty else { return }
+        listener?.cancel()
+        listener = nil
         for peer in Array(peers.values) {
             // Told why, where it can be, and what it started stopped: the
             // switch went off under it.
