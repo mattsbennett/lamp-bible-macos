@@ -468,7 +468,7 @@ private enum RenderedDevotionalBlock: Sendable {
 /// A run of prose with its inline markdown already resolved. Parsing happens off
 /// the main actor, so the attributed value is built once per edit rather than on
 /// every layout pass.
-private struct RenderedProseItem: Sendable {
+struct RenderedProseItem: Sendable {
     /// This run's place in the writing, counted in reading order. Find uses it
     /// to say which run a match is in; nothing else does.
     let id: Int
@@ -484,6 +484,18 @@ private struct RenderedProseItem: Sendable {
         )
     }
 
+    /// A run core has already read.
+    ///
+    /// Nothing is parsed here: core hands over the text with Foundation's own
+    /// inline attributes on it, set from its parse rather than from a second
+    /// one in this app. That second parse is what made this app's reading of
+    /// a writing disagree with the editor the writer typed it into.
+    init(_ text: LampProseText, id: Int) {
+        self.id = id
+        plain = text.plain
+        attributed = text.text
+    }
+
     /// The text as it is drawn, which is what find searches: the inline
     /// Markdown is resolved, so `**grace**` is found by searching for `grace`
     /// and not by searching for the asterisks.
@@ -494,7 +506,7 @@ private struct RenderedProseItem: Sendable {
 }
 
 /// Hands out run numbers in reading order as a document is built.
-private struct RunNumbering {
+struct RunNumbering {
     private var next = 0
 
     mutating func take() -> Int {
@@ -505,9 +517,13 @@ private struct RunNumbering {
     mutating func item(_ source: String) -> RenderedProseItem {
         RenderedProseItem(source, id: take())
     }
+
+    mutating func item(_ text: LampProseText) -> RenderedProseItem {
+        RenderedProseItem(text, id: take())
+    }
 }
 
-private enum RenderedProseBlock: Sendable {
+enum RenderedProseBlock: Sendable {
     case heading(level: Int, text: RenderedProseItem)
     case paragraph(RenderedProseItem)
     case quote([RenderedProseItem])
@@ -533,6 +549,122 @@ private enum RenderedProseBlock: Sendable {
         case .nestedNumberedList(let items): items.map(\.text)
         case .table(let headers, let rows): headers + rows.flatMap { $0 }
         case .codeBlock, .rule: []
+        }
+    }
+
+    /// Core's blocks, in the shapes this view draws.
+    ///
+    /// Core gives a list as a tree of items; this draws one with a depth on
+    /// each line, so the tree is flattened here. The depth is the tree's own,
+    /// where both apps used to divide the indent by two and drew the editor's
+    /// four-space level two steps in.
+    static func all(
+        _ blocks: [LampProseBlock], numbering: inout RunNumbering
+    ) -> [RenderedProseBlock] {
+        var out: [RenderedProseBlock] = []
+        for block in blocks {
+            switch block {
+            case .heading(let level, let text):
+                out.append(.heading(level: level, text: numbering.item(text)))
+            case .paragraph(let text):
+                out.append(.paragraph(numbering.item(text)))
+            case .quote(let inner):
+                var items: [RenderedProseItem] = []
+                collect(inner, into: &items, numbering: &numbering)
+                if !items.isEmpty { out.append(.quote(items)) }
+            case .list(let ordered, _, let items):
+                var lines: [RenderedListLine] = []
+                flatten(items, depth: 0, into: &lines, numbering: &numbering)
+                guard !lines.isEmpty else { break }
+                let flat = lines.allSatisfy { $0.depth == 0 }
+                if ordered {
+                    out.append(flat
+                        ? .numberedList(lines.map(\.text))
+                        : .nestedNumberedList(lines))
+                } else {
+                    out.append(flat ? .bulletList(lines.map(\.text)) : .nestedBulletList(lines))
+                }
+            case .code(let language, let code):
+                out.append(.codeBlock(language: language, code: code))
+            case .table(let headers, let rows):
+                out.append(.table(
+                    headers: headers.map { numbering.item($0) },
+                    rows: rows.map { row in row.map { numbering.item($0) } }
+                ))
+            case .html(let raw):
+                // Drawn as the characters the writer wrote, as this app has
+                // always drawn them; better than losing the words.
+                out.append(.paragraph(numbering.item(raw)))
+            case .footnote(let label, let inner):
+                // A writing's own footnotes are gathered and drawn below it
+                // by LampDevotionalFootnotes; one left in the prose is drawn
+                // where it stands rather than dropped.
+                var items: [RenderedProseItem] = []
+                collect(inner, into: &items, numbering: &numbering)
+                out.append(.paragraph(numbering.item("[^\(label)]:")))
+                out.append(contentsOf: items.map { .paragraph($0) })
+            case .audio(let caption, _), .picture(let caption, _):
+                // Media is taken out before this by DevotionalMarkdownParser,
+                // which resolves where each file is. One that reaches here is
+                // drawn as its caption rather than silently dropped.
+                if !caption.isEmpty { out.append(.paragraph(numbering.item(caption))) }
+            case .rule:
+                out.append(.rule)
+            }
+        }
+        return out
+    }
+
+    /// Every piece of text in a run of blocks, in reading order.
+    private static func collect(
+        _ blocks: [LampProseBlock], into items: inout [RenderedProseItem],
+        numbering: inout RunNumbering
+    ) {
+        for block in blocks {
+            switch block {
+            case .paragraph(let text), .heading(_, let text):
+                items.append(numbering.item(text))
+            case .quote(let inner):
+                collect(inner, into: &items, numbering: &numbering)
+            case .list(_, _, let inner):
+                for item in inner { collect(item.blocks, into: &items, numbering: &numbering) }
+            case .footnote(_, let inner):
+                collect(inner, into: &items, numbering: &numbering)
+            case .code(_, let code):
+                items.append(numbering.item(code))
+            case .table(let headers, let rows):
+                items.append(contentsOf: headers.map { numbering.item($0) })
+                for row in rows { items.append(contentsOf: row.map { numbering.item($0) }) }
+            case .html(let raw):
+                items.append(numbering.item(raw))
+            case .audio(let caption, _), .picture(let caption, _):
+                if !caption.isEmpty { items.append(numbering.item(caption)) }
+            case .rule:
+                break
+            }
+        }
+    }
+
+    /// A tree of list items as lines carrying their depth.
+    private static func flatten(
+        _ items: [LampProseItem], depth: Int, into lines: inout [RenderedListLine],
+        numbering: inout RunNumbering
+    ) {
+        for item in items {
+            for block in item.blocks {
+                switch block {
+                case .paragraph(let text), .heading(_, let text):
+                    lines.append(RenderedListLine(depth: depth, text: numbering.item(text)))
+                case .list(_, _, let inner):
+                    flatten(inner, depth: depth + 1, into: &lines, numbering: &numbering)
+                default:
+                    var carried: [RenderedProseItem] = []
+                    collect([block], into: &carried, numbering: &numbering)
+                    lines.append(contentsOf: carried.map {
+                        RenderedListLine(depth: depth, text: $0)
+                    })
+                }
+            }
         }
     }
 
@@ -565,9 +697,14 @@ private enum RenderedProseBlock: Sendable {
     }
 }
 
-private struct RenderedListLine: Sendable {
+struct RenderedListLine: Sendable {
     let depth: Int
     let text: RenderedProseItem
+
+    init(depth: Int, text: RenderedProseItem) {
+        self.depth = depth
+        self.text = text
+    }
 
     init(_ item: DevotionalListLine, numbering: inout RunNumbering) {
         depth = item.depth
@@ -598,9 +735,10 @@ private actor DevotionalContentRenderer {
                 // One `.text` run holds every consecutive prose line, so it has to
                 // be split back into headings, quotes, lists and paragraphs before
                 // any of them can be styled.
-                return DevotionalProseParser.parse(value, lineBreaks: lineBreaks).map {
-                    .prose(RenderedProseBlock($0, numbering: &numbering))
-                }
+                return RenderedProseBlock.all(
+                    LampProse.blocks(value, options: .init(lineBreaks: lineBreaks)),
+                    numbering: &numbering
+                ).map { .prose($0) }
             case .image(let caption, let url):
                 return [.image(caption: caption, url: url)]
             case .audio(let label, let url):
