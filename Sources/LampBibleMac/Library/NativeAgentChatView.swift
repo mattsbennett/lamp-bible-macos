@@ -992,9 +992,10 @@ enum KeptAgentChats {
         existing(provider: provider, workspace: workspace)?.requestRelease()
     }
 
-    /// Set as Lamp begins to quit, after which no chat starts a reply.
+    /// Set as Lamp begins to quit, after which no chat starts a reply. A
+    /// quit is never cancelled, so it is never cleared.
     @MainActor
-    private(set) static var isQuitting = false
+    static var isQuitting = false
 
     /// Whether any kept chat has a reply running.
     @MainActor
@@ -1008,7 +1009,6 @@ enum KeptAgentChats {
     @MainActor
     @discardableResult
     static func stopEveryReply(within seconds: Double) async -> [NativeAgentChatModel] {
-        isQuitting = true
         let running = models.values.filter(\.isRunning)
         running.forEach { $0.cancel() }
         let deadline = Date().addingTimeInterval(seconds)

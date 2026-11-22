@@ -34,6 +34,11 @@ final class LampAppDelegate: NSObject, NSApplicationDelegate {
         _ sender: NSApplication
     ) -> NSApplication.TerminateReply {
         hasReplied = false
+        // From here no chat starts a reply, whether or not one is running:
+        // a phone's message or a click during the flush below would
+        // otherwise start a run nobody is left to stop. Every path here
+        // quits, so this is never undone.
+        KeptAgentChats.isQuitting = true
         // An agent reply still running is stopped first. Its CLI is a child
         // of Lamp only until Lamp exits; after that it goes on working, and
         // spending the reader's usage, with nothing to show it to.
