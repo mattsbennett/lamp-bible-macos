@@ -245,3 +245,53 @@ narrower than the problem.
 - `lamp-bible-core`: compiler/schema/library tests cover all module kinds, search, plans, editable study data, devotionals, portable backups, media, set/theme preservation, and conflicts.
 - `lamp-bible-macos`: support tests cover Studio documents, reading/search history, Unicode span conversion, read-aloud queues, external links, reading estimates/reminders, deep links, devotional and book media/content parsing, finding text in writing, per-book reading state, workspace merges, sync archives, and WebDAV requests.
 - The signed Xcode application is built with the `Lamp Bible` scheme and smoke-tested by launching a real window and opening a `lampbible://read` URL.
+
+### One block parse, in core: what is measured and what is left
+
+`LampProse` (core f6419c0) reads a writing's blocks the way the editor the
+writer types into reads them, so the apps stop hand-writing readers that
+disagree with it. Four such readers existed between the two apps:
+`DevotionalProseParser` and `DevotionalMarkdownParser` here,
+`NoteMarkdown.Block` and the Files sheet's cutter on the phone.
+
+**Measured, over the 233-file writing corpus (138 of them Markdown the
+harness could read), against markdown-it with the editor's options:**
+
+| reader | files whose block sequence differs |
+| --- | --- |
+| this app's `DevotionalProseParser` | 77 of 138 — 1,225 paragraphs, 506 bullet lists, 245 ordered lists |
+| `LampProse` | 0 of 138 |
+
+Two apparent exceptions were the harness's own gaps, not divergences: it
+emits no block for raw HTML, and it runs markdown-it without the editor's
+own preprocessing, so it does not gather footnotes. Both were traced. The
+comparison is against markdown-it plus a reading of the editor's
+preprocessing, not against the editor binary, so it is strong evidence and
+not proof.
+
+Two divergences it found were real and are fixed here: a note typed as
+plain lines read back joined (1514a9c), and a list whose items wrapped cut
+into one list per item (2dd95ec).
+
+**Inline content crosses as a Foundation `AttributedString`, not as
+Markdown.** Two earlier designs sent it as a string — cut from the source by
+its parsed range, then written back out from the tree — and review found
+nineteen ways the writer's words changed between them: a code span losing
+its backticks, `&copy;` decoded, `**a**__b__` run together into
+`**a****b**`, a title's quotes destroying its link. All were about spelling
+delimiters for a parser to read again. The readers already parse their
+string and walk the runs for `inlinePresentationIntent`, `link` and
+`imageURL`, which is what core now hands them, so nothing is spelled and
+nothing is re-parsed.
+
+**Not yet adopted here.** The reading card still draws through
+`DevotionalProseParser`. Adoption means `RenderedProseBlock` and
+`RenderedProseItem` (`DevotionalContentView.swift`) carrying attributed
+strings instead of source strings, and a tree of list items instead of the
+flat `nestedBulletList`/`nestedNumberedList` cases with integer depths;
+`AgentProseText.segments` follows, and both Mac parsers then go. It is a
+change to the path that draws every note, every writing preview and every
+agent reply, so it wants seeing drawn and not only tested.
+
+Until then this app keeps the divergences the table above counts, except
+the two already fixed.
