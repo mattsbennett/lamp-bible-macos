@@ -44,6 +44,14 @@ struct ReaderChatSidebarView: View {
     @ObservedObject var reader: ReaderWorkspace
 
     @State private var isChoosingChat = false
+    /// Whether the setup under the header row is open. Folded to begin with,
+    /// as the writing assistant's is: the conversation leads, and who
+    /// answers and with what is one row that opens on a click.
+    @AppStorage("reader.chat.showsSetup") private var showsSetup = false
+    @State private var providerConnection = AIProviderConnectionState.checking
+    /// The setup was opened because the provider needed it, so it folds
+    /// again once the provider is connected.
+    @State private var setupOpenedForConnection = false
 
     private var provider: AIProviderCLI {
         ReaderChatTurns.provider(chatChoices: chatChoices, appDefault: providerID)
@@ -198,92 +206,102 @@ struct ReaderChatSidebarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 7) {
-                    Image(systemName: "bubble.left.and.bubble.right")
-                        .foregroundStyle(.secondary)
-                    Text("Reader Chat")
-                        .font(.headline)
-                    Spacer()
-                    Button("Start a Writing", systemImage: "square.and.pencil") {
-                        offerWriting(upTo: nil)
+            HStack(spacing: 2) {
+                setupToggle
+                Button("Start a Writing", systemImage: "square.and.pencil") {
+                    offerWriting(upTo: nil)
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(ChatControlButtonStyle())
+                .disabled(isReplying)
+                .help("Start a writing from this conversation")
+                Button("Chats", systemImage: "clock.arrow.circlepath") {
+                    isChoosingChat = true
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(ChatControlButtonStyle())
+                .help("Start a new chat, or go back to one")
+                .popover(isPresented: $isChoosingChat, arrowEdge: .bottom) {
+                    // Built from a reading taken here, as the popover
+                    // opens, and handed in. Read from this view's own
+                    // `@State` instead and the list came up empty: the
+                    // content closure is called with a copy of the view
+                    // whose state is not the one the button wrote to, so
+                    // what it saw was the initial value.
+                    ReaderChatChooser(
+                        chats: ReaderChatWorkspaceStore
+                            .chats(libraryRootURL: libraryModel.library.rootURL)
+                            .filter { $0.id != chatID },
+                        inUse: OpenReaderChats.inUse,
+                        libraryRootURL: libraryModel.library.rootURL
+                    ) { chosen in
+                        isChoosingChat = false
+                        resume(chosen)
                     }
+                }
+                Button("Close Chat", systemImage: "xmark", action: close)
                     .labelStyle(.iconOnly)
                     .buttonStyle(ChatControlButtonStyle())
-                    .disabled(isReplying)
-                    .help("Start a writing from this conversation")
-                    Button("Chats", systemImage: "clock.arrow.circlepath") {
-                        isChoosingChat = true
-                    }
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(ChatControlButtonStyle())
-                    .help("Start a new chat, or go back to one")
-                    .popover(isPresented: $isChoosingChat, arrowEdge: .bottom) {
-                        // Built from a reading taken here, as the popover
-                        // opens, and handed in. Read from this view's own
-                        // `@State` instead and the list came up empty: the
-                        // content closure is called with a copy of the view
-                        // whose state is not the one the button wrote to, so
-                        // what it saw was the initial value.
-                        ReaderChatChooser(
-                            chats: ReaderChatWorkspaceStore
-                                .chats(libraryRootURL: libraryModel.library.rootURL)
-                                .filter { $0.id != chatID },
-                            inUse: OpenReaderChats.inUse,
-                            libraryRootURL: libraryModel.library.rootURL
-                        ) { chosen in
-                            isChoosingChat = false
-                            resume(chosen)
-                        }
-                    }
-                    Button("Close Chat", systemImage: "xmark", action: close)
-                        .labelStyle(.iconOnly)
-                        .buttonStyle(ChatControlButtonStyle())
-                        .help("Close reader chat")
-                }
-
-                // Who answers, with what, in one quiet row of menus that each
-                // say their whole choice. Bordered pop-ups side by side in a
-                // pane this narrow cut "Default model" to "Defa…model".
-                HStack(spacing: 2) {
-                    Menu {
-                        Picker("Provider", selection: providerSelection) {
-                            ForEach(AIProviderCLI.allCases) { provider in
-                                Text(provider.shortName).tag(provider.rawValue)
-                            }
-                        }
-                        .pickerStyle(.inline)
-                        .labelsHidden()
-                    } label: {
-                        ChatControlMenuLabel(title: provider.shortName, systemImage: provider.systemImage)
-                    }
-                    .menuStyle(.button)
-                    .menuIndicator(.hidden)
-                    .buttonStyle(ChatControlButtonStyle())
-                    .fixedSize()
-                    .accessibilityLabel("Provider")
-                    .accessibilityValue(provider.shortName)
-                    .help("Which AI answers in this chat")
-
-                    AgentChatProviderChoice(
-                        kind: .model, provider: provider, workspace: workspace,
-                        chatChoices: $chatChoices
-                    )
-                    AgentChatProviderChoice(
-                        kind: .effort, provider: provider, workspace: workspace,
-                        chatChoices: $chatChoices
-                    )
-                    Spacer(minLength: 0)
-                }
-                .padding(.leading, -6)
-
-                contextCard
-                startedWritingsLine
+                    .help("Close reader chat")
             }
-            .padding(.horizontal, 14)
-            .padding(.top, 12)
-            .padding(.bottom, 12)
+            .padding(.leading, 12)
+            .padding(.trailing, 10)
+            // The writing assistant's setup row is this height, so the two
+            // chats' headers are one thing, wherever each is met.
+            .frame(height: LampMetrics.paneHeaderHeight)
             Divider()
+
+            if showsSetup {
+                VStack(alignment: .leading, spacing: 10) {
+                    // Who answers, with what, in one quiet row of menus that each
+                    // say their whole choice. Bordered pop-ups side by side in a
+                    // pane this narrow cut "Default model" to "Defa…model".
+                    HStack(spacing: 2) {
+                        Menu {
+                            Picker("Provider", selection: providerSelection) {
+                                ForEach(AIProviderCLI.allCases) { provider in
+                                    Text(provider.shortName).tag(provider.rawValue)
+                                }
+                            }
+                            .pickerStyle(.inline)
+                            .labelsHidden()
+                        } label: {
+                            ChatControlMenuLabel(title: provider.shortName, systemImage: provider.systemImage)
+                        }
+                        .menuStyle(.button)
+                        .menuIndicator(.hidden)
+                        .buttonStyle(ChatControlButtonStyle())
+                        .fixedSize()
+                        .accessibilityLabel("Provider")
+                        .accessibilityValue(provider.shortName)
+                        .help("Which AI answers in this chat")
+
+                        AgentChatProviderChoice(
+                            kind: .model, provider: provider, workspace: workspace,
+                            chatChoices: $chatChoices
+                        )
+                        AgentChatProviderChoice(
+                            kind: .effort, provider: provider, workspace: workspace,
+                            chatChoices: $chatChoices
+                        )
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.leading, -6)
+
+                    contextCard
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                Divider()
+            }
+
+            // Not setup: where this chat's work went, so it stays in view.
+            if hasStartedWritings {
+                startedWritingsLine
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                Divider()
+            }
 
             // Only a configuration made for **this** chat. The pane is kept
             // when its tab moves to another chat, and a chat mounted with the
@@ -311,6 +329,10 @@ struct ReaderChatSidebarView: View {
                     forkFromTurn: forkFromTurn,
                     startWritingFromTurn: { offerWriting(upTo: $0) }
                 )
+                // The setup row names the provider and whether it is
+                // connected, so the chat's own header does not say it again.
+                .identityShownByHost()
+                .onConnectionChanged { state in providerConnection = state }
                 .id("\(provider.rawValue)|\(workspace.path)")
             } else if let preparationError {
                 ContentUnavailableView {
@@ -378,6 +400,25 @@ struct ReaderChatSidebarView: View {
             loadStartedWritings()
         }
         .onChange(of: provider) { _, _ in loadChoices() }
+        // A provider not installed or not signed in: the setup opens, with
+        // its picker beside the chat's Connect, so another can be chosen.
+        // As the writing assistant does.
+        .onChange(of: providerConnection) { _, state in
+            switch state {
+            case .checking:
+                break
+            case .connected:
+                if setupOpenedForConnection {
+                    withAnimation(.easeInOut(duration: 0.15)) { showsSetup = false }
+                    setupOpenedForConnection = false
+                }
+            case .notInstalled, .notConnected, .unavailable:
+                if !showsSetup {
+                    withAnimation(.easeInOut(duration: 0.15)) { showsSetup = true }
+                    setupOpenedForConnection = true
+                }
+            }
+        }
         .onChange(of: accessPolicy) { _, _ in
             do {
                 try writeAccessPolicy()
@@ -385,6 +426,56 @@ struct ReaderChatSidebarView: View {
                 preparationError = error.localizedDescription
                 configuration = nil
             }
+        }
+    }
+
+    /// The header's own row, opened on the whole of it: who answers, with
+    /// what model, about which passage, and whether it is connected. The
+    /// setup it opens holds the choices and the context card.
+    private var setupToggle: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) { showsSetup.toggle() }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(showsSetup ? 90 : 0))
+                    .frame(width: 10)
+                Image(systemName: provider.systemImage)
+                    .foregroundStyle(.secondary)
+                Text(setupSummary)
+                    .font(.callout.weight(.medium))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if providerConnection != .connected {
+                    Label(providerConnection.label, systemImage: providerConnection.systemImage)
+                        .labelStyle(.iconOnly)
+                        .font(.callout)
+                        .foregroundStyle(providerConnection.color)
+                        .help(providerConnection.label)
+                }
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(showsSetup ? "Hide the chat's setup"
+              : "Choose the provider and model, and see what each message is sent with")
+    }
+
+    private var setupSummary: String {
+        // The model this chat runs, where one is chosen; the provider's own
+        // default goes unnamed, as its menu calls it only "Default model".
+        let key = AgentChatModelChoice.defaultsKey(provider.wireProvider)
+        let model = chatChoices.value(for: key, orAppDefault: UserDefaults.standard.string(forKey: key)) ?? ""
+        return ([provider.shortName, model.isEmpty ? nil : model, capture()?.reference].compactMap { $0 })
+            .joined(separator: " · ")
+    }
+
+    private var hasStartedWritings: Bool {
+        startedWritings.contains { started in
+            libraryModel.devotionals.contains { $0.id == started.writingID }
         }
     }
 
