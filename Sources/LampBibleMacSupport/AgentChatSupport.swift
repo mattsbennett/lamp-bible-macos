@@ -803,37 +803,70 @@ public struct AgentChatUsageLimit: Equatable, Sendable {
 /// a failure is written into the chat's transcript, which goes to every Mac
 /// and phone the library syncs with.
 public enum AgentChatSecrets {
-    /// Names whose value is a credential whatever it looks like: `api_key`,
-    /// `client_secret`, `password`, and environment names such as
-    /// `GEMINI_API_KEY` or `GITHUB_TOKEN`.
-    private static let credentialName = #"(?:[A-Za-z0-9]+[_-])*(?:api[_-]?key|secret|password|passwd|access[_-]?token|refresh[_-]?token|auth[_-]?token|bearer[_-]?token)|[A-Z0-9]+(?:_[A-Z0-9]+)*_(?:KEY|TOKEN|SECRET|PASSWORD)"#
-    /// A value: quoted whole, or up to the next space or delimiter.
-    private static let value = #"("[^"]*"|'[^']*'|[^\s"',;]+)"#
-
-    private static let patterns: [(NSRegularExpression, String)] = [
-        // `Authorization: Bearer …`, and a bare bearer token.
-        (try! NSRegularExpression(pattern: #"(?i)\b(bearer)\s+[A-Za-z0-9._~+/=-]{8,}"#), "$1 [redacted]"),
-        // Anthropic and OpenAI keys, and other `sk-` keys.
-        (try! NSRegularExpression(pattern: #"\bsk-[A-Za-z0-9_-]{12,}"#), "sk-[redacted]"),
-        // A credential's name and its value, keeping the name.
-        (try! NSRegularExpression(
-            pattern: "(?<![A-Za-z0-9_])(\"?(?:" + credentialName + ")\"?\\s*[:=]\\s*)" + value,
-            options: [.caseInsensitive]
-        ), "$1[redacted]"),
-        // A bare `token` only where the value looks like one, so "Unexpected
-        // token: undefined" keeps its word.
-        (try! NSRegularExpression(
-            pattern: #"(?i)(?<![A-Za-z0-9_])("?token"?\s*[:=]\s*)("[^"]{16,}"|[A-Za-z0-9._~+/=-]*[0-9][A-Za-z0-9._~+/=-]*)"#
-        ), "$1[redacted]"),
-    ]
+    private static let bearer = try! NSRegularExpression(pattern: #"(?i)\b(bearer)\s+[A-Za-z0-9._~+/=-]{8,}"#)
+    private static let skKey = try! NSRegularExpression(pattern: #"\bsk-[A-Za-z0-9_-]{12,}"#)
+    /// A field and its value: an optionally quoted name of bounded length,
+    /// `:` or `=`, and a value quoted whole (escapes included) or running
+    /// to the next delimiter. Whether the name is a credential is decided
+    /// in code, so no part of the pattern can backtrack far.
+    private static let field = try! NSRegularExpression(pattern:
+        #"(?<![A-Za-z0-9_-])(["']?)([A-Za-z][A-Za-z0-9_-]{0,63})\1(\s*[:=]\s*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s"',;}\]]+)"#
+    )
 
     public static func redacted(_ text: String) -> String {
-        var result = text
-        for (pattern, template) in patterns {
-            let range = NSRange(result.startIndex..<result.endIndex, in: result)
-            result = pattern.stringByReplacingMatches(in: result, range: range, withTemplate: template)
+        var result = replacing(bearer, in: text, with: "$1 [redacted]")
+        result = replacing(skKey, in: result, with: "sk-[redacted]")
+        let ns = result as NSString
+        var pieces: [String] = []
+        var cursor = 0
+        var searchFrom = 0
+        // One match at a time: a field that is not a credential resumes the
+        // search just after its name, so "failed: GEMINI_API_KEY=…" does not
+        // take the key as the value of `failed` and pass over it.
+        while searchFrom < ns.length,
+              let match = field.firstMatch(in: result, range: NSRange(location: searchFrom, length: ns.length - searchFrom)) {
+            let nameRange = match.range(at: 2)
+            let valueRange = match.range(at: 4)
+            let name = ns.substring(with: nameRange)
+            let value = ns.substring(with: valueRange)
+            guard isCredential(name: name, value: value) else {
+                searchFrom = nameRange.location + nameRange.length
+                continue
+            }
+            pieces.append(ns.substring(with: NSRange(location: cursor, length: valueRange.location - cursor)))
+            pieces.append("[redacted]")
+            cursor = valueRange.location + valueRange.length
+            searchFrom = cursor
         }
-        return result
+        pieces.append(ns.substring(from: cursor))
+        return pieces.joined()
+    }
+
+    /// Credential names whatever the value looks like; environment-style
+    /// names (`GEMINI_API_KEY`, `GITHUB_TOKEN`) only in capitals, so a
+    /// `sort_key` or `primary_key` keeps its value. A bare `token`, which
+    /// prose uses too ("Unexpected token: 123"), only where the value is
+    /// long enough to be one.
+    static func isCredential(name: String, value: String) -> Bool {
+        let lowered = name.lowercased().replacingOccurrences(of: "-", with: "_")
+        let alwaysSecret = ["api_key", "apikey", "secret", "password", "passwd", "access_token",
+                            "refresh_token", "auth_token", "bearer_token", "id_token", "private_key",
+                            "secret_key", "access_key", "session_token", "client_secret"]
+        if alwaysSecret.contains(where: { lowered == $0 || lowered.hasSuffix("_" + $0) }) { return true }
+        if name == name.uppercased(), name.contains("_"),
+           ["_KEY", "_TOKEN", "_SECRET", "_PASSWORD"].contains(where: { name.hasSuffix($0) }) {
+            return true
+        }
+        if lowered == "token" || lowered.hasSuffix("_token") {
+            return value.trimmingCharacters(in: CharacterSet(charactersIn: "\"'")).count >= 12
+        }
+        return false
+    }
+
+    private static func replacing(_ pattern: NSRegularExpression, in text: String, with template: String) -> String {
+        pattern.stringByReplacingMatches(
+            in: text, range: NSRange(text.startIndex..<text.endIndex, in: text), withTemplate: template
+        )
     }
 }
 
@@ -1270,9 +1303,27 @@ public enum AgentProcessTree {
         }
     }
 
+    /// The process with this number as it is now, to know it by later.
+    public static func member(_ pid: pid_t) -> Member? {
+        processTable().first { $0.0.pid == pid }?.0
+    }
+
+    /// Every process descended from `root`, but only if the process with
+    /// that number is still the one it was: checked in the same look at the
+    /// process table that finds its children, so a number reused by
+    /// another process gives nothing.
+    public static func descendants(of root: Member) -> [Member] {
+        let table = processTable()
+        guard table.contains(where: { $0.0 == root }) else { return [] }
+        return descendants(of: root.pid, in: table)
+    }
+
     /// Every process descended from `root`, from the kernel's process table.
     public static func descendants(of root: pid_t) -> [Member] {
-        let table = processTable()
+        descendants(of: root, in: processTable())
+    }
+
+    private static func descendants(of root: pid_t, in table: [(Member, pid_t)]) -> [Member] {
         var children: [pid_t: [Member]] = [:]
         for (member, parent) in table { children[parent, default: []].append(member) }
         var result: [Member] = []
@@ -1481,14 +1532,32 @@ public enum AgentACPRun {
             return String(format: reason, "act")
         }
         let allowed = ((settings["permissions"] as? [String: Any])?["allow"] as? [String]) ?? []
-        let readOnly = ["read", "view", "list", "grep", "search", "find", "mcp(lamp"]
-        if allowed.contains(where: { rule in
-            let lowered = rule.lowercased()
-            return !readOnly.contains { lowered.hasPrefix($0) }
-        }) {
+        if allowed.contains(where: { !isReadOnlyRule($0) }) {
             return String(format: reason, "run commands or change files")
         }
         return nil
+    }
+
+    /// Whether an allow rule, `action(target)`, can only read: a reading
+    /// action, or Lamp's own MCP server by its exact name (`mcp(lamp)` or
+    /// `mcp(lamp/<tool>)`), never another server whose name merely starts
+    /// with it.
+    static func isReadOnlyRule(_ rule: String) -> Bool {
+        let trimmed = rule.trimmingCharacters(in: .whitespaces)
+        let action: String
+        let target: String
+        if let open = trimmed.firstIndex(of: "("), trimmed.hasSuffix(")") {
+            action = String(trimmed[..<open]).lowercased()
+            target = String(trimmed[trimmed.index(after: open)..<trimmed.index(before: trimmed.endIndex)])
+        } else {
+            action = trimmed.lowercased()
+            target = ""
+        }
+        if ["read_file", "view_file", "list_dir", "list_directory", "grep_search", "find_by_name", "codebase_search", "read"].contains(action) {
+            return true
+        }
+        if action == "mcp" { return target == "lamp" || target.hasPrefix("lamp/") }
+        return false
     }
 
     public static func prompt(sessionID: String, text: String) -> [String: Any] {
@@ -1546,8 +1615,10 @@ public enum AgentACPRun {
         let kind = call["kind"] as? String ?? ""
         let paths = (call["locations"] as? [[String: Any]] ?? []).compactMap { $0["path"] as? String }
         // Only this session's own folder: never another session's.
+        // Where it puts a long tool result to read back, and nothing else of
+        // its own: not the rest of this session's folder, nor another's.
         let agentFolder = sessionID.map {
-            home.appendingPathComponent(".gemini/antigravity-cli/brain/\($0)", isDirectory: true)
+            home.appendingPathComponent(".gemini/antigravity-cli/brain/\($0)/.system_generated", isDirectory: true)
         }
         func inside(_ root: URL?) -> Bool {
             guard let root else { return false }
@@ -1575,6 +1646,7 @@ public enum AgentACPRun {
     /// lands. A dangling link is refused.
     static func confined(_ path: String, to root: URL) -> Bool {
         guard let resolvedPath = resolved(path), let resolvedRoot = resolved(root.path) else { return false }
+        if resolvedRoot == "/" { return true }
         return resolvedPath == resolvedRoot || resolvedPath.hasPrefix(resolvedRoot + "/")
     }
 
@@ -1587,7 +1659,17 @@ public enum AgentACPRun {
         while !existing.isEmpty {
             var info = stat()
             if lstat("/" + existing.joined(separator: "/"), &info) == 0 { break }
+            // Only a part that is not there is passed over; any other
+            // failure means the path can't be judged.
+            guard errno == ENOENT else { return nil }
             missing.insert(existing.removeLast(), at: 0)
+        }
+        // A file can only be made under a folder.
+        if !missing.isEmpty {
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: "/" + existing.joined(separator: "/"), isDirectory: &isDirectory),
+                  isDirectory.boolValue
+            else { return nil }
         }
         guard let real = realpath("/" + existing.joined(separator: "/"), nil) else { return nil }
         defer { free(real) }

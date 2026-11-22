@@ -56,11 +56,17 @@ extension AIProviderCLI {
 enum AgentHelperProcesses {
     private static let lock = NSLock()
     private nonisolated(unsafe) static var running: [ObjectIdentifier: Process] = [:]
+    private nonisolated(unsafe) static var shuttingDown = false
 
+    /// Takes a process just launched into the registry. Once quitting has
+    /// begun it is ended at once instead: a check started after the last
+    /// look would otherwise outlive Lamp.
     static func track(_ process: Process) {
         lock.lock()
-        running[ObjectIdentifier(process)] = process
+        let refused = shuttingDown
+        if !refused { running[ObjectIdentifier(process)] = process }
         lock.unlock()
+        if refused { end([process]) }
     }
 
     static func untrack(_ process: Process) {
@@ -69,16 +75,33 @@ enum AgentHelperProcesses {
         lock.unlock()
     }
 
-    /// Ends every one still running, with what it started.
+    /// Ends every one still running, with what it started, and refuses any
+    /// launched after. Waits up to a second for each to go before killing
+    /// what is left: called while quitting, after the chats have stopped.
     static func terminateAll() {
         lock.lock()
+        shuttingDown = true
         let processes = Array(running.values)
         running = [:]
         lock.unlock()
-        for process in processes where process.isRunning {
-            let tree = AgentProcessTree.descendants(of: process.processIdentifier)
-            process.terminate()
+        end(processes)
+    }
+
+    /// Asks each to stop, then kills it and what it started if it has not
+    /// gone within a second.
+    static func end(_ processes: [Process]) {
+        let alive = processes.filter(\.isRunning)
+        guard !alive.isEmpty else { return }
+        let trees = alive.map { process -> (Process, [AgentProcessTree.Member]) in
+            let root = AgentProcessTree.member(process.processIdentifier)
+            return (process, root.map(AgentProcessTree.descendants(of:)) ?? [])
+        }
+        alive.forEach { $0.terminate() }
+        let deadline = Date().addingTimeInterval(1)
+        while alive.contains(where: \.isRunning), Date() < deadline { usleep(20_000) }
+        for (process, tree) in trees {
             AgentProcessTree.kill(tree)
+            if process.isRunning { Darwin.kill(process.processIdentifier, SIGKILL) }
         }
     }
 }
@@ -139,12 +162,25 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
     /// that quitting would never let fire.
     private var stoppedTree: [AgentProcessTree.Member] = []
 
+    /// Set once a run has ended and taken what its stop found, so a stop
+    /// still looking at the process table then kills what it found itself
+    /// rather than leaving it for a run that has already gone.
+    private var runEnded = true
+
     private func killWhatTheStopLeft() {
         lock.lock()
         let leftovers = stoppedTree
         stoppedTree = []
+        runEnded = true
         lock.unlock()
         if !leftovers.isEmpty { AgentProcessTree.kill(leftovers) }
+    }
+
+    private func runStarted() {
+        lock.lock()
+        runEnded = false
+        stoppedTree = []
+        lock.unlock()
     }
 
     /// Runs the provider, handing `onLine` each line of its output as it
@@ -194,24 +230,22 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
     /// can save its session, which the next message resumes. What it started
     /// is also killed as the run ends; see `killWhatTheStopLeft`.
     private func stop(_ process: Process) {
-        guard process.isRunning else { return }
-        let root = process.processIdentifier
+        guard process.isRunning, let root = AgentProcessTree.member(process.processIdentifier) else { return }
         let started = AgentProcessTree.descendants(of: root)
         lock.lock()
-        stoppedTree += started
+        let ended = runEnded
+        if !ended { stoppedTree += started }
         lock.unlock()
+        if ended { AgentProcessTree.kill(started) }
         process.terminate()
         DispatchQueue.global().asyncAfter(deadline: .now() + Self.stopGraceSeconds) {
-            // Looked for again only while the root is still the process it
-            // was: a number freed by its exit can belong to something else
-            // by now, and its children are not this run's.
-            guard process.isRunning else {
-                AgentProcessTree.kill(started)
-                return
-            }
+            // Looked for again only by the root's identity, checked in the
+            // same look at the process table: a number freed by its exit
+            // can belong to something else by now. What it started goes
+            // before it, so nothing is left to be handed to another parent.
             let members = started + AgentProcessTree.descendants(of: root)
-            Darwin.kill(root, SIGKILL)
             AgentProcessTree.kill(members)
+            if process.isRunning { Darwin.kill(root.pid, SIGKILL) }
         }
     }
 
@@ -275,6 +309,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
 
             guard !isCancelled else { return .stoppedBeforeStarting }
             try process.run()
+            runStarted()
             AgentHelperProcesses.track(process)
             // And once more, now there is something to terminate. Stop
             // between the guard above and this line found an assigned but
@@ -428,6 +463,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
 
             guard !isCancelled else { return .stoppedBeforeStarting }
             try process.run()
+            runStarted()
             AgentHelperProcesses.track(process)
             if isCancelled { stop(process) }
             let watchdog = watchForStall(in: process)
@@ -445,6 +481,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             }
             _ = request("initialize", AgentACPRun.initialize())
             var configurationQueue: [(method: String, params: [String: Any])] = []
+            var refusal: String?
             var answered = false
             var failed = false
 
@@ -458,10 +495,18 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                 lastOutput = Date()
                 lock.unlock()
                 for line in reader.lines(from: chunk) {
-                    collected += Data(line.utf8) + Data([0x0A])
-                    onLine?(line)
-                    guard let message = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
-                    else { continue }
+                    let message = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
+                    // The answer to setting the model or thinking level is
+                    // Lamp's business: refused, the turn goes on with the
+                    // default, and it is not read as the run failing.
+                    let isSettingAnswer = message.flatMap { $0["id"] as? Int }
+                        .flatMap { pending[$0] }
+                        .map { ["session/set_mode", "session/set_config_option"].contains($0) } ?? false
+                    if !isSettingAnswer {
+                        collected += Data(line.utf8) + Data([0x0A])
+                        onLine?(line)
+                    }
+                    guard let message else { continue }
                     if let method = message["method"] as? String, let id = message["id"] {
                         // A request from the agent.
                         if method == "session/request_permission", let params = message["params"] as? [String: Any] {
@@ -484,6 +529,13 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                     // A model or level Antigravity does not know is said (the
                     // error is in the output) and the turn goes on without it;
                     // any other error ends the turn.
+                    if message["error"] != nil, method == "session/set_mode", mode.isReadOnly {
+                        // Without the asking mode, actions the session's own
+                        // mode approves would never reach Lamp's rule.
+                        refusal = "Antigravity wouldn’t switch to asking before it acts, so Lamp didn’t send this reader question."
+                        failed = true
+                        break reading
+                    }
                     if message["error"] != nil, !["session/set_mode", "session/set_config_option"].contains(method) {
                         failed = true
                         break reading
@@ -545,7 +597,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             return AgentCLIProcessResult(
                 exitCode: answered && !failed ? 0 : 1,
                 output: String(decoding: collected, as: UTF8.self),
-                launchError: nil,
+                launchError: refusal,
                 stalled: wasStalled
             )
         } catch {
@@ -558,7 +610,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
     private static func giveUp(on process: Process, after seconds: Double) {
         AgentHelperProcesses.track(process)
         DispatchQueue.global().asyncAfter(deadline: .now() + seconds) {
-            if process.isRunning { process.terminate() }
+            AgentHelperProcesses.end([process])
             AgentHelperProcesses.untrack(process)
         }
     }
@@ -1811,6 +1863,9 @@ final class NativeAgentChatModel: ObservableObject {
 
     /// Why Lamp, rather than the person, stopped the running reply.
     private var stoppedByLamp: String?
+    /// Counts runs, so an answer that arrives late is applied only to the
+    /// run that asked for it.
+    private var runGeneration = 0
 
     /// The folder this chat runs in.
     var workspaceURL: URL { workspace }
@@ -1893,16 +1948,26 @@ final class NativeAgentChatModel: ObservableObject {
         // Codex does not say in its stream how it is billed; its login status
         // does. Asked on every run, since the account can change between
         // them, and alongside the run rather than ahead of it.
+        runGeneration += 1
+        let generation = runGeneration
+        let billingRunner = AgentCLIProcessRunner()
         let billingCheck: Task<Void, Never>? = provider == .codex ? Task { [weak self, workspace] in
-            let status = await AgentCLIProcessRunner().run(
+            let status = await billingRunner.run(
                 executableName: AIProviderCLI.codex.executable,
                 arguments: ["login", "status"],
                 workingDirectory: workspace
             )
-            guard let billing = AgentChatBilling.codex(loginStatus: status.output) else { return }
-            self?.absorb([.billing(billing)])
+            // Only for the run that asked: a slow answer from an earlier
+            // run must not overwrite a later one's.
+            guard !Task.isCancelled, let self, self.runGeneration == generation,
+                  let billing = AgentChatBilling.codex(loginStatus: status.output)
+            else { return }
+            self.absorb([.billing(billing)])
         } : nil
-        defer { billingCheck?.cancel() }
+        defer {
+            billingCheck?.cancel()
+            billingRunner.cancel()
+        }
         let chatChoices = AgentChatChoicesStore.load(in: workspace)
         // Through a stream rather than a task per line: separate tasks are not
         // ordered, and a reply whose fragments arrive out of order is a reply

@@ -49,6 +49,14 @@ final class LampAppDelegate: NSObject, NSApplicationDelegate {
                 let stopped = await KeptAgentChats.stopEveryReply(
                     within: AgentCLIProcessRunner.acpCancelGraceSeconds + AgentCLIProcessRunner.stopGraceSeconds + 2
                 )
+                // Whatever is still running — a run the deadline missed, a
+                // usage or sign-in check — is ended before any writing is
+                // collected, so nothing writes after its collection.
+                AgentHelperProcesses.terminateAll()
+                let deadline = Date().addingTimeInterval(2)
+                while stopped.contains(where: \.isRunning), Date() < deadline {
+                    try? await Task.sleep(for: .milliseconds(50))
+                }
                 guard let self else { return }
                 // What each stopped writing turn wrote is saved and marked
                 // before the flush counts what is left. A writing a window
@@ -75,9 +83,6 @@ final class LampAppDelegate: NSObject, NSApplicationDelegate {
                         )
                     }
                 }
-                // Whatever is still running — a run the stop's deadline
-                // missed, a usage or sign-in check — goes now.
-                AgentHelperProcesses.terminateAll()
                 if self.flushPendingWrites(then: sender) { self.reply(to: sender) }
             }
             return .terminateLater

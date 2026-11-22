@@ -248,6 +248,8 @@ enum AIProviderCommandRunner {
                 process.standardInput = FileHandle.nullDevice
                 do {
                     try process.run()
+                    AgentHelperProcesses.track(process)
+                    defer { AgentHelperProcesses.untrack(process) }
                     let data = pipe.fileHandleForReading.readDataToEndOfFile()
                     process.waitUntilExit()
                     continuation.resume(returning: (

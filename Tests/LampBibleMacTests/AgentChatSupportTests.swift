@@ -695,5 +695,57 @@ struct AgentACPContainmentTests {
         #expect(AgentChatSecrets.redacted("Unexpected token: undefined") == "Unexpected token: undefined")
         #expect(AgentChatSecrets.redacted("Your token expired.") == "Your token expired.")
         #expect(AgentChatSecrets.redacted("token: 9f8e7d6c5b4a3f2e1d0c") == "token: [redacted]")
+        // Codex's second-round probes.
+        #expect(!AgentChatSecrets.redacted("{'password': 'first part second part'}").contains("second part"))
+        #expect(!AgentChatSecrets.redacted(#"password="first \" second secret suffix""#).contains("suffix"))
+        #expect(AgentChatSecrets.redacted("token=abcdefghijklmnopqrstuvwx") == "token=[redacted]")
+        for kept in ["sort_key=created_at", "primary_key=user_id", "Unexpected token: 123"] {
+            #expect(AgentChatSecrets.redacted(kept) == kept)
+        }
+    }
+
+    @Test func redactionStaysFastOnInputThatAlmostMatches() {
+        let input = String(repeating: "a-", count: 8000)
+        let started = Date()
+        _ = AgentChatSecrets.redacted(input)
+        #expect(Date().timeIntervalSince(started) < 0.5)
+    }
+
+    @Test func onlyLampsOwnServerCountsAsReadOnly() {
+        #expect(AgentACPRun.isReadOnlyRule("mcp(lamp)"))
+        #expect(AgentACPRun.isReadOnlyRule("mcp(lamp/read_passage)"))
+        #expect(!AgentACPRun.isReadOnlyRule("mcp(lamp-admin/delete_record)"))
+        #expect(AgentACPRun.isReadOnlyRule("read_file(src/)"))
+        #expect(!AgentACPRun.isReadOnlyRule("write_file(src/)"))
+        #expect(!AgentACPRun.isReadOnlyRule("command(git)"))
+        #expect(!AgentACPRun.isReadOnlyRule("readme_writer(x)"))
+    }
+
+    @Test func theRootAndImpossiblePathsAreJudgedRight() {
+        #expect(AgentACPRun.confined("/tmp", to: URL(fileURLWithPath: "/")))
+        // A file cannot be made inside a file.
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("acp-file-\(UUID().uuidString)")
+        FileManager.default.createFile(atPath: file.path, contents: Data())
+        defer { try? FileManager.default.removeItem(at: file) }
+        #expect(!AgentACPRun.confined(file.path + "/new.md", to: FileManager.default.temporaryDirectory))
+    }
+
+    @Test func aRescanOfAGoneRootFindsNothing() throws {
+        let shell = Process()
+        shell.executableURL = URL(fileURLWithPath: "/bin/sh")
+        shell.arguments = ["-c", "sleep 30 & wait"]
+        try shell.run()
+        let root = try #require(AgentProcessTree.member(shell.processIdentifier))
+        var children: [AgentProcessTree.Member] = []
+        for _ in 0..<50 where children.isEmpty {
+            children = AgentProcessTree.descendants(of: root)
+            if children.isEmpty { Thread.sleep(forTimeInterval: 0.05) }
+        }
+        #expect(!children.isEmpty)
+        AgentProcessTree.kill(children)
+        shell.waitUntilExit()
+        // The same number, as if reused, with a different start: nothing.
+        let impostor = AgentProcessTree.Member(pid: root.pid, started: timeval(tv_sec: 1, tv_usec: 0))
+        #expect(AgentProcessTree.descendants(of: impostor).isEmpty)
     }
 }
