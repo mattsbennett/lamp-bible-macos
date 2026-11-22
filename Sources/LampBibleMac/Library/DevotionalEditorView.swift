@@ -2452,10 +2452,15 @@ struct DevotionalEditorView: View {
         // survives a view coming and going never says `ready` again,
         // and a host resetting on its own lifecycle would let go of
         // passages that are still redoable.
-        coordinator.onRedoAvailable = { available, discarded, text in
-            guard let writingID = reviewKey?.writingID else { return }
+        // The page itself identifies the redo state, since a writing
+        // can be open in two editors at once — the reader window's
+        // inline one and a Writing window — and one page's branch
+        // ending says nothing about the other's.
+        coordinator.onRedoAvailable = { [weak coordinator] available, discarded, text in
+            guard let coordinator, let writingID = reviewKey?.writingID else { return }
             WritingReviewObligations.shared.redo(
-                available: available, discarded: discarded, standingIn: text, for: writingID
+                available: available, discarded: discarded, standingIn: text,
+                page: coordinator, for: writingID
             )
         }
         coordinator.onReviewMarksDrawn = { [weak reviewSession] in
@@ -2834,6 +2839,9 @@ struct DevotionalEditorView: View {
         guard let key else { return }
         let owing = WritingReviewObligations.shared.owing(for: key)
         guard !owing.isEmpty else { return }
+        // Where the page's history stood as this save committed, so a
+        // Redo landing while the proving runs is not missed.
+        let historyMark = WritingReviewObligations.shared.historyMarks(for: key.writingID)
         // One settle at a time, in the order the saves committed.
         //
         // Each takes its obligations as its save commits, which is
@@ -2860,7 +2868,10 @@ struct DevotionalEditorView: View {
                 }
             }.value
             for (owed, answers, current) in proofs {
-                await settle(owed, answers: answers, current: current, for: key)
+                await settle(
+                    owed, answers: answers, current: current, for: key,
+                    historyMark: historyMark
+                )
             }
         }
     }
@@ -2879,10 +2890,13 @@ struct DevotionalEditorView: View {
         _ owing: WritingReviewSession.OwedRestore,
         answers: [UUID: LampWritingReview.RestorePlan.Standing],
         current: [UUID: LampWritingReview.RestorePlan.Standing],
-        for key: WritingReviewKey
+        for key: WritingReviewKey,
+        historyMark: (changes: Int, discards: Int)
     ) async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            settle(owing, answers: answers, current: current, for: key) {
+            settle(
+                owing, answers: answers, current: current, for: key, historyMark: historyMark
+            ) {
                 continuation.resume()
             }
         }
@@ -2893,6 +2907,7 @@ struct DevotionalEditorView: View {
         answers: [UUID: LampWritingReview.RestorePlan.Standing],
         current: [UUID: LampWritingReview.RestorePlan.Standing],
         for key: WritingReviewKey,
+        historyMark: (changes: Int, discards: Int),
         then done: @escaping () -> Void
     ) {
         // Core's decision, which the phone makes too
@@ -2925,7 +2940,14 @@ struct DevotionalEditorView: View {
         // kept: of the two failures, recording nothing is the one to
         // have. Both halves of this were found by the iOS session,
         // against their own version of it, and these are their rules.
-        let heldForRedo = WritingReviewObligations.shared.canRedo(key.writingID) ? dormant : []
+        // Read against where the history stood when this settle's texts
+        // were taken, not only where it stands now: a Redo landing
+        // while the proving ran would otherwise be answered with the
+        // older texts and the passage dropped. The iOS session found
+        // that race.
+        let keepsUndone = WritingReviewObligations.shared
+            .keepsUndone(since: historyMark, for: key.writingID)
+        let heldForRedo = keepsUndone ? dormant : []
         let owed = waiting.union(heldForRedo)
         guard !stands.isEmpty else {
             if owed.count != pending.count {

@@ -56,9 +56,49 @@ final class WritingReviewObligations {
     /// The page says so as its history changes, and on `ready` — where a
     /// fresh page has none — so the host never has to guess. Nothing is
     /// kept dormant for a writing this is false for.
-    private var redoAvailable: Set<String> = []
+    /// One entry per live page, since a writing can be open in more
+    /// than one: the reader window's inline editor and a Writing window
+    /// can hold the same writing at once, and a linked-writing hop can
+    /// come back to where it started. A page that has gone takes its
+    /// entry with it.
+    private final class PageRedo {
+        weak var page: AnyObject?
+        var canRedo: Bool
+        init(page: AnyObject, canRedo: Bool) {
+            self.page = page
+            self.canRedo = canRedo
+        }
+    }
 
-    func canRedo(_ writingID: String) -> Bool { redoAvailable.contains(writingID) }
+    private var pages: [String: [PageRedo]] = [:]
+    /// How many times a writing's history has spoken, and how many of
+    /// those threw the redo branch away. A settle takes both when it
+    /// starts and reads them again when it applies, so a Redo that
+    /// landed while it was proving is not answered with the older
+    /// texts. The iOS session found that race.
+    private var historyChanges: [String: Int] = [:]
+    private var discards: [String: Int] = [:]
+
+    /// Whether any live page of this writing can still redo.
+    func canRedo(_ writingID: String) -> Bool {
+        pages[writingID]?.contains { $0.page != nil && $0.canRedo } ?? false
+    }
+
+    /// What a settle takes when it starts, to compare when it applies.
+    func historyMarks(for writingID: String) -> (changes: Int, discards: Int) {
+        (historyChanges[writingID] ?? 0, discards[writingID] ?? 0)
+    }
+
+    /// Whether a passage the writer undid survives this settle.
+    ///
+    /// It does if a Redo is possible now, or if the history moved while
+    /// the settle was proving without throwing the branch away — a Redo
+    /// landing mid-proof must not be answered against the older texts.
+    func keepsUndone(since mark: (changes: Int, discards: Int), for writingID: String) -> Bool {
+        let now = historyMarks(for: writingID)
+        if canRedo(writingID) { return true }
+        return now.changes != mark.changes && now.discards == mark.discards
+    }
 
     /// The page's word on its redo branch.
     ///
@@ -78,14 +118,23 @@ final class WritingReviewObligations {
     /// `(available: false, discarded: true)`: it has no history, and
     /// nothing kept for a branch that no longer exists is worth having.
     func redo(
-        available: Bool, discarded: Bool, standingIn text: String?, for writingID: String
+        available: Bool, discarded: Bool, standingIn text: String?,
+        page: AnyObject, for writingID: String
     ) {
-        if available {
-            redoAvailable.insert(writingID)
+        var live = (pages[writingID] ?? []).filter { $0.page != nil }
+        if let mine = live.first(where: { $0.page === page }) {
+            mine.canRedo = available
         } else {
-            redoAvailable.remove(writingID)
+            live.append(PageRedo(page: page, canRedo: available))
         }
+        pages[writingID] = live.isEmpty ? nil : live
+        historyChanges[writingID, default: 0] += 1
+
         guard discarded else { return }
+        discards[writingID, default: 0] += 1
+        // Another page of the same writing may still be able to redo
+        // this, so one page's branch ending is not the end of it.
+        guard !canRedo(writingID) else { return }
         guard owed[writingID]?.contains(where: { !$0.dormantMarks.isEmpty }) == true else { return }
         var kept: [WritingReviewSession.OwedRestore] = []
         for var owing in owed[writingID] ?? [] {

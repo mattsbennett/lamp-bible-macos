@@ -684,6 +684,16 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         // thrown the branch away. Using up the last Redo gives
         // `(false, false)` — not a discard, since the passage is back
         // in the text and the next save will record it.
+        //
+        // **The bundled page does not send this yet.** It is in the
+        // iOS session's unlanded work and arrives here with the next
+        // splice, since the Mac's page is their build. Until then this
+        // handler never fires, `canRedo` is always false, and a
+        // passage the writer undid is let go on the next save — so an
+        // undone-then-redone restore goes unrecorded. That is the
+        // failure this whole arrangement chooses when it cannot tell:
+        // nothing recorded that did not happen. Do not "fix" the
+        // silence by trusting `canRedo` by default.
         case "redoAvailable":
             onRedoAvailable?(
                 body["available"] as? Bool ?? false,
