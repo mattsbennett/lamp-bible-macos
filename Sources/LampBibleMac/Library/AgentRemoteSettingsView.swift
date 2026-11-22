@@ -104,7 +104,9 @@ private struct AgentRemotePairingSheet: View {
             Text("Pair an iPhone or iPad")
                 .font(.headline)
             if let pairing = host.pairing, !pairing.isClosed {
-                if let image = qrImage(for: pairing.code) {
+                // With this Mac's tailnet addresses, so a device paired here
+                // can reach it from anywhere on the tailnet with nothing typed.
+                if let image = qrImage(for: pairing.code, addresses: host.tailnetAddresses) {
                     Image(nsImage: image)
                         .interpolation(.none)
                         .resizable()
@@ -133,8 +135,8 @@ private struct AgentRemotePairingSheet: View {
         .frame(width: 340)
     }
 
-    private func qrImage(for code: String) -> NSImage? {
-        guard let payload = LampAgentRemoteHandshake.qrPayload(for: code) else { return nil }
+    private func qrImage(for code: String, addresses: [LampAgentRemoteAddress]) -> NSImage? {
+        guard let payload = LampAgentRemoteHandshake.qrPayload(for: code, addresses: addresses) else { return nil }
         let filter = CIFilter.qrCodeGenerator()
         filter.message = Data(payload.utf8)
         filter.correctionLevel = "M"
