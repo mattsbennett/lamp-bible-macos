@@ -458,11 +458,12 @@ final class WritingReviewSession: ObservableObject {
         remember(text)
         let known = texts
         // Reaching back over a line's own block syntax where the range
-        // begins just after it: a change to that syntax alone is drawn
+        // begins just after it, and outward over the emphasis
+        // delimiters against its edges: a change to that syntax alone is drawn
         // as a point after it while the mark sits on it, so a clear
         // from that point touches nothing and the writer watches the
         // mark stay (core's `takingInSyntax`).
-        let asked = LampWritingReviewMarkdown.takingInSyntax(range, of: text)
+        let asked = LampWritingReviewMarkdown.takingInSyntaxAndDelimiters(range, of: text)
         change { $0.clearing(asked, in: text, carryingFrom: known) }
     }
 
@@ -513,8 +514,11 @@ final class WritingReviewSession: ObservableObject {
     /// list can say, holding only what can be put back.
     func restoring(_ range: NSRange, in text: String? = nil) -> LampWritingReview.RestoreOutcome {
         let text = text ?? self.text
-        // The same reach back over a line's block syntax as a clear's.
-        let asked = LampWritingReviewMarkdown.takingInSyntax(range, of: text)
+        // The same reaches as a clear's: a line's block syntax, and the
+        // emphasis delimiters against the range's edges — what the
+        // assistant changed to make `red dog` bold is the two runs of
+        // `**`, which a selection of the words does not cover.
+        let asked = LampWritingReviewMarkdown.takingInSyntaxAndDelimiters(range, of: text)
         return live(in: text)?.restoring(asked, in: text) ?? .nothingTouched
     }
 
