@@ -55,6 +55,11 @@ enum AgentTurnPush {
     }()
 
     private static var sweptThisLaunch = false
+    /// Every save and sweep in the order asked for, one after another. Two
+    /// turns in one chat ending close together would otherwise race, and
+    /// a whole-record save ignores change tags, so the older could land
+    /// last; and a sweep could delete a record refreshed after it looked.
+    private static var tail: Task<Void, Never>?
 
     /// Writes the record, best effort: a Mac not signed in to iCloud, or
     /// offline, leaves the phone to find the reply when it is next opened.
@@ -64,7 +69,9 @@ enum AgentTurnPush {
         let database = CKContainer(identifier: containerIdentifier).privateCloudDatabase
         let sweeps = !sweptThisLaunch
         sweptThisLaunch = true
-        Task.detached(priority: .utility) {
+        let previous = tail
+        tail = Task.detached(priority: .utility) {
+            await previous?.value
             _ = try? await database.modifyRecords(saving: [record], deleting: [], savePolicy: .allKeys)
             if sweeps { await sweep(database) }
         }
@@ -111,6 +118,8 @@ enum AgentTurnPush {
 
     /// Takes away records older than a day, once a launch. Overwriting keeps
     /// one per chat and phone already; this is for chats and phones gone.
+    /// Run in the line with the saves (`tail`), so no save of this Mac's
+    /// lands between its looking and its deleting.
     nonisolated private static func sweep(_ database: CKDatabase) async {
         let dayAgo = Date().addingTimeInterval(-24 * 60 * 60)
         let query = CKQuery(recordType: recordType, predicate: NSPredicate(format: "endedAt < %@", dayAgo as NSDate))

@@ -857,7 +857,11 @@ final class AgentRemoteHost: ObservableObject {
         // left open, so being in `peers` is no proof the phone heard the
         // end. A phone that did hear it knows the turn id and lets the push
         // go unshown.
-        if let outcome {
+        // Asked again here, not when the turn began: the device may have
+        // been forgotten, or remote chats turned off, during the collect,
+        // and a reply's words must not go to a phone that is no longer
+        // trusted. No live connection is asked for; that is the point.
+        if let outcome, isAllowed, !revoked.contains(device), devices.contains(where: { $0.id == device }) {
             AgentTurnPush.tell(pushedEnd(of: open.chat, turn: turn, device: device, outcome: outcome))
         }
         runs[device]?.removeAll { $0.turn == turn }
