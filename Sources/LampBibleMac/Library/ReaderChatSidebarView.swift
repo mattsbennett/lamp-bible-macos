@@ -333,6 +333,12 @@ struct ReaderChatSidebarView: View {
                 // connected, so the chat's own header does not say it again.
                 .identityShownByHost()
                 .onConnectionChanged { state in providerConnection = state }
+                // Named by the passage the tab is on, and led back to by
+                // the chat, which one of this window's tabs holds.
+                .turnNotifications(
+                    title: ["Reader Chat", capture()?.reference].compactMap { $0 }.joined(separator: " \u{00B7} "),
+                    route: .readerChat(chatID)
+                )
                 .id("\(provider.rawValue)|\(workspace.path)")
             } else if let preparationError {
                 ContentUnavailableView {

@@ -416,6 +416,7 @@ struct LibraryRootView: View {
         // A modifier of its own: this body is at the type-checker's limit.
         .modifier(ShowPresentationsReceiver { selection = .section(.presentations) })
         .modifier(CommandPaletteToggleReceiver(isPalettePresented: $showingCommandPalette))
+        .modifier(AgentTurnRouteReceiver(showReaderChat: showReaderChat))
         .overlay(alignment: .top) {
             if showingCommandPalette {
                 ZStack(alignment: .top) {
@@ -925,6 +926,19 @@ struct LibraryRootView: View {
         if let chat, !taken { return }
         if let left { letGoOfChat(left) }
         readerTabs.updateSelected(chatID: taken ? chat : OpenReaderChats.start(libraryRootURL: root))
+    }
+
+    /// Brings forward the tab holding `chat`, with its chat shown, for a
+    /// clicked turn notification (`AgentTurnRouteReceiver`). False where no
+    /// tab in this window holds it.
+    private func showReaderChat(_ chat: UUID) -> Bool {
+        guard aiFeaturesEnabled,
+              let tab = readerTabs.tabs.first(where: { $0.chatID == chat }) else { return false }
+        selectReaderTab(tab.id)
+        // Set here as well: choosing the tab already open changes nothing.
+        selection = .section(.reader)
+        readerSidebar = .chat
+        return true
     }
 
     /// Takes up the conversations the restored tabs remember, and forgets the

@@ -321,6 +321,9 @@ private struct ReaderSettingsView: View {
     @EnvironmentObject private var softwareUpdater: SoftwareUpdater
     @AppStorage(AIFeatures.key) private var aiFeaturesEnabled = AIFeatures.defaultValue
     @AppStorage(WritingReviewMarks.key) private var reviewMarksEnabled = LampPreferenceDefaults.writingReviewMarksEnabled
+    @AppStorage(AgentTurnNotifications.enabledKey) private var turnNotificationsEnabled = false
+    @AppStorage(AgentTurnNotifications.showsReplyKey) private var turnNotificationsShowReply = true
+    @State private var turnNotificationError: String?
     @AppStorage("reader.fontSize") private var fontSize = LampTextScale.readerText.defaultValue
     @AppStorage("reader.lineSpacing") private var lineSpacing = LampTextScale.readerLineSpacing.defaultValue
     @AppStorage("reader.typeface") private var typeface = ProseTypeface.readerDefault
@@ -807,6 +810,47 @@ private struct ReaderSettingsView: View {
                         )
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    }
+
+                    Section {
+                        Toggle("Notify when a chat finishes a turn", isOn: $turnNotificationsEnabled)
+                        .tint(Color.lampAccentMuted)
+                        Toggle("Show the start of the reply", isOn: $turnNotificationsShowReply)
+                        .tint(Color.lampAccentMuted)
+                        .disabled(!turnNotificationsEnabled)
+                        if let turnNotificationError {
+                            Label(turnNotificationError, systemImage: "exclamationmark.triangle")
+                                .font(.callout)
+                                .foregroundStyle(.red)
+                        }
+                    } header: {
+                        Text("Notifications")
+                    } footer: {
+                        Text(
+                            """
+                            When a reader chat or a writing’s assistant finishes \
+                            while you are elsewhere, in a chat or in Terminal. \
+                            Not for one on screen, one you stopped, or one your \
+                            phone asked. With the reply shown, its opening words \
+                            appear in Notification Center.
+                            """
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                    // Asked when it is turned on, not at launch. Left on if
+                    // refused, so allowing it later in System Settings is all
+                    // it takes, as the reading reminder does.
+                    .onChange(of: turnNotificationsEnabled, initial: true) { _, isOn in
+                        guard isOn else {
+                            turnNotificationError = nil
+                            return
+                        }
+                        Task {
+                            let granted = await AgentTurnNotifications.requestAuthorization()
+                            turnNotificationError = granted ? nil
+                                : "Notifications are off for Lamp Bible. Allow them in System Settings ▸ Notifications."
+                        }
                     }
 
                     Section("AI Provider Accounts") {

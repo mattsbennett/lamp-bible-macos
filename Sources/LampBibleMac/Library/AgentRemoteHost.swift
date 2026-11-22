@@ -812,7 +812,12 @@ final class AgentRemoteHost: ObservableObject {
         // than for a count that is zero between the marks and the save.
         LampPendingWrites.shared.begin()
         defer { LampPendingWrites.shared.end() }
-        let taken = await open.model.send(text, contextualPrompt: prompt, messageID: turn, inConversation: conversation)
+        // No notification on this Mac when it ends: whoever asked is on the
+        // phone, which follows the reply as it arrives.
+        let taken = await open.model.send(
+            text, contextualPrompt: prompt, messageID: turn, inConversation: conversation,
+            notifiesWhenDone: false
+        )
         // A poll part way through saving finishes before the last one looks,
         // or the last would read the writing from before that save.
         collecting?.cancel()

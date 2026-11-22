@@ -1508,6 +1508,24 @@ final class NativeAgentChatModel: ObservableObject {
         queueObservers[token] = observe
     }
 
+    /// Whose turn this is and where it leads, for the notification a turn
+    /// sends when it ends unwatched (`AgentTurnNotifications`). Set by the
+    /// host and kept when its pane goes, since a reply outlives its pane.
+    var notificationContext: AgentTurnNotificationContext?
+    /// The panes on this chat that are where the reader is looking
+    /// (`WatchedPaneProbe`). Per pane, as the observers are.
+    private var watchingPanes: Set<AnyHashable> = []
+    /// Whether the run in progress should say when it ends: not one a phone
+    /// asked for, whose person is on the phone.
+    private var notifiesThisRun = true
+
+    func setWatched(_ watched: Bool, by token: AnyHashable) {
+        if watched { watchingPanes.insert(token) } else { watchingPanes.remove(token) }
+    }
+
+    /// Whether anyone is looking at this chat now.
+    private var isWatched: Bool { NSApp.isActive && !watchingPanes.isEmpty }
+
     func stopObservingQueueReady(for token: AnyHashable) {
         queueObservers.removeValue(forKey: token)
     }
@@ -1732,7 +1750,8 @@ final class NativeAgentChatModel: ObservableObject {
         _ rawPrompt: String,
         contextualPrompt: String,
         messageID: UUID? = nil,
-        inConversation expected: UUID? = nil
+        inConversation expected: UUID? = nil,
+        notifiesWhenDone: Bool = true
     ) async -> Bool {
         let prompt = rawPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         // Nothing new starts once Lamp is quitting: a message queued behind
@@ -1758,6 +1777,7 @@ final class NativeAgentChatModel: ObservableObject {
         errorMessage = nil
         needsProviderSetup = false
         stoppedNotice = nil
+        notifiesThisRun = notifiesWhenDone
         isRunning = true
         cancelRequested = false
         stoppedByLamp = nil
@@ -2187,6 +2207,19 @@ final class NativeAgentChatModel: ObservableObject {
                 ?? outcome.proposedSessionID
                 ?? (wasStopped ? sessionID : nil)
         }
+
+        // What the notification would say, if nobody is watching. Not for
+        // a Stop the reader pressed: they were there to press it.
+        let notified: AgentTurnNotifications.Outcome? = switch disposition {
+        case .replied(let reply): .replied(reply)
+        case .stopped: lampReason.map { .stoppedByLamp($0) }
+        case .failed(let failure): .failed(failure)
+        case .silent(let notice): .notice(notice)
+        }
+        if let notified, notifiesThisRun, !isWatched, let notificationContext {
+            AgentTurnNotifications.post(notified, context: notificationContext)
+        }
+        notifiesThisRun = true
 
         switch disposition {
         case .replied(let reply):
@@ -2706,6 +2739,9 @@ struct NativeAgentChatView: View {
     /// Told whether the provider is connected, for a host that
     /// shows its setup when it is not.
     private var onConnectionChanged: ((AIProviderConnectionState) -> Void)?
+    /// Whose this chat is and where a notification of its turn leads; see
+    /// `NativeAgentChatModel.notificationContext`.
+    private var notificationContext: AgentTurnNotificationContext?
     /// The host's own row names the agent, the writing and the
     /// connection, so this header keeps only its buttons, and only when it
     /// has one to offer.
@@ -3047,6 +3083,12 @@ struct NativeAgentChatView: View {
         .onChange(of: observedTurn) { _, turn in
             onTurnChanged?(turn)
         }
+        // Where its notification leads, and whether anyone is looking: a
+        // turn that ends in a pane on screen in the key window says nothing.
+        .onChange(of: notificationContext, initial: true) { _, context in
+            if let context { model.notificationContext = context }
+        }
+        .reportsWatched { model.setWatched($0, by: paneToken) }
         .onChange(of: model.isRunning, initial: true) { _, running in
             onRunningChanged(running)
             // The reply has landed, so the next message waiting goes. One at
@@ -3059,6 +3101,10 @@ struct NativeAgentChatView: View {
         .onDisappear {
             model.stopObservingTurn(for: paneToken)
             model.stopObservingQueueReady(for: paneToken)
+            // Said here too: a probe's change may not be delivered to a
+            // view that has gone, and a pane left counted as watching would
+            // keep every later turn quiet.
+            model.setWatched(false, by: paneToken)
             // And told so. A host that goes on holding the turn it was last
             // told about would mark everything written afterwards — by a run
             // that outlives this pane, or by the person — as that turn's
@@ -3141,6 +3187,13 @@ struct NativeAgentChatView: View {
     /// by rather than its path.
     private var workspaceName: String {
         workspaceTitle.flatMap { $0.isEmpty ? nil : $0 } ?? workspaceFolder.lastPathComponent
+    }
+
+    /// See `notificationContext`.
+    func turnNotifications(title: String, route: AgentTurnRoute) -> NativeAgentChatView {
+        var copy = self
+        copy.notificationContext = AgentTurnNotificationContext(title: title, route: route)
+        return copy
     }
 
     /// See `workspaceTitle`.

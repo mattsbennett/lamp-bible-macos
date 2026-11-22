@@ -1128,6 +1128,12 @@ struct DevotionalAgentWorkspaceView: View {
     @State private var terminalExitCode: Int32?
     @State private var terminalCommand = ""
     @State private var terminalCapture = TerminalCaptureState()
+    /// Whether this pane is where the reader is looking, so a Terminal turn
+    /// ending here unwatched can say so (`AgentTurnNotifications`).
+    @State private var paneIsWatched = false
+    /// The last Terminal reply a notification was sent for, so one reply is
+    /// told once however many polls find it.
+    @State private var notifiedTerminalReply: UUID?
     @State private var showingRevisionHistory = false
     @State private var presentationStatus: String?
     /// The last answer about what Slide Studio has changed, and the state of
@@ -1234,6 +1240,7 @@ struct DevotionalAgentWorkspaceView: View {
                 sessionPane
             }
         }
+        .reportsWatched { paneIsWatched = $0 }
         .onChange(of: errorMessage) { _, message in
             if message != nil { showsSetup = true }
         }
@@ -1724,6 +1731,7 @@ struct DevotionalAgentWorkspaceView: View {
                     }
                 )
                 .workspaceTitle(devotionalTitle)
+                .turnNotifications(title: notificationTitle, route: .writing(devotionalID))
                 .identityShownByHost()
                 .onConnectionChanged { state in providerConnection = state }
                 .id("\(selectedProvider.rawValue)|\(workspaceURL.path)")
@@ -2603,11 +2611,36 @@ struct DevotionalAgentWorkspaceView: View {
         if result.integrationReported, let provider = terminalCapture.provider {
             AgentTerminalIntegrationMemory.forProvider(provider.wireProvider)?.recordRun()
         }
+        if result.absorbedMessageCount > 0 { notifyOfTerminalReply(in: workspace) }
         var capture = terminalCapture
         capture.record(result, now: Date())
         // Assigned only on a real change: this runs several times a second, and
         // every assignment would redraw the terminal pane.
         if capture != terminalCapture { terminalCapture = capture }
+    }
+
+    /// What a notification of this writing's turns is headed with.
+    private var notificationTitle: String {
+        devotionalTitle.isEmpty ? "Writing" : devotionalTitle
+    }
+
+    /// Tells of a Terminal reply that arrived while nobody was looking, as a
+    /// chat's turn does when it ends (`NativeAgentChatModel.finish`). Only a
+    /// reply made since this launch: the first poll of a session can bring
+    /// in replies from before it, which are not news.
+    private func notifyOfTerminalReply(in workspace: URL) {
+        guard AgentTurnNotifications.isEnabledNow, !(paneIsWatched && NSApp.isActive),
+              let provider = terminalCapture.provider,
+              let launchedAt = terminalCapture.launchedAt,
+              let last = AgentChatTranscriptStore.load(providerID: provider.rawValue, in: workspace)
+                  .messages.last,
+              last.role == .assistant, last.date >= launchedAt, last.id != notifiedTerminalReply
+        else { return }
+        notifiedTerminalReply = last.id
+        AgentTurnNotifications.post(
+            .replied(last.text),
+            context: AgentTurnNotificationContext(title: notificationTitle, route: .writing(devotionalID))
+        )
     }
 
     /// A terminal taken off screen takes its CLI with it. Showing it again
