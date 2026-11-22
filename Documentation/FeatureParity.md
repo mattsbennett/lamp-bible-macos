@@ -27,6 +27,46 @@ This matrix tracks user-facing capability rather than identical UI. Touch-only i
 | Multiwindow | iPad/window navigation | Reader, book, writing and Slide Studio window groups; additional reader windows from File menu | Complete |
 | Module authoring | Not an iOS feature | Drag/drop JSON inspection, validation and `.lamp` builds for every module kind | macOS addition |
 
+## Decisions both apps hold to
+
+### An undone restore is let go, on both apps
+
+Where the writer undoes a restore Lamp made, both apps drop what they
+were going to write down, and neither tries to notice a Redo.
+
+The cost is real: Redo puts the restored wording back without the page
+asking the host anything, so an undone-then-redone restore is recorded
+nowhere, no restoration reaches the assistant, and the words it put
+back that nobody has read carry no mark.
+
+The other side is worse. A restore whose replacement is empty — a
+deletion put back — is proved only negatively: it stands whenever the
+assistant's words are absent, which an unrelated edit eventually makes
+true. Held across that, the next save records a restoration the writer
+never made.
+
+Keeping it safely means knowing whether a Redo brought *this restore*
+back. The iOS session built that signal and took it through four codex
+rounds; each round found new losses, and the fourth found a false
+record — paste the restore's words after an unrelated redo, and the
+save records a restore that never happened. The conclusion was that no
+signal built from the page's text and history depth can work: text
+cannot tell a Redo from typing or pasting the same words, and every
+such signal races with a settle. A sound version would have the page
+track the restore through its own history, and even that cannot mark a
+restore that only deletes — the dangerous case to begin with.
+
+The work is kept, unpushed, on the iOS branch `held-redo` (42ef0cf).
+**Read it before building anything in this direction.** The Mac built
+a host half to the same rules and removed it again (396dfbe) rather
+than leave inert machinery for someone to wire up.
+
+Core still classifies such a passage as `dormant` from
+`RestorePlan.settlement`, and `SyncMerge.lean` proves no passage of a
+restore is ever dropped from the classification. That is a true
+description of what a save proves; it does not ask either app to keep
+anything, and neither does.
+
 ## Platform-specific substitutions
 
 - The iOS camera/image picker is a native Mac file picker; image attachments and full-size viewing remain available.
