@@ -312,7 +312,13 @@ extension LampAppDelegate: UNUserNotificationCenterDelegate {
         UNUserNotificationCenter.current().delegate = self
     }
 
-    nonisolated func userNotificationCenter(
+    // On the main actor, both of them: an async delegate method that is not
+    // returns on the cooperative pool, and the system then finishes the
+    // response there. On the phone that ran UIKit's state-restoration
+    // snapshot off the main thread and aborted Lamp on every tap (iOS crash
+    // 2026-11-22); the Mac is given no chance to do the same.
+    @MainActor
+    func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
@@ -321,16 +327,15 @@ extension LampAppDelegate: UNUserNotificationCenterDelegate {
             : []
     }
 
-    nonisolated func userNotificationCenter(
+    @MainActor
+    func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse
     ) async {
         let content = response.notification.request.content
         guard content.categoryIdentifier == AgentTurnNotifications.categoryIdentifier,
               let route = AgentTurnRoute(userInfo: content.userInfo) else { return }
-        await MainActor.run {
-            NSApp.activate()
-            NotificationCenter.default.post(name: .lampShowAgentTurn, object: route)
-        }
+        NSApp.activate()
+        NotificationCenter.default.post(name: .lampShowAgentTurn, object: route)
     }
 }

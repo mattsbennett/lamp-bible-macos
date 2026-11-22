@@ -1,5 +1,6 @@
 import CloudKit
 import Foundation
+import os
 #if canImport(LampBibleMacSupport)
 import LampBibleMacSupport
 #endif
@@ -33,6 +34,10 @@ import Security
 enum AgentTurnPush {
     nonisolated static let containerIdentifier = "iCloud.com.neus.lamp-bible"
     nonisolated static let recordType = "AgentTurnEnded"
+    /// Where a save or sweep that fails says why: best effort is not silent.
+    /// Read with `log show --predicate 'subsystem == "com.neus.Lamp-Bible.macOS"
+    /// AND category == "turn-push"'`.
+    nonisolated private static let log = Logger(subsystem: "com.neus.Lamp-Bible.macOS", category: "turn-push")
 
     /// What one ended turn says, worked out by the host that ran it.
     struct Ended: Equatable, Sendable {
@@ -99,9 +104,7 @@ enum AgentTurnPush {
                 guard stillAllowed(), AIFeatures.isEnabledNow, !KeptAgentChats.isQuitting else { return nil }
                 return Self.record(for: ended, showsReply: AgentTurnNotifications.showsReplyNow)
             }
-            if let record {
-                _ = try? await database.modifyRecords(saving: [record], deleting: [], savePolicy: .allKeys)
-            }
+            if let record { await save(record, to: database) }
             if sweeps { await sweep(database, devices: pairedDevices) }
         }
     }
@@ -138,6 +141,20 @@ enum AgentTurnPush {
         return record
     }
 
+    /// Saves one record, and logs a failure of the call or of the record:
+    /// `modifyRecords` can succeed as a call and still fail the record, a
+    /// missing schema or an account signed out among the reasons.
+    nonisolated private static func save(_ record: CKRecord, to database: CKDatabase) async {
+        do {
+            let (saved, _) = try await database.modifyRecords(saving: [record], deleting: [], savePolicy: .allKeys)
+            for case let (id, .failure(error)) in saved {
+                log.error("turn push \(id.recordName, privacy: .public) not saved: \(error.localizedDescription, privacy: .public)")
+            }
+        } catch {
+            log.error("turn push not saved: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     static func outcomeName(_ outcome: AgentTurnNotifications.Outcome) -> String {
         switch outcome {
         case .replied: "replied"
@@ -158,10 +175,13 @@ enum AgentTurnPush {
             recordType: recordType,
             predicate: NSPredicate(format: "endedAt < %@ AND deviceID IN %@", dayAgo as NSDate, devices)
         )
-        guard let (results, _) = try? await database.records(matching: query, desiredKeys: [], resultsLimit: 200)
-        else { return }
-        let old = results.map(\.0)
-        guard !old.isEmpty else { return }
-        _ = try? await database.modifyRecords(saving: [], deleting: old)
+        do {
+            let (results, _) = try await database.records(matching: query, desiredKeys: [], resultsLimit: 200)
+            let old = results.map(\.0)
+            guard !old.isEmpty else { return }
+            _ = try await database.modifyRecords(saving: [], deleting: old)
+        } catch {
+            log.error("turn push sweep failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 }
