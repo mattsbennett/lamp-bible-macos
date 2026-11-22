@@ -35,9 +35,10 @@ The comfortable claims need the same scrutiny as the unfamiliar ones.
    establish a scriptural claim. Read commentaries only when the user asks about
    them, the writing uses them, or a specific unattributed framing needs tracing.
    Do not open one first to find out what a passage means: that makes its reading
-   the frame. The cross-reference indexes are listed as commentary modules but are
-   not commentaries in this sense: they say where to read, not what a passage
-   means, so consult them freely.
+   the frame. The bundled `tske` and `crossrefs` are classified as commentary
+   modules; use their reference lists freely to locate candidate passages. Their
+   headings and explanatory prose remain the compiler's interpretation, not
+   scriptural evidence.
 3. **Separate observation, inference and attribution.** Show the further premise
    needed to move from a quotation to the claim. An alternative reading is not
    refuted because it differs from a familiar one. Where a claim is established,
@@ -84,8 +85,9 @@ compatible translations, not an entire library by default.
 - Cross-references: `read_commentary` with `module_ids: ["tske"]` or
   `["crossrefs"]`, both bundled indexes. Use them, beside the translations and
   originals, to find the passages a verse is linked to — including ones that may
-  tell against a finding — and read those passages before relying on them. Follow
-  `nextOffset` only for relevant units.
+  tell against a finding — and read those passages before relying on them. A
+  `tske` entry can also carry the compiler's own notes; they are commentary.
+  Follow `nextOffset` only for relevant units.
 - `search_library`: use `kinds: ["translation"]` for candidate scripture and
   `kinds: ["book"]` to trace a framing. Search results are bounded samples (default
   20, subject to the reader's cap), not proof of absence or complete inventories.
