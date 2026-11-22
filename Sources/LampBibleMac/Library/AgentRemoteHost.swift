@@ -47,6 +47,9 @@ final class AgentRemoteHost: ObservableObject {
     @Published private(set) var connectedNames: [String] = []
     /// The pairing QR's window while it is on screen.
     @Published private(set) var pairing: LampAgentRemotePairingWindow?
+    /// Where a device on a tailnet reaches this Mac while it listens, which
+    /// Bonjour cannot tell it: a tailnet carries no multicast.
+    @Published private(set) var tailnetAddresses: [LampAgentRemoteAddress] = []
 
     private let trust = LampAgentRemoteTrustStore()
     /// The keychain is read and written here, never on the main thread: a
@@ -65,6 +68,9 @@ final class AgentRemoteHost: ObservableObject {
     /// says, so no ordering of reads and writes can let one back in.
     private var revoked: Set<String> = []
     private var listener: NWListener?
+    /// Watches for the Mac joining or leaving a tailnet while it listens, so
+    /// the address Settings shows is the one that works.
+    private var pathMonitor: NWPathMonitor?
     private var peers: [ObjectIdentifier: Peer] = [:]
     /// The turns a device has running, by the id of the question that began
     /// each: kept here rather than on its connection, which a phone going to
@@ -204,10 +210,27 @@ final class AgentRemoteHost: ObservableObject {
     private func start() {
         guard listener == nil else { return }
         refreshDevices()
+        listen(onLampsPort: true)
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] _ in
+            DispatchQueue.main.async { self?.refreshTailnetAddresses() }
+        }
+        monitor.start(queue: .main)
+        pathMonitor = monitor
+    }
+
+    /// Listens on Lamp's own port when it is free, so an address typed into
+    /// a device for a tailnet keeps working from one launch to the next, and
+    /// on any port the system gives when it is taken.
+    private func listen(onLampsPort: Bool) {
         do {
             let parameters = NWParameters.tcp
             parameters.includePeerToPeer = true
-            let listener = try NWListener(using: parameters)
+            let listener = if onLampsPort, let port = NWEndpoint.Port(rawValue: LampAgentRemoteAddress.defaultPort) {
+                try NWListener(using: parameters, on: port)
+            } else {
+                try NWListener(using: parameters)
+            }
             listener.service = NWListener.Service(
                 name: "Lamp Bible on \(Host.current().localizedName ?? "Mac")",
                 type: LampAgentRemoteProtocol.bonjourServiceType
@@ -216,7 +239,13 @@ final class AgentRemoteHost: ObservableObject {
                 MainActor.assumeIsolated {
                     guard let self, self.listener === listener else { return }
                     switch state {
-                    case .ready: self.publishConnected()
+                    case .ready:
+                        self.publishConnected()
+                        self.refreshTailnetAddresses()
+                    case .failed(.posix(.EADDRINUSE)) where onLampsPort:
+                        listener.cancel()
+                        self.listener = nil
+                        self.listen(onLampsPort: false)
                     case .failed(let error): self.status = .failed("Chats from devices unavailable: \(error.localizedDescription)")
                     default: break
                     }
@@ -237,6 +266,9 @@ final class AgentRemoteHost: ObservableObject {
         guard listener != nil || !peers.isEmpty else { return }
         listener?.cancel()
         listener = nil
+        pathMonitor?.cancel()
+        pathMonitor = nil
+        tailnetAddresses = []
         for peer in Array(peers.values) {
             // Told why, where it can be, and what it started stopped: the
             // switch went off under it.
@@ -1351,6 +1383,11 @@ final class AgentRemoteHost: ObservableObject {
         peers.removeValue(forKey: ObjectIdentifier(peer.connection))
         peer.connection.cancel()
         publishConnected()
+    }
+
+    private func refreshTailnetAddresses() {
+        let addresses = listener?.port.map { LampAgentRemoteTailnet.addresses(port: $0.rawValue) } ?? []
+        if addresses != tailnetAddresses { tailnetAddresses = addresses }
     }
 
     private func publishConnected() {

@@ -30,6 +30,20 @@ struct AgentRemoteSettingsSection: View {
 
             if isEnabled {
                 LabeledContent("Status", value: statusText)
+                if !host.tailnetAddresses.isEmpty {
+                    LabeledContent("Over Tailscale") {
+                        VStack(alignment: .trailing, spacing: 2) {
+                            ForEach(host.tailnetAddresses, id: \.self) { address in
+                                Text(address.text)
+                                    .font(.system(.body, design: .monospaced))
+                                    .textSelection(.enabled)
+                            }
+                        }
+                    }
+                    Text(tailnetNote)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 if !host.canKeepPairings {
                     Label(
                         "Lamp couldn't read its saved devices from the keychain, so a device paired now will need pairing again after Lamp next opens.",
@@ -60,7 +74,16 @@ struct AgentRemoteSettingsSection: View {
         }
     }
 
-    private var statusText: String {
+    /// Lamp's own port is left out of the address, and stays the same; any
+    /// other is one the system gave for this launch only.
+    private var tailnetNote: String {
+        let fixed = host.tailnetAddresses.allSatisfy { $0.port == LampAgentRemoteAddress.defaultPort }
+        let which = host.tailnetAddresses.count > 1 ? "either address" : "this address"
+        let note = "A paired device on your tailnet can connect to \(which) when it can't find this Mac nearby."
+        return fixed ? note : note + " Another app has Lamp's usual port, so the address will change when Lamp next opens."
+    }
+
+        private var statusText: String {
         switch host.status {
         case .off: "Off"
         case .waiting: "Waiting for a device"

@@ -1,5 +1,5 @@
 import Foundation
-import LampBibleMacSupport
+@testable import LampBibleMacSupport
 import LampCore
 import Testing
 
@@ -124,5 +124,19 @@ struct LampAgentRemoteChoicesHostingTests {
         )
         #expect(claude.models == ["opus", "sonnet", "haiku"])
         #expect(claude.defaultModel == "sonnet" && claude.defaultEffort == "high")
+    }
+}
+
+struct LampAgentRemoteTailnetTests {
+    @Test func listsIPv4FirstAndEachOnce() {
+        #expect(LampAgentRemoteTailnet.ordered(["fd7a:115c:a1e0::1", "100.90.1.2", "fd7a:115c:a1e0::1", "100.90.1.2"])
+            == ["100.90.1.2", "fd7a:115c:a1e0::1"])
+    }
+
+    @Test func offersOnlyTailnetAddressesWithTheListenersPort() {
+        // Whatever this Mac's interfaces are, nothing outside Tailscale's
+        // ranges is offered, and every address carries the port given.
+        let addresses = LampAgentRemoteTailnet.addresses(port: 5000)
+        #expect(addresses.allSatisfy { LampAgentRemoteAddress.isTailnet($0.host) && $0.port == 5000 })
     }
 }

@@ -402,3 +402,39 @@ public extension AgentChatChoicesStore {
         return path == workspace.standardizedFileURL.path
     }
 }
+
+/// This Mac's own addresses on a tailnet, from its network interfaces, for a
+/// device that cannot find it with Bonjour; see `LampAgentRemoteAddress`.
+public enum LampAgentRemoteTailnet {
+    /// IPv4 before IPv6, as the shorter to type, each once.
+    public static func addresses(port: UInt16) -> [LampAgentRemoteAddress] {
+        ordered(interfaceAddresses().filter(LampAgentRemoteAddress.isTailnet))
+            .map { LampAgentRemoteAddress(host: $0, port: port) }
+    }
+
+    static func ordered(_ addresses: [String]) -> [String] {
+        var seen = Set<String>()
+        let unique = addresses.filter { seen.insert($0).inserted }
+        return unique.filter { !$0.contains(":") } + unique.filter { $0.contains(":") }
+    }
+
+    /// Every address on an interface that is up, numeric, any zone left off.
+    private static func interfaceAddresses() -> [String] {
+        var first: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&first) == 0, let first else { return [] }
+        defer { freeifaddrs(first) }
+        var addresses: [String] = []
+        for entry in sequence(first: first, next: { $0.pointee.ifa_next }) {
+            let interface = entry.pointee
+            guard interface.ifa_flags & UInt32(IFF_UP) != 0, let address = interface.ifa_addr else { continue }
+            let family = Int32(address.pointee.sa_family)
+            guard family == AF_INET || family == AF_INET6 else { continue }
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            guard getnameinfo(address, socklen_t(address.pointee.sa_len), &host, socklen_t(host.count),
+                              nil, 0, NI_NUMERICHOST) == 0 else { continue }
+            let text = String(cString: host)
+            addresses.append(text.split(separator: "%", maxSplits: 1).first.map(String.init) ?? text)
+        }
+        return addresses
+    }
+}
