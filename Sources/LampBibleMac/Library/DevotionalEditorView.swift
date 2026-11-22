@@ -2925,9 +2925,7 @@ struct DevotionalEditorView: View {
                 // passage the words could not answer for needs a save
                 // that can, and marking the remainder as committed had
                 // it written down later against the text it was made
-                // in, with nothing having proved it at all. A dormant
-                // passage is not that: the body it was proved against
-                // is this save's, so it does not hold the commit back.
+                // in, with nothing having proved it at all.
                 var again = owing.pending(kept ? owed : pending)
                 again.bodyCommitted = waiting.isEmpty
                 again.cleared = cleared
