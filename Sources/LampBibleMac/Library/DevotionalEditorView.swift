@@ -2471,10 +2471,12 @@ struct DevotionalEditorView: View {
             Button("Restore Original Wording…") { offerRestoreForSelection() }
                 .disabled(reviewSession.restorable.isEmpty)
             Divider()
+            // Both step by the page's own marks while it is showing, so
+            // neither can go anywhere when it has refused them.
             Button("Next Change") { stepToMarkedPassage(forward: true) }
-                .disabled(reviewSession.ranges.isEmpty)
+                .disabled(reviewSession.ranges.isEmpty || reviewMarksUnshown)
             Button("Previous Change") { stepToMarkedPassage(forward: false) }
-                .disabled(reviewSession.ranges.isEmpty)
+                .disabled(reviewSession.ranges.isEmpty || reviewMarksUnshown)
         } label: {
             // Named for what it counts, and marked when none of it can
             // be drawn where it belongs: a document that looks unchanged
@@ -2502,10 +2504,13 @@ struct DevotionalEditorView: View {
 
     private var reviewHelp: String {
         if reviewMarksUnshown {
+            // Not "use Next Change": that asks the page where its next
+            // mark is, and the page has none — it is why this is being
+            // said at all. Markdown draws them from the record itself,
+            // which is where they can be read and cleared.
             return """
                 \(reviewSession.count == 1 ? "A passage" : "Passages") the assistant changed \
-                that this editor cannot mark in place. Use Next Change to step through \
-                \(reviewSession.count == 1 ? "it" : "them"), or write in Markdown to see \
+                that this editor cannot mark in place. Write in Markdown to see \
                 \(reviewSession.count == 1 ? "it" : "them") in the text.
                 """
         }
