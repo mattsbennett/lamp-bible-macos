@@ -788,6 +788,28 @@ final class WritingReviewSession: ObservableObject {
             let drawn = await Task.detached(priority: .userInitiated) {
                 let live = review.carryingToText(text, from: known)
                 let ranges = live.highlightedRanges(in: text)
+                // Markers moved to where the Markdown still reads as the
+                // writing, and the changes put in the order the moving
+                // left the passages in.
+                //
+                // Placing can swap two of them: a change to a link's
+                // words and a change to where it points, when the
+                // second's markers come out of the address and go before
+                // the first. The page pairs what it is handed with the
+                // passages it finds, in order, so the label would carry
+                // the destination's change — and a writer putting one
+                // back would get the other. Its own check cannot see
+                // that: it proves the text is the document, not the
+                // order of the passages in it.
+                //
+                // So the order is worked out here and the changes go
+                // over in it. The page is handed the plain placed
+                // Markdown it already understands, with nothing new to
+                // read.
+                let placed = sendsMarks
+                    ? live.markedMarkdown(in: text).map { LampWritingReviewMarkdown.placed($0) }
+                    : nil
+                let changes = sendsMarks ? live.changes(in: text, ranges: ranges) : []
                 return (
                     ranges,
                     live.located(in: text).count,
@@ -815,9 +837,10 @@ final class WritingReviewSession: ObservableObject {
                     // parse as something else and the page refuses the
                     // lot: those passages go unmarked, which is poor but
                     // honest. Marks against the wrong changes are not.
-                    sendsMarks ? live.markedMarkdown(in: text) : nil,
+                    placed?.markdown,
                     live.restorable(in: text),
-                    sendsMarks ? live.changes(in: text, ranges: ranges) : []
+                    placed.map { LampWritingReviewMarkdown.reordered(changes, by: $0.order) }
+                        ?? changes
                 )
             }.value
             guard let self, self.drawGeneration == generation else { return }
