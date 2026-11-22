@@ -298,8 +298,12 @@ the two already fixed.
 
 ### Two decisions, and who made them
 
-**The undone restore stays without an interface.** Put to the owner on
-2026-11-22 with the recommendation to close it, and agreed. The reasoning
+**The undone restore stays without an interface.** Recommended to the
+owner on 2026-11-22 as "leave it with no UI, and close the item — not as a
+deferred decision, but because the behaviour is already right", and
+answered "otherwise agreed on 3". That is the whole of the exchange, set
+down as it happened: the recommendation was specific, the agreement was to
+it, and nothing further was asked. The reasoning
 is worth keeping because the item reads like a gap and is not one:
 `dormant` does not mean dropped. `LampWritingReviewStore.swift` says it
 exactly — "still owed, out of the queue, and recorded by a later save that
