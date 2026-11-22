@@ -12,6 +12,8 @@ enum AIProviderCLI: String, CaseIterable, Identifiable {
     case codex
     case claude
     case openCode
+    /// Chat only, through `agy acp`: no Terminal session. See `AgentACPRun`.
+    case antigravity
 
     var id: String { rawValue }
 
@@ -20,6 +22,7 @@ enum AIProviderCLI: String, CaseIterable, Identifiable {
         case .codex: "OpenAI Codex"
         case .claude: "Claude Code"
         case .openCode: "OpenCode"
+        case .antigravity: "Google Antigravity"
         }
     }
 
@@ -28,6 +31,7 @@ enum AIProviderCLI: String, CaseIterable, Identifiable {
         case .codex: "Codex"
         case .claude: "Claude"
         case .openCode: "OpenCode"
+        case .antigravity: "Antigravity"
         }
     }
 
@@ -36,6 +40,7 @@ enum AIProviderCLI: String, CaseIterable, Identifiable {
         case .codex: "codex"
         case .claude: "claude"
         case .openCode: "opencode"
+        case .antigravity: "agy"
         }
     }
 
@@ -44,6 +49,7 @@ enum AIProviderCLI: String, CaseIterable, Identifiable {
         case .codex: "terminal"
         case .claude: "sparkles"
         case .openCode: "chevron.left.forwardslash.chevron.right"
+        case .antigravity: "atom"
         }
     }
 
@@ -52,6 +58,9 @@ enum AIProviderCLI: String, CaseIterable, Identifiable {
         case .codex: "codex login"
         case .claude: "claude auth login"
         case .openCode: "opencode auth login"
+        // Its ACP server's own sign-in: a link to open, and a code to paste
+        // back. Sign-in is the CLI's; Lamp never sees the credential.
+        case .antigravity: "agy acp --login"
         }
     }
 
@@ -60,6 +69,8 @@ enum AIProviderCLI: String, CaseIterable, Identifiable {
         case .codex: "codex logout"
         case .claude: "claude auth logout"
         case .openCode: "opencode auth logout"
+        // The CLI has no sign-out command, only `/logout` inside itself.
+        case .antigravity: "echo 'Type /logout and press Return to sign out of Antigravity.'; agy"
         }
     }
 
@@ -68,6 +79,9 @@ enum AIProviderCLI: String, CaseIterable, Identifiable {
         case .codex: "codex login status"
         case .claude: "claude auth status --text"
         case .openCode: "opencode auth list"
+        // Not asked: signing in is proven by opening a session over ACP;
+        // see `AIProviderCommandRunner.antigravityConnectionState`.
+        case .antigravity: "agy --version"
         }
     }
 
@@ -79,6 +93,8 @@ enum AIProviderCLI: String, CaseIterable, Identifiable {
             URL(string: "https://code.claude.com/docs/en/authentication")!
         case .openCode:
             URL(string: "https://opencode.ai/docs/providers")!
+        case .antigravity:
+            URL(string: "https://antigravity.google/docs/cli/acp")!
         }
     }
 }
@@ -122,6 +138,7 @@ enum AIProviderCommandRunner {
     private static let notInstalledMarker = "__LAMP_AI_CLI_NOT_INSTALLED__"
 
     static func connectionState(for provider: AIProviderCLI) async -> AIProviderConnectionState {
+        if provider == .antigravity { return await antigravityConnectionState() }
         let command = """
         if ! command -v \(provider.executable) >/dev/null 2>&1; then
           echo \(notInstalledMarker)
@@ -140,6 +157,75 @@ enum AIProviderCommandRunner {
             ) ? .connected : .notConnected
         }
         return result.exitCode == 0 ? .connected : .notConnected
+    }
+
+    /// Antigravity has no status command. Signed in is proven the way its
+    /// ACP server documents: a session opens (and is closed again at once,
+    /// with nothing sent). Signed out, it answers "Authentication required".
+    private static func antigravityConnectionState() async -> AIProviderConnectionState {
+        let located = await runInLoginShell("command -v \(AIProviderCLI.antigravity.executable)")
+        let path = located.output.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: \.isNewline).last.map(String.init) ?? ""
+        guard located.exitCode == 0, FileManager.default.isExecutableFile(atPath: path) else { return .notInstalled }
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(returning: probeAntigravity(at: URL(fileURLWithPath: path)))
+            }
+        }
+    }
+
+    nonisolated private static func probeAntigravity(at url: URL) -> AIProviderConnectionState {
+        let process = Process()
+        let input = Pipe()
+        let output = Pipe()
+        process.executableURL = url
+        process.arguments = ["acp"]
+        process.currentDirectoryURL = FileManager.default.temporaryDirectory
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        process.environment = AgentProcessEnvironment.cleaned(ProcessInfo.processInfo.environment)
+        guard (try? process.run()) != nil else { return .unavailable("Could not check") }
+        defer {
+            try? input.fileHandleForWriting.close()
+            if process.isRunning { process.terminate() }
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 30) {
+            if process.isRunning { process.terminate() }
+        }
+        func send(_ message: [String: Any]) {
+            var message = message
+            message["jsonrpc"] = "2.0"
+            guard let data = try? JSONSerialization.data(withJSONObject: message) else { return }
+            try? input.fileHandleForWriting.write(contentsOf: data + Data([0x0A]))
+        }
+        var reader = AgentChatLineReader()
+        let handle = output.fileHandleForReading
+        func reply(to id: Int) -> [String: Any]? {
+            while true {
+                let chunk = handle.availableData
+                if chunk.isEmpty { return nil }
+                for line in reader.lines(from: chunk) {
+                    guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                          object["method"] == nil, object["id"] as? Int == id
+                    else { continue }
+                    return object
+                }
+            }
+        }
+        send(["id": 1, "method": "initialize", "params": AgentACPRun.initialize()])
+        guard reply(to: 1)?["result"] != nil else { return .unavailable("Could not check") }
+        send(["id": 2, "method": "session/new", "params": [
+            "cwd": FileManager.default.temporaryDirectory.path, "mcpServers": [[String: Any]](),
+        ]])
+        guard let opened = reply(to: 2) else { return .unavailable("Could not check") }
+        if let sessionID = (opened["result"] as? [String: Any])?["sessionId"] as? String {
+            send(["id": 3, "method": "session/close", "params": ["sessionId": sessionID]])
+            _ = reply(to: 3)
+            return .connected
+        }
+        let message = ((opened["error"] as? [String: Any])?["message"] as? String ?? "").lowercased()
+        return message.contains("authentication") ? .notConnected : .unavailable("Could not check")
     }
 
     private static func runInLoginShell(_ command: String) async -> (
@@ -947,6 +1033,9 @@ private struct TerminalCaptureState: Equatable {
             // OpenCode installs a plugin's SDK the first time it loads one, which
             // can take a while; that is not a failure.
             return Status(text: "Waiting for OpenCode to load Lamp’s plugin (the first launch installs it)…", systemImage: "arrow.triangle.2.circlepath", isProblem: false)
+        case .antigravity:
+            // Antigravity has no Terminal session; its chats run over ACP.
+            return Status(text: "Antigravity runs in Chat, not Terminal.", systemImage: "info.circle", isProblem: false)
         }
     }
 }
@@ -1082,7 +1171,10 @@ struct DevotionalAgentWorkspaceView: View {
     }
 
     private var sessionMode: AgentSessionDisplayMode {
-        AgentSessionDisplayMode(rawValue: sessionModeID) ?? .native
+        // Antigravity is chat only, through `agy acp`: running its
+        // interactive CLI inside Lamp is not the integration Google documents.
+        if selectedProvider == .antigravity { return .native }
+        return AgentSessionDisplayMode(rawValue: sessionModeID) ?? .native
     }
 
     var body: some View {
@@ -1344,14 +1436,16 @@ struct DevotionalAgentWorkspaceView: View {
 
     @ViewBuilder
     private var agentSessionControls: some View {
-        LampSegmentedPicker(
-            "Session interface",
-            selection: $sessionModeID,
-            items: AgentSessionDisplayMode.allCases.map {
-                .init(id: $0.rawValue, title: $0.title, systemImage: $0.systemImage)
-            }
-        )
-        .controlSize(.small)
+        if selectedProvider != .antigravity {
+            LampSegmentedPicker(
+                "Session interface",
+                selection: $sessionModeID,
+                items: AgentSessionDisplayMode.allCases.map {
+                    .init(id: $0.rawValue, title: $0.title, systemImage: $0.systemImage)
+                }
+            )
+            .controlSize(.small)
+        }
 
         if sessionMode == .terminal {
             Button(activeProvider == nil ? "Launch" : "Restart", systemImage: "play.fill") {
@@ -2448,6 +2542,8 @@ struct DevotionalAgentWorkspaceView: View {
     }
 
     private func launch(_ provider: AIProviderCLI) async {
+        // No Terminal session for Antigravity; see `sessionMode`.
+        guard provider != .antigravity else { return }
         guard let workspaceURL else { return }
         try? await DevotionalAgentWorkspaceStore.writeContext(contextDocument, to: workspaceURL)
         scheduleEditorSync(draftMarkdown)

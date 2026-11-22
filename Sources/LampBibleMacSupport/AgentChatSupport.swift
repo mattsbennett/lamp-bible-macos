@@ -4,6 +4,11 @@ public enum AgentChatWireProvider: String, Sendable {
     case codex
     case claude
     case openCode
+    /// Google's Antigravity CLI, driven over its Agent Client Protocol
+    /// server (`agy acp`), the way Google documents for apps; never its
+    /// headless `-p` mode, which its FAQ rules out for third-party apps on a
+    /// consumer plan. See `AgentACPRun`.
+    case antigravity
 }
 
 /// Which model a provider's CLI should run, when the reader does not want its
@@ -29,7 +34,7 @@ public enum AgentChatModelChoice {
     public static func aliases(_ provider: AgentChatWireProvider) -> [String] {
         switch provider {
         case .claude: ["opus", "sonnet", "haiku"]
-        case .codex, .openCode: []
+        case .codex, .openCode, .antigravity: []
         }
     }
 
@@ -77,6 +82,8 @@ public enum AgentChatModelChoice {
         switch provider {
         case .claude, .openCode: return ["--model", model]
         case .codex: return ["-m", model]
+        // Set on the session over ACP instead; see `AgentACPRun`.
+        case .antigravity: return []
         }
     }
 
@@ -90,6 +97,7 @@ public enum AgentChatModelChoice {
         // one picked for them need not spell it. One written here by hand
         // stands over it.
         case .openCode: "provider/model, or provider/model#variant."
+        case .antigravity: "A model ID from `agy models`, such as gemini-3.8-flash."
         }
     }
 }
@@ -113,7 +121,7 @@ public enum AgentChatEffortChoice {
     public static func isCarriedByTheModel(_ provider: AgentChatWireProvider) -> Bool {
         switch provider {
         case .openCode: true
-        case .claude, .codex: false
+        case .claude, .codex, .antigravity: false
         }
     }
 
@@ -133,7 +141,9 @@ public enum AgentChatEffortChoice {
     /// they are asked of the CLI instead; see `AgentChatOpenCodeVariants`.
     public static func levels(_ provider: AgentChatWireProvider) -> [String] {
         switch provider {
-        case .claude: ["low", "medium", "high", "xhigh", "max"]
+        // Antigravity documents the same five for `--effort` and its
+        // session's thinking level, depending on the model.
+        case .claude, .antigravity: ["low", "medium", "high", "xhigh", "max"]
         case .codex, .openCode: []
         }
     }
@@ -155,6 +165,8 @@ public enum AgentChatEffortChoice {
         // Nothing of its own: the level is written onto the model by
         // `AgentChatModelChoice.naming`, which is where OpenCode reads it.
         case .openCode: return []
+        // The session's thinking level, set over ACP; see `AgentACPRun`.
+        case .antigravity: return []
         }
     }
 
@@ -163,6 +175,7 @@ public enum AgentChatEffortChoice {
         case .claude: "A level such as high. Claude Code names low to max."
         case .codex: "A value your Codex accepts for model_reasoning_effort."
         case .openCode: "A variant of this model, such as high. It is written onto the model name, which is how OpenCode is told."
+        case .antigravity: "A thinking level such as high. Antigravity names low to max, depending on the model."
         }
     }
 }
@@ -484,6 +497,10 @@ public enum AgentChatLaunchArguments {
             if let sessionID { arguments += ["--session", sessionID] }
             arguments += ["--", prompt]
             return arguments
+        case .antigravity:
+            // Everything else — the session, the model, the prompt — goes
+            // over the protocol; see `AgentACPRun`.
+            return ["acp"]
         }
     }
 }
@@ -513,6 +530,8 @@ public enum AgentChatSetupRequirement {
         "run `codex login`",
         "run codex login",
         "run `opencode auth login`",
+        // `agy acp`, asked for a session before anyone has signed in.
+        "authentication required",
     ]
 
     /// Whether `output` says the provider needs something answered first.
@@ -597,6 +616,8 @@ public enum AgentChatToolDescription {
     /// The tool's name as the pane shows it. An MCP tool arrives as
     /// `mcp__lamp__read_passage`, which names a server nobody needs to see.
     public static func label(for name: String) -> String {
+        // Antigravity spells it `mcp_lamp_read_passage`.
+        if name.hasPrefix("mcp_lamp_") { return String(name.dropFirst("mcp_lamp_".count)) }
         guard name.hasPrefix("mcp__") else { return name }
         let last = name.components(separatedBy: "__").last ?? ""
         return last.isEmpty ? name : last
@@ -819,6 +840,8 @@ public enum AgentChatWireParser {
             return parseClaude(object)
         case .openCode:
             return parseOpenCode(object)
+        case .antigravity:
+            return parseACP(object)
         }
     }
 
@@ -954,6 +977,53 @@ public enum AgentChatWireParser {
             break
         }
         return events
+    }
+
+    /// One line of an `agy acp` conversation: what the agent sent Lamp, and
+    /// the answers to what Lamp asked. Lamp's own requests are not in the
+    /// output; see `AgentACPRun`.
+    private static func parseACP(_ object: [String: Any]) -> [AgentChatWireEvent] {
+        if object.string("method") == "session/update",
+           let update = object.dictionary("params")?.dictionary("update") {
+            switch update.string("sessionUpdate") {
+            case "agent_message_chunk":
+                if update.dictionary("content")?.string("type") == "text",
+                   let text = update.dictionary("content")?.string("text"), !text.isEmpty {
+                    return [.textFragment(text)]
+                }
+            case "agent_thought_chunk":
+                return [.activity(.thinking(estimatedTokens: nil))]
+            case "tool_call":
+                let name = update.string("name") ?? update.string("title") ?? "tool"
+                let summary = update.dictionary("rawInput")?.string("toolSummary")
+                    ?? AgentChatToolDescription.summary(of: update.dictionary("rawInput"))
+                return [.activity(.tool(name: name, summary: summary))]
+            case "tool_call_update":
+                if ["completed", "failed"].contains(update.string("status") ?? "") {
+                    return [.activity(.toolFinished)]
+                }
+            default:
+                break
+            }
+            return []
+        }
+        // A request from the agent — a permission, a file read — is answered
+        // by the run, not read as part of the reply.
+        guard object["method"] == nil else { return [] }
+        if let error = object.dictionary("error") {
+            let message = error.string("message") ?? "Antigravity reported an error."
+            return [.failure(message)]
+        }
+        guard let result = object.dictionary("result") else { return [] }
+        if let sessionID = result.string("sessionId"), !sessionID.isEmpty {
+            return [.sessionStarted(sessionID)]
+        }
+        if result.string("stopReason") == "refusal" {
+            // Where Antigravity reports a spent quota (QUOTA_EXHAUSTED), and
+            // a refusal by the model.
+            return [.failure("Antigravity stopped without answering. It does this when a usage limit is reached, or when the model refuses.")]
+        }
+        return []
     }
 
     private static func parseOpenCode(_ object: [String: Any]) -> [AgentChatWireEvent] {
@@ -1313,5 +1383,136 @@ public enum AgentUsageReading {
             return "at " + date.formatted(.dateTime.hour().minute())
         }
         return date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute())
+    }
+}
+
+/// One turn with Google's Antigravity CLI over its Agent Client Protocol
+/// server, `agy acp`: the protocol Google documents for editors and "other
+/// ACP clients" to drive it with the reader's own sign-in. Its headless `-p`
+/// mode is never used: the Antigravity FAQ says wrapping it in a third-party
+/// app is not supported on consumer plans.
+///
+/// A turn is one process, as with the other CLIs: initialize, open the
+/// session (`session/resume` for one Lamp already has, never `session/load`,
+/// which replays every tool call), set the model and thinking level if
+/// chosen, send the prompt, and end at its answer. The instructions reach it
+/// as `AGENTS.md` in the workspace, which Antigravity reads itself.
+public enum AgentACPRun {
+    public static let protocolVersion = 1
+
+    public static func initialize() -> [String: Any] {
+        [
+            "protocolVersion": protocolVersion,
+            "clientInfo": ["name": "lamp-bible", "title": "Lamp Bible", "version": "1"],
+            // Lamp serves no files and no terminal: the agent uses its own.
+            "clientCapabilities": [
+                "fs": ["readTextFile": false, "writeTextFile": false],
+                "terminal": false,
+            ],
+        ]
+    }
+
+    /// `session/resume` for a session Lamp has, else `session/new`. Never
+    /// extra workspace folders: Antigravity runs commands from the first, so
+    /// a second one could move where they run.
+    public static func open(
+        sessionID: String?, workspace: URL, mcpServers: [[String: Any]]
+    ) -> (method: String, params: [String: Any]) {
+        var params: [String: Any] = ["cwd": workspace.path, "mcpServers": mcpServers]
+        if let sessionID {
+            params["sessionId"] = sessionID
+            return ("session/resume", params)
+        }
+        return ("session/new", params)
+    }
+
+    /// The session's model and thinking level, as Antigravity names its
+    /// config options. A cold resume reports the default model, so a choice
+    /// is set again on every turn rather than once.
+    public static func configuration(
+        sessionID: String, model: String?, effort: String?
+    ) -> [[String: Any]] {
+        var requests: [[String: Any]] = []
+        if let model = AgentChatModelChoice.canonical(model) {
+            requests.append(["sessionId": sessionID, "configId": "model", "value": model])
+        }
+        if let effort = AgentChatEffortChoice.canonical(effort) {
+            requests.append(["sessionId": sessionID, "configId": "thought_level", "value": effort])
+        }
+        return requests
+    }
+
+    public static func prompt(sessionID: String, text: String) -> [String: Any] {
+        ["sessionId": sessionID, "prompt": [["type": "text", "text": text]]]
+    }
+
+    /// Lamp's MCP server, as ACP describes a stdio server. A reader chat's
+    /// comes from its mode; a writing's from the `.mcp.json` Lamp writes in
+    /// its workspace for every provider.
+    public static func mcpServers(mode: AgentChatMode, workspace: URL) -> [[String: Any]] {
+        switch mode {
+        case .reader(let configuration):
+            let answering = configuration.answering(provider: AgentChatWireProvider.antigravity.rawValue)
+            return [server(command: answering.helperExecutableURL.path, arguments: answering.arguments)]
+        case .writing:
+            guard let data = try? Data(contentsOf: workspace.appendingPathComponent(".mcp.json")),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let lamp = (object["mcpServers"] as? [String: Any])?["lamp"] as? [String: Any],
+                  let command = lamp["command"] as? String
+            else { return [] }
+            return [server(command: command, arguments: lamp["args"] as? [String] ?? [])]
+        }
+    }
+
+    private static func server(command: String, arguments: [String]) -> [String: Any] {
+        ["name": "lamp", "command": command, "args": arguments, "env": [[String: String]]()]
+    }
+
+    /// The answer to an agent's `session/request_permission`, as the option
+    /// to pick. Nothing is ever allowed always: each call is judged.
+    ///
+    /// - Lamp's own tools (`mcp_lamp_…`) are allowed: they are read-only but
+    ///   for the writes each answers to its own setting.
+    /// - A read is allowed inside the workspace, or inside Antigravity's own
+    ///   folder for the session, where it puts a long tool result and then
+    ///   reads it back.
+    /// - A writing's agent may edit files inside its workspace, as Claude
+    ///   Code's does under acceptEdits.
+    /// - A question with set choices (a `toolCallId` beginning
+    ///   `interaction_`) is turned down: nobody is there to answer it.
+    /// - Everything else — commands, the web, schedules, subagents, writes
+    ///   outside — is turned down. Work that outlives a turn would go on
+    ///   after Lamp had stopped listening.
+    public static func decide(
+        permission params: [String: Any], readOnly: Bool, workspace: URL, home: URL
+    ) -> String? {
+        guard let options = params["options"] as? [[String: Any]] else { return nil }
+        func option(_ kind: String) -> String? {
+            options.first { $0["kind"] as? String == kind }?["optionId"] as? String
+        }
+        let reject = option("reject_once") ?? option("reject_always")
+        guard let call = params["toolCall"] as? [String: Any] else { return reject }
+        if (call["toolCallId"] as? String)?.hasPrefix("interaction_") == true { return reject }
+        let name = call["name"] as? String ?? ""
+        let kind = call["kind"] as? String ?? ""
+        let paths = (call["locations"] as? [[String: Any]] ?? []).compactMap { $0["path"] as? String }
+        let agentFolder = home.appendingPathComponent(".gemini/antigravity-cli/brain", isDirectory: true)
+        func inside(_ root: URL) -> Bool {
+            let base = root.standardizedFileURL.resolvingSymlinksInPath().path + "/"
+            return !paths.isEmpty && paths.allSatisfy {
+                URL(fileURLWithPath: $0).standardizedFileURL.resolvingSymlinksInPath().path.hasPrefix(base)
+            }
+        }
+        let allowed: Bool
+        if name.hasPrefix("mcp_lamp_") {
+            allowed = true
+        } else if kind == "read" {
+            allowed = inside(workspace) || inside(agentFolder)
+        } else if kind == "edit" {
+            allowed = !readOnly && inside(workspace)
+        } else {
+            allowed = false
+        }
+        return allowed ? option("allow_once") : reject
     }
 }

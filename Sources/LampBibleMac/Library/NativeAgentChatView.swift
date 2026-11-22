@@ -28,13 +28,14 @@ enum AgentSessionDisplayMode: String, CaseIterable, Identifiable {
 }
 
 extension AIProviderCLI {
-    var supportsBrowserAuthentication: Bool { self != .openCode }
+    var supportsBrowserAuthentication: Bool { self != .openCode && self != .antigravity }
 
     var authenticationArguments: [String] {
         switch self {
         case .codex: ["login"]
         case .claude: ["auth", "login"]
         case .openCode: ["auth", "login"]
+        case .antigravity: ["acp", "--login"]
         }
     }
 
@@ -43,6 +44,7 @@ extension AIProviderCLI {
         case .codex: .codex
         case .claude: .claude
         case .openCode: .openCode
+        case .antigravity: .antigravity
         }
     }
 }
@@ -72,6 +74,9 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
     /// call, which is not stalling however long it takes.
     private var waitingOnPerson = false
     private var stalled = false
+    /// Set while an ACP turn runs: how to ask the agent to stop, which is
+    /// its own `session/cancel` rather than a signal.
+    private var acpCancel: (() -> Void)?
 
     /// How long a run may say nothing before Lamp stops it. A provider in
     /// trouble — retrying an overloaded API, or held at a usage limit — can
@@ -119,8 +124,15 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
         // that is work on the person's draft after they said stop.
         cancelled = true
         let process = activeProcess
+        let askToStop = acpCancel
         lock.unlock()
-        if let process, process.isRunning { Self.stop(process) }
+        if let askToStop {
+            // Off the caller's thread: it writes to the agent's input, and a
+            // Stop pressed on the main thread must never wait on a pipe.
+            DispatchQueue.global(qos: .userInitiated).async { askToStop() }
+        } else if let process, process.isRunning {
+            Self.stop(process)
+        }
     }
 
     /// Asks the provider to stop, then kills it and everything it started if
@@ -231,6 +243,223 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             lock.unlock()
             return AgentCLIProcessResult(
                 exitCode: process.terminationStatus,
+                output: String(decoding: collected, as: UTF8.self),
+                launchError: nil,
+                stalled: wasStalled
+            )
+        } catch {
+            return AgentCLIProcessResult(exitCode: -1, output: "", launchError: error.localizedDescription)
+        }
+    }
+
+    /// One Antigravity turn over `agy acp`; see `AgentACPRun`. The whole
+    /// conversation — what the agent sent, and its answers to Lamp — is the
+    /// output, line by line, which `AgentChatWireParser` reads as for any
+    /// provider. Lamp's own requests are not in it.
+    func runACP(
+        executableName: String,
+        workingDirectory: URL,
+        mode: AgentChatMode,
+        sessionID: String?,
+        model: String?,
+        effort: String?,
+        prompt: String,
+        onLine: (@Sendable (String) -> Void)? = nil
+    ) async -> AgentCLIProcessResult {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async { [self] in
+                continuation.resume(returning: runACPSynchronously(
+                    executableName: executableName, workingDirectory: workingDirectory, mode: mode,
+                    sessionID: sessionID, model: model, effort: effort, prompt: prompt, onLine: onLine
+                ))
+            }
+        }
+    }
+
+    private func runACPSynchronously(
+        executableName: String,
+        workingDirectory: URL,
+        mode: AgentChatMode,
+        sessionID resumed: String?,
+        model: String?,
+        effort: String?,
+        prompt: String,
+        onLine: (@Sendable (String) -> Void)?
+    ) -> AgentCLIProcessResult {
+        do {
+            let executableURL = try resolveExecutable(named: executableName)
+            guard !isCancelled else { return .stoppedBeforeStarting }
+            let process = Process()
+            let input = Pipe()
+            let output = Pipe()
+            process.executableURL = executableURL
+            process.arguments = AgentChatLaunchArguments.make(
+                provider: .antigravity, prompt: prompt, sessionID: resumed, proposedSessionID: nil, mode: mode
+            )
+            process.currentDirectoryURL = workingDirectory
+            process.standardInput = input
+            process.standardOutput = output
+            // Its own logs, not the conversation.
+            process.standardError = FileHandle.nullDevice
+            var environment = AgentProcessEnvironment.cleaned(ProcessInfo.processInfo.environment)
+            environment["PWD"] = workingDirectory.path
+            process.environment = environment
+
+            // Two locks: one keeps lines whole on the agent's input, the
+            // other guards what a Stop on another thread reads. Holding one
+            // while taking the other again is how the prompt never went.
+            let writeLock = NSLock()
+            let stateLock = NSLock()
+            func send(_ message: [String: Any]) {
+                var message = message
+                message["jsonrpc"] = "2.0"
+                guard let data = try? JSONSerialization.data(withJSONObject: message) else { return }
+                writeLock.lock()
+                defer { writeLock.unlock() }
+                try? input.fileHandleForWriting.write(contentsOf: data + Data([0x0A]))
+            }
+
+            var session: String?
+            var promptID: Int?
+            var cancelSent = false
+            lock.lock()
+            activeProcess = process
+            acpCancel = { [weak self] in
+                // Asked of the agent while it is answering, which ends the
+                // prompt as cancelled and lets it save; and if it does not
+                // end, the process and what it started are stopped.
+                stateLock.lock()
+                let sessionToCancel = promptID != nil ? session : nil
+                let first = !cancelSent
+                cancelSent = true
+                stateLock.unlock()
+                if let sessionToCancel, first {
+                    send(["method": "session/cancel", "params": ["sessionId": sessionToCancel]])
+                    DispatchQueue.global().asyncAfter(deadline: .now() + Self.stopGraceSeconds) {
+                        if process.isRunning { Self.stop(process) }
+                    }
+                } else if process.isRunning {
+                    Self.stop(process)
+                }
+                _ = self
+            }
+            lock.unlock()
+            defer {
+                lock.lock()
+                if activeProcess === process { activeProcess = nil }
+                acpCancel = nil
+                lock.unlock()
+            }
+
+            guard !isCancelled else { return .stoppedBeforeStarting }
+            try process.run()
+            if isCancelled { Self.stop(process) }
+            let watchdog = watchForStall(in: process)
+            defer { watchdog.cancel() }
+
+            let home = FileManager.default.homeDirectoryForCurrentUser
+            var nextID = 1
+            var pending: [Int: String] = [:]
+            func request(_ method: String, _ params: [String: Any]) -> Int {
+                let id = nextID
+                nextID += 1
+                pending[id] = method
+                send(["id": id, "method": method, "params": params])
+                return id
+            }
+            _ = request("initialize", AgentACPRun.initialize())
+            var configurationQueue: [[String: Any]] = []
+            var answered = false
+            var failed = false
+
+            let handle = output.fileHandleForReading
+            var collected = Data()
+            var reader = AgentChatLineReader()
+            reading: while true {
+                let chunk = handle.availableData
+                if chunk.isEmpty { break }
+                lock.lock()
+                lastOutput = Date()
+                lock.unlock()
+                for line in reader.lines(from: chunk) {
+                    collected += Data(line.utf8) + Data([0x0A])
+                    onLine?(line)
+                    guard let message = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
+                    else { continue }
+                    if let method = message["method"] as? String, let id = message["id"] {
+                        // A request from the agent.
+                        if method == "session/request_permission", let params = message["params"] as? [String: Any] {
+                            let choice = AgentACPRun.decide(
+                                permission: params, readOnly: mode.isReadOnly, workspace: workingDirectory, home: home
+                            )
+                            let outcome: [String: Any] = choice.map { ["outcome": "selected", "optionId": $0] }
+                                ?? ["outcome": "cancelled"]
+                            send(["id": id, "result": ["outcome": outcome]])
+                        } else {
+                            send(["id": id, "error": ["code": -32601, "message": "Lamp does not provide \(method)."]])
+                        }
+                        continue
+                    }
+                    guard let id = message["id"] as? Int, let method = pending.removeValue(forKey: id) else { continue }
+                    // A model or level Antigravity does not know is said (the
+                    // error is in the output) and the turn goes on without it;
+                    // any other error ends the turn.
+                    if message["error"] != nil, method != "session/set_config_option" {
+                        failed = true
+                        break reading
+                    }
+                    let result = message["result"] as? [String: Any] ?? [:]
+                    switch method {
+                    case "initialize":
+                        let open = AgentACPRun.open(
+                            sessionID: resumed, workspace: workingDirectory,
+                            mcpServers: AgentACPRun.mcpServers(mode: mode, workspace: workingDirectory)
+                        )
+                        _ = request(open.method, open.params)
+                    case "session/new", "session/resume":
+                        guard let sessionID = result["sessionId"] as? String ?? resumed else {
+                            failed = true
+                            break reading
+                        }
+                        stateLock.lock(); session = sessionID; stateLock.unlock()
+                        configurationQueue = AgentACPRun.configuration(sessionID: sessionID, model: model, effort: effort)
+                        if isCancelled { break reading }
+                        if !configurationQueue.isEmpty {
+                            _ = request("session/set_config_option", configurationQueue.removeFirst())
+                        } else {
+                            let id = request("session/prompt", AgentACPRun.prompt(sessionID: sessionID, text: prompt)); stateLock.lock(); promptID = id; stateLock.unlock()
+                        }
+                    case "session/set_config_option":
+                        guard let sessionID = session else { break }
+                        if isCancelled { break reading }
+                        if !configurationQueue.isEmpty {
+                            _ = request("session/set_config_option", configurationQueue.removeFirst())
+                        } else {
+                            let id = request("session/prompt", AgentACPRun.prompt(sessionID: sessionID, text: prompt)); stateLock.lock(); promptID = id; stateLock.unlock()
+                        }
+                    case "session/prompt":
+                        answered = true
+                        break reading
+                    default:
+                        break
+                    }
+                }
+            }
+            if let onLine, let last = reader.flush() { onLine(last) }
+            // The turn is over: closing its input ends `agy acp`, which then
+            // saves and exits; one that does not is stopped.
+            try? input.fileHandleForWriting.close()
+            let exited = DispatchSemaphore(value: 0)
+            DispatchQueue.global().async { process.waitUntilExit(); exited.signal() }
+            if exited.wait(timeout: .now() + Self.stopGraceSeconds) == .timedOut {
+                Self.stop(process)
+                process.waitUntilExit()
+            }
+            lock.lock()
+            let wasStalled = stalled
+            lock.unlock()
+            return AgentCLIProcessResult(
+                exitCode: answered && !failed ? 0 : 1,
                 output: String(decoding: collected, as: UTF8.self),
                 launchError: nil,
                 stalled: wasStalled
@@ -1610,42 +1839,55 @@ final class NativeAgentChatModel: ObservableObject {
         let providerMajorVersion = await Task.detached {
             runner.majorVersion(ofExecutableNamed: executable)
         }.value
-        let result = await runner.run(
-            executableName: provider.executable,
-            arguments: AgentChatLaunchArguments.make(
-                provider: wire,
-                prompt: prompt,
-                sessionID: resumedSessionID,
-                proposedSessionID: proposedSessionID,
-                mode: mode,
-                permissionHookSettings: channel.map { ClaudePermissionHook.settingsJSON(for: $0) },
-                // Read as the run starts rather than held on the model: the
-                // picker writes straight to this chat's own choices, and a
-                // chat left open while they changed would otherwise keep
-                // launching the old one. This chat's choice first, so that two
-                // windows on two models each run theirs, and what the app
-                // remembers only where this chat has pinned nothing.
-                model: chatChoices.value(
-                    for: AgentChatModelChoice.defaultsKey(wire),
-                    orAppDefault: UserDefaults.standard.string(
-                        forKey: AgentChatModelChoice.defaultsKey(wire)
-                    )
-                ),
-                effort: chatChoices.value(
-                    for: AgentChatEffortChoice.defaultsKey(wire),
-                    orAppDefault: UserDefaults.standard.string(
-                        forKey: AgentChatEffortChoice.defaultsKey(wire)
-                    )
-                ),
-                providerMajorVersion: providerMajorVersion
-            ),
-            workingDirectory: workspace,
-            onLine: { line in
-                let parsed = AgentChatWireParser.parse(line, provider: wire)
-                guard !parsed.isEmpty else { return }
-                lines.yield(parsed)
-            }
+        // Read as the run starts rather than held on the model: the picker
+        // writes straight to this chat's own choices, and a chat left open
+        // while they changed would otherwise keep launching the old one. This
+        // chat's choice first, so that two windows on two models each run
+        // theirs, and what the app remembers only where this chat has pinned
+        // nothing.
+        let chosenModel = chatChoices.value(
+            for: AgentChatModelChoice.defaultsKey(wire),
+            orAppDefault: UserDefaults.standard.string(forKey: AgentChatModelChoice.defaultsKey(wire))
         )
+        let chosenEffort = chatChoices.value(
+            for: AgentChatEffortChoice.defaultsKey(wire),
+            orAppDefault: UserDefaults.standard.string(forKey: AgentChatEffortChoice.defaultsKey(wire))
+        )
+        let onLine: @Sendable (String) -> Void = { line in
+            let parsed = AgentChatWireParser.parse(line, provider: wire)
+            guard !parsed.isEmpty else { return }
+            lines.yield(parsed)
+        }
+        let result: AgentCLIProcessResult
+        if provider == .antigravity {
+            result = await runner.runACP(
+                executableName: provider.executable,
+                workingDirectory: workspace,
+                mode: mode,
+                sessionID: resumedSessionID,
+                model: chosenModel,
+                effort: chosenEffort,
+                prompt: prompt,
+                onLine: onLine
+            )
+        } else {
+            result = await runner.run(
+                executableName: provider.executable,
+                arguments: AgentChatLaunchArguments.make(
+                    provider: wire,
+                    prompt: prompt,
+                    sessionID: resumedSessionID,
+                    proposedSessionID: proposedSessionID,
+                    mode: mode,
+                    permissionHookSettings: channel.map { ClaudePermissionHook.settingsJSON(for: $0) },
+                    model: chosenModel,
+                    effort: chosenEffort,
+                    providerMajorVersion: providerMajorVersion
+                ),
+                workingDirectory: workspace,
+                onLine: onLine
+            )
+        }
         // Everything the run said is taken in before the run is read for what
         // it amounts to, so nothing arrives after the reply has replaced it.
         lines.finish()
@@ -3093,7 +3335,10 @@ final class AgentUsageService: ObservableObject {
     private static let freshFor: TimeInterval = 5 * 60
 
     /// Whether Lamp has any way to ask this provider.
-    static func reports(_ provider: AIProviderCLI) -> Bool { true }
+    /// Antigravity documents no way for an app to read its usage. Its plan
+    /// is all `agy acp` says, and reading the CLI's sign-in to ask Google's
+    /// servers directly is what its terms forbid.
+    static func reports(_ provider: AIProviderCLI) -> Bool { provider != .antigravity }
 
     func refreshIfStale(_ provider: AIProviderCLI) {
         guard Self.reports(provider) else { return }
@@ -3111,6 +3356,7 @@ final class AgentUsageService: ObservableObject {
             case .claude: report = await Self.claudeUsage()
             case .codex: report = await Self.codexUsage()
             case .openCode: report = await Self.openCodeUsage()
+            case .antigravity: report = nil
             }
             states[provider] = report.map(State.shown) ?? .unavailable
         }

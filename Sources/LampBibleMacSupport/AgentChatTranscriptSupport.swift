@@ -871,6 +871,8 @@ public enum AgentChatResumeFailure {
             "session not found",
             "thread not found",
             "no saved session found",
+            // `agy acp` asked to resume a session it doesn't have.
+            "failed to read session",
         ]
         return explicit.contains { text.contains($0) }
     }

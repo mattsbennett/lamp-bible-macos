@@ -530,3 +530,112 @@ struct AgentChatAccountTests {
         #expect(gone)
     }
 }
+
+/// Antigravity over `agy acp`, from messages agy 1.5.14 sent.
+struct AgentACPTests {
+    private let workspace = URL(fileURLWithPath: "/tmp/lamp-acp-workspace", isDirectory: true)
+    private let home = URL(fileURLWithPath: "/Users/someone", isDirectory: true)
+
+    @Test func itsLaunchIsTheACPServerAndNothingElse() {
+        #expect(AgentChatLaunchArguments.make(
+            provider: .antigravity, prompt: "hi", sessionID: "s", proposedSessionID: nil
+        ) == ["acp"])
+        #expect(AgentChatModelChoice.arguments(for: "gemini-3.8-flash", provider: .antigravity) == [])
+        #expect(AgentChatEffortChoice.arguments(for: "high", provider: .antigravity) == [])
+    }
+
+    @Test func aReplyIsReadFromTheSessionsUpdates() {
+        let chunk = #"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Jesus wept."}}}}"#
+        #expect(AgentChatWireParser.parse(chunk, provider: .antigravity) == [.textFragment("Jesus wept.")])
+        let tool = #"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"tool_call","toolCallId":"call_1","name":"mcp_lamp_read_passage","status":"in_progress","kind":"other","title":"Run mcp_lamp_read_passage","rawInput":{"reference":"John 11:35","toolSummary":"Read John 11:35 in KJVs"}}}}"#
+        #expect(AgentChatWireParser.parse(tool, provider: .antigravity)
+            == [.activity(.tool(name: "mcp_lamp_read_passage", summary: "Read John 11:35 in KJVs"))])
+        #expect(AgentChatToolDescription.label(for: "mcp_lamp_read_passage") == "read_passage")
+        let opened = #"{"jsonrpc":"2.0","result":{"sessionId":"3b0eea46-e7e7-4475-8692-a9cca85f6d07","models":{}},"id":2}"#
+        #expect(AgentChatWireParser.parse(opened, provider: .antigravity)
+            == [.sessionStarted("3b0eea46-e7e7-4475-8692-a9cca85f6d07")])
+        // A permission request is the run's to answer, not part of the reply.
+        let asked = #"{"jsonrpc":"2.0","method":"session/request_permission","params":{"sessionId":"s"},"id":"1"}"#
+        #expect(AgentChatWireParser.parse(asked, provider: .antigravity) == [])
+    }
+
+    @Test func aRunsReplyAndSessionAreReadFromItsWholeOutput() {
+        let output = [
+            #"{"jsonrpc":"2.0","result":{"protocolVersion":1},"id":1}"#,
+            #"{"jsonrpc":"2.0","result":{"sessionId":"abc"},"id":2}"#,
+            #"{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello, "}}}}"#,
+            #"{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"friend."}}}}"#,
+            #"{"jsonrpc":"2.0","result":{"stopReason":"end_turn"},"id":3}"#,
+        ].joined(separator: "\n")
+        let summary = AgentChatRunSummary.summarize(output: output, provider: .antigravity)
+        #expect(summary.sessionID == "abc")
+        #expect(summary.response == "Hello, friend.")
+    }
+
+    @Test func signingInAndALostSessionAreRecognised() {
+        let unsigned = #"{"jsonrpc":"2.0","error":{"code":-32000,"message":"Authentication required"},"id":2}"#
+        #expect(AgentChatWireParser.parse(unsigned, provider: .antigravity) == [.failure("Authentication required")])
+        #expect(AgentChatSetupRequirement.verdict(
+            output: unsigned, failure: "Authentication required", sessionID: nil, exitCode: 1
+        ) == .indicated)
+        let lost = #"{"jsonrpc":"2.0","error":{"code":-32603,"message":"Failed to read session 0000; retry, or load it with session/load"},"id":2}"#
+        #expect(AgentChatResumeFailure.indicatesMissingSession(in: lost))
+        let refused = #"{"jsonrpc":"2.0","result":{"stopReason":"refusal"},"id":3}"#
+        #expect(AgentChatWireParser.parse(refused, provider: .antigravity).count == 1)
+    }
+
+    @Test func aSessionIsResumedNeverLoadedAndGivenNoSecondFolder() {
+        let fresh = AgentACPRun.open(sessionID: nil, workspace: workspace, mcpServers: [])
+        #expect(fresh.method == "session/new")
+        let again = AgentACPRun.open(sessionID: "abc", workspace: workspace, mcpServers: [])
+        #expect(again.method == "session/resume")
+        #expect(again.params["sessionId"] as? String == "abc")
+        #expect(again.params["additionalDirectories"] == nil)
+        let configuration = AgentACPRun.configuration(sessionID: "abc", model: "gemini-3.8-flash", effort: " ")
+        #expect(configuration.count == 1)
+        #expect(configuration.first?["configId"] as? String == "model")
+    }
+
+    @Test func aWritingsLampServerComesFromItsWorkspace() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("acp-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try #"{"mcpServers":{"lamp":{"type":"stdio","command":"/Applications/Lamp Bible.app/Contents/Helpers/lamp-mcp","args":["--library-root","/lib"]}}}"#
+            .write(to: folder.appendingPathComponent(".mcp.json"), atomically: true, encoding: .utf8)
+        let servers = AgentACPRun.mcpServers(mode: .writing, workspace: folder)
+        #expect(servers.count == 1)
+        #expect(servers.first?["name"] as? String == "lamp")
+        #expect(servers.first?["args"] as? [String] == ["--library-root", "/lib"])
+    }
+
+    private func request(_ call: [String: Any]) -> [String: Any] {
+        ["toolCall": call, "options": [
+            ["optionId": "allow", "name": "Allow", "kind": "allow_once"],
+            ["optionId": "always", "name": "Always", "kind": "allow_always"],
+            ["optionId": "deny", "name": "Deny", "kind": "reject_once"],
+        ]]
+    }
+
+    @Test func onlyLampsToolsAndOwnReadsAreAllowedInAReaderChat() {
+        func decide(_ call: [String: Any], readOnly: Bool = true) -> String? {
+            AgentACPRun.decide(permission: request(call), readOnly: readOnly, workspace: workspace, home: home)
+        }
+        #expect(decide(["toolCallId": "c", "name": "mcp_lamp_read_passage", "kind": "other"]) == "allow")
+        // Its own long result, saved in its folder and read back.
+        #expect(decide(["toolCallId": "c", "name": "view_file", "kind": "read",
+                        "locations": [["path": "/Users/someone/.gemini/antigravity-cli/brain/s/.system_generated/steps/2/output.txt"]]]) == "allow")
+        #expect(decide(["toolCallId": "c", "name": "view_file", "kind": "read",
+                        "locations": [["path": "/Users/someone/.ssh/id_ed25519"]]]) == "deny")
+        #expect(decide(["toolCallId": "c", "name": "run_command", "kind": "execute"]) == "deny")
+        #expect(decide(["toolCallId": "c", "name": "write_file", "kind": "edit",
+                        "locations": [["path": "/tmp/lamp-acp-workspace/draft.md"]]]) == "deny")
+        // A question nobody is there to answer.
+        #expect(decide(["toolCallId": "interaction_1", "name": "ask", "kind": "other"]) == "deny")
+        // A writing's agent edits its own workspace and nothing outside it.
+        #expect(decide(["toolCallId": "c", "name": "write_file", "kind": "edit",
+                        "locations": [["path": "/tmp/lamp-acp-workspace/draft.md"]]], readOnly: false) == "allow")
+        #expect(decide(["toolCallId": "c", "name": "write_file", "kind": "edit",
+                        "locations": [["path": "/tmp/lamp-acp-workspace/../elsewhere.md"]]], readOnly: false) == "deny")
+        #expect(decide(["toolCallId": "c", "name": "run_command", "kind": "execute"], readOnly: false) == "deny")
+    }
+}

@@ -60,6 +60,9 @@ public enum AgentTerminalCaptureParser {
             return parseLifecycleHook(object, provider: provider, eventKey: eventKey, recordedAt: recordedAt)
         case .openCode:
             return parseOpenCode(object)
+        // No Terminal session for Antigravity, so nothing is captured.
+        case .antigravity:
+            return nil
         }
     }
 
@@ -227,6 +230,7 @@ public enum AgentTerminalCaptureStore {
         case .claude: "claude"
         case .codex: "codex"
         case .openCode: "opencode"
+        case .antigravity: "agy"
         }
     }
 
@@ -468,6 +472,7 @@ public enum AgentTerminalIntegrationMemory: CaseIterable, Sendable {
         case .openCode: .openCodePlugin
         // Claude's hooks need no first-run step, so there's nothing to remember.
         case .claude: nil
+        case .antigravity: nil
         }
     }
 
@@ -662,6 +667,13 @@ public enum AgentTerminalLaunchPlanner {
             if let resume = request.resumeSessionID {
                 plan.arguments += ["resume", resume]
             }
+
+        case .antigravity:
+            // Lamp offers no Terminal session for Antigravity: driving its
+            // interactive CLI from another app is not the integration Google
+            // documents, so its chats go through `agy acp` alone. Nothing
+            // asks for this plan.
+            break
 
         case .openCode:
             if let resume = request.resumeSessionID {

@@ -75,6 +75,8 @@ struct AgentChatProviderChoice: View {
     @AppStorage(AgentChatEffortChoice.defaultsKey(.claude)) private var claudeEffort = ""
     @AppStorage(AgentChatEffortChoice.defaultsKey(.codex)) private var codexEffort = ""
     @AppStorage(AgentChatEffortChoice.defaultsKey(.openCode)) private var openCodeEffort = ""
+    @AppStorage(AgentChatModelChoice.defaultsKey(.antigravity)) private var antigravityModel = ""
+    @AppStorage(AgentChatEffortChoice.defaultsKey(.antigravity)) private var antigravityEffort = ""
 
     /// This chat's own choices, held by the pane the chat is in so that the
     /// controls and the run all read one copy.
@@ -95,6 +97,8 @@ struct AgentChatProviderChoice: View {
         case (.effort, .claude): $claudeEffort
         case (.effort, .codex): $codexEffort
         case (.effort, .openCode): $openCodeEffort
+        case (.model, .antigravity): $antigravityModel
+        case (.effort, .antigravity): $antigravityEffort
         }
     }
 
@@ -103,6 +107,7 @@ struct AgentChatProviderChoice: View {
         case .claude: $claudeModel
         case .codex: $codexModel
         case .openCode: $openCodeModel
+        case .antigravity: $antigravityModel
         }
     }
 
