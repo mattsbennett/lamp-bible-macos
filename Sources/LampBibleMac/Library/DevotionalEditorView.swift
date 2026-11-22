@@ -2847,17 +2847,40 @@ struct DevotionalEditorView: View {
                 }
             }.value
             for (owed, answers, current) in proofs {
-                settle(owed, answers: answers, current: current, for: key)
+                await settle(owed, answers: answers, current: current, for: key)
             }
         }
     }
 
     /// Writes down what `answers` is proof of, and leaves the rest owed.
+    /// Waits for the record to be written, not only asked for.
+    ///
+    /// The bookkeeping — what is settled, what is still owed — happens
+    /// when the write comes back, so a settle that returned at the
+    /// asking left the next one free to run against what this one had
+    /// not finished changing. An older `waiting` set written after a
+    /// newer settle had finished could bring a completed obligation
+    /// back to life, and its retry make fresh marks and record the
+    /// restore again.
     private func settle(
         _ owing: WritingReviewSession.OwedRestore,
         answers: [UUID: LampWritingReview.RestorePlan.Standing],
         current: [UUID: LampWritingReview.RestorePlan.Standing],
         for key: WritingReviewKey
+    ) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            settle(owing, answers: answers, current: current, for: key) {
+                continuation.resume()
+            }
+        }
+    }
+
+    private func settle(
+        _ owing: WritingReviewSession.OwedRestore,
+        answers: [UUID: LampWritingReview.RestorePlan.Standing],
+        current: [UUID: LampWritingReview.RestorePlan.Standing],
+        for key: WritingReviewKey,
+        then done: @escaping () -> Void
     ) {
         // Core's decision, which the phone makes too
         // (`RestorePlan.settlement`): what this save proves, and what
@@ -2870,7 +2893,7 @@ struct DevotionalEditorView: View {
             if waiting.count != pending.count {
                 WritingReviewObligations.shared.stillOwed(owing.pending(waiting), for: key.writingID)
             }
-            return
+            return done()
         }
         // Written against the whole plan, so each passage is put back where
         // the plan actually put it, and only these passages are recorded.
@@ -2900,6 +2923,7 @@ struct DevotionalEditorView: View {
                     refusedRestore = "The wording was put back, but Lamp couldn’t record it. It will try again."
                 }
             }
+            done()
         }
     }
 

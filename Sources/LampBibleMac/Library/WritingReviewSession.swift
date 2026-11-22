@@ -457,7 +457,13 @@ final class WritingReviewSession: ObservableObject {
         if let key { WritingReviewObligations.shared.wasCleared(for: key) }
         remember(text)
         let known = texts
-        change { $0.clearing(range, in: text, carryingFrom: known) }
+        // Reaching back over a line's own block syntax where the range
+        // begins just after it: a change to that syntax alone is drawn
+        // as a point after it while the mark sits on it, so a clear
+        // from that point touches nothing and the writer watches the
+        // mark stay (core's `takingInSyntax`).
+        let asked = LampWritingReviewMarkdown.takingInSyntax(range, of: text)
+        change { $0.clearing(asked, in: text, carryingFrom: known) }
     }
 
     /// Clears the range the visual page marked in the Markdown it sent.
@@ -507,7 +513,9 @@ final class WritingReviewSession: ObservableObject {
     /// list can say, holding only what can be put back.
     func restoring(_ range: NSRange, in text: String? = nil) -> LampWritingReview.RestoreOutcome {
         let text = text ?? self.text
-        return live(in: text)?.restoring(range, in: text) ?? .nothingTouched
+        // The same reach back over a line's block syntax as a clear's.
+        let asked = LampWritingReviewMarkdown.takingInSyntax(range, of: text)
+        return live(in: text)?.restoring(asked, in: text) ?? .nothingTouched
     }
 
     /// The marks carried into `text`, as drawing carries them.
