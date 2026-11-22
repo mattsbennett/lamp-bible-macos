@@ -383,13 +383,19 @@ final class WritingReviewSession: ObservableObject {
     /// this one. They go again once the text settles.
     func marksRejected() {
         needsResend = true
-        guard resentFor != text else {
-            // Refused twice for one text: it will not take them, and the
-            // writer is told rather than left with a document that looks
-            // unchanged.
-            if !isUnshown, count > 0 { isUnshown = true }
-            return
-        }
+        // Said on the first refusal, not the second.
+        //
+        // A refusal schedules another draw, and that draw makes the
+        // same Markdown from the same record — which the page is not
+        // even sent, being identical to what it just refused. So a
+        // second refusal never comes, and waiting for one left the
+        // writer looking at an unmarked document with nothing to say
+        // the marks had been turned away.
+        //
+        // Cleared again the moment anything draws, so a resend that
+        // does land takes the warning with it.
+        if !isUnshown, count > 0 { isUnshown = true }
+        guard resentFor != text else { return }
         resentFor = text
         scheduleDraw()
     }
@@ -788,26 +794,19 @@ final class WritingReviewSession: ObservableObject {
             let drawn = await Task.detached(priority: .userInitiated) {
                 let live = review.carryingToText(text, from: known)
                 let ranges = live.highlightedRanges(in: text)
-                // Markers moved to where the Markdown still reads as the
-                // writing, and the changes put in the order the moving
-                // left the passages in.
+                // Markers moved to where the Markdown still reads as
+                // the writing, each passage carrying its own place.
                 //
                 // Placing can swap two of them: a change to a link's
                 // words and a change to where it points, when the
-                // second's markers come out of the address and go before
-                // the first. The page pairs what it is handed with the
-                // passages it finds, in order, so the label would carry
-                // the destination's change — and a writer putting one
-                // back would get the other. Its own check cannot see
-                // that: it proves the text is the document, not the
-                // order of the passages in it.
-                //
-                // So the order is worked out here and the changes go
-                // over in it. The page is handed the plain placed
-                // Markdown it already understands, with nothing new to
-                // read.
+                // second's markers come out of the address and go
+                // before the first. The page reads the place written
+                // after each marker and pairs by that, so neither of us
+                // is counting on the order they arrive in — and the
+                // page is the one that knows what it parsed, which no
+                // amount of working it out here can match.
                 let placed = sendsMarks
-                    ? live.markedMarkdown(in: text).map { LampWritingReviewMarkdown.placed($0) }
+                    ? live.markedMarkdown(in: text).map { LampWritingReviewMarkdown.drawable($0) }
                     : nil
                 let changes = sendsMarks ? live.changes(in: text, ranges: ranges) : []
                 return (
@@ -837,10 +836,9 @@ final class WritingReviewSession: ObservableObject {
                     // parse as something else and the page refuses the
                     // lot: those passages go unmarked, which is poor but
                     // honest. Marks against the wrong changes are not.
-                    placed?.markdown,
+                    placed,
                     live.restorable(in: text),
-                    placed.map { LampWritingReviewMarkdown.reordered(changes, by: $0.order) }
-                        ?? changes
+                    changes
                 )
             }.value
             guard let self, self.drawGeneration == generation else { return }
