@@ -62,6 +62,7 @@ struct AgentTurnNotificationsTests {
         #expect(record["kind"] as? String == "reader")
         #expect(record["writingID"] == nil)
         #expect(record["turnID"] as? String == turn.uuidString)
+        #expect(record["collapseID"] as? String == "lamp.agent-turn.\(chat.uuidString)")
         #expect(record["subtitle"] as? String == "")
         #expect(record["outcome"] as? String == "replied")
         #expect(record["summary"] as? String == "Replied.")
@@ -78,6 +79,8 @@ struct AgentTurnNotificationsTests {
         let record = AgentTurnPush.record(for: ended, showsReply: false)
         #expect(record["kind"] as? String == "writing")
         #expect(record["writingID"] as? String == "w-1")
+        #expect(record["chatID"] as? String == "writing:w-1")
+        #expect(record["collapseID"] as? String == "lamp.agent-turn.writing:w-1")
         #expect(record["body"] as? String == "Replied.")
         let written = record.allKeys().compactMap { record[$0] as? String }
         #expect(!written.contains { $0.contains("Secret") })

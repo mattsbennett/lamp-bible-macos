@@ -836,6 +836,9 @@ final class AgentRemoteHost: ObservableObject {
             text, contextualPrompt: prompt, messageID: turn, inConversation: conversation,
             notifiesWhenDone: false
         )
+        // How it ended, read now: the collecting below waits, and a turn
+        // started in that wait, from this Mac or another phone, clears it.
+        let outcome = taken ? open.model.lastTurnOutcome : nil
         // A poll part way through saving finishes before the last one looks,
         // or the last would read the writing from before that save.
         collecting?.cancel()
@@ -849,10 +852,12 @@ final class AgentRemoteHost: ObservableObject {
                 writingID: id, turnID: open.model.takeTurnForAttribution() ?? turn, libraryModel: libraryModel
             )
         }
-        // A phone still here and following this chat heard the turn end as
-        // it streamed. One that has gone, suspended a while after it was
-        // left, is told through iCloud instead (`AgentTurnPush`).
-        if taken, let outcome = open.model.lastTurnOutcome, !(isConnected(peer) && peer.open === open) {
+        // Told through iCloud whether or not the phone still looks
+        // connected (`AgentTurnPush`): iOS can suspend Lamp with its socket
+        // left open, so being in `peers` is no proof the phone heard the
+        // end. A phone that did hear it knows the turn id and lets the push
+        // go unshown.
+        if let outcome {
             AgentTurnPush.tell(pushedEnd(of: open.chat, turn: turn, device: device, outcome: outcome))
         }
         runs[device]?.removeAll { $0.turn == turn }
