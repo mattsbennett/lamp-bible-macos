@@ -92,6 +92,48 @@ against the code rather than by assertion:
 The phone and iPad in use run iOS a2dec6e on core 0605966; for review
 marks that behaves as 13dcafd does, so no reinstall was needed.
 
+### Core reads Markdown with a CommonMark parser
+
+Decided by the owner on 2026-11-22, after six rounds of review found
+six ways a hand-written reader disagreed with the writer's editor
+about what the Markdown means. Core depends on swift-markdown (Apple's
+wrapper over cmark-gfm), pinned exact as GRDB is.
+
+`LampMarkdownModel` parses a text once and reports UTF-16 ranges for
+blocks and their kinds, and for each inline span both its delimiter
+ranges and its content. Two things it does that are easy to get wrong
+and are tested on their own:
+
+- **The conversion.** swift-markdown reports a line and a *UTF-8
+  column*; `NSRange` counts UTF-16. A Hebrew letter is two UTF-16
+  units and two UTF-8 bytes, an emoji two and four, and `"\r\n"` is a
+  single Swift `Character`. Lines are split and mapped by Unicode
+  scalar for exactly these reasons.
+- **Matching the editor, not the spec.** The page reads Markdown with
+  markdown-it. Where cmark-gfm differs, core follows the page: a lone
+  `~` is literal (markdown-it needs `~~`), DocC block directives are
+  off, and a bare URL is not a link because the page has `linkify`
+  off.
+
+**What is on the parser:** what counts as code, how much of a line is
+its opening block syntax, which emphasis a clear may reach, and —
+through `readsTheSame` — whether a review marker standing in a line
+changes how that line reads.
+
+**What is still by hand, deliberately:** `keepingEscapes`, one regex
+that is exactly the spec's rule; and `movingMarksOutOfLinks`, whose
+rewrite onto the model broke a marker inside a link's label and an
+autolink's address, and was reverted. Both have tests a rewrite must
+pass.
+
+A review marker is a private-use scalar, which to cmark is an ordinary
+character — so it can create or destroy a delimiter. Anything asking
+what Markdown *means* must therefore parse the unmarked text, and
+anything asking whether a marker is safe where it stands must parse
+both and compare their shapes. Comparing renderings does not work: a
+delimiter run a marker split writes back the same characters as real
+emphasis once the markers come off.
+
 ### A clear reaches block syntax, never emphasis
 
 Where the assistant's change *is* the emphasis — `red dog` becoming
