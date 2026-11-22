@@ -2452,17 +2452,6 @@ struct DevotionalEditorView: View {
         // survives a view coming and going never says `ready` again,
         // and a host resetting on its own lifecycle would let go of
         // passages that are still redoable.
-        // The page itself identifies the redo state, since a writing
-        // can be open in two editors at once — the reader window's
-        // inline one and a Writing window — and one page's branch
-        // ending says nothing about the other's.
-        coordinator.onRedoAvailable = { [weak coordinator] available, discarded, text in
-            guard let coordinator, let writingID = reviewKey?.writingID else { return }
-            WritingReviewObligations.shared.redo(
-                available: available, discarded: discarded, standingIn: text,
-                page: coordinator, for: writingID
-            )
-        }
         coordinator.onReviewMarksDrawn = { [weak reviewSession] in
             let askedIn = reviewKey
             guard askedIn != nil else { return }
@@ -2839,9 +2828,6 @@ struct DevotionalEditorView: View {
         guard let key else { return }
         let owing = WritingReviewObligations.shared.owing(for: key)
         guard !owing.isEmpty else { return }
-        // Where the page's history stood as this save committed, so a
-        // Redo landing while the proving runs is not missed.
-        let historyMark = WritingReviewObligations.shared.historyMarks(for: key.writingID)
         // One settle at a time, in the order the saves committed.
         //
         // Each takes its obligations as its save commits, which is
@@ -2868,10 +2854,7 @@ struct DevotionalEditorView: View {
                 }
             }.value
             for (owed, answers, current) in proofs {
-                await settle(
-                    owed, answers: answers, current: current, for: key,
-                    historyMark: historyMark
-                )
+                await settle(owed, answers: answers, current: current, for: key)
             }
         }
     }
@@ -2890,13 +2873,10 @@ struct DevotionalEditorView: View {
         _ owing: WritingReviewSession.OwedRestore,
         answers: [UUID: LampWritingReview.RestorePlan.Standing],
         current: [UUID: LampWritingReview.RestorePlan.Standing],
-        for key: WritingReviewKey,
-        historyMark: (changes: Int, discards: Int)
+        for key: WritingReviewKey
     ) async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            settle(
-                owing, answers: answers, current: current, for: key, historyMark: historyMark
-            ) {
+            settle(owing, answers: answers, current: current, for: key) {
                 continuation.resume()
             }
         }
@@ -2907,7 +2887,6 @@ struct DevotionalEditorView: View {
         answers: [UUID: LampWritingReview.RestorePlan.Standing],
         current: [UUID: LampWritingReview.RestorePlan.Standing],
         for key: WritingReviewKey,
-        historyMark: (changes: Int, discards: Int),
         then done: @escaping () -> Void
     ) {
         // Core's decision, which the phone makes too
@@ -2917,38 +2896,37 @@ struct DevotionalEditorView: View {
         let (stands, waiting, dormant) = LampWritingReview.RestorePlan.settlement(
             pending: pending, inSaved: answers, inCurrent: current
         )
-        // A passage the writer has undone is kept only while the page
-        // says a Redo of it is still possible.
+        // A passage the writer has undone is let go. Core returns it
+        // as `dormant`; nothing here keeps it.
         //
-        // Keeping it is what a Redo needs: the page puts the restored
-        // wording back without asking the host anything, so an
-        // obligation dropped at the undo is owed by nobody, and the
-        // save that then holds it records nothing — no restoration to
-        // the assistant, and no mark on words it put back that nobody
-        // has read.
+        // Keeping it is what a Redo needs, since the page puts the
+        // wording back without asking the host anything — so an
+        // undone-then-redone restore goes unrecorded, and the words it
+        // put back that nobody has read carry no mark. That is a real
+        // loss and this is still the right side of it.
         //
-        // Keeping it past the end of its redo branch is worse. A
-        // restore whose replacement is empty — a deletion put back — is
-        // proved only negatively: `standing` says it stands when the
-        // assistant's words are not there. Held long enough, an
-        // ordinary edit elsewhere makes that true by accident, and the
-        // next save records a restoration the writer never made.
+        // The other side records a restoration the writer never made.
+        // A restore whose replacement is empty — a deletion put back —
+        // is proved only negatively: it stands whenever the
+        // assistant's words are absent, which an unrelated edit
+        // eventually makes true.
         //
-        // So the page is asked rather than guessed at. It reports its
-        // redo depth as its history changes, and on `ready`, where a
-        // fresh page has none. Where it has not spoken, nothing is
-        // kept: of the two failures, recording nothing is the one to
-        // have. Both halves of this were found by the iOS session,
-        // against their own version of it, and these are their rules.
-        // Read against where the history stood when this settle's texts
-        // were taken, not only where it stands now: a Redo landing
-        // while the proving ran would otherwise be answered with the
-        // older texts and the passage dropped. The iOS session found
-        // that race.
-        let keepsUndone = WritingReviewObligations.shared
-            .keepsUndone(since: historyMark, for: key.writingID)
-        let heldForRedo = keepsUndone ? dormant : []
-        let owed = waiting.union(heldForRedo)
+        // Keeping it safely needs the page to say whether a Redo
+        // brought *this restore* back, and the iOS session showed over
+        // four rounds that no signal built from the page's text and
+        // history depth can: text cannot tell a Redo from typing or
+        // pasting the same words, and every such signal races with a
+        // settle. Their last round found a paste of the restore's
+        // words recording a restore that was never redone. A sound
+        // version would have the page track the restore through its
+        // own history, and even that cannot mark a restore that only
+        // deletes — the dangerous case to begin with. They shelved it;
+        // this followed.
+        //
+        // So: do not wire a redo signal to this without reading
+        // `held-redo` on the iOS side first. The holes are not
+        // obvious and they are not in the parts that look hard.
+        let owed = waiting
         guard !stands.isEmpty else {
             if owed.count != pending.count {
                 WritingReviewObligations.shared.stillOwed(owing.pending(owed), for: key.writingID)
@@ -2982,7 +2960,6 @@ struct DevotionalEditorView: View {
                 // it written down later against the text it was made
                 // in, with nothing having proved it at all.
                 var again = owing.pending(kept ? owed : pending)
-                again.dormant = kept ? heldForRedo : owing.dormantMarks
                 again.bodyCommitted = waiting.isEmpty
                 again.cleared = cleared
                 WritingReviewObligations.shared.stillOwed(again, for: key.writingID)
