@@ -2886,12 +2886,20 @@ struct DevotionalEditorView: View {
         // (`RestorePlan.settlement`): what this save proves, and what
         // waits for a save that can answer for it.
         let pending = owing.pendingMarks
-        let (stands, waiting) = LampWritingReview.RestorePlan.settlement(
+        let (stands, waiting, dormant) = LampWritingReview.RestorePlan.settlement(
             pending: pending, inSaved: answers, inCurrent: current
         )
+        // A passage the writer has undone keeps its obligation and gives
+        // up its place in the queue. Redo puts the restored wording back
+        // without the page asking anything — it only reports that its
+        // marks are stale — so dropped outright it would be owed by
+        // nobody, and the save that then held it would record nothing:
+        // no restoration to the assistant, and no mark on the words it
+        // put back and nobody has read. Found by the iOS session.
+        let owed = waiting.union(dormant)
         guard !stands.isEmpty else {
-            if waiting.count != pending.count {
-                WritingReviewObligations.shared.stillOwed(owing.pending(waiting), for: key.writingID)
+            if owed.count != pending.count {
+                WritingReviewObligations.shared.stillOwed(owing.pending(owed), for: key.writingID)
             }
             return done()
         }
@@ -2907,15 +2915,20 @@ struct DevotionalEditorView: View {
             owing.restore, held: owing.held, for: key, only: stands,
             remarkingUnread: !cleared
         ) { kept in
-            if kept, waiting.isEmpty {
+            // `owed`, not `waiting`: a passage the writer has undone is
+            // dormant rather than finished, so the obligation stays and
+            // a later Redo can still be recorded.
+            if kept, owed.isEmpty {
                 WritingReviewObligations.shared.settled(owing.id, for: key.writingID)
             } else {
                 // Not committed where anything is still waiting: a
                 // passage the words could not answer for needs a save
                 // that can, and marking the remainder as committed had
                 // it written down later against the text it was made
-                // in, with nothing having proved it at all.
-                var again = owing.pending(kept ? waiting : pending)
+                // in, with nothing having proved it at all. A dormant
+                // passage is not that: the body it was proved against
+                // is this save's, so it does not hold the commit back.
+                var again = owing.pending(kept ? owed : pending)
                 again.bodyCommitted = waiting.isEmpty
                 again.cleared = cleared
                 WritingReviewObligations.shared.stillOwed(again, for: key.writingID)
