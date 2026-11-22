@@ -508,27 +508,6 @@ struct AgentChatAccountTests {
         ])
     }
 
-    @Test func aStopReachesWhatTheRunStarted() throws {
-        // A shell that starts a child which outlives it unless killed.
-        let shell = Process()
-        shell.executableURL = URL(fileURLWithPath: "/bin/sh")
-        shell.arguments = ["-c", "sleep 60 & wait"]
-        try shell.run()
-        defer { if shell.isRunning { shell.terminate() } }
-        var children: [AgentProcessTree.Member] = []
-        for _ in 0..<50 where children.isEmpty {
-            children = AgentProcessTree.descendants(of: shell.processIdentifier)
-            if children.isEmpty { Thread.sleep(forTimeInterval: 0.05) }
-        }
-        let child = try #require(children.first)
-        AgentProcessTree.kill([child])
-        var gone = false
-        for _ in 0..<50 where !gone {
-            gone = Darwin.kill(child.pid, 0) != 0
-            if !gone { Thread.sleep(forTimeInterval: 0.05) }
-        }
-        #expect(gone)
-    }
 }
 
 /// Antigravity over `agy acp`, from messages agy 1.5.14 sent.
@@ -756,24 +735,6 @@ struct AgentACPContainmentTests {
         #expect(!AgentACPRun.confined(file.path + "/new.md", to: FileManager.default.temporaryDirectory))
     }
 
-    @Test func aRescanOfAGoneRootFindsNothing() throws {
-        let shell = Process()
-        shell.executableURL = URL(fileURLWithPath: "/bin/sh")
-        shell.arguments = ["-c", "sleep 30 & wait"]
-        try shell.run()
-        let root = try #require(AgentProcessTree.member(shell.processIdentifier))
-        var children: [AgentProcessTree.Member] = []
-        for _ in 0..<50 where children.isEmpty {
-            children = AgentProcessTree.descendants(of: root)
-            if children.isEmpty { Thread.sleep(forTimeInterval: 0.05) }
-        }
-        #expect(!children.isEmpty)
-        AgentProcessTree.kill(children)
-        shell.waitUntilExit()
-        // The same number, as if reused, with a different start: nothing.
-        let impostor = AgentProcessTree.Member(pid: root.pid, started: timeval(tv_sec: 1, tv_usec: 0))
-        #expect(AgentProcessTree.descendants(of: impostor).isEmpty)
-    }
 }
 
 /// Asking about another Lamp chat, from Lamp's own transcripts.
@@ -862,5 +823,70 @@ struct LampAgentChatHistoryTests {
                 try LampAgentChatHistory.read(chatID: id, libraryRootURL: fixture.root)
             }
         }
+    }
+}
+
+/// CLIs launched in a process group of their own.
+struct AgentSpawnedProcessTests {
+    private func run(_ script: String, in directory: URL? = nil, environment: [String: String]? = nil,
+                     input: String? = nil) throws -> (status: Int32, output: String) {
+        let process = AgentSpawnedProcess()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", script]
+        process.currentDirectoryURL = directory
+        process.environment = environment
+        process.standardOutput = output
+        process.standardError = output
+        let stdin = input.map { _ in Pipe() }
+        process.standardInput = stdin
+        try process.run()
+        if let stdin, let input {
+            try stdin.fileHandleForWriting.write(contentsOf: Data(input.utf8))
+            try stdin.fileHandleForWriting.close()
+        }
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return (process.terminationStatus, String(decoding: data, as: UTF8.self))
+    }
+
+    @Test func itRunsWhereAndWithWhatItIsGiven() throws {
+        let directory = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
+        let result = try run(#"pwd -P; echo "$LAMP_TEST"; cat; exit 3"#, in: directory,
+                             environment: ["LAMP_TEST": "given", "PATH": "/usr/bin:/bin"], input: "typed")
+        #expect(result.status == 3)
+        #expect(result.output.contains(directory.path))
+        #expect(result.output.contains("given"))
+        #expect(result.output.contains("typed"))
+    }
+
+    @Test func lampsOwnFilesAreNotHandedDown() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("spawn-fd-\(UUID().uuidString)")
+        FileManager.default.createFile(atPath: file.path, contents: Data())
+        defer { try? FileManager.default.removeItem(at: file) }
+        let handle = try FileHandle(forReadingFrom: file)
+        defer { try? handle.close() }
+        let result = try run("[ -e /dev/fd/\(handle.fileDescriptor) ] && echo leaked || echo closed")
+        #expect(result.output.contains("closed"))
+    }
+
+    @Test func aStopReachesTheWholeGroupEvenAnOrphan() throws {
+        let process = AgentSpawnedProcess()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        // A child left behind by a parent that has exited, and one still
+        // under the shell.
+        process.arguments = ["-c", "(sleep 60 &); sleep 60 & wait"]
+        try process.run()
+        let group = process.processIdentifier
+        Thread.sleep(forTimeInterval: 0.3)
+        #expect(killpg(group, 0) == 0)
+        process.terminate()
+        #expect(process.waitUntilExit(within: 5))
+        var gone = false
+        for _ in 0..<100 where !gone {
+            gone = killpg(group, 0) != 0
+            if !gone { Thread.sleep(forTimeInterval: 0.05) }
+        }
+        #expect(gone)
     }
 }

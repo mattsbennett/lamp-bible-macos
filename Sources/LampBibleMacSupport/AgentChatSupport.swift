@@ -1307,80 +1307,150 @@ public enum AgentProcessEnvironment {
     }
 }
 
-/// A provider run's processes, so a stop reaches all of them.
+/// A CLI process Lamp starts, in a process group of its own.
 ///
-/// Terminating the CLI alone is not enough: what it started (an MCP server,
-/// a shell command) can hold its output open after it exits, so the read
-/// never ends and the reply never finishes, and a CLI can go on working
-/// after its pipes close.
-public enum AgentProcessTree {
-    public struct Member: Equatable, Sendable {
-        public let pid: pid_t
-        /// When it started, so a number reused by a new process is not
-        /// mistaken for it.
-        public let started: timeval
+/// Launched with `posix_spawn` and `POSIX_SPAWN_SETPGROUP`, so the process
+/// and everything it starts share a group whose number is its own. A stop
+/// signals the group, which reaches every process the run started — an MCP
+/// server, a shell command, one whose parent has already exited — with no
+/// walk of the process table and no guessing at which processes are whose.
+/// What leaves the group on purpose (a daemon that calls `setsid`, such as
+/// OpenCode's background server) is left alone, as it should be.
+///
+/// Shaped like the parts of Foundation's `Process` Lamp used: configure, then
+/// `run()`; a pipe or nothing (`/dev/null`) for each standard stream; and the
+/// file descriptors Lamp holds are not handed down, since every one but the
+/// three standard streams is closed in the child.
+public final class AgentSpawnedProcess: @unchecked Sendable {
+    public var executableURL: URL?
+    public var arguments: [String] = []
+    public var environment: [String: String]?
+    public var currentDirectoryURL: URL?
+    /// Nil is `/dev/null`.
+    public var standardInput: Pipe?
+    public var standardOutput: Pipe?
+    /// Nil is `/dev/null`. Setting it to the same pipe as `standardOutput`
+    /// merges the two.
+    public var standardError: Pipe?
 
-        public static func == (lhs: Member, rhs: Member) -> Bool {
-            lhs.pid == rhs.pid && lhs.started.tv_sec == rhs.started.tv_sec
-                && lhs.started.tv_usec == rhs.started.tv_usec
-        }
+    private let lock = NSLock()
+    private let exited = DispatchGroup()
+    private var pid: pid_t = 0
+    private var status: Int32?
+
+    public init() {}
+
+    public var processIdentifier: pid_t {
+        lock.lock()
+        defer { lock.unlock() }
+        return pid
     }
 
-    /// The process with this number as it is now, to know it by later.
-    public static func member(_ pid: pid_t) -> Member? {
-        processTable().first { $0.0.pid == pid }?.0
+    /// Whether the process Lamp started is still running. Others in its group
+    /// may outlive it; `signalGroup` reaches them.
+    public var isRunning: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return pid != 0 && status == nil
     }
 
-    /// Every process descended from `root`, but only if the process with
-    /// that number is still the one it was: checked in the same look at the
-    /// process table that finds its children, so a number reused by
-    /// another process gives nothing.
-    public static func descendants(of root: Member) -> [Member] {
-        let table = processTable()
-        guard table.contains(where: { $0.0 == root }) else { return [] }
-        return descendants(of: root.pid, in: table)
+    /// Its exit status, or the number of the signal that ended it, as
+    /// `Process.terminationStatus` gives it.
+    public var terminationStatus: Int32 {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let status else { return 0 }
+        return status & 0x7f == 0 ? (status >> 8) & 0xff : status & 0x7f
     }
 
-    /// Every process descended from `root`, from the kernel's process table.
-    public static func descendants(of root: pid_t) -> [Member] {
-        descendants(of: root, in: processTable())
-    }
-
-    private static func descendants(of root: pid_t, in table: [(Member, pid_t)]) -> [Member] {
-        var children: [pid_t: [Member]] = [:]
-        for (member, parent) in table { children[parent, default: []].append(member) }
-        var result: [Member] = []
-        var frontier = [root]
-        while let next = frontier.popLast() {
-            for child in children[next] ?? [] where child.pid != next {
-                result.append(child)
-                frontier.append(child.pid)
+    public func run() throws {
+        guard let executableURL else { throw POSIXError(.ENOENT) }
+        var actions: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&actions)
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        func wire(_ pipe: Pipe?, reading: Bool, to target: Int32) {
+            if let pipe {
+                let fd = reading ? pipe.fileHandleForReading.fileDescriptor : pipe.fileHandleForWriting.fileDescriptor
+                posix_spawn_file_actions_adddup2(&actions, fd, target)
+            } else {
+                posix_spawn_file_actions_addopen(&actions, target, "/dev/null", reading ? O_RDONLY : O_WRONLY, 0)
             }
         }
-        return result
-    }
+        wire(standardInput, reading: true, to: 0)
+        wire(standardOutput, reading: false, to: 1)
+        wire(standardError, reading: false, to: 2)
+        if let directory = currentDirectoryURL {
+            posix_spawn_file_actions_addchdir_np(&actions, directory.path)
+        }
 
-    /// Sends SIGKILL to each that is still the process it was.
-    public static func kill(_ members: [Member]) {
-        let alive = Dictionary(processTable().map { ($0.0.pid, $0.0) }, uniquingKeysWith: { first, _ in first })
-        for member in members where alive[member.pid] == member {
-            Darwin.kill(member.pid, SIGKILL)
+        var attributes: posix_spawnattr_t?
+        posix_spawnattr_init(&attributes)
+        defer { posix_spawnattr_destroy(&attributes) }
+        // Its own group, numbered as itself; only the three streams handed
+        // down; and signals as a freshly started program expects them.
+        posix_spawnattr_setflags(&attributes, Int16(
+            POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF
+        ))
+        posix_spawnattr_setpgroup(&attributes, 0)
+        var none = sigset_t()
+        sigemptyset(&none)
+        posix_spawnattr_setsigmask(&attributes, &none)
+        var all = sigset_t()
+        sigfillset(&all)
+        posix_spawnattr_setsigdefault(&attributes, &all)
+
+        let environment = self.environment ?? ProcessInfo.processInfo.environment
+        let argv = ([executableURL.path] + arguments).map { strdup($0) } + [nil]
+        let envp = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
+        defer {
+            argv.forEach { free($0) }
+            envp.forEach { free($0) }
+        }
+        var spawned: pid_t = 0
+        let result = posix_spawn(&spawned, executableURL.path, &actions, &attributes, argv, envp)
+        guard result == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: result) ?? .EIO)
+        }
+        lock.lock()
+        pid = spawned
+        lock.unlock()
+        // The child's ends are the child's: held open here, a pipe would
+        // never reach the end of its input.
+        try? standardInput?.fileHandleForReading.close()
+        try? standardOutput?.fileHandleForWriting.close()
+        if standardError !== standardOutput { try? standardError?.fileHandleForWriting.close() }
+
+        exited.enter()
+        Thread.detachNewThread { [self] in
+            var raw: Int32 = 0
+            while waitpid(spawned, &raw, 0) == -1, errno == EINTR {}
+            lock.lock()
+            status = raw
+            lock.unlock()
+            exited.leave()
         }
     }
 
-    private static func processTable() -> [(Member, pid_t)] {
-        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
-        var size = 0
-        guard sysctl(&mib, 4, nil, &size, nil, 0) == 0 else { return [] }
-        let stride = MemoryLayout<kinfo_proc>.stride
-        // Room for processes started between the two calls.
-        var processes = [kinfo_proc](repeating: kinfo_proc(), count: size / stride + 32)
-        size = processes.count * stride
-        guard sysctl(&mib, 4, &processes, &size, nil, 0) == 0 else { return [] }
-        return processes.prefix(size / stride).map { process in
-            (Member(pid: process.kp_proc.p_pid, started: process.kp_proc.p_un.__p_starttime), process.kp_eproc.e_ppid)
-        }
+    public func waitUntilExit() {
+        guard processIdentifier != 0 else { return }
+        exited.wait()
     }
+
+    /// Waits up to `seconds` for the process to exit; true if it has.
+    public func waitUntilExit(within seconds: Double) -> Bool {
+        guard processIdentifier != 0 else { return true }
+        return exited.wait(timeout: .now() + seconds) == .success
+    }
+
+    /// Sends `signal` to every process in the run's group.
+    public func signalGroup(_ signal: Int32) {
+        let group = processIdentifier
+        guard group > 0 else { return }
+        killpg(group, signal)
+    }
+
+    /// Asks the whole group to stop, as `Process.terminate` asked the one.
+    public func terminate() { signalGroup(SIGTERM) }
 }
 
 /// Where an account stands against its plan's limits, as lines fit to show.

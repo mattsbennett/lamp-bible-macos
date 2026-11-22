@@ -55,13 +55,13 @@ extension AIProviderCLI {
 /// gone with it.
 enum AgentHelperProcesses {
     private static let lock = NSLock()
-    private nonisolated(unsafe) static var running: [ObjectIdentifier: Process] = [:]
+    private nonisolated(unsafe) static var running: [ObjectIdentifier: AgentSpawnedProcess] = [:]
     private nonisolated(unsafe) static var shuttingDown = false
 
     /// Launches a process and takes it into the registry in one step, under
     /// the lock quitting takes: once quitting has begun nothing launches, and
     /// nothing launched can be missed by it.
-    static func launch(_ process: Process) throws {
+    static func launch(_ process: AgentSpawnedProcess) throws {
         lock.lock()
         defer { lock.unlock() }
         guard !shuttingDown else { throw CocoaError(.userCancelled) }
@@ -75,7 +75,7 @@ enum AgentHelperProcesses {
         _ = fcntl(pipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
     }
 
-    static func untrack(_ process: Process) {
+    static func untrack(_ process: AgentSpawnedProcess) {
         lock.lock()
         running[ObjectIdentifier(process)] = nil
         lock.unlock()
@@ -93,22 +93,18 @@ enum AgentHelperProcesses {
         end(processes)
     }
 
-    /// Asks each to stop, then kills it and what it started if it has not
-    /// gone within a second.
-    static func end(_ processes: [Process]) {
+    /// Asks each one's whole group to stop, then kills the group if the
+    /// process has not gone within a second. A group's other members are
+    /// killed either way: nothing a helper started outlives it.
+    static func end(_ processes: [AgentSpawnedProcess]) {
+        // Only groups whose process is still running: an exited one's number
+        // can be given to another group once it is empty.
         let alive = processes.filter(\.isRunning)
         guard !alive.isEmpty else { return }
-        let trees = alive.map { process -> (Process, [AgentProcessTree.Member]) in
-            let root = AgentProcessTree.member(process.processIdentifier)
-            return (process, root.map(AgentProcessTree.descendants(of:)) ?? [])
-        }
         alive.forEach { $0.terminate() }
         let deadline = Date().addingTimeInterval(1)
         while alive.contains(where: \.isRunning), Date() < deadline { usleep(20_000) }
-        for (process, tree) in trees {
-            AgentProcessTree.kill(tree)
-            if process.isRunning { Darwin.kill(process.processIdentifier, SIGKILL) }
-        }
+        alive.filter(\.isRunning).forEach { $0.signalGroup(SIGKILL) }
     }
 }
 
@@ -129,7 +125,7 @@ struct AgentCLIProcessResult: Sendable {
 
 final class AgentCLIProcessRunner: @unchecked Sendable {
     private let lock = NSLock()
-    private var activeProcess: Process?
+    private var activeProcess: AgentSpawnedProcess?
     private var cancelled = false
     /// When the running provider last said anything.
     private var lastOutput = Date()
@@ -163,35 +159,23 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
         lock.unlock()
     }
 
-    /// What a stop found running under the CLI, killed once the CLI has
-    /// gone if it has not gone with it: as the run ends, not on a timer
-    /// that quitting would never let fire.
-    private var stoppedTree: [AgentProcessTree.Member] = []
+    /// Whether the running process was stopped, so what is left of its
+    /// group is killed as the run ends rather than on a timer quitting would
+    /// never let fire.
+    private var stopRequested = false
 
-    /// Set once a run has ended and taken what its stop found, so a stop
-    /// still looking at the process table then kills what it found itself
-    /// rather than leaving it for a run that has already gone.
-    private var runEnded = true
-
-    private func killWhatTheStopLeft() {
+    /// Kills whatever is left of a stopped run's group: something it started
+    /// that kept going after it exited.
+    private func killWhatTheStopLeft(_ process: AgentSpawnedProcess) {
         lock.lock()
-        let leftovers = stoppedTree
-        stoppedTree = []
-        runEnded = true
+        let stopped = stopRequested
         lock.unlock()
-        if !leftovers.isEmpty { AgentProcessTree.kill(leftovers) }
+        if stopped { process.signalGroup(SIGKILL) }
     }
 
-    /// The running provider as it was when launched, so cleanup is bound to
-    /// that process and not to whatever later holds its number.
-    private var rootIdentity: AgentProcessTree.Member?
-
-    private func runStarted(_ process: Process) {
-        let identity = AgentProcessTree.member(process.processIdentifier)
+    private func runStarted() {
         lock.lock()
-        runEnded = false
-        stoppedTree = []
-        rootIdentity = identity
+        stopRequested = false
         lock.unlock()
     }
 
@@ -237,40 +221,21 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
         }
     }
 
-    /// Asks the provider to stop, then kills it and everything it started if
-    /// it has not exited a few seconds later. The ask comes first so a CLI
-    /// can save its session, which the next message resumes. What it started
-    /// is also killed as the run ends; see `killWhatTheStopLeft`.
-    private func stop(_ process: Process) {
-        guard process.isRunning else { return }
+    /// Asks the provider's whole group to stop, then kills the group if the
+    /// provider has not exited a few seconds later. The ask comes first so a
+    /// CLI can save its session, which the next message resumes. What is
+    /// left of the group is also killed as the run ends; see
+    /// `killWhatTheStopLeft`.
+    private func stop(_ process: AgentSpawnedProcess) {
         lock.lock()
-        // Only this process's identity: a stop arriving before a new run has
-        // published its own must not act on the last run's.
-        let root = rootIdentity?.pid == process.processIdentifier ? rootIdentity : nil
+        stopRequested = true
         lock.unlock()
-        // What it started, found by the identity captured at launch. If the
-        // process table can't be read, the provider is still stopped.
-        let started = root.map(AgentProcessTree.descendants(of:)) ?? []
-        lock.lock()
-        let ended = runEnded
-        if !ended { stoppedTree += started }
-        lock.unlock()
-        if ended { AgentProcessTree.kill(started) }
         process.terminate()
-        guard let root else {
-            DispatchQueue.global().asyncAfter(deadline: .now() + Self.stopGraceSeconds) {
-                if process.isRunning { Darwin.kill(process.processIdentifier, SIGKILL) }
-            }
-            return
-        }
         DispatchQueue.global().asyncAfter(deadline: .now() + Self.stopGraceSeconds) {
-            // Looked for again only by the root's identity, checked in the
-            // same look at the process table: a number freed by its exit
-            // can belong to something else by now. What it started goes
-            // before it, so nothing is left to be handed to another parent.
-            let members = started + AgentProcessTree.descendants(of: root)
-            AgentProcessTree.kill(members)
-            if process.isRunning { Darwin.kill(root.pid, SIGKILL) }
+            // Only while the provider itself is still there: once it has
+            // exited and been reaped, its group number can be given out
+            // again, and the run's end has already killed what it left.
+            if process.isRunning { process.signalGroup(SIGKILL) }
         }
     }
 
@@ -305,17 +270,17 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
         do {
             let executableURL = try resolveExecutable(named: executableName)
             guard !isCancelled else { return .stoppedBeforeStarting }
-            let process = Process()
+            let process = AgentSpawnedProcess()
             let output = Pipe()
             process.executableURL = executableURL
             process.arguments = arguments
             process.currentDirectoryURL = workingDirectory
             process.standardOutput = output
             process.standardError = output
-            // Without this the child inherits Lamp's own stdin, and
-            // `codex exec` announces "Reading additional input from stdin…"
-            // and blocks on it forever — the chat pane spinning with no reply.
-            process.standardInput = FileHandle.nullDevice
+            // No stdin (`/dev/null`): inheriting Lamp's own, `codex exec`
+            // announces "Reading additional input from stdin…" and blocks on
+            // it forever — the chat pane spinning with no reply.
+            process.standardInput = nil
             var environment = AgentProcessEnvironment.cleaned(ProcessInfo.processInfo.environment)
             // As a shell would. OpenCode takes its project from `PWD`, and
             // Lamp's own may name another directory entirely — in which case
@@ -334,7 +299,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
 
             guard !isCancelled else { return .stoppedBeforeStarting }
             try AgentHelperProcesses.launch(process)
-            runStarted(process)
+            runStarted()
             // And once more, now there is something to terminate. Stop
             // between the guard above and this line found an assigned but
             // unstarted process and killed nothing, so the provider ran on
@@ -362,7 +327,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             }
             if let onLine, let last = reader.flush() { onLine(last) }
             process.waitUntilExit()
-            killWhatTheStopLeft()
+            killWhatTheStopLeft(process)
             AgentHelperProcesses.untrack(process)
             lock.lock()
             let wasStalled = stalled
@@ -422,7 +387,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
         do {
             let executableURL = try resolveExecutable(named: executableName)
             guard !isCancelled else { return .stoppedBeforeStarting }
-            let process = Process()
+            let process = AgentSpawnedProcess()
             let input = Pipe()
             let output = Pipe()
             process.executableURL = executableURL
@@ -434,7 +399,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             process.standardInput = input
             process.standardOutput = output
             // Its own logs, not the conversation.
-            process.standardError = FileHandle.nullDevice
+            process.standardError = nil
             var environment = AgentProcessEnvironment.cleaned(ProcessInfo.processInfo.environment)
             environment["PWD"] = workingDirectory.path
             process.environment = environment
@@ -488,7 +453,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
 
             guard !isCancelled else { return .stoppedBeforeStarting }
             try AgentHelperProcesses.launch(process)
-            runStarted(process)
+            runStarted()
             if isCancelled { stop(process) }
             let watchdog = watchForStall(in: process)
             defer { watchdog.cancel() }
@@ -609,13 +574,11 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             // The turn is over: closing its input ends `agy acp`, which then
             // saves and exits; one that does not is stopped.
             try? input.fileHandleForWriting.close()
-            let exited = DispatchSemaphore(value: 0)
-            DispatchQueue.global().async { process.waitUntilExit(); exited.signal() }
-            if exited.wait(timeout: .now() + Self.stopGraceSeconds) == .timedOut {
+            if !process.waitUntilExit(within: Self.stopGraceSeconds) {
                 stop(process)
                 process.waitUntilExit()
             }
-            killWhatTheStopLeft()
+            killWhatTheStopLeft(process)
             AgentHelperProcesses.untrack(process)
             lock.lock()
             let wasStalled = stalled
@@ -633,16 +596,16 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
 
     /// Ends a helper launch that has not finished in `seconds`, so reading
     /// its output returns.
-    private static func giveUp(on process: Process, after seconds: Double) {
+    private static func giveUp(on process: AgentSpawnedProcess, after seconds: Double) {
         DispatchQueue.global().asyncAfter(deadline: .now() + seconds) {
+            // `end` leaves alone a process that has already finished.
             AgentHelperProcesses.end([process])
-            AgentHelperProcesses.untrack(process)
         }
     }
 
     /// Stops the run once it has said nothing for `stallMinutes`, except
     /// while it waits on the person.
-    private func watchForStall(in process: Process) -> DispatchSourceTimer {
+    private func watchForStall(in process: AgentSpawnedProcess) -> DispatchSourceTimer {
         lock.lock()
         lastOutput = Date()
         lock.unlock()
@@ -672,17 +635,16 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
         Self.versionLock.unlock()
         if let known { return known }
         guard let url = try? resolveExecutable(named: name) else { return nil }
-        let process = Process()
+        let process = AgentSpawnedProcess()
         let output = Pipe()
         process.executableURL = url
         process.arguments = ["--version"]
         process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        process.standardInput = FileHandle.nullDevice
         guard (try? AgentHelperProcesses.launch(process)) != nil else { return nil }
         Self.giveUp(on: process, after: 20)
         let data = output.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
+        AgentHelperProcesses.untrack(process)
         let major = AgentChatCLIVersion.major(
             fromVersionOutput: String(decoding: data, as: UTF8.self)
         )
@@ -699,19 +661,18 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
     private static let versionLock = NSLock()
 
     func resolveExecutable(named name: String) throws -> URL {
-        let process = Process()
+        let process = AgentSpawnedProcess()
         let output = Pipe()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = ["-lic", "command -v \(name)"]
         process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        process.standardInput = FileHandle.nullDevice
         try AgentHelperProcesses.launch(process)
         // A login shell runs the reader's own startup files, and one that
         // waits on something would hold every chat to that provider.
         Self.giveUp(on: process, after: 20)
         let data = output.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
+        AgentHelperProcesses.untrack(process)
         let path = String(decoding: data, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard process.terminationStatus == 0,
@@ -3588,14 +3549,13 @@ final class AgentUsageService: ObservableObject {
     nonisolated private static func readCodexRateLimits() -> AgentUsageReport? {
         guard let url = try? AgentCLIProcessRunner().resolveExecutable(named: AIProviderCLI.codex.executable)
         else { return nil }
-        let process = Process()
+        let process = AgentSpawnedProcess()
         let input = Pipe()
         let output = Pipe()
         process.executableURL = url
         process.arguments = ["app-server"]
         process.standardInput = input
         process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
         process.environment = AgentProcessEnvironment.cleaned(ProcessInfo.processInfo.environment)
         AgentHelperProcesses.refuseSIGPIPE(input)
         guard (try? AgentHelperProcesses.launch(process)) != nil else { return nil }

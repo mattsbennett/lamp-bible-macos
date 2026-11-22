@@ -175,7 +175,7 @@ enum AIProviderCommandRunner {
     }
 
     nonisolated private static func probeAntigravity(at url: URL) -> AIProviderConnectionState {
-        let process = Process()
+        let process = AgentSpawnedProcess()
         let input = Pipe()
         let output = Pipe()
         process.executableURL = url
@@ -183,7 +183,6 @@ enum AIProviderCommandRunner {
         process.currentDirectoryURL = FileManager.default.temporaryDirectory
         process.standardInput = input
         process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
         process.environment = AgentProcessEnvironment.cleaned(ProcessInfo.processInfo.environment)
         AgentHelperProcesses.refuseSIGPIPE(input)
         guard (try? AgentHelperProcesses.launch(process)) != nil else { return .unavailable("Could not check") }
@@ -237,15 +236,15 @@ enum AIProviderCommandRunner {
     ) {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
-                let process = Process()
+                let process = AgentSpawnedProcess()
                 let pipe = Pipe()
                 process.executableURL = URL(fileURLWithPath: "/bin/zsh")
                 process.arguments = ["-lic", command]
                 process.standardOutput = pipe
                 process.standardError = pipe
-                // A status command that reads stdin would otherwise hang the
-                // whole connection check on Lamp's own.
-                process.standardInput = FileHandle.nullDevice
+                // No stdin (`/dev/null`): a status command that reads it
+                // would otherwise hang the whole connection check on Lamp's.
+                process.standardInput = nil
                 do {
                     try AgentHelperProcesses.launch(process)
                     defer { AgentHelperProcesses.untrack(process) }
