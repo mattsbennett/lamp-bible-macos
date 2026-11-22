@@ -68,8 +68,14 @@ Weigh these, and say what each one found:
 
 Against the link:
 
-- **The features are common.** If the same correspondences would tie the passage
-  to many others, they identify none of them.
+- **The features are common.** This test works differently for echoes and for
+  patterns.
+  - **An echo of one passage:** if the same correspondences would tie the later
+    passage to many others, they do not identify that source.
+  - **A pattern or principle:** recurrence across many contexts is the evidence,
+    so many matches count for it. But the shape must be specific. A shape so
+    general it would fit almost any account is a commonplace, not a pattern, and
+    the matches it finds are incidental.
 - **The match is selective.** It holds only once the differences are set aside, or
   only in one translation's wording.
 - **It needs an outside key.** The correspondence works only through a symbol
@@ -95,7 +101,7 @@ Give the grade with its reasons, so the writer can see what moved it.
 | **Strong** | Several correspondences that are distinctive and coherent in both contexts, usually with recurrence or the writer's own use of the source. For an echo, the distinctiveness is usually shared language. For a pattern or principle, it can be a specific shape (elements in the same order or relation) recurring in contexts not composed together, with no shared wording at all. | Inferred, strong |
 | **Plausible** | Real support on more than one test, while a fair alternative remains, such as language shared only because it is a natural way to describe such an event. | Inferred, plausible |
 | **Faint** | One distinctive resemblance — a rare word, a specific detail — with nothing else in support. Possible, not shown. | Inferred, faint |
-| **Not shown** | Only features common enough to occur anyway, which identify no link in particular. Unsupported, with the scope. If the link needs an outside key, it is Imported instead. | Unsupported or Imported |
+| **Not shown** | Only features common enough to occur anyway: for an echo, nothing that identifies its source; for a pattern, a shape too general to fit these accounts rather than any account. Unsupported, with the scope. If the link needs an outside key, it is Imported instead. | Unsupported or Imported |
 
 A link that overturns a plain statement is Contrary to that statement, whatever
 its grade would otherwise be.
