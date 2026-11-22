@@ -295,3 +295,38 @@ agent reply, so it wants seeing drawn and not only tested.
 
 Until then this app keeps the divergences the table above counts, except
 the two already fixed.
+
+### Two decisions, and who made them
+
+**The undone restore stays without an interface.** Put to the owner on
+2026-11-22 with the recommendation to close it, and agreed. The reasoning
+is worth keeping because the item reads like a gap and is not one:
+`dormant` does not mean dropped. `LampWritingReviewStore.swift` says it
+exactly — "still owed, out of the queue, and recorded by a later save that
+holds it" — and the comment above it gives the reason a passage is not
+dropped outright: dropped, it is owed by nobody, so a writer who redoes
+gets the assistant's words back unmarked. The Lean theorem is
+`nopassageOfARestoreIsEverDropped`.
+
+So the writer has nothing to be told and nothing to do: if they redo, the
+next save that holds the restored wording records it, with no signal
+needed, because the save is the evidence. The four review rounds did not
+prove the writer cannot be told; they proved the app cannot *detect* a
+restoration from page text or history depth. The dormant path reaches the
+same end from the save instead, which is trustworthy. A notice would fire
+mid-undo, report a queue state, attach no action, and read as though
+something had gone wrong.
+
+The one real cost is that a regression here would be invisible to a
+writer too. That argues for coverage, not interface, and it has unit tests
+and the theorem.
+
+**`NoteMarkdownRenderer` on the phone is left as it is.** Not because
+migrating it was refused — the question was the wrong way round. It was
+recorded here as the phone deliberately diverging from core, and the
+measurement said otherwise: the reader that disagreed with the editor was
+this app's, on 77 of 138 real writings, and the phone's line-by-line split
+matched the notes editor's own setting all along. This app's reader has
+been replaced (0953460); the phone's was never the defect. If its blocks
+later come from core too, that is parity work on a correct reader, not a
+fix.
