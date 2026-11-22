@@ -160,24 +160,13 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
         lock.unlock()
     }
 
-    /// Whether the running process was stopped, so what is left of its
-    /// group is killed as the run ends rather than on a timer quitting would
-    /// never let fire.
-    private var stopRequested = false
-
-    /// Kills whatever is left of a stopped run's group: something it started
-    /// that kept going after it exited.
-    private func killWhatTheStopLeft(_ process: AgentSpawnedProcess) {
-        lock.lock()
-        let stopped = stopRequested
-        lock.unlock()
-        if stopped { process.signalGroup(SIGKILL) }
-    }
-
-    private func runStarted() {
-        lock.lock()
-        stopRequested = false
-        lock.unlock()
+    /// Kills whatever is left of a run's group once the run is over, stopped
+    /// or not: a tool's process that outlived the CLI could otherwise go on
+    /// writing the draft after the turn was collected, or after an undo.
+    /// Nothing a turn starts is meant to outlive it; what is (OpenCode's
+    /// background server) leaves the group on its own.
+    private func endWhatTheRunLeft(_ process: AgentSpawnedProcess) {
+        process.signalGroup(SIGKILL)
     }
 
     /// Runs the provider, handing `onLine` each line of its output as it
@@ -217,7 +206,9 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             // Off the caller's thread: it writes to the agent's input, and a
             // Stop pressed on the main thread must never wait on a pipe.
             DispatchQueue.global(qos: .userInitiated).async { askToStop() }
-        } else if let process, process.isRunning {
+        } else if let process {
+            // Whether or not the provider itself is still running: a child
+            // it left can be, holding the output open or editing files.
             stop(process)
         }
     }
@@ -226,11 +217,8 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
     /// provider has not exited a few seconds later. The ask comes first so a
     /// CLI can save its session, which the next message resumes. What is
     /// left of the group is also killed as the run ends; see
-    /// `killWhatTheStopLeft`.
+    /// `endWhatTheRunLeft`.
     private func stop(_ process: AgentSpawnedProcess) {
-        lock.lock()
-        stopRequested = true
-        lock.unlock()
         process.terminate()
         DispatchQueue.global().asyncAfter(deadline: .now() + Self.stopGraceSeconds) {
             // Whether or not the provider has exited: a child that ignored
@@ -301,7 +289,6 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
 
             guard !isCancelled else { return .stoppedBeforeStarting }
             try AgentHelperProcesses.launch(process)
-            runStarted()
             // And once more, now there is something to terminate. Stop
             // between the guard above and this line found an assigned but
             // unstarted process and killed nothing, so the provider ran on
@@ -329,7 +316,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             }
             if let onLine, let last = reader.flush() { onLine(last) }
             process.waitUntilExit()
-            killWhatTheStopLeft(process)
+            endWhatTheRunLeft(process)
             AgentHelperProcesses.untrack(process)
             process.release()
             lock.lock()
@@ -439,10 +426,10 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                     // Armed before the write, which can block on a full pipe
                     // if the agent has stopped reading.
                     DispatchQueue.global().asyncAfter(deadline: .now() + Self.acpCancelGraceSeconds) {
-                        if process.isRunning { self?.stop(process) }
+                        self?.stop(process)
                     }
                     send(["method": "session/cancel", "params": ["sessionId": sessionToCancel]])
-                } else if process.isRunning {
+                } else {
                     self?.stop(process)
                 }
             }
@@ -456,7 +443,6 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
 
             guard !isCancelled else { return .stoppedBeforeStarting }
             try AgentHelperProcesses.launch(process)
-            runStarted()
             if isCancelled { stop(process) }
             let watchdog = watchForStall(in: process)
             defer { watchdog.cancel() }
@@ -581,7 +567,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                 stop(process)
                 process.waitUntilExit()
             }
-            killWhatTheStopLeft(process)
+            endWhatTheRunLeft(process)
             AgentHelperProcesses.untrack(process)
             process.release()
             lock.lock()
@@ -623,7 +609,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             let stall = !self.stalled && quiet > Double(Self.stallMinutes * 60)
             if stall { self.stalled = true }
             self.lock.unlock()
-            if stall, process.isRunning { self.stop(process) }
+            if stall { self.stop(process) }
         }
         timer.resume()
         return timer
@@ -3629,9 +3615,10 @@ final class AgentUsageService: ObservableObject {
             AgentHelperProcesses.untrack(process)
             process.release()
         }
-        // An app-server that never answers is not waited on past this.
+        // An app-server that never answers is not waited on past this; the
+        // whole group, so a read held open by a child ends too.
         DispatchQueue.global().asyncAfter(deadline: .now() + 20) {
-            if process.isRunning { process.terminate() }
+            AgentHelperProcesses.end([process])
         }
         func send(_ message: [String: Any]) {
             guard let data = try? JSONSerialization.data(withJSONObject: message) else { return }

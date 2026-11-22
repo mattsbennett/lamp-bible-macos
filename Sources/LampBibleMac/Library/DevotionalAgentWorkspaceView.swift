@@ -193,7 +193,7 @@ enum AIProviderCommandRunner {
             process.release()
         }
         DispatchQueue.global().asyncAfter(deadline: .now() + 30) {
-            if process.isRunning { process.terminate() }
+            AgentHelperProcesses.end([process])
         }
         func send(_ message: [String: Any]) {
             var message = message
@@ -248,6 +248,11 @@ enum AIProviderCommandRunner {
                 process.standardInput = nil
                 do {
                     try AgentHelperProcesses.launch(process)
+                    // A status command that hangs — a login shell waiting on
+                    // the reader's startup files — is ended, group and all.
+                    DispatchQueue.global().asyncAfter(deadline: .now() + 30) {
+                        AgentHelperProcesses.end([process])
+                    }
                     let data = pipe.fileHandleForReading.readDataToEndOfFile()
                     process.waitUntilExit()
                     let status = process.terminationStatus

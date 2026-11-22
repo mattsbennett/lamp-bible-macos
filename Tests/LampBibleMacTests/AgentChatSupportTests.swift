@@ -815,6 +815,33 @@ struct LampAgentChatHistoryTests {
         }
     }
 
+    @Test func aClearedChatDoesNotHideAnOlderOne() throws {
+        let fixture = try library()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        // The newest file of all, and nothing in it.
+        let cleared = UUID()
+        try AgentChatTranscriptStore.save(
+            AgentChatTranscript(), providerID: "claude",
+            in: ReaderChatWorkspaceStore.workspaceURL(libraryRootURL: fixture.root, chatID: cleared)
+        )
+        let newest = LampAgentChatHistory.list(libraryRootURL: fixture.root, limit: 1)
+        #expect(newest.count == 1)
+        #expect(newest.first?.chatID != "reader:\(cleared.uuidString)")
+    }
+
+    @Test func aWritingIsTitledByItsBriefBeforeItsDraft() throws {
+        let fixture = try library()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let workspace = LampWritingWorkspace.url(libraryRootURL: fixture.root, writingID: "w1")
+        try "# Devotional brief\n\n- Title: Patience, the Long Way\n- Subtitle: None\n".write(
+            to: workspace.appendingPathComponent(LampWritingWorkspace.contextFilename), atomically: true, encoding: .utf8
+        )
+        let chats = LampAgentChatHistory.list(libraryRootURL: fixture.root, kind: "writing")
+        #expect(chats.first?.title == "Patience, the Long Way")
+        #expect(try LampAgentChatHistory.read(chatID: "writing:w1", libraryRootURL: fixture.root).title
+            == "Patience, the Long Way")
+    }
+
     @Test func aChatIDNamesOnlyAChatNeverAFolder() throws {
         let fixture = try library()
         defer { try? FileManager.default.removeItem(at: fixture.root) }

@@ -309,33 +309,25 @@ public actor LampMCPToolHandler {
 
         case "list_chats":
             try requirePersonalContent()
-            var chats = LampAgentChatHistory.list(
+            return try result(ChatList(chats: LampAgentChatHistory.list(
                 libraryRootURL: try writingLibraryRoot(),
                 thisReaderChat: readerChatID,
                 thisWorkspace: workspaceURL,
                 kind: arguments["kind"]?.stringValue,
                 limit: arguments["limit"]?.intValue ?? 30
-            )
-            for index in chats.indices where chats[index].kind == "writing" {
-                if let title = await writingTitle(chats[index].chatID) {
-                    chats[index] = chats[index].titled(title)
-                }
-            }
-            return try result(ChatList(chats: chats))
+            )))
 
         case "read_chat":
             try requirePersonalContent()
             let chatID = try requiredString("chat_id", in: arguments)
             do {
-                var reading = try LampAgentChatHistory.read(
+                return try result(try LampAgentChatHistory.read(
                     chatID: chatID,
                     provider: arguments["provider"]?.stringValue,
                     libraryRootURL: try writingLibraryRoot(),
                     offset: arguments["offset"]?.intValue,
                     limit: arguments["limit"]?.intValue ?? 30
-                )
-                if let title = await writingTitle(chatID) { reading = reading.titled(title) }
-                return try result(reading)
+                ))
             } catch LampAgentChatHistory.Failure.unknownChat {
                 throw LampMCPToolError.invalidArgument("chat_id", "no chat \(chatID); see list_chats")
             } catch LampAgentChatHistory.Failure.noSuchProvider(let provider) {
@@ -762,19 +754,6 @@ public actor LampMCPToolHandler {
             )
         }
         return SkillReading(available: names, skill: skill, file: relative, text: text)
-    }
-
-    /// A writing chat's title as the library has it, which is the writing's
-    /// own name, rather than its draft's first line. Nil for a reader chat,
-    /// or where the library can't say.
-    private func writingTitle(_ chatID: String) async -> String? {
-        guard chatID.hasPrefix("writing:") else { return nil }
-        let writingID = String(chatID.dropFirst("writing:".count))
-        guard let writing = try? await library.readDevotional(
-            moduleID: LampAgentChatHistory.personalWritingsModuleID, devotionalID: writingID
-        ) else { return nil }
-        let title = writing.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        return title.isEmpty ? nil : title
     }
 
     /// `list_chats`' answer: an object, as MCP requires of structured content.

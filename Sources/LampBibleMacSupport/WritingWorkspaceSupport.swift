@@ -355,8 +355,6 @@ public enum LampAgentChatHistory {
     static let transcriptFolder = ".lamp"
     static let transcriptPrefix = "native-chat-"
     static let readerFolder = "AgentWorkspaces/Reader"
-    /// The library module that holds the reader's own writings.
-    public static let personalWritingsModuleID = "personal-devotionals"
 
     private struct StoredTranscript: Decodable {
         struct Message: Decodable {
@@ -378,12 +376,6 @@ public enum LampAgentChatHistory {
         public let lastSpoken: Date?
         /// The chat this question is being asked in.
         public let isThisChat: Bool
-
-        /// The same chat under the library's name for it.
-        public func titled(_ title: String) -> Summary {
-            Summary(chatID: chatID, kind: kind, title: title, providers: providers,
-                    messageCount: messageCount, lastSpoken: lastSpoken, isThisChat: isThisChat)
-        }
 
         // In the tools' own spelling: `read_chat` takes a `chat_id`.
         enum CodingKeys: String, CodingKey {
@@ -408,11 +400,6 @@ public enum LampAgentChatHistory {
         /// first message; ask again with a smaller offset for earlier ones.
         public let offset: Int
         public let messages: [Line]
-
-        public func titled(_ title: String) -> Reading {
-            Reading(chatID: chatID, title: title, provider: provider, providers: providers,
-                    totalMessages: totalMessages, offset: offset, messages: messages)
-        }
 
         enum CodingKeys: String, CodingKey {
             case chatID = "chat_id", title, provider, providers
@@ -461,21 +448,26 @@ public enum LampAgentChatHistory {
             }
         }
         candidates.sort { $0.newest > $1.newest }
-        return candidates.prefix(max(1, limit)).compactMap { candidate in
+        // Read newest first until enough have something in them: a chat that
+        // was cleared has a fresh file and no messages, and must not take the
+        // place of an older one that has.
+        var summaries: [Summary] = []
+        for candidate in candidates where summaries.count < max(1, limit) {
             let transcripts = transcripts(in: candidate.workspace)
-            guard !transcripts.isEmpty else { return nil }
-            return Summary(
+            guard !transcripts.isEmpty else { continue }
+            summaries.append(Summary(
                 chatID: candidate.chatID,
                 kind: candidate.kind,
                 title: candidate.kind == "writing"
-                    ? draftTitle(in: candidate.workspace) ?? "Untitled writing"
+                    ? writingTitle(in: candidate.workspace) ?? "Untitled writing"
                     : opening(of: transcripts) ?? "Reader chat",
                 providers: transcripts.map(\.provider),
                 messageCount: transcripts.reduce(0) { $0 + $1.transcript.messages.count },
                 lastSpoken: transcripts.compactMap { $0.transcript.messages.last?.date }.max(),
                 isThisChat: candidate.isThisChat
-            )
+            ))
         }
+        return summaries
     }
 
     /// When a workspace's newest transcript file was written, or nil if it
@@ -497,8 +489,21 @@ public enum LampAgentChatHistory {
         return id.isEmpty ? nil : id
     }
 
-    /// What the draft calls itself; `lamp-mcp` puts the writing's own title
-    /// from the library in its place where it can.
+    /// The writing's own title, from the brief Lamp writes into its
+    /// workspace from the library (`- Title: …`), else what its draft calls
+    /// itself.
+    static func writingTitle(in workspace: URL) -> String? {
+        if let brief = try? String(
+            contentsOf: workspace.appendingPathComponent(LampWritingWorkspace.contextFilename), encoding: .utf8
+        ) {
+            for line in brief.split(separator: "\n").prefix(12) where line.hasPrefix("- Title: ") {
+                let title = line.dropFirst("- Title: ".count).trimmingCharacters(in: .whitespaces)
+                if !title.isEmpty { return title }
+            }
+        }
+        return draftTitle(in: workspace)
+    }
+
     private static func draftTitle(in workspace: URL) -> String? {
         let draft = (try? String(
             contentsOf: workspace.appendingPathComponent(LampWritingWorkspace.draftFilename), encoding: .utf8
@@ -580,7 +585,7 @@ public enum LampAgentChatHistory {
     ) -> String {
         if chatID.hasPrefix("writing:"),
            let workspace = workspace(for: chatID, libraryRootURL: libraryRootURL) {
-            return draftTitle(in: workspace) ?? "Untitled writing"
+            return writingTitle(in: workspace) ?? "Untitled writing"
         }
         return opening(of: transcripts) ?? "Reader chat"
     }
