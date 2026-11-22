@@ -705,10 +705,25 @@ struct AgentACPContainmentTests {
     }
 
     @Test func redactionStaysFastOnInputThatAlmostMatches() {
-        let input = String(repeating: "a-", count: 8000)
-        let started = Date()
-        _ = AgentChatSecrets.redacted(input)
-        #expect(Date().timeIntervalSince(started) < 0.5)
+        for input in [String(repeating: "a-", count: 8000), String(repeating: "a:", count: 8000)] {
+            let started = Date()
+            _ = AgentChatSecrets.redacted(input)
+            #expect(Date().timeIntervalSince(started) < 0.5)
+        }
+    }
+
+    @Test func camelCaseCredentialsAreRedacted() {
+        for leaked in ["accessToken=abcdefghijklmnopqrstuvwx", "refreshToken=abc123secret",
+                       "authToken=abc123secret", "bearerToken=abc123secret", "apiKey: abc123secretvalue"] {
+            #expect(AgentChatSecrets.redacted(leaked).hasSuffix("[redacted]"), "\(leaked)")
+        }
+    }
+
+    @Test func anAskRuleOverEveryCommandKeepsAReaderChatSafe() {
+        let safe = #"{"permissions":{"allow":["command(git)"],"ask":["command(*)"]}}"#
+        #expect(AgentACPRun.readerRefusal(settings: Data(safe.utf8)) == nil)
+        let unsafe = #"{"permissions":{"allow":["command(git)"],"ask":["command(rm)"]}}"#
+        #expect(AgentACPRun.readerRefusal(settings: Data(unsafe.utf8)) != nil)
     }
 
     @Test func onlyLampsOwnServerCountsAsReadOnly() {

@@ -809,8 +809,11 @@ public enum AgentChatSecrets {
     /// `:` or `=`, and a value quoted whole (escapes included) or running
     /// to the next delimiter. Whether the name is a credential is decided
     /// in code, so no part of the pattern can backtrack far.
-    private static let field = try! NSRegularExpression(pattern:
-        #"(?<![A-Za-z0-9_-])(["']?)([A-Za-z][A-Za-z0-9_-]{0,63})\1(\s*[:=]\s*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s"',;}\]]+)"#
+    private static let fieldName = try! NSRegularExpression(pattern:
+        #"(?<![A-Za-z0-9_-])(["']?)([A-Za-z][A-Za-z0-9_-]{0,63})\1\s*[:=]\s*"#
+    )
+    private static let fieldValue = try! NSRegularExpression(pattern:
+        #"\G(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s"',;}\]]+)"#
     )
 
     public static func redacted(_ text: String) -> String {
@@ -819,24 +822,23 @@ public enum AgentChatSecrets {
         let ns = result as NSString
         var pieces: [String] = []
         var cursor = 0
-        var searchFrom = 0
-        // One match at a time: a field that is not a credential resumes the
-        // search just after its name, so "failed: GEMINI_API_KEY=…" does not
-        // take the key as the value of `failed` and pass over it.
-        while searchFrom < ns.length,
-              let match = field.firstMatch(in: result, range: NSRange(location: searchFrom, length: ns.length - searchFrom)) {
-            let nameRange = match.range(at: 2)
-            let valueRange = match.range(at: 4)
-            let name = ns.substring(with: nameRange)
+        // Names are found first, in one pass; a value is read only after a
+        // name that could be a credential, and only from just there. So
+        // "failed: GEMINI_API_KEY=…" is not taken as the value of `failed`,
+        // and no value is scanned twice.
+        for match in fieldName.matches(in: result, range: NSRange(location: 0, length: ns.length)) {
+            let nameEnd = match.range.location + match.range.length
+            guard nameEnd >= cursor else { continue }
+            let name = ns.substring(with: match.range(at: 2))
+            guard isCredentialName(name),
+                  let valueMatch = fieldValue.firstMatch(in: result, range: NSRange(location: nameEnd, length: ns.length - nameEnd))
+            else { continue }
+            let valueRange = valueMatch.range
             let value = ns.substring(with: valueRange)
-            guard isCredential(name: name, value: value) else {
-                searchFrom = nameRange.location + nameRange.length
-                continue
-            }
+            guard isCredential(name: name, value: value) else { continue }
             pieces.append(ns.substring(with: NSRange(location: cursor, length: valueRange.location - cursor)))
             pieces.append("[redacted]")
             cursor = valueRange.location + valueRange.length
-            searchFrom = cursor
         }
         pieces.append(ns.substring(from: cursor))
         return pieces.joined()
@@ -847,8 +849,19 @@ public enum AgentChatSecrets {
     /// `sort_key` or `primary_key` keeps its value. A bare `token`, which
     /// prose uses too ("Unexpected token: 123"), only where the value is
     /// long enough to be one.
+    /// Whether a name could be a credential's, before its value is read.
+    static func isCredentialName(_ name: String) -> Bool {
+        isCredential(name: name, value: String(repeating: "x", count: 12))
+    }
+
     static func isCredential(name: String, value: String) -> Bool {
-        let lowered = name.lowercased().replacingOccurrences(of: "-", with: "_")
+        // camelCase as snake_case, so `accessToken` reads as `access_token`.
+        var snake = ""
+        for character in name {
+            if character.isUppercase, let last = snake.last, last.isLowercase || last.isNumber { snake.append("_") }
+            snake.append(character)
+        }
+        let lowered = snake.lowercased().replacingOccurrences(of: "-", with: "_")
         let alwaysSecret = ["api_key", "apikey", "secret", "password", "passwd", "access_token",
                             "refresh_token", "auth_token", "bearer_token", "id_token", "private_key",
                             "secret_key", "access_key", "session_token", "client_secret"]
@@ -1531,8 +1544,16 @@ public enum AgentACPRun {
            ["always-proceed", "proceed-in-sandbox"].contains(permission) {
             return String(format: reason, "act")
         }
-        let allowed = ((settings["permissions"] as? [String: Any])?["allow"] as? [String]) ?? []
-        if allowed.contains(where: { !isReadOnlyRule($0) }) {
+        let permissions = settings["permissions"] as? [String: Any]
+        let allowed = (permissions?["allow"] as? [String]) ?? []
+        // An ask or deny rule for the same action, on everything, comes
+        // before the allow: such a call still reaches Lamp, or never runs.
+        let guarded = ((permissions?["ask"] as? [String]) ?? []) + ((permissions?["deny"] as? [String]) ?? [])
+        let coveredActions = Set(guarded.compactMap { rule -> String? in
+            let parts = ruleParts(rule)
+            return parts.target.isEmpty || parts.target == "*" ? parts.action : nil
+        })
+        if allowed.contains(where: { !isReadOnlyRule($0) && !coveredActions.contains(ruleParts($0).action) }) {
             return String(format: reason, "run commands or change files")
         }
         return nil
@@ -1542,17 +1563,17 @@ public enum AgentACPRun {
     /// action, or Lamp's own MCP server by its exact name (`mcp(lamp)` or
     /// `mcp(lamp/<tool>)`), never another server whose name merely starts
     /// with it.
-    static func isReadOnlyRule(_ rule: String) -> Bool {
+    static func ruleParts(_ rule: String) -> (action: String, target: String) {
         let trimmed = rule.trimmingCharacters(in: .whitespaces)
-        let action: String
-        let target: String
-        if let open = trimmed.firstIndex(of: "("), trimmed.hasSuffix(")") {
-            action = String(trimmed[..<open]).lowercased()
-            target = String(trimmed[trimmed.index(after: open)..<trimmed.index(before: trimmed.endIndex)])
-        } else {
-            action = trimmed.lowercased()
-            target = ""
-        }
+        guard let open = trimmed.firstIndex(of: "("), trimmed.hasSuffix(")") else { return (trimmed.lowercased(), "") }
+        return (
+            String(trimmed[..<open]).lowercased(),
+            String(trimmed[trimmed.index(after: open)..<trimmed.index(before: trimmed.endIndex)])
+        )
+    }
+
+    static func isReadOnlyRule(_ rule: String) -> Bool {
+        let (action, target) = ruleParts(rule)
         if ["read_file", "view_file", "list_dir", "list_directory", "grep_search", "find_by_name", "codebase_search", "read"].contains(action) {
             return true
         }

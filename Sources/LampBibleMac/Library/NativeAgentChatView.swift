@@ -176,10 +176,16 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
         if !leftovers.isEmpty { AgentProcessTree.kill(leftovers) }
     }
 
-    private func runStarted() {
+    /// The running provider as it was when launched, so cleanup is bound to
+    /// that process and not to whatever later holds its number.
+    private var rootIdentity: AgentProcessTree.Member?
+
+    private func runStarted(_ process: Process) {
+        let identity = AgentProcessTree.member(process.processIdentifier)
         lock.lock()
         runEnded = false
         stoppedTree = []
+        rootIdentity = identity
         lock.unlock()
     }
 
@@ -230,14 +236,25 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
     /// can save its session, which the next message resumes. What it started
     /// is also killed as the run ends; see `killWhatTheStopLeft`.
     private func stop(_ process: Process) {
-        guard process.isRunning, let root = AgentProcessTree.member(process.processIdentifier) else { return }
-        let started = AgentProcessTree.descendants(of: root)
+        guard process.isRunning else { return }
+        lock.lock()
+        let root = rootIdentity
+        lock.unlock()
+        // What it started, found by the identity captured at launch. If the
+        // process table can't be read, the provider is still stopped.
+        let started = root.map(AgentProcessTree.descendants(of:)) ?? []
         lock.lock()
         let ended = runEnded
         if !ended { stoppedTree += started }
         lock.unlock()
         if ended { AgentProcessTree.kill(started) }
         process.terminate()
+        guard let root else {
+            DispatchQueue.global().asyncAfter(deadline: .now() + Self.stopGraceSeconds) {
+                if process.isRunning { Darwin.kill(process.processIdentifier, SIGKILL) }
+            }
+            return
+        }
         DispatchQueue.global().asyncAfter(deadline: .now() + Self.stopGraceSeconds) {
             // Looked for again only by the root's identity, checked in the
             // same look at the process table: a number freed by its exit
@@ -309,7 +326,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
 
             guard !isCancelled else { return .stoppedBeforeStarting }
             try process.run()
-            runStarted()
+            runStarted(process)
             AgentHelperProcesses.track(process)
             // And once more, now there is something to terminate. Stop
             // between the guard above and this line found an assigned but
@@ -463,7 +480,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
 
             guard !isCancelled else { return .stoppedBeforeStarting }
             try process.run()
-            runStarted()
+            runStarted(process)
             AgentHelperProcesses.track(process)
             if isCancelled { stop(process) }
             let watchdog = watchForStall(in: process)
@@ -1951,6 +1968,10 @@ final class NativeAgentChatModel: ObservableObject {
         runGeneration += 1
         let generation = runGeneration
         let billingRunner = AgentCLIProcessRunner()
+        // Not known again until the check answers: a notice from before an
+        // account change must not stand meanwhile, or for good if the
+        // check says nothing Lamp recognises.
+        if provider == .codex { billingNotice = nil }
         let billingCheck: Task<Void, Never>? = provider == .codex ? Task { [weak self, workspace] in
             let status = await billingRunner.run(
                 executableName: AIProviderCLI.codex.executable,
