@@ -1,6 +1,6 @@
 ---
 name: sola-scriptura
-description: Check what scripture establishes, permits, or does not support. Use for questions about a claim or passage, or to audit writing for proof-text drift, unmarked inference, and imported premises. Not a prose-editing or doctrinal-compliance review.
+description: Check what scripture establishes, permits, or does not support, including how strongly an echo, pattern or type is carried. Use for questions about a claim or passage, or to audit writing for proof-text drift, unmarked inference, and imported premises. Not a prose-editing or doctrinal-compliance review.
 ---
 
 # Sola scriptura
@@ -8,6 +8,24 @@ description: Check what scripture establishes, permits, or does not support. Use
 Measure claims against scripture, not agreement with a tradition, including the
 reader's own. Report what the evidence carries, not whether a doctrine is right.
 The comfortable claims need the same scrutiny as the unfamiliar ones.
+
+## The standard
+
+This skill receives scripture as God's inspired word, and so as its own
+authority (2 Timothy 3:16; 2 Peter 1:20–21). Four things follow:
+
+- **Nothing outside scripture judges it.** That includes a creed, a tradition, a
+  scholar, and a modern assumption about what a text could mean. Claims are
+  measured against the text. The text itself is not audited.
+- **Scripture interprets scripture.** A passage is read in the light of the
+  rest: its plain statements first, then its echoes, patterns and principles,
+  weighed for how well the texts carry them.
+- **Apparent tension is a question about the reading.** Work it from the texts on
+  both sides. Do not settle it by ranking one passage below another or by
+  appealing to an outside source. Say what remains open.
+- **The text is inspired; no reading of it is.** That covers the writer's
+  reading, a tradition's and yours. So every claim about what scripture
+  teaches still has to be shown from it.
 
 ## Choose the job
 
@@ -56,6 +74,13 @@ The comfortable claims need the same scrutiny as the unfamiliar ones.
    what you checked and what remains unchecked; withhold a balance that exceeds
    that coverage. Read [references/weighing-evidence.md](references/weighing-evidence.md)
    for a comparative judgement or a follow-up that challenges one.
+7. **Echoes and patterns are evidence, graded.** A reading built on an echo of
+   earlier scripture, a recurring pattern, a type or a principle is not
+   unsupported merely because no verse states it. Grade how well the texts carry
+   it, from drawn to not shown, using
+   [references/echoes-and-patterns.md](references/echoes-and-patterns.md).
+   Explicit statement remains the strongest evidence. An undrawn link is at best
+   inferred, and it never overturns a plain statement.
 
 ## Research without unnecessary work
 
@@ -122,6 +147,10 @@ Use these verdicts, not a count of agreeing translations:
 | Imported | An external premise does work | Its dependence is unmarked or promoted to scripture |
 | Unsupported | The checked evidence does not establish it | State the scope of the search |
 | Contrary | The cited or governing text tells against it | Quote and explain the conflict, not the doctrine |
+
+An echo, pattern or type that no text draws takes Inferred with its grade (strong,
+plausible or faint), or Unsupported when not shown. A grade stated above what the
+link supports is the finding, never the use of a pattern as such.
 
 For a difficult entailment or cumulative claim, read
 [references/verdicts.md](references/verdicts.md). Quoted premises alone do not make

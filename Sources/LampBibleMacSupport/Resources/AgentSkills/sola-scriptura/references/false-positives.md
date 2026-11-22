@@ -48,6 +48,11 @@ and the honest attribution of a claim the author never made is still a finding.
 **A labelled reconstruction.** "Putting the two accounts together." Harmonisation
 the writer has owned.
 
+**A marked echo or pattern.** *This seems to recall Exodus*, *the pattern repeats*.
+The writer has presented a reading as a reading. It is a finding only when its
+grade in `echoes-and-patterns.md` falls short of the confidence the writing gives
+it, or when the claim built on it reaches past the link.
+
 ## In the text, therefore checkable, therefore fine
 
 **Literary observation.** Repetition, a recurring word, a chiasm, a parable's

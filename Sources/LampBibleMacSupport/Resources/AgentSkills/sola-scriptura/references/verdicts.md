@@ -22,6 +22,12 @@ almost always to mark it, not to drop it: *I take this to mean*, *the most natur
 reading is*, *Matthew seems to be drawing*. One phrase converts an overreach into
 an honest argument, and the writer keeps their point.
 
+An echo, pattern, type or principle that no text draws belongs here too. Give it a
+grade — strong, plausible or faint — from `echoes-and-patterns.md`, since
+*inferred* alone says nothing about how well the texts carry it. A link the
+evidence does not distinguish is unsupported, and one that needs an outside key is
+imported. Neither is unsupported merely for having no verse that states it.
+
 **Imported.** A premise comes from outside scripture: a creed, a confession, a
 commentator, a lexicon, received practice, scholarly consensus, historical or
 cultural background, or a religious idea so common it feels scriptural. Report
@@ -97,7 +103,8 @@ figure of speech loses the authority it needs for the finding that matters.
 How widely a claim is witnessed is not a third axis — it does not change which
 verdict a claim takes — but it is part of the evidence, and an entry that gives the
 verdict and says nothing about the breadth has left out the fact the writer could
-least see for themselves.
+least see for themselves. For an echo or a pattern, breadth is one of the tests
+that sets its grade; see `echoes-and-patterns.md`.
 
 **Evidence from several writers, books or testaments weighs more than the same
 evidence from one.** This bites where support is cumulative: the claim is assembled

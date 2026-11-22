@@ -81,6 +81,36 @@ struct SolaScripturaGuardrailTests {
     }
 }
 
+/// The owner's two rules of 2026-11-22: the skill rests on scripture as God's
+/// inspired word, and a reading from an echo or a pattern is graded rather
+/// than rejected for lacking a verse that states it.
+struct SolaScripturaStandardTests {
+    private func instructions(_ file: String = "SKILL.md") throws -> String {
+        try LampBundledSkills.read(name: "sola-scriptura", file: file)
+            .replacingOccurrences(of: "*", with: "")
+            .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
+    @Test func scriptureIsItsOwnAuthorityButNoReadingIsInspired() throws {
+        let text = try instructions()
+        #expect(text.contains("This skill receives scripture as God's inspired word, and so as its own authority"))
+        #expect(text.contains("Scripture interprets scripture."))
+        #expect(text.contains("The text is inspired; no reading of it is."))
+    }
+
+    @Test func echoesAreGradedNotRejectedAndNeverOverturnAStatement() throws {
+        let text = try instructions()
+        #expect(text.contains("is not unsupported merely because no verse states it"))
+        #expect(text.contains("[references/echoes-and-patterns.md](references/echoes-and-patterns.md)"))
+        #expect(text.contains("it never overturns a plain statement"))
+        let echoes = try instructions("references/echoes-and-patterns.md")
+        #expect(echoes.contains("Explicit statement remains the strongest evidence"))
+        #expect(echoes.contains("Commentators noticing an echo is agreement among readers, not evidence"))
+        #expect(echoes.contains("Grade the link and the claim built on it separately"))
+        #expect(echoes.contains("The finding is never that a writer reasoned from a pattern"))
+    }
+}
+
 struct ScriptureAnswerDisciplineTests {
     @Test func servedInstructionsComposeTheSharedDiscipline() {
         #expect(LampMCPServerFactory.instructions.contains(LampScriptureAnswerDiscipline.text))

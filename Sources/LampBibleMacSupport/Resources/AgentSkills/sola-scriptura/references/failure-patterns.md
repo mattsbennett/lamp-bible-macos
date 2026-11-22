@@ -70,15 +70,21 @@ work a load-bearing one with that skill rather than half-settling it here, or li
 it as a language check still needed. Do not claim a handoff was performed when it
 was only recommended.
 
-## 7. Typology asserted rather than shown
+## 7. An echo or type stated above its grade
 
-A type the New Testament never draws, presented as though it does. Scripture draws
-plenty — Adam, Melchizedek, the bronze serpent, Jonah, the Passover lamb — and a
-writer may propose more. The finding is the presentation, not the proposal. "I
-think the pattern continues here" is honest; "this is a type of Christ" where no
-writer says so is not.
+A type, echo or pattern presented with more confidence than the texts give it. The
+commonest form is a type no writer of scripture draws, presented as though one did.
+Scripture draws plenty — Adam, Melchizedek, the bronze serpent, Jonah, the Passover
+lamb — and a writer may see more, as the apostles read the scriptures before them.
+The finding is the presentation, not the proposal. "I think the pattern continues
+here" is honest. "This is a type of Christ", where no writer says so, claims a
+drawn link that is at most strong.
 
-**Test:** which New Testament text makes this link? Name it or own the inference.
+**Test:** which text draws this link? If one does, quote it and check that the
+claim stays within what it draws. If none does, grade the link with
+`echoes-and-patterns.md`, and compare that grade with the confidence the writing
+states. Do not report a well-supported echo as unsupported merely because no verse
+draws it.
 
 ## 8. Silence read as teaching
 

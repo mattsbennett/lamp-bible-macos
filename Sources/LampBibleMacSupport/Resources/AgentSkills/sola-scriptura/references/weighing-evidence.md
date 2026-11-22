@@ -6,7 +6,10 @@ Read this before a comparative balance, or when a follow-up challenges one.
 
 Identify the kinds of evidence the question needs before selecting favourite
 verses: direct statements, incidental descriptions, parallel accounts, the writer's
-own usage, and relevant counterexamples. Read the relevant categories for both
+own usage, echoes of earlier scripture and patterns recurring across it, and
+relevant counterexamples. Grade an echo or a pattern with
+[echoes-and-patterns.md](echoes-and-patterns.md) before weighing it against a
+statement. A strong echo is real evidence, but it is still not a statement. Read the relevant categories for both
 readings, or say which remain unchecked and withhold a broader balance. A category
 is relevant for a reason, not merely because it adds another search.
 
