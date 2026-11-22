@@ -155,6 +155,10 @@ struct SolaScripturaProphecyTests {
         #expect(text.contains("never from where a passage stands in its book"))
         #expect(text.contains("a symbol's meaning in one passage does not carry over to another by itself"))
         #expect(text.contains("that two terms name the same class is itself a claim to show"))
+        #expect(text.contains("Whether a passage is figurative is itself a reading to show."))
+        #expect(text.contains("It is never a way to set aside a plain statement the reader finds difficult."))
+        #expect(text.contains("So it stands for that quality, not for one fixed thing."))
+        #expect(text.contains("Treat an entry like a cross-reference link"))
         #expect(text.contains("Its facts are history, an external premise to name."))
     }
 }

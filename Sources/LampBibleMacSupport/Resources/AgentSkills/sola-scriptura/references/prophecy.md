@@ -101,6 +101,32 @@ concern its foretelling.
 
 ## Symbols in prophecy
 
+Symbols in prophecy are no special code. They are the metaphors and similes
+scripture uses everywhere:
+- **A metaphor** puts one thing for another: the waters of the river, "even the
+  king of Assyria, and all his glory" (Isaiah 8:7).
+- **A simile** compares one thing with another: "his eyes were as a flame of
+  fire" (Revelation 1:14).
+
+They are read the way scripture's figures are read elsewhere, and two rules govern
+them:
+- **A symbol stands for another thing because of a quality the two share.**
+- **So it stands for that quality, not for one fixed thing.** Iron does not always
+  stand for one nation. It stands for something strong, or for something of low
+  worth, whichever the context brings forward.
+
+**Whether a passage is figurative is itself a reading to show.** An earthquake in a
+vision need not be a literal earthquake. It may be an event like one in its
+effects, such as the overthrow of a kingdom. But a figurative reading must be shown
+in one of these ways:
+- from the passage's own signals: a vision, a stated comparison, or a sense the
+  literal reading cannot bear;
+- from scripture's use of the same figure elsewhere.
+
+It is never a way to set aside a plain statement the reader finds difficult.
+Neither reading is the default. A literal reading that the passage's own signals
+rule out is an error too.
+
 1. **Several terms or symbols can stand for one class of thing.** Those who obey
    God's commandments are called the seed of the woman, the righteous, the godly,
    the saints and the children of God. All of these name one class of people, not
@@ -110,11 +136,36 @@ concern its foretelling.
    is not to be assumed from a likeness.
 2. **One term or symbol can stand for several things that share one quality of
    it.**
-   - Brass represents Greece in Daniel 2, because brass is strong.
-   - It represents people who are spiritually valueless in Ezekiel 22:18,
-     because brass is common and cheap.
-   - It represents the flesh in the brazen serpent of Numbers 21:9, because of
+   - **Brass for Greece, because brass is strong.** Daniel 2 does not name its
+     third kingdom, but Daniel 8:20–21 names the kingdoms after Babylon as Media
+     and Persia, then Grecia. The identification comes from reading the visions
+     together, by principle 5 above. Daniel 2:40 states the quality for the kingdom
+     after it, "strong as iron". Brass stands for strength elsewhere too
+     (Deuteronomy 33:25; Job 6:12; 40:18; 41:27).
+   - **Brass for people who are spiritually valueless (Ezekiel 22:18),** because
+     brass is common and cheap.
+   - **Brass for the flesh, in the brazen serpent of Numbers 21:9,** because of
      its reddish colour.
+
+   Other symbols work the same way. Each pairing below is a symbol, the quality the
+   context draws on, and the text that shows it:
+   - **The eagle:** speed (Lamentations 4:19) and strength (Isaiah 40:31).
+   - **Fire:** what destroys (Psalm 80:16) and what refines (Malachi 3:2).
+   - **The yoke:** willing service (Matthew 11:29) and subjection to an enemy
+     (Deuteronomy 28:48).
+
+   The fig tree shows how context sets a symbol's polarity as well as its
+   quality.
+   - **Peace and prosperity.** Under one's vine and fig tree stands for that state
+     (1 Kings 4:25; Micah 4:4; Zechariah 3:10).
+   - **Their absence.** A fig tree bare or withered stands for loss of that state
+     (Jeremiah 8:13; Joel 1:12; Habakkuk 3:17). What the text says of the tree's
+     state decides which.
+   - **A quick fall.** The fig tree also has another quality: its first-ripe figs
+     fall at a shake. So it can stand for a quick and easy fall, as with
+     Nineveh's strongholds (Nahum 3:12). Revelation 6:13 takes up the same image,
+     the stars falling "as a fig tree casteth her untimely figs, when she is
+     shaken of a mighty wind".
 
    So a symbol's meaning in one passage does not carry over to another by
    itself. Name the quality the symbol shares with what it stands for in this
@@ -131,7 +182,10 @@ How strongly a meaning is shown:
   first, as in *Breadth of witness*.
 - **A key from outside scripture.** A meaning that needs a key scripture does not
   supply is Imported. That includes a symbol system, a later tradition's lexicon of
-  images, or a historical identification the text does not make.
+  images, or a historical identification the text does not make. Expositions of
+  prophecy often print catalogues of symbols. Treat an entry like a cross-reference
+  link: a pointer to scripture's uses of the figure, which must be read before the
+  meaning is relied on.
 
 ## In an audit
 
@@ -140,6 +194,8 @@ Report the usual findings:
 - a fulfilment stated as declared when it is inferred;
 - a symbol's meaning carried from one passage to another without showing the
   shared quality;
+- a passage read figuratively without the passage's signals or scripture's use
+  of the figure, or literally against them;
 - a timeline presented as one text's statement;
 - a historical identification presented in scripture's voice.
 
