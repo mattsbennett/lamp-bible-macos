@@ -1550,6 +1550,10 @@ final class NativeAgentChatModel: ObservableObject {
     /// Whether the run in progress should say when it ends: not one a phone
     /// asked for, whose person is on the phone.
     private var notifiesThisRun = true
+    /// How the last turn ended, as a notification would say it, or nil for
+    /// one the reader stopped. Read by the phone's host once its turn's send
+    /// returns, to tell a phone that has gone to sleep (`AgentTurnPush`).
+    private(set) var lastTurnOutcome: AgentTurnNotifications.Outcome?
 
     func showsIn(_ visibility: PaneVisibility, for token: AnyHashable) {
         panes[token] = visibility
@@ -1814,6 +1818,7 @@ final class NativeAgentChatModel: ObservableObject {
         needsProviderSetup = false
         stoppedNotice = nil
         notifiesThisRun = notifiesWhenDone
+        lastTurnOutcome = nil
         isRunning = true
         cancelRequested = false
         stoppedByLamp = nil
@@ -2252,6 +2257,7 @@ final class NativeAgentChatModel: ObservableObject {
         case .failed(let failure): .failed(failure)
         case .silent(let notice): .notice(notice)
         }
+        lastTurnOutcome = notified
         if let notified, notifiesThisRun, !isWatched, let notificationContext {
             AgentTurnNotifications.post(notified, context: notificationContext)
         }

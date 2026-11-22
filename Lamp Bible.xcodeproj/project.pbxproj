@@ -182,6 +182,7 @@
 		A10000000000000000000042 /* ReaderChatSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000003D /* ReaderChatSidebarView.swift */; };
 		A1000000000000000000F800 /* ReaderChatTurns.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000F801 /* ReaderChatTurns.swift */; };
 		A1000000000000000000F814 /* AgentTurnNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000F815 /* AgentTurnNotifications.swift */; };
+		A1000000000000000000F816 /* AgentTurnPush.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000F817 /* AgentTurnPush.swift */; };
 		A1000000000000000000F810 /* WritingChatTurns.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000F811 /* WritingChatTurns.swift */; };
 		A1000000000000000000F812 /* WritingReviewSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000F813 /* WritingReviewSession.swift */; };
 		A1000000000000000000F808 /* AgentRemoteSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000F809 /* AgentRemoteSettingsView.swift */; };
@@ -340,6 +341,7 @@
 		B1000000000000000000003D /* ReaderChatSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/ReaderChatSidebarView.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000F801 /* ReaderChatTurns.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/ReaderChatTurns.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000F815 /* AgentTurnNotifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/AgentTurnNotifications.swift; sourceTree = SOURCE_ROOT; };
+		B1000000000000000000F817 /* AgentTurnPush.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/AgentTurnPush.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000F811 /* WritingChatTurns.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/WritingChatTurns.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000F813 /* WritingReviewSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/WritingReviewSession.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000F809 /* AgentRemoteSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/AgentRemoteSettingsView.swift; sourceTree = SOURCE_ROOT; };
@@ -533,6 +535,7 @@
 				B1000000000000000000003D /* ReaderChatSidebarView.swift */,
 				B1000000000000000000F801 /* ReaderChatTurns.swift */,
 				B1000000000000000000F815 /* AgentTurnNotifications.swift */,
+				B1000000000000000000F817 /* AgentTurnPush.swift */,
 				B1000000000000000000F811 /* WritingChatTurns.swift */,
 				B1000000000000000000F813 /* WritingReviewSession.swift */,
 				B1000000000000000000F809 /* AgentRemoteSettingsView.swift */,
@@ -844,6 +847,7 @@
 				A10000000000000000000042 /* ReaderChatSidebarView.swift in Sources */,
 				A1000000000000000000F800 /* ReaderChatTurns.swift in Sources */,
 				A1000000000000000000F814 /* AgentTurnNotifications.swift in Sources */,
+				A1000000000000000000F816 /* AgentTurnPush.swift in Sources */,
 				A1000000000000000000F810 /* WritingChatTurns.swift in Sources */,
 				A1000000000000000000F812 /* WritingReviewSession.swift in Sources */,
 				A1000000000000000000F808 /* AgentRemoteSettingsView.swift in Sources */,

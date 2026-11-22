@@ -500,6 +500,24 @@ final class AgentRemoteHost: ObservableObject {
         }
     }
 
+    /// A turn's end as the phone names the chat: a writing by its name; a
+    /// reader chat as "Reader Chat", under the title its list gives it, or
+    /// nothing for one still called "New Chat".
+    private func pushedEnd(
+        of chat: LampAgentRemoteHosting.Chat, turn: UUID, device: String,
+        outcome: AgentTurnNotifications.Outcome
+    ) -> AgentTurnPush.Ended {
+        let (title, subtitle): (String, String) = switch chat {
+        case .reader:
+            ("Reader Chat", summary(of: chat)?.title.replacingOccurrences(of: "New Chat", with: "") ?? "")
+        case .writing(let id):
+            (writing(id)?.title ?? "Writing", "")
+        }
+        return AgentTurnPush.Ended(
+            deviceID: device, chat: chat, turnID: turn, title: title, subtitle: subtitle, outcome: outcome
+        )
+    }
+
     /// A chat with nothing said in it yet, as it is listed until something is.
     private func untitled(_ chat: LampAgentRemoteHosting.Chat, workspace: URL, title: String = "New Chat", isRunning: Bool) -> LampAgentRemoteChatSummary {
         let writing: LampAgentRemoteHosting.Writing? = switch chat {
@@ -830,6 +848,12 @@ final class AgentRemoteHost: ObservableObject {
             _ = try? await WritingChatTurns.collect(
                 writingID: id, turnID: open.model.takeTurnForAttribution() ?? turn, libraryModel: libraryModel
             )
+        }
+        // A phone still here and following this chat heard the turn end as
+        // it streamed. One that has gone, suspended a while after it was
+        // left, is told through iCloud instead (`AgentTurnPush`).
+        if taken, let outcome = open.model.lastTurnOutcome, !(isConnected(peer) && peer.open === open) {
+            AgentTurnPush.tell(pushedEnd(of: open.chat, turn: turn, device: device, outcome: outcome))
         }
         runs[device]?.removeAll { $0.turn == turn }
         if runs[device]?.isEmpty == true { runs[device] = nil }
