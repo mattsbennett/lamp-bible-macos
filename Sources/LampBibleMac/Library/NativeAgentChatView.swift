@@ -58,15 +58,21 @@ enum AgentHelperProcesses {
     private nonisolated(unsafe) static var running: [ObjectIdentifier: Process] = [:]
     private nonisolated(unsafe) static var shuttingDown = false
 
-    /// Takes a process just launched into the registry. Once quitting has
-    /// begun it is ended at once instead: a check started after the last
-    /// look would otherwise outlive Lamp.
-    static func track(_ process: Process) {
+    /// Launches a process and takes it into the registry in one step, under
+    /// the lock quitting takes: once quitting has begun nothing launches, and
+    /// nothing launched can be missed by it.
+    static func launch(_ process: Process) throws {
         lock.lock()
-        let refused = shuttingDown
-        if !refused { running[ObjectIdentifier(process)] = process }
-        lock.unlock()
-        if refused { end([process]) }
+        defer { lock.unlock() }
+        guard !shuttingDown else { throw CocoaError(.userCancelled) }
+        try process.run()
+        running[ObjectIdentifier(process)] = process
+    }
+
+    /// Keeps a write to a process that has exited from raising SIGPIPE,
+    /// which would end Lamp: the write fails instead, and is handled.
+    static func refuseSIGPIPE(_ pipe: Pipe) {
+        _ = fcntl(pipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
     }
 
     static func untrack(_ process: Process) {
@@ -238,7 +244,9 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
     private func stop(_ process: Process) {
         guard process.isRunning else { return }
         lock.lock()
-        let root = rootIdentity
+        // Only this process's identity: a stop arriving before a new run has
+        // published its own must not act on the last run's.
+        let root = rootIdentity?.pid == process.processIdentifier ? rootIdentity : nil
         lock.unlock()
         // What it started, found by the identity captured at launch. If the
         // process table can't be read, the provider is still stopped.
@@ -325,9 +333,8 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             }
 
             guard !isCancelled else { return .stoppedBeforeStarting }
-            try process.run()
+            try AgentHelperProcesses.launch(process)
             runStarted(process)
-            AgentHelperProcesses.track(process)
             // And once more, now there is something to terminate. Stop
             // between the guard above and this line found an assigned but
             // unstarted process and killed nothing, so the provider ran on
@@ -423,6 +430,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                 provider: .antigravity, prompt: prompt, sessionID: resumed, proposedSessionID: nil, mode: mode
             )
             process.currentDirectoryURL = workingDirectory
+            AgentHelperProcesses.refuseSIGPIPE(input)
             process.standardInput = input
             process.standardOutput = output
             // Its own logs, not the conversation.
@@ -479,9 +487,8 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             }
 
             guard !isCancelled else { return .stoppedBeforeStarting }
-            try process.run()
+            try AgentHelperProcesses.launch(process)
             runStarted(process)
-            AgentHelperProcesses.track(process)
             if isCancelled { stop(process) }
             let watchdog = watchForStall(in: process)
             defer { watchdog.cancel() }
@@ -530,7 +537,9 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                             stateLock.lock()
                             let currentSession = session
                             stateLock.unlock()
-                            let choice = AgentACPRun.decide(
+                            // After Stop nothing more is approved: ACP answers an
+                            // outstanding request with `cancelled` then.
+                            let choice = isCancelled ? nil : AgentACPRun.decide(
                                 permission: params, readOnly: mode.isReadOnly, workspace: workingDirectory,
                                 home: home, sessionID: currentSession
                             )
@@ -625,7 +634,6 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
     /// Ends a helper launch that has not finished in `seconds`, so reading
     /// its output returns.
     private static func giveUp(on process: Process, after seconds: Double) {
-        AgentHelperProcesses.track(process)
         DispatchQueue.global().asyncAfter(deadline: .now() + seconds) {
             AgentHelperProcesses.end([process])
             AgentHelperProcesses.untrack(process)
@@ -671,7 +679,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
         process.standardInput = FileHandle.nullDevice
-        guard (try? process.run()) != nil else { return nil }
+        guard (try? AgentHelperProcesses.launch(process)) != nil else { return nil }
         Self.giveUp(on: process, after: 20)
         let data = output.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
@@ -698,7 +706,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
         process.standardInput = FileHandle.nullDevice
-        try process.run()
+        try AgentHelperProcesses.launch(process)
         // A login shell runs the reader's own startup files, and one that
         // waits on something would hold every chat to that provider.
         Self.giveUp(on: process, after: 20)
@@ -2208,7 +2216,11 @@ final class NativeAgentChatModel: ObservableObject {
         // prompt before it was stopped, so the next message resumes from
         // there; if it was stopped before getting that far, resuming fails in
         // the one way this already recovers from — carrying on from a recap.
-        if result.exitCode == 0 || wasStopped, result.launchError == nil {
+        // An Antigravity session that opened is kept even when its prompt
+        // then failed: it holds the turn's tool history, and a recap would
+        // lose it. A session that can't be resumed is found out by resuming.
+        let openedACPSession = provider == .antigravity && summary.sessionID != nil
+        if result.exitCode == 0 || wasStopped || openedACPSession, result.launchError == nil {
             sessionID = summary.sessionID
                 ?? outcome.resumedSessionID
                 ?? outcome.proposedSessionID
@@ -3585,11 +3597,11 @@ final class AgentUsageService: ObservableObject {
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
         process.environment = AgentProcessEnvironment.cleaned(ProcessInfo.processInfo.environment)
-        guard (try? process.run()) != nil else { return nil }
-        AgentHelperProcesses.track(process)
+        AgentHelperProcesses.refuseSIGPIPE(input)
+        guard (try? AgentHelperProcesses.launch(process)) != nil else { return nil }
         defer {
             try? input.fileHandleForWriting.close()
-            if process.isRunning { process.terminate() }
+            AgentHelperProcesses.end([process])
             AgentHelperProcesses.untrack(process)
         }
         // An app-server that never answers is not waited on past this.
@@ -3598,7 +3610,7 @@ final class AgentUsageService: ObservableObject {
         }
         func send(_ message: [String: Any]) {
             guard let data = try? JSONSerialization.data(withJSONObject: message) else { return }
-            input.fileHandleForWriting.write(data + Data([0x0A]))
+            try? input.fileHandleForWriting.write(contentsOf: data + Data([0x0A]))
         }
         var reader = AgentChatLineReader()
         let handle = output.fileHandleForReading

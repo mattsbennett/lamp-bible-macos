@@ -285,6 +285,13 @@ struct LampMCPServerTests {
         #expect(response.structuredContent?.objectValue != nil, "\(tool) must answer with an object")
     }
 
+    /// Antigravity's permission rule allows Lamp's tools by exact name, so
+    /// its list must be the helper's own.
+    @Test func antigravityKnowsEveryLampToolByName() {
+        let catalogue = Set(LampMCPToolCatalog.tools(workspace: true).map(\.name))
+        #expect(AgentACPRun.lampToolNames == catalogue)
+    }
+
     @Test func otherChatsAreReadOnlyWithPersonalContentShared() async throws {
         let fixture = FileManager.default.temporaryDirectory
             .appendingPathComponent("lamp-mcp-chats-\(UUID().uuidString)", isDirectory: true)

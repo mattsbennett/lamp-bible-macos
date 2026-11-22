@@ -1077,12 +1077,22 @@ public enum AgentChatWireParser {
         if let sessionID = result.string("sessionId"), !sessionID.isEmpty {
             return [.sessionStarted(sessionID)]
         }
-        if result.string("stopReason") == "refusal" {
+        switch result.string("stopReason") {
+        case "refusal":
             // Where Antigravity reports a spent quota (QUOTA_EXHAUSTED), and
             // a refusal by the model.
             return [.failure("Antigravity stopped without answering. It does this when a usage limit is reached, or when the model refuses.")]
+        case "max_tokens":
+            return [.failure("Antigravity stopped partway: the reply reached the model’s length limit.")]
+        case "max_turn_requests":
+            return [.failure("Antigravity stopped partway: the turn reached its limit of model requests.")]
+        case "cancelled":
+            // A Stop is read as a stop before this is; this is one Lamp did
+            // not ask for.
+            return [.failure("Antigravity cancelled the reply.")]
+        default:
+            return []
         }
-        return []
     }
 
     private static func parseOpenCode(_ object: [String: Any]) -> [AgentChatWireEvent] {
@@ -1553,7 +1563,12 @@ public enum AgentACPRun {
             let parts = ruleParts(rule)
             return parts.target.isEmpty || parts.target == "*" ? parts.action : nil
         })
-        if allowed.contains(where: { !isReadOnlyRule($0) && !coveredActions.contains(ruleParts($0).action) }) {
+        // The same rule asked or denied as well, which comes first.
+        let coveredRules = Set(guarded.map { $0.trimmingCharacters(in: .whitespaces) })
+        if allowed.contains(where: {
+            !isReadOnlyRule($0) && !coveredActions.contains(ruleParts($0).action)
+                && !coveredRules.contains($0.trimmingCharacters(in: .whitespaces))
+        }) {
             return String(format: reason, "run commands or change files")
         }
         return nil
@@ -1607,6 +1622,18 @@ public enum AgentACPRun {
         ["name": "lamp", "command": command, "args": arguments, "env": [[String: String]]()]
     }
 
+    /// Lamp's own MCP tools, by name, as `lamp-mcp` offers them; a test holds
+    /// this to the helper's catalogue.
+    public static let lampToolNames: Set<String> = [
+        "add_reading_plan", "analyze_strongs", "build_deck", "draft_reading_plan", "import_writings",
+        "list_book_sections", "list_books", "list_chats", "list_modules", "list_quiz_modules",
+        "list_reading_plans", "list_writings", "lookup_dictionary_keys", "plan_writing_import",
+        "read_book_section", "read_chat", "read_commentary", "read_devotional", "read_passage",
+        "read_plan_day", "read_quiz_questions", "read_skill", "read_study_material", "read_writing",
+        "render_deck", "search_dictionary", "search_library", "start_writing", "validate_deck",
+        "write_writing_draft", "writing_changes", "writing_import_status",
+    ]
+
     /// The answer to an agent's `session/request_permission`, as the option
     /// to pick. Nothing is ever allowed always: each call is judged.
     ///
@@ -1646,7 +1673,9 @@ public enum AgentACPRun {
             return !paths.isEmpty && paths.allSatisfy { confined($0, to: root) }
         }
         let allowed: Bool
-        if name.hasPrefix("mcp_lamp_") {
+        if name.hasPrefix("mcp_lamp_"), lampToolNames.contains(String(name.dropFirst("mcp_lamp_".count))) {
+            // By the exact name of one of Lamp's tools: another server
+            // called `lamp_admin` would flatten to the same prefix.
             allowed = true
         } else if kind == "read" {
             allowed = inside(workspace) || inside(agentFolder)

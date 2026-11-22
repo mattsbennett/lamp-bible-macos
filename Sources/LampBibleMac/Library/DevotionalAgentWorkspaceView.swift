@@ -185,11 +185,11 @@ enum AIProviderCommandRunner {
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
         process.environment = AgentProcessEnvironment.cleaned(ProcessInfo.processInfo.environment)
-        guard (try? process.run()) != nil else { return .unavailable("Could not check") }
-        AgentHelperProcesses.track(process)
+        AgentHelperProcesses.refuseSIGPIPE(input)
+        guard (try? AgentHelperProcesses.launch(process)) != nil else { return .unavailable("Could not check") }
         defer {
             try? input.fileHandleForWriting.close()
-            if process.isRunning { process.terminate() }
+            AgentHelperProcesses.end([process])
             AgentHelperProcesses.untrack(process)
         }
         DispatchQueue.global().asyncAfter(deadline: .now() + 30) {
@@ -247,8 +247,7 @@ enum AIProviderCommandRunner {
                 // whole connection check on Lamp's own.
                 process.standardInput = FileHandle.nullDevice
                 do {
-                    try process.run()
-                    AgentHelperProcesses.track(process)
+                    try AgentHelperProcesses.launch(process)
                     defer { AgentHelperProcesses.untrack(process) }
                     let data = pipe.fileHandleForReading.readDataToEndOfFile()
                     process.waitUntilExit()

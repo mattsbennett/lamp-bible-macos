@@ -582,6 +582,13 @@ struct AgentACPTests {
         #expect(AgentChatResumeFailure.indicatesMissingSession(in: lost))
         let refused = #"{"jsonrpc":"2.0","result":{"stopReason":"refusal"},"id":3}"#
         #expect(AgentChatWireParser.parse(refused, provider: .antigravity).count == 1)
+        // A turn cut short is not a finished one.
+        for reason in ["max_tokens", "max_turn_requests", "cancelled"] {
+            let cut = #"{"jsonrpc":"2.0","result":{"stopReason":"\#(reason)"},"id":3}"#
+            #expect(AgentChatWireParser.parse(cut, provider: .antigravity).count == 1, "\(reason)")
+        }
+        let finished = #"{"jsonrpc":"2.0","result":{"stopReason":"end_turn"},"id":3}"#
+        #expect(AgentChatWireParser.parse(finished, provider: .antigravity).isEmpty)
     }
 
     @Test func aSessionIsResumedNeverLoadedAndGivenNoSecondFolder() {
@@ -625,6 +632,8 @@ struct AgentACPTests {
             )
         }
         #expect(decide(["toolCallId": "c", "name": "mcp_lamp_read_passage", "kind": "other"]) == "allow")
+        // Another server that flattens to the same prefix is not Lamp's.
+        #expect(decide(["toolCallId": "c", "name": "mcp_lamp_admin_delete_record", "kind": "other"]) == "deny")
         // Its own long result, saved in its folder and read back.
         #expect(decide(["toolCallId": "c", "name": "view_file", "kind": "read",
                         "locations": [["path": "/Users/someone/.gemini/antigravity-cli/brain/s/.system_generated/steps/2/output.txt"]]]) == "allow")
@@ -724,6 +733,8 @@ struct AgentACPContainmentTests {
         #expect(AgentACPRun.readerRefusal(settings: Data(safe.utf8)) == nil)
         let unsafe = #"{"permissions":{"allow":["command(git)"],"ask":["command(rm)"]}}"#
         #expect(AgentACPRun.readerRefusal(settings: Data(unsafe.utf8)) != nil)
+        let denied = #"{"permissions":{"allow":["command(git)"],"deny":["command(git)"]}}"#
+        #expect(AgentACPRun.readerRefusal(settings: Data(denied.utf8)) == nil)
     }
 
     @Test func onlyLampsOwnServerCountsAsReadOnly() {
