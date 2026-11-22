@@ -992,6 +992,10 @@ enum KeptAgentChats {
         existing(provider: provider, workspace: workspace)?.requestRelease()
     }
 
+    /// Set as Lamp begins to quit, after which no chat starts a reply.
+    @MainActor
+    private(set) static var isQuitting = false
+
     /// Whether any kept chat has a reply running.
     @MainActor
     static var anyRunning: Bool { models.values.contains { $0.isRunning } }
@@ -1004,6 +1008,7 @@ enum KeptAgentChats {
     @MainActor
     @discardableResult
     static func stopEveryReply(within seconds: Double) async -> [NativeAgentChatModel] {
+        isQuitting = true
         let running = models.values.filter(\.isRunning)
         running.forEach { $0.cancel() }
         let deadline = Date().addingTimeInterval(seconds)
@@ -1377,7 +1382,10 @@ final class NativeAgentChatModel: ObservableObject {
         inConversation expected: UUID? = nil
     ) async -> Bool {
         let prompt = rawPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty, !isRunning else { return false }
+        // Nothing new starts once Lamp is quitting: a message queued behind
+        // the reply being stopped would otherwise go the moment it stopped,
+        // as a run nobody is left to stop. Refused here, it stays queued.
+        guard !prompt.isEmpty, !isRunning, !KeptAgentChats.isQuitting else { return false }
         // Turns from Terminal, another pane or another Mac may have arrived
         // while this prompt was being prepared, so the conversation is read
         // from disk **before** it is judged against the one the caller

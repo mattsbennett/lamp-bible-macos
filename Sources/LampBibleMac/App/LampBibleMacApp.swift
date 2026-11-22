@@ -57,7 +57,12 @@ final class LampAppDelegate: NSObject, NSApplicationDelegate {
                             DevotionalAgentWorkspaceStore.workspaceURL(
                                 libraryRootURL: libraryModel.library.rootURL, devotionalID: $0.id
                             ).standardizedFileURL == model.workspaceURL.standardizedFileURL
-                        })?.id else { continue }
+                        })?.id,
+                              // Checked before the turn is taken: taking it
+                              // is once only, and a watching window's poll
+                              // files the change under it.
+                              !WritingChatTurns.isWatched(writingID)
+                        else { continue }
                         _ = try? await WritingChatTurns.collect(
                             writingID: writingID, turnID: model.takeTurnForAttribution(), libraryModel: libraryModel
                         )
