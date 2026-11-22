@@ -160,8 +160,10 @@ public enum AgentChatEffortChoice {
         case .claude: return ["--effort", effort]
         // Codex has no flag for it; the setting lives in `~/.codex/config.toml`
         // and `-c` overrides one key for this run alone, leaving the reader's
-        // own config as they wrote it.
-        case .codex: return ["-c", "model_reasoning_effort=\"\(effort)\""]
+        // own config as they wrote it. Quoted as TOML, since the level is
+        // typed: a quote or a newline in it would otherwise end the string
+        // and Codex would refuse to start.
+        case .codex: return ["-c", "model_reasoning_effort=" + AgentTerminalLaunchPlanner.tomlString(effort)]
         // Nothing of its own: the level is written onto the model by
         // `AgentChatModelChoice.naming`, which is where OpenCode reads it.
         case .openCode: return []

@@ -172,6 +172,17 @@ struct ReaderChatSupportTests {
         #expect(value(after: "-c", in: codex) != nil)
     }
 
+    @Test func aTypedCodexEffortStaysOneTOMLString() {
+        // Codex takes any level, so it is typed, and a quote, backslash or
+        // newline in it must not end the string `-c` parses.
+        let codex = AgentChatLaunchArguments.make(
+            provider: .codex, prompt: "Read", sessionID: nil, proposedSessionID: nil,
+            effort: "high\"\nsandbox_mode=\"danger-full-access\\"
+        )
+        #expect(codex.first { $0.hasPrefix("model_reasoning_effort=") }
+            == #"model_reasoning_effort="high\"\nsandbox_mode=\"danger-full-access\\""#)
+    }
+
     @Test func openCodeTakesItsEffortOnTheModelAndNotAsAFlag() {
         // `opencode run` has no effort flag; a variant of the model is what
         // sets its reasoning, so the level is written onto the name.
