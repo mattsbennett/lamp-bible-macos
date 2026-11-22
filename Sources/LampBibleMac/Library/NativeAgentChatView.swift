@@ -97,14 +97,15 @@ enum AgentHelperProcesses {
     /// process has not gone within a second. A group's other members are
     /// killed either way: nothing a helper started outlives it.
     static func end(_ processes: [AgentSpawnedProcess]) {
-        // Only groups whose process is still running: an exited one's number
-        // can be given to another group once it is empty.
-        let alive = processes.filter(\.isRunning)
-        guard !alive.isEmpty else { return }
-        alive.forEach { $0.terminate() }
+        // Every group, whether or not its process has exited: what it
+        // started may not have. A group whose process has been reaped is
+        // left alone by `signalGroup` itself, since its number may since
+        // belong to another.
+        guard !processes.isEmpty else { return }
+        processes.forEach { $0.terminate() }
         let deadline = Date().addingTimeInterval(1)
-        while alive.contains(where: \.isRunning), Date() < deadline { usleep(20_000) }
-        alive.filter(\.isRunning).forEach { $0.signalGroup(SIGKILL) }
+        while processes.contains(where: \.isRunning), Date() < deadline { usleep(20_000) }
+        processes.forEach { $0.signalGroup(SIGKILL) }
     }
 }
 
@@ -232,10 +233,11 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
         lock.unlock()
         process.terminate()
         DispatchQueue.global().asyncAfter(deadline: .now() + Self.stopGraceSeconds) {
-            // Only while the provider itself is still there: once it has
-            // exited and been reaped, its group number can be given out
-            // again, and the run's end has already killed what it left.
-            if process.isRunning { process.signalGroup(SIGKILL) }
+            // Whether or not the provider has exited: a child that ignored
+            // the ask and holds the output open would otherwise keep the run
+            // from ever ending. Once the run has released the process, this
+            // does nothing.
+            process.signalGroup(SIGKILL)
         }
     }
 
@@ -329,6 +331,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             process.waitUntilExit()
             killWhatTheStopLeft(process)
             AgentHelperProcesses.untrack(process)
+            process.release()
             lock.lock()
             let wasStalled = stalled
             lock.unlock()
@@ -580,6 +583,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             }
             killWhatTheStopLeft(process)
             AgentHelperProcesses.untrack(process)
+            process.release()
             lock.lock()
             let wasStalled = stalled
             lock.unlock()
@@ -645,6 +649,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
         let data = output.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         AgentHelperProcesses.untrack(process)
+        process.release()
         let major = AgentChatCLIVersion.major(
             fromVersionOutput: String(decoding: data, as: UTF8.self)
         )
@@ -672,10 +677,12 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
         Self.giveUp(on: process, after: 20)
         let data = output.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
+        let status = process.terminationStatus
         AgentHelperProcesses.untrack(process)
+        process.release()
         let path = String(decoding: data, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard process.terminationStatus == 0,
+        guard status == 0,
               !path.isEmpty,
               FileManager.default.isExecutableFile(atPath: path)
         else {
@@ -3620,6 +3627,7 @@ final class AgentUsageService: ObservableObject {
             try? input.fileHandleForWriting.close()
             AgentHelperProcesses.end([process])
             AgentHelperProcesses.untrack(process)
+            process.release()
         }
         // An app-server that never answers is not waited on past this.
         DispatchQueue.global().asyncAfter(deadline: .now() + 20) {

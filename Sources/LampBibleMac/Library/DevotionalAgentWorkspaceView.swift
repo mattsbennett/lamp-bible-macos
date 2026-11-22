@@ -190,6 +190,7 @@ enum AIProviderCommandRunner {
             try? input.fileHandleForWriting.close()
             AgentHelperProcesses.end([process])
             AgentHelperProcesses.untrack(process)
+            process.release()
         }
         DispatchQueue.global().asyncAfter(deadline: .now() + 30) {
             if process.isRunning { process.terminate() }
@@ -247,12 +248,14 @@ enum AIProviderCommandRunner {
                 process.standardInput = nil
                 do {
                     try AgentHelperProcesses.launch(process)
-                    defer { AgentHelperProcesses.untrack(process) }
                     let data = pipe.fileHandleForReading.readDataToEndOfFile()
                     process.waitUntilExit()
+                    let status = process.terminationStatus
+                    AgentHelperProcesses.untrack(process)
+                    process.release()
                     continuation.resume(returning: (
                         true,
-                        process.terminationStatus,
+                        status,
                         String(decoding: data, as: UTF8.self)
                     ))
                 } catch {

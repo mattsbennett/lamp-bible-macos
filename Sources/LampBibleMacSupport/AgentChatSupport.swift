@@ -1336,9 +1336,23 @@ public final class AgentSpawnedProcess: @unchecked Sendable {
     private let lock = NSLock()
     private let exited = DispatchGroup()
     private var pid: pid_t = 0
+    /// Its exit status (or ending signal), once its exit has been seen.
     private var status: Int32?
+    /// Whether it has been reaped. Until then its exit is seen but not
+    /// collected (`waitid` with `WNOWAIT`), so the exited process holds its
+    /// number — and with it the group's — and no other process or group can
+    /// be given it. Signals to the group stop when it is reaped.
+    private var released = false
 
     public init() {}
+
+    deinit {
+        // Never leave a zombie: one whose exit was seen is reaped now.
+        if status != nil, !released, pid > 0 {
+            var raw: Int32 = 0
+            waitpid(pid, &raw, WNOHANG)
+        }
+    }
 
     public var processIdentifier: pid_t {
         lock.lock()
@@ -1346,8 +1360,8 @@ public final class AgentSpawnedProcess: @unchecked Sendable {
         return pid
     }
 
-    /// Whether the process Lamp started is still running. Others in its group
-    /// may outlive it; `signalGroup` reaches them.
+    /// Whether the process Lamp started is still running (its exit not yet
+    /// seen). Others in its group may outlive it; `signalGroup` reaches them.
     public var isRunning: Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -1359,8 +1373,7 @@ public final class AgentSpawnedProcess: @unchecked Sendable {
     public var terminationStatus: Int32 {
         lock.lock()
         defer { lock.unlock() }
-        guard let status else { return 0 }
-        return status & 0x7f == 0 ? (status >> 8) & 0xff : status & 0x7f
+        return status ?? 0
     }
 
     public func run() throws {
@@ -1407,8 +1420,12 @@ public final class AgentSpawnedProcess: @unchecked Sendable {
             envp.forEach { free($0) }
         }
         var spawned: pid_t = 0
+        // Entered before the process can be seen running, so a wait can never
+        // find nothing outstanding while it runs.
+        exited.enter()
         let result = posix_spawn(&spawned, executableURL.path, &actions, &attributes, argv, envp)
         guard result == 0 else {
+            exited.leave()
             throw POSIXError(POSIXErrorCode(rawValue: result) ?? .EIO)
         }
         lock.lock()
@@ -1420,15 +1437,31 @@ public final class AgentSpawnedProcess: @unchecked Sendable {
         try? standardOutput?.fileHandleForWriting.close()
         if standardError !== standardOutput { try? standardError?.fileHandleForWriting.close() }
 
-        exited.enter()
         Thread.detachNewThread { [self] in
-            var raw: Int32 = 0
-            while waitpid(spawned, &raw, 0) == -1, errno == EINTR {}
+            // Seen, not reaped: see `released`.
+            var info = siginfo_t()
+            while waitid(P_PID, id_t(spawned), &info, WEXITED | WNOWAIT) == -1, errno == EINTR {}
             lock.lock()
-            status = raw
+            // An exit code, or the signal that ended it, as
+            // `Process.terminationStatus` gives them.
+            status = info.si_status
             lock.unlock()
             exited.leave()
         }
+    }
+
+    /// Reaps the process once nothing more will be signalled to its group,
+    /// waiting for it to exit first if it has not. After this its number is
+    /// free to be given out again, so `signalGroup` does nothing.
+    public func release() {
+        guard processIdentifier != 0 else { return }
+        exited.wait()
+        lock.lock()
+        defer { lock.unlock() }
+        guard !released else { return }
+        released = true
+        var raw: Int32 = 0
+        while waitpid(pid, &raw, 0) == -1, errno == EINTR {}
     }
 
     public func waitUntilExit() {
@@ -1442,11 +1475,14 @@ public final class AgentSpawnedProcess: @unchecked Sendable {
         return exited.wait(timeout: .now() + seconds) == .success
     }
 
-    /// Sends `signal` to every process in the run's group.
+    /// Sends `signal` to every process in the run's group: whether or not
+    /// the process Lamp started is still running, since what it started may
+    /// be, and safely, because until `release` its number is still its own.
     public func signalGroup(_ signal: Int32) {
-        let group = processIdentifier
-        guard group > 0 else { return }
-        killpg(group, signal)
+        lock.lock()
+        defer { lock.unlock() }
+        guard pid > 0, !released else { return }
+        killpg(pid, signal)
     }
 
     /// Asks the whole group to stop, as `Process.terminate` asked the one.

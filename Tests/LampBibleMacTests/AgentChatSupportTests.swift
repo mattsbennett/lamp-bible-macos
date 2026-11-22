@@ -870,6 +870,34 @@ struct AgentSpawnedProcessTests {
         #expect(result.output.contains("closed"))
     }
 
+    @Test func aChildThatIgnoresStopIsStillKilledAfterItsParentHasGone() throws {
+        let process = AgentSpawnedProcess()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        // The parent exits at once; its child ignores SIGTERM and holds the
+        // output open, so the output never ends on its own.
+        process.arguments = ["-c", #"(trap "" TERM; sleep 30) & exit 0"#]
+        process.standardOutput = output
+        try process.run()
+        process.waitUntilExit()
+        #expect(!process.isRunning)
+        process.terminate()
+        let ended = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            _ = output.fileHandleForReading.readDataToEndOfFile()
+            ended.signal()
+        }
+        #expect(ended.wait(timeout: .now() + 0.5) == .timedOut)
+        // Its number is still the group's until release, so this is safe.
+        process.signalGroup(SIGKILL)
+        #expect(ended.wait(timeout: .now() + 5) == .success)
+        let group = process.processIdentifier
+        process.release()
+        // Released, the number may be anyone's: nothing more is sent.
+        process.signalGroup(SIGKILL)
+        #expect(killpg(group, 0) != 0)
+    }
+
     @Test func aStopReachesTheWholeGroupEvenAnOrphan() throws {
         let process = AgentSpawnedProcess()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")

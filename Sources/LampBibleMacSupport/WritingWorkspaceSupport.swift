@@ -355,6 +355,8 @@ public enum LampAgentChatHistory {
     static let transcriptFolder = ".lamp"
     static let transcriptPrefix = "native-chat-"
     static let readerFolder = "AgentWorkspaces/Reader"
+    /// The library module that holds the reader's own writings.
+    public static let personalWritingsModuleID = "personal-devotionals"
 
     private struct StoredTranscript: Decodable {
         struct Message: Decodable {
@@ -376,6 +378,12 @@ public enum LampAgentChatHistory {
         public let lastSpoken: Date?
         /// The chat this question is being asked in.
         public let isThisChat: Bool
+
+        /// The same chat under the library's name for it.
+        public func titled(_ title: String) -> Summary {
+            Summary(chatID: chatID, kind: kind, title: title, providers: providers,
+                    messageCount: messageCount, lastSpoken: lastSpoken, isThisChat: isThisChat)
+        }
 
         // In the tools' own spelling: `read_chat` takes a `chat_id`.
         enum CodingKeys: String, CodingKey {
@@ -401,6 +409,11 @@ public enum LampAgentChatHistory {
         public let offset: Int
         public let messages: [Line]
 
+        public func titled(_ title: String) -> Reading {
+            Reading(chatID: chatID, title: title, provider: provider, providers: providers,
+                    totalMessages: totalMessages, offset: offset, messages: messages)
+        }
+
         enum CodingKeys: String, CodingKey {
             case chatID = "chat_id", title, provider, providers
             case totalMessages = "total_messages", offset, messages
@@ -423,46 +436,74 @@ public enum LampAgentChatHistory {
         kind: String? = nil,
         limit: Int = 30
     ) -> [Summary] {
-        var summaries: [Summary] = []
+        // Ordered by when each chat's transcripts were last written, from
+        // the files' dates alone, so only the chats returned are read.
+        var candidates: [(chatID: String, kind: String, workspace: URL, isThisChat: Bool, newest: Date)] = []
         if kind == nil || kind == "reader" {
             let folder = libraryRootURL.appendingPathComponent(readerFolder, isDirectory: true)
-            let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
-            for name in names {
+            for name in (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [] {
                 guard let id = UUID(uuidString: name) else { continue }
-                let transcripts = transcripts(in: folder.appendingPathComponent(name, isDirectory: true))
-                guard !transcripts.isEmpty else { continue }
-                summaries.append(Summary(
-                    chatID: "reader:\(id.uuidString)",
-                    kind: "reader",
-                    title: opening(of: transcripts) ?? "Reader chat",
-                    providers: transcripts.map(\.provider),
-                    messageCount: transcripts.reduce(0) { $0 + $1.transcript.messages.count },
-                    lastSpoken: transcripts.compactMap { $0.transcript.messages.last?.date }.max(),
-                    isThisChat: id == thisReaderChat
-                ))
+                let workspace = folder.appendingPathComponent(name, isDirectory: true)
+                guard let newest = newestTranscript(in: workspace) else { continue }
+                candidates.append(("reader:\(id.uuidString)", "reader", workspace, id == thisReaderChat, newest))
             }
         }
         if kind == nil || kind == "writing" {
-            for writing in LampWritingWorkspace.listed(libraryRootURL: libraryRootURL) {
-                let workspace = LampWritingWorkspace.url(libraryRootURL: libraryRootURL, writingID: writing.id)
-                let transcripts = transcripts(in: workspace)
-                guard !transcripts.isEmpty else { continue }
-                summaries.append(Summary(
-                    chatID: "writing:\(writing.id)",
-                    kind: "writing",
-                    title: writing.title ?? "Untitled writing",
-                    providers: transcripts.map(\.provider),
-                    messageCount: transcripts.reduce(0) { $0 + $1.transcript.messages.count },
-                    lastSpoken: transcripts.compactMap { $0.transcript.messages.last?.date }.max(),
-                    isThisChat: thisWorkspace.map {
-                        $0.standardizedFileURL.path == workspace.standardizedFileURL.path
-                    } ?? false
-                ))
+            let root = LampWritingWorkspace.root(libraryRootURL: libraryRootURL)
+            for name in (try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? [] {
+                let workspace = root.appendingPathComponent(name, isDirectory: true)
+                guard let writingID = writingID(in: workspace),
+                      let newest = newestTranscript(in: workspace) else { continue }
+                let isThis = thisWorkspace.map {
+                    $0.standardizedFileURL.path == workspace.standardizedFileURL.path
+                } ?? false
+                candidates.append(("writing:\(writingID)", "writing", workspace, isThis, newest))
             }
         }
-        return Array(summaries.sorted {
-            ($0.lastSpoken ?? .distantPast) > ($1.lastSpoken ?? .distantPast)
-        }.prefix(max(1, limit)))
+        candidates.sort { $0.newest > $1.newest }
+        return candidates.prefix(max(1, limit)).compactMap { candidate in
+            let transcripts = transcripts(in: candidate.workspace)
+            guard !transcripts.isEmpty else { return nil }
+            return Summary(
+                chatID: candidate.chatID,
+                kind: candidate.kind,
+                title: candidate.kind == "writing"
+                    ? draftTitle(in: candidate.workspace) ?? "Untitled writing"
+                    : opening(of: transcripts) ?? "Reader chat",
+                providers: transcripts.map(\.provider),
+                messageCount: transcripts.reduce(0) { $0 + $1.transcript.messages.count },
+                lastSpoken: transcripts.compactMap { $0.transcript.messages.last?.date }.max(),
+                isThisChat: candidate.isThisChat
+            )
+        }
+    }
+
+    /// When a workspace's newest transcript file was written, or nil if it
+    /// has none.
+    private static func newestTranscript(in workspace: URL) -> Date? {
+        let folder = workspace.appendingPathComponent(transcriptFolder, isDirectory: true)
+        return ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [])
+            .filter { $0.hasPrefix(transcriptPrefix) && $0.hasSuffix(".json") }
+            .compactMap { LampFileModification.date(of: folder.appendingPathComponent($0)) }
+            .max()
+    }
+
+    /// The writing a workspace holds, from its identifier file.
+    private static func writingID(in workspace: URL) -> String? {
+        guard let text = try? String(
+            contentsOf: workspace.appendingPathComponent(LampWritingWorkspace.identifierFilename), encoding: .utf8
+        ) else { return nil }
+        let id = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return id.isEmpty ? nil : id
+    }
+
+    /// What the draft calls itself; `lamp-mcp` puts the writing's own title
+    /// from the library in its place where it can.
+    private static func draftTitle(in workspace: URL) -> String? {
+        let draft = (try? String(
+            contentsOf: workspace.appendingPathComponent(LampWritingWorkspace.draftFilename), encoding: .utf8
+        )) ?? ""
+        return LampWritingWorkspace.title(ofDraft: draft)
     }
 
     /// A window of one chat's conversation with one provider: by default the
@@ -523,10 +564,12 @@ public enum LampAgentChatHistory {
                 .appendingPathComponent(id.uuidString, isDirectory: true)
         }
         if chatID.hasPrefix("writing:") {
+            // The workspace this ID derives, holding this ID: no scan of
+            // every writing, and nothing an argument can steer elsewhere.
             let writingID = String(chatID.dropFirst("writing:".count))
-            guard LampWritingWorkspace.listed(libraryRootURL: libraryRootURL).contains(where: { $0.id == writingID })
-            else { return nil }
-            return LampWritingWorkspace.url(libraryRootURL: libraryRootURL, writingID: writingID)
+            guard !writingID.isEmpty else { return nil }
+            let workspace = LampWritingWorkspace.url(libraryRootURL: libraryRootURL, writingID: writingID)
+            return self.writingID(in: workspace) == writingID ? workspace : nil
         }
         return nil
     }
@@ -535,10 +578,9 @@ public enum LampAgentChatHistory {
         chatID: String, libraryRootURL: URL,
         transcripts: [(provider: String, transcript: StoredTranscript)]
     ) -> String {
-        if chatID.hasPrefix("writing:") {
-            let writingID = String(chatID.dropFirst("writing:".count))
-            return LampWritingWorkspace.listed(libraryRootURL: libraryRootURL)
-                .first { $0.id == writingID }?.title ?? "Untitled writing"
+        if chatID.hasPrefix("writing:"),
+           let workspace = workspace(for: chatID, libraryRootURL: libraryRootURL) {
+            return draftTitle(in: workspace) ?? "Untitled writing"
         }
         return opening(of: transcripts) ?? "Reader chat"
     }
