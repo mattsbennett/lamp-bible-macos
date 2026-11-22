@@ -126,8 +126,25 @@ struct SolaScripturaStandardTests {
         #expect(echoes.contains("A drawn link is itself scripture speaking."))
         #expect(echoes.contains("A detail some text states is Stated, cited to that text."))
         let skill = try instructions()
+        #expect(skill.contains("[references/prophecy.md](references/prophecy.md)"))
         #expect(skill.contains("It takes Imported when it needs a key from outside scripture"))
         #expect(skill.contains("It takes Contrary when it would overturn a plain statement, whatever its grade"))
+    }
+}
+
+/// The owner's prophecy principles of 2026-11-22, credited to their source,
+/// with the limits that keep them from becoming a second authority.
+struct SolaScripturaProphecyTests {
+    @Test func theyAreCreditedAndTheTextsRemainTheAuthority() throws {
+        let text = try LampBundledSkills.read(name: "sola-scriptura", file: "references/prophecy.md")
+            .replacingOccurrences(of: "*", with: "")
+            .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        #expect(text.contains("The principles below follow Jonathan Burke, More Sure Word of Prophecy (2010)."))
+        #expect(text.contains("Those texts, not the book, are the authority"))
+        #expect(text.contains("The condition must come from scripture."))
+        #expect(text.contains("a symbol's meaning in one passage does not carry over to another by itself"))
+        #expect(text.contains("that two terms name the same class is itself a claim to show"))
+        #expect(text.contains("Its facts are history, an external premise to name."))
     }
 }
 

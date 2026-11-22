@@ -80,7 +80,9 @@ authority (2 Timothy 3:16; 2 Peter 1:20–21). Four things follow:
    it, from drawn to not shown, using
    [references/echoes-and-patterns.md](references/echoes-and-patterns.md).
    Explicit statement remains the strongest evidence. An undrawn link is at best
-   inferred, and it never overturns a plain statement.
+   inferred, and it never overturns a plain statement. For prophecy — its
+   fulfilment, the order of its events, or its symbols — also read
+   [references/prophecy.md](references/prophecy.md).
 
 ## Research without unnecessary work
 
