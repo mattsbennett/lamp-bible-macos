@@ -25,8 +25,9 @@ an honest argument, and the writer keeps their point.
 An echo, pattern, type or principle that no text draws belongs here too. Give it a
 grade — strong, plausible or faint — from `echoes-and-patterns.md`, since
 *inferred* alone says nothing about how well the texts carry it. A link the
-evidence does not distinguish is unsupported, and one that needs an outside key is
-imported. Neither is unsupported merely for having no verse that states it.
+evidence does not distinguish is unsupported. One that needs an outside key is
+imported. One that would overturn a plain statement is contrary, whatever its
+grade. No link is unsupported merely for having no verse that states it.
 
 **Imported.** A premise comes from outside scripture: a creed, a confession, a
 commentator, a lexicon, received practice, scholarly consensus, historical or

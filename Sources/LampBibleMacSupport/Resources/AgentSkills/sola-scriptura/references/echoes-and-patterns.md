@@ -92,10 +92,10 @@ Give the grade with its reasons, so the writer can see what moved it.
 | Grade | What it takes | Verdict for the link |
 |---|---|---|
 | **Drawn** | A writer of scripture makes the link. Quote the text that does. | Stated |
-| **Strong** | Distinctive shared language and several correspondences, coherent in both contexts, usually with recurrence or the writer's own use of the source. | Inferred, strong |
-| **Plausible** | Real support on more than one test, while a fair alternative remains: common language, or a natural way to describe such an event. | Inferred, plausible |
-| **Faint** | One resemblance, or language common enough to occur anyway. Possible, not shown. | Inferred, faint |
-| **Not shown** | The features offered do not distinguish this link, or it needs an outside key. | Unsupported or Imported, as above, with the scope |
+| **Strong** | Several correspondences that are distinctive and coherent in both contexts, usually with recurrence or the writer's own use of the source. For an echo, the distinctiveness is usually shared language. For a pattern or principle, it can be a specific shape (elements in the same order or relation) recurring in contexts not composed together, with no shared wording at all. | Inferred, strong |
+| **Plausible** | Real support on more than one test, while a fair alternative remains, such as language shared only because it is a natural way to describe such an event. | Inferred, plausible |
+| **Faint** | One distinctive resemblance — a rare word, a specific detail — with nothing else in support. Possible, not shown. | Inferred, faint |
+| **Not shown** | Only features common enough to occur anyway, which identify no link in particular. Unsupported, with the scope. If the link needs an outside key, it is Imported instead. | Unsupported or Imported |
 
 A link that overturns a plain statement is Contrary to that statement, whatever
 its grade would otherwise be.

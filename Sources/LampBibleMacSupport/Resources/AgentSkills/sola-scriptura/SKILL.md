@@ -149,8 +149,10 @@ Use these verdicts, not a count of agreeing translations:
 | Contrary | The cited or governing text tells against it | Quote and explain the conflict, not the doctrine |
 
 An echo, pattern or type that no text draws takes Inferred with its grade (strong,
-plausible or faint), or Unsupported when not shown. A grade stated above what the
-link supports is the finding, never the use of a pattern as such.
+plausible or faint), or Unsupported when not shown. It takes Imported when it needs
+a key from outside scripture. It takes Contrary when it would overturn a plain
+statement, whatever its grade. A grade stated above what the link supports is the
+finding, never the use of a pattern as such.
 
 For a difficult entailment or cumulative claim, read
 [references/verdicts.md](references/verdicts.md). Quoted premises alone do not make
