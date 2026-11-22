@@ -189,7 +189,11 @@ struct StudyInspectorView: View {
                 .disabled(!tabSupportsScrollLink)
                 .help(scrollLinkHelp)
             }
-            .padding(StudyPaneMetrics.contentInset)
+            .padding(.horizontal, StudyPaneMetrics.contentInset)
+            // The reader chat takes this column in its place, and its setup
+            // row is a pane header's height; the tabs take the same, so
+            // switching between the two does not move the line under them.
+            .frame(height: LampMetrics.paneHeaderHeight)
 
             Divider()
 
