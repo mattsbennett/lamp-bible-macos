@@ -100,6 +100,45 @@ struct DevotionalProseParserTests {
         #expect(blocks == [.quote(["She gave what she had,\nand it was everything."])])
     }
 
+    /// An outline's list items usually wrap, and the rest of an item
+    /// belongs to it.
+    ///
+    /// Read as prose, a wrapped line ended the list, so the next marker
+    /// opened a new one: a three-item list came back as three one-item
+    /// lists with the wrapped halves stranded as paragraphs between them.
+    @Test func awrappedListItemIsStillOneItem() {
+        let blocks = DevotionalProseParser.parse(
+            """
+            1. **Changed wording:** substitution, addition,
+               internal omission, rearrangement.
+            2. **Changed application:** a redirection of
+               speaker or addressee.
+            """
+        )
+
+        #expect(blocks == [.numberedList([
+            "**Changed wording:** substitution, addition, internal omission, rearrangement.",
+            "**Changed application:** a redirection of speaker or addressee.",
+        ])])
+    }
+
+    /// The same for bullets, and a blank line still ends the list.
+    @Test func ablankLineStillEndsAWrappedList() {
+        let blocks = DevotionalProseParser.parse(
+            """
+            - Set the readings side by side
+              and read them back to back.
+
+            Then the prose carries on.
+            """
+        )
+
+        #expect(blocks == [
+            .bulletList(["Set the readings side by side and read them back to back."]),
+            .paragraph("Then the prose carries on."),
+        ])
+    }
+
     @Test func wrappedLinesStayInOneParagraph() {
         // A soft-wrapped source line is not a new paragraph, and joining with a
         // space is what stops "watching,and" appearing in the preview.

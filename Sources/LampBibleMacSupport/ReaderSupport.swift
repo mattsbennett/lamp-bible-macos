@@ -1451,6 +1451,30 @@ public enum DevotionalProseParser {
                 continue
             }
 
+            // A plain line under an open list item is the rest of that item.
+            //
+            // A blank line flushes the lists above, so a list is only still
+            // open here if the line before this one was part of it — which is
+            // the lazy continuation CommonMark and the editor both read. Taken
+            // as a paragraph instead, a list whose items wrap was cut into one
+            // list per item with the wrapped halves stranded as prose between
+            // them: a three-item outline read back as three lists and three
+            // paragraphs.
+            if !bulletItems.isEmpty {
+                let last = bulletItems.removeLast()
+                bulletItems.append(DevotionalListLine(
+                    depth: last.depth, text: last.text + joiner + line
+                ))
+                continue
+            }
+            if !numberedItems.isEmpty {
+                let last = numberedItems.removeLast()
+                numberedItems.append(DevotionalListLine(
+                    depth: last.depth, text: last.text + joiner + line
+                ))
+                continue
+            }
+
             flushAll(except: .paragraph)
             paragraphLines.append(line)
         }
