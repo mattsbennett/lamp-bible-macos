@@ -465,12 +465,12 @@ final class WritingReviewSession: ObservableObject {
         remember(text)
         let known = texts
         // Reaching back over a line's own block syntax where the range
-        // begins just after it, and outward over the emphasis
-        // delimiters against its edges: a change to that syntax alone is drawn
+        // begins just after it. Not outward over emphasis delimiters:
+        // see the note on the other call site. a change to that syntax alone is drawn
         // as a point after it while the mark sits on it, so a clear
         // from that point touches nothing and the writer watches the
         // mark stay (core's `takingInSyntax`).
-        let asked = LampWritingReviewMarkdown.takingInSyntaxAndDelimiters(range, of: text)
+        let asked = LampWritingReviewMarkdown.takingInSyntax(range, of: text)
         change { $0.clearing(asked, in: text, carryingFrom: known) }
     }
 
@@ -521,11 +521,32 @@ final class WritingReviewSession: ObservableObject {
     /// list can say, holding only what can be put back.
     func restoring(_ range: NSRange, in text: String? = nil) -> LampWritingReview.RestoreOutcome {
         let text = text ?? self.text
-        // The same reaches as a clear's: a line's block syntax, and the
-        // emphasis delimiters against the range's edges — what the
-        // assistant changed to make `red dog` bold is the two runs of
-        // `**`, which a selection of the words does not cover.
-        let asked = LampWritingReviewMarkdown.takingInSyntaxAndDelimiters(range, of: text)
+        // The same reach back over a line's block syntax as a clear's.
+        //
+        // Not outward over emphasis delimiters. What the assistant
+        // changed to make `red dog` bold is the two runs of `**`, so a
+        // selection of the words does not cover them and the marks on
+        // them stay — a sliver a second clear or a caret clear
+        // removes. That is the small cost.
+        //
+        // Reaching for them cost more. Six rounds of the iOS session's
+        // codex found six ways a hand-written pairing takes in a
+        // delimiter belonging to a word the writer never selected,
+        // which partly clears that word's mark and leaves its change
+        // unrestorable: a run that merely matches, a literal run in a
+        // code span, an escaped run, a caret, a list bullet, and a
+        // nested emphasis. Each fix was one case narrower than the
+        // problem.
+        //
+        // The rule behind all of them is CommonMark's delimiter-run
+        // algorithm — flanking runs and the emphasis-processing pass —
+        // which is what the editor page itself follows, through
+        // markdown-it, and so what decides what the writer sees as
+        // bold. Matching it means parsing with cmark, or porting that
+        // pass faithfully and testing against the spec's own emphasis
+        // examples. Until one of those is done, this reaches only for
+        // block syntax. Do not add emphasis back by hand.
+        let asked = LampWritingReviewMarkdown.takingInSyntax(range, of: text)
         return live(in: text)?.restoring(asked, in: text) ?? .nothingTouched
     }
 
