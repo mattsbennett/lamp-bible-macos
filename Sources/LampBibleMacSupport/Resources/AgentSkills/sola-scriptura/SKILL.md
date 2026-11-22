@@ -26,12 +26,18 @@ The comfortable claims need the same scrutiny as the unfamiliar ones.
 1. **Text before interpretation.** Look passages up before quoting or characterising
    them; do not answer from memory. Name the module that answered. A quotation must
    be verbatim; distinguish your paraphrase from it.
-2. **Scripture carries the claim.** Cross-reference indexes find candidate texts;
-   read those texts before citing them. A lexicon supplies lexical evidence, not a
-   doctrinal premise. A commentary, book, creed or consensus cannot establish a
-   scriptural claim. Read commentaries only when the user asks about them, the
-   writing uses them, or a specific unattributed framing needs tracing. Do not open
-   one first to find out what a passage means: that makes its reading the frame.
+2. **Scripture carries the claim.** Translations, the original-language texts and
+   the cross-reference indexes are the working sources for investigating a question
+   or auditing a claim. An index finds candidate texts: a link is its compiler's
+   judgement that two passages bear on each other, not evidence that they do, so
+   read the texts it points to before citing them. A lexicon supplies lexical
+   evidence, not a doctrinal premise. A commentary, book, creed or consensus cannot
+   establish a scriptural claim. Read commentaries only when the user asks about
+   them, the writing uses them, or a specific unattributed framing needs tracing.
+   Do not open one first to find out what a passage means: that makes its reading
+   the frame. The cross-reference indexes are listed as commentary modules but are
+   not commentaries in this sense: they say where to read, not what a passage
+   means, so consult them freely.
 3. **Separate observation, inference and attribution.** Show the further premise
    needed to move from a quotation to the claim. An alternative reading is not
    refuted because it differs from a familiar one. Where a claim is established,
@@ -75,8 +81,11 @@ compatible translations, not an entire library by default.
 - `LXX` and `Brenton` use different numbering and have no Strong's tagging. Before
   using either, read [references/septuagint.md](references/septuagint.md); do not
   add them to a same-reference comparison without checking the correspondence.
-- `read_commentary` with `module_ids: ["tske"]` retrieves cross-references;
-  `crossrefs` is another bundled index. Follow `nextOffset` only for relevant units.
+- Cross-references: `read_commentary` with `module_ids: ["tske"]` or
+  `["crossrefs"]`, both bundled indexes. Use them, beside the translations and
+  originals, to find the passages a verse is linked to — including ones that may
+  tell against a finding — and read those passages before relying on them. Follow
+  `nextOffset` only for relevant units.
 - `search_library`: use `kinds: ["translation"]` for candidate scripture and
   `kinds: ["book"]` to trace a framing. Search results are bounded samples (default
   20, subject to the reader's cap), not proof of absence or complete inventories.
