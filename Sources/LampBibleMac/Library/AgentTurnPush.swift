@@ -14,11 +14,12 @@ import Security
 /// writes the record. Its shape is agreed with the phone (iOS ios-6b):
 ///
 /// - type `AgentTurnEnded`, default zone, named `turn.<deviceID>.<chatID>`
-///   and saved whole, so a chat's next turn overwrites its last;
+///   and saved whole, so a chat's next turn overwrites its last; the phone
+///   reads the device and chat from that name when a push leaves the
+///   fields out, so the name's form is part of the agreement;
 /// - `deviceID` (the pairing's, queryable), `chatID`, `kind` ("reader" or
-///   "writing"), `writingID` (writing chats), `turnID`, `collapseID`
-///   ("lamp.agent-turn." and the chat id, as the phone's own notification
-///   of the turn is identified, so the two collapse into one);
+///   "writing"), `writingID` (writing chats), `turnID`, which the phone
+///   matches against a turn end it already heard;
 /// - `title` and `subtitle` as the phone shows the chat, subtitle always
 ///   written, empty or not;
 /// - `outcome` ("replied", "failed", "stopped"), `summary` (the body with
@@ -128,9 +129,6 @@ enum AgentTurnPush {
             record["writingID"] = id
         }
         record["turnID"] = ended.turnID.uuidString
-        // The identifier the phone's own notification of this turn shows
-        // under, so where both arrive they are one.
-        record["collapseID"] = "lamp.agent-turn.\(chatID)"
         record["title"] = ended.title
         record["subtitle"] = ended.subtitle
         record["outcome"] = outcomeName(ended.outcome)
