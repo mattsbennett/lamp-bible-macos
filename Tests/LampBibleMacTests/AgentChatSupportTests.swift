@@ -903,9 +903,12 @@ struct AgentSpawnedProcessTests {
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         // The parent exits at once; its child ignores SIGTERM and holds the
         // output open, so the output never ends on its own.
-        process.arguments = ["-c", #"(trap "" TERM; sleep 30) & exit 0"#]
+        process.arguments = ["-c", #"(trap "" TERM; echo ready; sleep 30) & exit 0"#]
         process.standardOutput = output
         try process.run()
+        // Only once the child is ignoring the ask: stopped any sooner, on a
+        // busy machine, it dies before the trap is set.
+        #expect(output.fileHandleForReading.readData(ofLength: 6) == Data("ready\n".utf8))
         process.waitUntilExit()
         #expect(!process.isRunning)
         process.terminate()
