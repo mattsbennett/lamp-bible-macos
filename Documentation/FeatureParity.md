@@ -69,6 +69,36 @@ restore is ever dropped from the classification. That is a true
 description of what a save proves; it does not ask either app to keep
 anything, and neither does.
 
+### A clear reaches block syntax, never emphasis
+
+Where the assistant's change *is* the emphasis — `red dog` becoming
+`**red dog**` — what it changed is the two runs of `**`, and the marks
+sit on them. A clear of the words does not cover the runs, so marks on
+them stay behind as a sliver. A second clear, or a caret clear on the
+sliver, removes it. That tidy-up click is the accepted cost, decided by
+the owner on 2026-11-21.
+
+Reaching for them cost more. Six rounds of the iOS session's codex
+found six ways a hand-written pairing takes in a delimiter belonging to
+a word the writer never selected, which partly clears that word's mark
+and leaves its change unrestorable: a run that merely matches rather
+than pairs, a literal run inside a code span, an escaped run, a caret,
+a list bullet pairing with a word's opener, and a nested emphasis.
+Still ahead were flanking runs, the rule of three, `_` inside words,
+links, autolinks, HTML, and `~~` against `~`.
+
+The rule behind all of them is CommonMark's delimiter-run algorithm —
+flanking runs and the emphasis-processing pass with its delimiter
+stack — which is what the editor page follows through markdown-it, and
+so what decides what the writer sees as bold. Matching it means a
+cmark-backed parser in core, or a faithful port tested against the
+spec's own emphasis examples. Both were considered and declined: the
+sliver is cheaper than either.
+
+**So a clear reaches a line's block syntax and stops.** Do not add
+emphasis back by hand; a seventh attempt would be the seventh case
+narrower than the problem.
+
 ## Platform-specific substitutions
 
 - The iOS camera/image picker is a native Mac file picker; image attachments and full-size viewing remain available.
