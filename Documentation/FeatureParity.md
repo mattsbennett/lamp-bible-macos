@@ -52,7 +52,9 @@ record — paste the restore's words after an unrelated redo, and the
 save records a restore that never happened. The conclusion was that no
 signal built from the page's text and history depth can work: text
 cannot tell a Redo from typing or pasting the same words, and every
-such signal races with a settle. A sound version would have the page
+such signal races with a settle; and the same writing can be open in
+two pages at once, each with its own history, so even a correct signal
+from one page does not say what another can still redo. A sound version would have the page
 track the restore through its own history, and even that cannot mark a
 restore that only deletes — the dangerous case to begin with.
 
