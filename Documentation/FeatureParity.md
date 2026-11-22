@@ -89,6 +89,29 @@ against the code rather than by assertion:
   (569 tests), which removed `takingInDelimiters`,
   `takingInSyntaxAndDelimiters` and their helpers.
 
+**The parser, as adopted (iOS a56bf48 on core 573a593):** the phone's
+`WritingDocumentText` reads code blocks and tables through
+`LampMarkdownModel`, and its own scanners for them — `isDelimiterRow`,
+the alignment-row match, the table rescan — are gone. The Mac reaches
+the same model through `drawable`, the block readers and the clear's
+reach, and its editor page is the phone's built bundle, so neither app
+can drift from the other on what the page does.
+
+`NoteMarkdownRenderer` on the phone is **deliberately not on the
+model**, and should stay that way: its inline reading is already
+Foundation's `AttributedString(markdown:)`, which is cmark, and its
+blocks are read line by line on purpose, to match the notes editor's
+line-break setting. CommonMark would join lines a note's writer typed
+apart.
+
+Equally deliberate in core: `keepingEscapes` stays a single regex,
+being exactly the spec's rule; and `movingMarksOutOfLinks` stays
+by hand after a rewrite onto the model was found — by running both
+against the same inputs — to drag a marker out of a link's *label* and
+to miss an autolink's address, where for `<url>` the address is the
+content rather than what follows it. Both failures are tests, so a
+future rewrite has a net the regexes already pass.
+
 The phone and iPad in use run iOS a2dec6e on core 0605966; for review
 marks that behaves as 13dcafd does, so no reinstall was needed.
 
