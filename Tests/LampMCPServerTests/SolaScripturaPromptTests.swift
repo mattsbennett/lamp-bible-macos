@@ -115,13 +115,22 @@ struct SolaScripturaStandardTests {
     /// recurrence counts for it, Faint needs one distinctive resemblance,
     /// and only an undrawn link yields to a statement.
     @Test func theGradesAdmitPatternsAndKeepTheirBoundaries() throws {
+        // A row is one line of the table, so each criterion is held to its grade.
+        let rows = try LampBundledSkills.read(name: "sola-scriptura", file: "references/echoes-and-patterns.md")
+            .split(separator: "\n").map(String.init)
+        func row(_ grade: String) throws -> String {
+            try #require(rows.first { $0.hasPrefix("| **\(grade)** |") })
+        }
+        let strong = try row("Strong")
+        #expect(strong.contains("with no shared wording at all"))
+        #expect(strong.hasSuffix("| Inferred, strong |"))
+        #expect(try row("Faint").contains("One distinctive resemblance"))
+        #expect(try row("Faint").hasSuffix("| Inferred, faint |"))
+        #expect(try row("Not shown").contains("Only features common enough to occur anyway"))
+        #expect(try row("Drawn").hasSuffix("| Stated |"))
         let echoes = try instructions("references/echoes-and-patterns.md")
-        #expect(echoes.contains("| Drawn | A writer of scripture makes the link."))
-        #expect(echoes.contains("recurring in contexts not composed together, with no shared wording at all"))
         #expect(echoes.contains("recurrence across many contexts is the evidence, so many matches count for it"))
         #expect(echoes.contains("A shape so general it would fit almost any account is a commonplace, not a pattern"))
-        #expect(echoes.contains("| Faint | One distinctive resemblance"))
-        #expect(echoes.contains("| Not shown | Only features common enough to occur anyway"))
         #expect(echoes.contains("An undrawn link that would overturn a plain statement is Contrary"))
         #expect(echoes.contains("A drawn link is itself scripture speaking."))
         #expect(echoes.contains("A detail some text states is Stated, cited to that text."))

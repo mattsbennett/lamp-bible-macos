@@ -24,8 +24,17 @@ transfer to another passage unchecked.
    the evil he had said he would do. The condition must come from scripture. A
    condition supplied to rescue an interpretation is an imported premise.
 3. **Prophecy follows a chronological order, according to the divine plan**
-   (Genesis 18:17; Psalm 25:14; Daniel 9:1–2; Revelation 1:1–2). Daniel
-   understood the number of years from what had been written. An order of events
+   (Genesis 18:17; Psalm 25:14; Daniel 9:1–2; Revelation 1:1–2).
+   - God does not leave his people uninformed of the work he is doing in their
+     generation. In Genesis 18:17 he asks whether he should hide from Abraham
+     what he is about to do.
+   - He guides those who fear him so that they may take part in his purpose
+     (Psalm 25:14).
+   - So each generation can learn where it stands in the order. In the first year
+     of Darius, Daniel understood from the books the number of years the word to
+     Jeremiah gave for Jerusalem's desolations.
+
+   An order of events
    is shown from the text's own markers of sequence and time. A timeline assembled
    across several books is a reconstruction: show each step, as for any
    harmonisation (pattern 5 in `failure-patterns.md`).
