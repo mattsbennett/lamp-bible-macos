@@ -817,7 +817,9 @@ final class AgentRemoteHost: ObservableObject {
         // or the last would read the writing from before that save.
         collecting?.cancel()
         await collecting?.value
-        if case .writing(let id) = open.chat, let libraryModel {
+        // Checked before the turn is taken: taking it is once only, and a
+        // window watching the writing files the change under it.
+        if case .writing(let id) = open.chat, let libraryModel, !WritingChatTurns.isWatched(id) {
             // Once more as it ends: a run's last write lands just before it
             // exits, after the last poll.
             _ = try? await WritingChatTurns.collect(
@@ -981,6 +983,7 @@ final class AgentRemoteHost: ObservableObject {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(400))
                 guard !Task.isCancelled, let libraryModel else { return }
+                guard !WritingChatTurns.isWatched(id) else { continue }
                 _ = try? await WritingChatTurns.collect(
                     writingID: id, turnID: model.takeTurnForAttribution() ?? model.currentTurn, libraryModel: libraryModel
                 )

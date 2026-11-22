@@ -803,14 +803,27 @@ public struct AgentChatUsageLimit: Equatable, Sendable {
 /// a failure is written into the chat's transcript, which goes to every Mac
 /// and phone the library syncs with.
 public enum AgentChatSecrets {
+    /// Names whose value is a credential whatever it looks like: `api_key`,
+    /// `client_secret`, `password`, and environment names such as
+    /// `GEMINI_API_KEY` or `GITHUB_TOKEN`.
+    private static let credentialName = #"(?:[A-Za-z0-9]+[_-])*(?:api[_-]?key|secret|password|passwd|access[_-]?token|refresh[_-]?token|auth[_-]?token|bearer[_-]?token)|[A-Z0-9]+(?:_[A-Z0-9]+)*_(?:KEY|TOKEN|SECRET|PASSWORD)"#
+    /// A value: quoted whole, or up to the next space or delimiter.
+    private static let value = #"("[^"]*"|'[^']*'|[^\s"',;]+)"#
+
     private static let patterns: [(NSRegularExpression, String)] = [
         // `Authorization: Bearer …`, and a bare bearer token.
         (try! NSRegularExpression(pattern: #"(?i)\b(bearer)\s+[A-Za-z0-9._~+/=-]{8,}"#), "$1 [redacted]"),
         // Anthropic and OpenAI keys, and other `sk-` keys.
         (try! NSRegularExpression(pattern: #"\bsk-[A-Za-z0-9_-]{12,}"#), "sk-[redacted]"),
-        // `api_key=…`, `token: …`, `"secret": "…"`, keeping the name.
+        // A credential's name and its value, keeping the name.
         (try! NSRegularExpression(
-            pattern: #"(?i)\b((?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password)["']?\s*[:=]\s*["']?)[^\s"',;]{6,}"#
+            pattern: "(?<![A-Za-z0-9_])(\"?(?:" + credentialName + ")\"?\\s*[:=]\\s*)" + value,
+            options: [.caseInsensitive]
+        ), "$1[redacted]"),
+        // A bare `token` only where the value looks like one, so "Unexpected
+        // token: undefined" keeps its word.
+        (try! NSRegularExpression(
+            pattern: #"(?i)(?<![A-Za-z0-9_])("?token"?\s*[:=]\s*)("[^"]{16,}"|[A-Za-z0-9._~+/=-]*[0-9][A-Za-z0-9._~+/=-]*)"#
         ), "$1[redacted]"),
     ]
 
@@ -1426,20 +1439,56 @@ public enum AgentACPRun {
         return ("session/new", params)
     }
 
-    /// The session's model and thinking level, as Antigravity names its
-    /// config options. A cold resume reports the default model, so a choice
-    /// is set again on every turn rather than once.
+    /// What a turn sets on its session before the prompt, in order. First
+    /// the `default` mode — "Ask before edits and commands, per your
+    /// permission settings" — whatever the reader's own `agentMode` says,
+    /// because since 1.5.7 an unset one means `auto`, which approves edits
+    /// and safe commands without asking Lamp. Then the model and thinking
+    /// level, as Antigravity names its config options. Set on every turn: a
+    /// cold resume reports the defaults.
     public static func configuration(
         sessionID: String, model: String?, effort: String?
-    ) -> [[String: Any]] {
-        var requests: [[String: Any]] = []
+    ) -> [(method: String, params: [String: Any])] {
+        var requests: [(method: String, params: [String: Any])] = [
+            ("session/set_mode", ["sessionId": sessionID, "modeId": "default"]),
+        ]
         if let model = AgentChatModelChoice.canonical(model) {
-            requests.append(["sessionId": sessionID, "configId": "model", "value": model])
+            requests.append(("session/set_config_option", ["sessionId": sessionID, "configId": "model", "value": model]))
         }
         if let effort = AgentChatEffortChoice.canonical(effort) {
-            requests.append(["sessionId": sessionID, "configId": "thought_level", "value": effort])
+            requests.append(("session/set_config_option", ["sessionId": sessionID, "configId": "thought_level", "value": effort]))
         }
         return requests
+    }
+
+    /// Why a reader chat can't be held read-only with this reader's
+    /// Antigravity, or nil when it can.
+    ///
+    /// Lamp keeps a reader chat read-only by answering the agent's
+    /// permission requests. An action the reader's own settings already
+    /// allow never asks, so Lamp never sees it: Google's ACP guide says
+    /// "Actions the rules already allow or deny don't prompt." The settings
+    /// file and its keys are the documented ones
+    /// (`~/.gemini/antigravity-cli/settings.json`: `toolPermission`,
+    /// `permissions.allow`). A rule that lets anything but reading go
+    /// unasked means a reader chat could change files, so it is refused.
+    public static func readerRefusal(settings data: Data?) -> String? {
+        guard let data, let settings = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        let reason = "Your Antigravity settings (~/.gemini/antigravity-cli/settings.json) let it %@ without asking, so Lamp can’t keep a reader chat read-only with it. Choose another provider for reader chats, or remove that setting."
+        if let permission = settings["toolPermission"] as? String,
+           ["always-proceed", "proceed-in-sandbox"].contains(permission) {
+            return String(format: reason, "act")
+        }
+        let allowed = ((settings["permissions"] as? [String: Any])?["allow"] as? [String]) ?? []
+        let readOnly = ["read", "view", "list", "grep", "search", "find", "mcp(lamp"]
+        if allowed.contains(where: { rule in
+            let lowered = rule.lowercased()
+            return !readOnly.contains { lowered.hasPrefix($0) }
+        }) {
+            return String(format: reason, "run commands or change files")
+        }
+        return nil
     }
 
     public static func prompt(sessionID: String, text: String) -> [String: Any] {
@@ -1484,7 +1533,7 @@ public enum AgentACPRun {
     ///   outside — is turned down. Work that outlives a turn would go on
     ///   after Lamp had stopped listening.
     public static func decide(
-        permission params: [String: Any], readOnly: Bool, workspace: URL, home: URL
+        permission params: [String: Any], readOnly: Bool, workspace: URL, home: URL, sessionID: String?
     ) -> String? {
         guard let options = params["options"] as? [[String: Any]] else { return nil }
         func option(_ kind: String) -> String? {
@@ -1496,12 +1545,13 @@ public enum AgentACPRun {
         let name = call["name"] as? String ?? ""
         let kind = call["kind"] as? String ?? ""
         let paths = (call["locations"] as? [[String: Any]] ?? []).compactMap { $0["path"] as? String }
-        let agentFolder = home.appendingPathComponent(".gemini/antigravity-cli/brain", isDirectory: true)
-        func inside(_ root: URL) -> Bool {
-            let base = root.standardizedFileURL.resolvingSymlinksInPath().path + "/"
-            return !paths.isEmpty && paths.allSatisfy {
-                URL(fileURLWithPath: $0).standardizedFileURL.resolvingSymlinksInPath().path.hasPrefix(base)
-            }
+        // Only this session's own folder: never another session's.
+        let agentFolder = sessionID.map {
+            home.appendingPathComponent(".gemini/antigravity-cli/brain/\($0)", isDirectory: true)
+        }
+        func inside(_ root: URL?) -> Bool {
+            guard let root else { return false }
+            return !paths.isEmpty && paths.allSatisfy { confined($0, to: root) }
         }
         let allowed: Bool
         if name.hasPrefix("mcp_lamp_") {
@@ -1514,5 +1564,34 @@ public enum AgentACPRun {
             allowed = false
         }
         return allowed ? option("allow_once") : reject
+    }
+
+    /// Whether `path`, as the filesystem will treat it, stays within
+    /// `root`. Absolute paths only, and no `.` or `..` parts, since a
+    /// symlinked folder followed by `..` means something other than the
+    /// text says. The deepest part of the path that exists is resolved with
+    /// `realpath`, without following a final symlink first, so a link out of
+    /// the folder, or a file to be created inside one, is judged by where it
+    /// lands. A dangling link is refused.
+    static func confined(_ path: String, to root: URL) -> Bool {
+        guard let resolvedPath = resolved(path), let resolvedRoot = resolved(root.path) else { return false }
+        return resolvedPath == resolvedRoot || resolvedPath.hasPrefix(resolvedRoot + "/")
+    }
+
+    private static func resolved(_ path: String) -> String? {
+        guard path.hasPrefix("/") else { return nil }
+        let parts = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        guard !parts.contains(".."), !parts.contains(".") else { return nil }
+        var existing = parts
+        var missing: [String] = []
+        while !existing.isEmpty {
+            var info = stat()
+            if lstat("/" + existing.joined(separator: "/"), &info) == 0 { break }
+            missing.insert(existing.removeLast(), at: 0)
+        }
+        guard let real = realpath("/" + existing.joined(separator: "/"), nil) else { return nil }
+        defer { free(real) }
+        let base = String(cString: real)
+        return missing.isEmpty ? base : (base == "/" ? "" : base) + "/" + missing.joined(separator: "/")
     }
 }

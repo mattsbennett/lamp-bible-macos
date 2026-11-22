@@ -46,7 +46,9 @@ final class LampAppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor [weak self] in
                 // The stop gives each CLI a few seconds to save its session
                 // before it and what it started are killed.
-                let stopped = await KeptAgentChats.stopEveryReply(within: AgentCLIProcessRunner.stopGraceSeconds + 2)
+                let stopped = await KeptAgentChats.stopEveryReply(
+                    within: AgentCLIProcessRunner.acpCancelGraceSeconds + AgentCLIProcessRunner.stopGraceSeconds + 2
+                )
                 guard let self else { return }
                 // What each stopped writing turn wrote is saved and marked
                 // before the flush counts what is left. A writing a window
@@ -73,10 +75,15 @@ final class LampAppDelegate: NSObject, NSApplicationDelegate {
                         )
                     }
                 }
+                // Whatever is still running — a run the stop's deadline
+                // missed, a usage or sign-in check — goes now.
+                AgentHelperProcesses.terminateAll()
                 if self.flushPendingWrites(then: sender) { self.reply(to: sender) }
             }
             return .terminateLater
         }
+        // A usage or sign-in check can be running with no chat: it goes too.
+        AgentHelperProcesses.terminateAll()
         return flushPendingWrites(then: sender) ? .terminateNow : .terminateLater
     }
 

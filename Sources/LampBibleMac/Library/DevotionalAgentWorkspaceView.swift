@@ -186,9 +186,11 @@ enum AIProviderCommandRunner {
         process.standardError = FileHandle.nullDevice
         process.environment = AgentProcessEnvironment.cleaned(ProcessInfo.processInfo.environment)
         guard (try? process.run()) != nil else { return .unavailable("Could not check") }
+        AgentHelperProcesses.track(process)
         defer {
             try? input.fileHandleForWriting.close()
             if process.isRunning { process.terminate() }
+            AgentHelperProcesses.untrack(process)
         }
         DispatchQueue.global().asyncAfter(deadline: .now() + 30) {
             if process.isRunning { process.terminate() }

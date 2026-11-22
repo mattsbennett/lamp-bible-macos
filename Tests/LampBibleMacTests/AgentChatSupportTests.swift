@@ -592,8 +592,10 @@ struct AgentACPTests {
         #expect(again.params["sessionId"] as? String == "abc")
         #expect(again.params["additionalDirectories"] == nil)
         let configuration = AgentACPRun.configuration(sessionID: "abc", model: "gemini-3.8-flash", effort: " ")
-        #expect(configuration.count == 1)
-        #expect(configuration.first?["configId"] as? String == "model")
+        // The asking mode first, whatever the reader's own agentMode says.
+        #expect(configuration.map(\.method) == ["session/set_mode", "session/set_config_option"])
+        #expect(configuration[0].params["modeId"] as? String == "default")
+        #expect(configuration[1].params["configId"] as? String == "model")
     }
 
     @Test func aWritingsLampServerComesFromItsWorkspace() throws {
@@ -618,7 +620,9 @@ struct AgentACPTests {
 
     @Test func onlyLampsToolsAndOwnReadsAreAllowedInAReaderChat() {
         func decide(_ call: [String: Any], readOnly: Bool = true) -> String? {
-            AgentACPRun.decide(permission: request(call), readOnly: readOnly, workspace: workspace, home: home)
+            AgentACPRun.decide(
+                permission: request(call), readOnly: readOnly, workspace: workspace, home: home, sessionID: "s"
+            )
         }
         #expect(decide(["toolCallId": "c", "name": "mcp_lamp_read_passage", "kind": "other"]) == "allow")
         // Its own long result, saved in its folder and read back.
@@ -626,6 +630,9 @@ struct AgentACPTests {
                         "locations": [["path": "/Users/someone/.gemini/antigravity-cli/brain/s/.system_generated/steps/2/output.txt"]]]) == "allow")
         #expect(decide(["toolCallId": "c", "name": "view_file", "kind": "read",
                         "locations": [["path": "/Users/someone/.ssh/id_ed25519"]]]) == "deny")
+        // Another session's folder is not this one's.
+        #expect(decide(["toolCallId": "c", "name": "view_file", "kind": "read",
+                        "locations": [["path": "/Users/someone/.gemini/antigravity-cli/brain/other/notes.md"]]]) == "deny")
         #expect(decide(["toolCallId": "c", "name": "run_command", "kind": "execute"]) == "deny")
         #expect(decide(["toolCallId": "c", "name": "write_file", "kind": "edit",
                         "locations": [["path": "/tmp/lamp-acp-workspace/draft.md"]]]) == "deny")
@@ -637,5 +644,56 @@ struct AgentACPTests {
         #expect(decide(["toolCallId": "c", "name": "write_file", "kind": "edit",
                         "locations": [["path": "/tmp/lamp-acp-workspace/../elsewhere.md"]]], readOnly: false) == "deny")
         #expect(decide(["toolCallId": "c", "name": "run_command", "kind": "execute"], readOnly: false) == "deny")
+    }
+}
+
+struct AgentACPContainmentTests {
+    @Test func aFileMadeThroughALinkOutOfTheWorkspaceIsRefused() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-confine-\(UUID().uuidString)", isDirectory: true)
+        let workspace = root.appendingPathComponent("workspace", isDirectory: true)
+        let outside = root.appendingPathComponent("outside", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createSymbolicLink(
+            at: workspace.appendingPathComponent("link"), withDestinationURL: outside
+        )
+        try FileManager.default.createSymbolicLink(
+            at: workspace.appendingPathComponent("dangling"),
+            withDestinationURL: root.appendingPathComponent("nowhere/file.md")
+        )
+        let path = workspace.path
+        #expect(AgentACPRun.confined(path + "/draft.md", to: workspace))
+        #expect(AgentACPRun.confined(path + "/new/folder/note.md", to: workspace))
+        // Not there yet, and through a link that leads out.
+        #expect(!AgentACPRun.confined(path + "/link/new.md", to: workspace))
+        #expect(!AgentACPRun.confined(path + "/link/../escape.md", to: workspace))
+        #expect(!AgentACPRun.confined(path + "/../outside/x.md", to: workspace))
+        #expect(!AgentACPRun.confined(path + "/dangling", to: workspace))
+        #expect(!AgentACPRun.confined("relative/draft.md", to: workspace))
+    }
+
+    @Test func aReaderChatIsRefusedWhereTheReadersOwnSettingsActUnasked() {
+        func refusal(_ json: String) -> String? { AgentACPRun.readerRefusal(settings: Data(json.utf8)) }
+        #expect(refusal(#"{"model":"gemini-4-neon"}"#) == nil)
+        #expect(refusal(#"{"permissions":{"allow":["read_file(src/)","view_file(*)"]}}"#) == nil)
+        #expect(refusal(#"{"toolPermission":"always-proceed"}"#) != nil)
+        #expect(refusal(#"{"permissions":{"allow":["command(git)"]}}"#) != nil)
+        #expect(refusal(#"{"permissions":{"allow":["write_file(src/)"]}}"#) != nil)
+        #expect(AgentACPRun.readerRefusal(settings: nil) == nil)
+    }
+
+    @Test func credentialsAreRedactedAndDiagnosticsKept() {
+        let key = "AIza" + String(repeating: "x", count: 20)
+        for leaked in ["GEMINI_API_KEY=\(key)", "client_secret=\(key)", #"password="first part second part""#] {
+            let text = AgentChatSecrets.redacted("failed: \(leaked) end")
+            #expect(text.contains("[redacted]"), "\(leaked)")
+            #expect(!text.contains(key))
+            #expect(!text.contains("second part"))
+        }
+        #expect(AgentChatSecrets.redacted("Unexpected token: undefined") == "Unexpected token: undefined")
+        #expect(AgentChatSecrets.redacted("Your token expired.") == "Your token expired.")
+        #expect(AgentChatSecrets.redacted("token: 9f8e7d6c5b4a3f2e1d0c") == "token: [redacted]")
     }
 }

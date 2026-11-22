@@ -302,8 +302,10 @@ def main() -> int:
         tools = result.best().tool_count() if result.best() else None
         missing = result.unanswered()
         known = baseline.get(result.client)
-        status = "ok" if tools else "FAIL"
-        failed |= not tools
+        # A request left unanswered is the failure that hides, even when the
+        # client fell back and got the tools in the end.
+        status = "ok" if tools and not missing else "FAIL"
+        failed |= not tools or bool(missing)
         print(f"- {result.client} {result.version}: {status}")
         print(f"    opened with {' → '.join(opening.get('methods') or ['nothing'])}, "
               f"offering MCP {', '.join(opening.get('protocolVersions') or ['?'])}")
