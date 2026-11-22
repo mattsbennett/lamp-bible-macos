@@ -68,7 +68,7 @@ enum AgentTurnNotifications {
     nonisolated static let categoryIdentifier = "lamp.agent-turn"
 
     /// How a turn ended, as the notification says it.
-    enum Outcome: Equatable {
+    enum Outcome: Equatable, Sendable {
         case replied(String)
         /// Lamp stopped it: a usage limit, or no word from the agent.
         case stoppedByLamp(String)

@@ -34,7 +34,7 @@ enum AgentTurnPush {
     nonisolated static let recordType = "AgentTurnEnded"
 
     /// What one ended turn says, worked out by the host that ran it.
-    struct Ended: Equatable {
+    struct Ended: Equatable, Sendable {
         var deviceID: String
         var chat: LampAgentRemoteHosting.Chat
         var turnID: UUID
@@ -82,8 +82,7 @@ enum AgentTurnPush {
         pairedDevices: [String]
     ) {
         guard isEntitled, AIFeatures.isEnabledNow, !KeptAgentChats.isQuitting else { return }
-        let record = record(for: ended, showsReply: AgentTurnNotifications.showsReplyNow)
-        let name = record.recordID.recordName
+        let name = recordName(for: ended)
         if let latest = latestEnd[name], latest >= ended.endedAt { return }
         latestEnd[name] = ended.endedAt
         let database = CKContainer(identifier: containerIdentifier).privateCloudDatabase
@@ -92,10 +91,14 @@ enum AgentTurnPush {
         let previous = tail
         tail = Task.detached(priority: .utility) {
             await previous?.value
-            let allowed = await MainActor.run {
-                stillAllowed() && AIFeatures.isEnabledNow && !KeptAgentChats.isQuitting
+            // Made now, not when asked for: the setting for the reply's
+            // words is read as it stands when the record is written, so one
+            // turned off while this waited is honoured.
+            let record: CKRecord? = await MainActor.run {
+                guard stillAllowed(), AIFeatures.isEnabledNow, !KeptAgentChats.isQuitting else { return nil }
+                return Self.record(for: ended, showsReply: AgentTurnNotifications.showsReplyNow)
             }
-            if allowed {
+            if let record {
                 _ = try? await database.modifyRecords(saving: [record], deleting: [], savePolicy: .allKeys)
             }
             if sweeps { await sweep(database, devices: pairedDevices) }
@@ -104,11 +107,15 @@ enum AgentTurnPush {
 
     /// The record for one ended turn. Without the reply allowed, the reply's
     /// words are not written at all, not merely left unshown.
+    static func recordName(for ended: Ended) -> String {
+        "turn.\(ended.deviceID).\(ended.chat.id)"
+    }
+
     static func record(for ended: Ended, showsReply: Bool) -> CKRecord {
         let chatID = ended.chat.id
         let record = CKRecord(
             recordType: recordType,
-            recordID: CKRecord.ID(recordName: "turn.\(ended.deviceID).\(chatID)")
+            recordID: CKRecord.ID(recordName: recordName(for: ended))
         )
         let summary = AgentTurnNotifications.body(for: ended.outcome, showsReply: false)
         record["deviceID"] = ended.deviceID
