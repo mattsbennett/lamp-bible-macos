@@ -993,13 +993,14 @@ struct AgentRunMembersTests {
         process.release()
     }
 
-    @Test func onlyADetachedAgentCLIIsSpared() {
+    @Test func onlyOpenCodesSharedServerIsSpared() {
         // OpenCode's background server: its own group, its own program.
         #expect(AgentRunMembers.isSpared(name: "opencode", pid: 500, group: 500))
         // The same name inside the run's group is part of the run.
         #expect(!AgentRunMembers.isSpared(name: "opencode", pid: 500, group: 400))
-        // A detached tool command is not spared.
+        // A detached agent a tool started is the run's work, not a service.
+        #expect(!AgentRunMembers.isSpared(name: "codex", pid: 500, group: 500))
+        #expect(!AgentRunMembers.isSpared(name: "claude", pid: 500, group: 500))
         #expect(!AgentRunMembers.isSpared(name: "python3", pid: 500, group: 500))
-        #expect(!AgentRunMembers.isSpared(name: "zsh", pid: 500, group: 500))
     }
 }

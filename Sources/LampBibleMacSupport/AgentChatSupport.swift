@@ -1848,9 +1848,14 @@ public enum AgentACPRun {
 /// A known process's own children are found from it, so an orphan's
 /// children are found too.
 ///
-/// Spared: a detached process that is itself one of the agent CLIs —
-/// OpenCode's shared background server, which `opencode run` can start and
-/// which serves every OpenCode session, not this run.
+/// Spared: OpenCode's shared background server, which `opencode run` can
+/// start and which serves every OpenCode session, not this run — a process
+/// leading its own group whose program is `opencode`. Only that: a detached
+/// `codex` or `claude` a tool started is this run's work, not a service.
+///
+/// Sampling narrows rather than closes the gap: a command started and
+/// orphaned between two samples is never seen. Closing it would take
+/// tracing every fork, which macOS offers apps no way to do.
 public final class AgentRunMembers: @unchecked Sendable {
     public struct Member: Hashable, Sendable {
         public let pid: pid_t
@@ -1865,12 +1870,16 @@ public final class AgentRunMembers: @unchecked Sendable {
         let name: String
     }
 
-    /// The agent CLIs' own process names, as the kernel records them.
-    public static let agentNames: Set<String> = ["claude", "codex", "opencode", "agy", "antigravity"]
+    /// The programs whose detached processes are shared services, not a
+    /// run's work, by the kernel's name for them.
+    public static let sharedServiceNames: Set<String> = ["opencode"]
 
     private let lock = NSLock()
     private let root: Member?
     private var known: [pid_t: Member] = [:]
+    /// Set by `endAll`, after which nothing more is recorded: a sample
+    /// still running when the run ended must not add to what was ended.
+    private var ended = false
 
     public init(rootPID: pid_t) {
         root = Self.table().first { $0.member.pid == rootPID }?.member
@@ -1883,8 +1892,15 @@ public final class AgentRunMembers: @unchecked Sendable {
         var children: [pid_t: [Row]] = [:]
         for row in table { children[row.parent, default: []].append(row) }
         let alive = Dictionary(table.map { ($0.member.pid, $0.member) }, uniquingKeysWith: { first, _ in first })
+        let rows = Dictionary(table.map { ($0.member.pid, $0) }, uniquingKeysWith: { first, _ in first })
         lock.lock()
         defer { lock.unlock() }
+        guard !ended else { return }
+        // One recorded before it became a shared service is let go, and is
+        // not searched: its children are other sessions' work.
+        for (pid, member) in known {
+            if let row = rows[pid], row.member == member, Self.isSpared(row) { known[pid] = nil }
+        }
         var frontier: [pid_t] = []
         if let root, alive[root.pid] == root { frontier.append(root.pid) }
         frontier += known.values.filter { alive[$0.pid] == $0 }.map(\.pid)
@@ -1906,7 +1922,9 @@ public final class AgentRunMembers: @unchecked Sendable {
         let table = Self.table()
         let alive = Dictionary(table.map { ($0.member.pid, $0) }, uniquingKeysWith: { first, _ in first })
         lock.lock()
+        ended = true
         let members = Array(known.values)
+        known = [:]
         lock.unlock()
         for member in members {
             // Judged as it is now: a process keeps its number and start
@@ -1929,11 +1947,11 @@ public final class AgentRunMembers: @unchecked Sendable {
         isSpared(name: row.name, pid: row.member.pid, group: row.group)
     }
 
-    /// A process leading its own group, named as one of the agent CLIs — the
-    /// kernel's name for it, which is its program file's, so a link named
-    /// like one does not count.
+    /// A process leading its own group whose program is a shared service's —
+    /// the kernel's name for it, which is its program file's, so a link
+    /// named like one does not count.
     static func isSpared(name: String, pid: pid_t, group: pid_t) -> Bool {
-        group == pid && agentNames.contains(name)
+        group == pid && sharedServiceNames.contains(name)
     }
 
     private static func table() -> [Row] {

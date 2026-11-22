@@ -168,26 +168,35 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
     private func endWhatTheRunLeft(_ process: AgentSpawnedProcess) {
         process.signalGroup(SIGKILL)
         // And what left the group: see `AgentRunMembers`.
-        lock.lock()
-        let members = runMembers
-        runMembers = nil
-        lock.unlock()
-        members?.endAll()
+        members(of: process, clearing: true)?.endAll()
     }
 
     /// Every process the running run has started, including those that
-    /// left its group; see `AgentRunMembers`.
-    private var runMembers: AgentRunMembers?
+    /// left its group, with the process it belongs to; see
+    /// `AgentRunMembers`.
+    private var runMembers: (process: AgentSpawnedProcess, members: AgentRunMembers)?
+
+    /// The record of `process`'s run, never another's: a stop that fires
+    /// late, after the next run began, must not end the next run's tools.
+    private func members(of process: AgentSpawnedProcess, clearing: Bool = false) -> AgentRunMembers? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let current = runMembers, current.process === process else { return nil }
+        if clearing { runMembers = nil }
+        return current.members
+    }
 
     /// Starts recording a run's processes, every two seconds until the run
     /// ends.
     private func recordMembers(of process: AgentSpawnedProcess) -> DispatchSourceTimer {
         let members = AgentRunMembers(rootPID: process.processIdentifier)
         lock.lock()
-        runMembers = members
+        runMembers = (process, members)
         lock.unlock()
+        // Often, since a command started and orphaned between two looks is
+        // never seen; one look at the process table is a few milliseconds.
         let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
-        timer.schedule(deadline: .now() + 0.5, repeating: 2)
+        timer.schedule(deadline: .now() + 0.2, repeating: 0.5)
         timer.setEventHandler { members.sample() }
         timer.resume()
         return timer
@@ -243,9 +252,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
     /// left of the group is also killed as the run ends; see
     /// `endWhatTheRunLeft`.
     private func stop(_ process: AgentSpawnedProcess) {
-        lock.lock()
-        let members = runMembers
-        lock.unlock()
+        let members = members(of: process)
         process.terminate()
         DispatchQueue.global().asyncAfter(deadline: .now() + Self.stopGraceSeconds) {
             // Whether or not the provider has exited: a child that ignored
