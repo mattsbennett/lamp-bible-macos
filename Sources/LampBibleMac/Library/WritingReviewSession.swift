@@ -381,6 +381,7 @@ final class WritingReviewSession: ObservableObject {
 
     /// The page could not place the marks it was sent: its text was not
     /// this one. They go again once the text settles.
+    /// The page would not draw the marks it was sent.
     func marksRejected() {
         needsResend = true
         // Said on the first refusal, not the second.
@@ -395,6 +396,27 @@ final class WritingReviewSession: ObservableObject {
         // Cleared again the moment anything draws, so a resend that
         // does land takes the warning with it.
         if !isUnshown, count > 0 { isUnshown = true }
+        guard resentFor != text else { return }
+        resentFor = text
+        scheduleDraw()
+    }
+
+    /// The page drew them, so there is nothing to warn about.
+    ///
+    /// Said by the page, not worked out from having ranges to send:
+    /// ranges exist in exactly the cases the page turns down, so
+    /// clearing on those would clear the warning whenever it was most
+    /// deserved.
+    func marksDrawn() {
+        if isUnshown { isUnshown = false }
+    }
+
+    /// Something else wants the marks sent again — a restore the page
+    /// refused, whose marks it may no longer agree with. Not a sign
+    /// that the marks cannot be drawn: they may be on the screen as
+    /// this is called, and refusing an edit says nothing about them.
+    func marksNeedResend() {
+        needsResend = true
         guard resentFor != text else { return }
         resentFor = text
         scheduleDraw()
@@ -866,8 +888,9 @@ final class WritingReviewSession: ObservableObject {
         marked: String?, changes: [LampWritingReview.Change?], note: String?, sendsMarks: Bool
     ) {
         if self.ranges != ranges { self.ranges = ranges }
-        // Shown again, so whatever could not be drawn before can be now.
-        if isUnshown, !ranges.isEmpty || count == 0 { isUnshown = false }
+        // Nothing marked at all: there is nothing that could not be
+        // shown. Anything else waits for the page to say it drew them.
+        if isUnshown, count == 0 { isUnshown = false }
         if self.count != count { self.count = count }
         if self.restorable != restorable { self.restorable = restorable }
         if agentNote != note { agentNote = note }

@@ -2440,6 +2440,10 @@ struct DevotionalEditorView: View {
             guard reviewKey != nil else { return }
             reviewSession?.marksRejected()
         }
+        coordinator.onReviewMarksDrawn = { [weak reviewSession] in
+            guard reviewKey != nil else { return }
+            reviewSession?.marksDrawn()
+        }
     }
 
     /// Takes the marks off the page, or puts them back, as the writer
@@ -2977,7 +2981,7 @@ struct DevotionalEditorView: View {
                 guard activeText == hostText else {
                     isRestoring = false
                     refusedRestore = "A new draft arrived while that was being put back, so nothing was changed."
-                    reviewSession.marksRejected()
+                    reviewSession.marksNeedResend()
                     return
                 }
                 keepRestore(
@@ -3003,7 +3007,7 @@ struct DevotionalEditorView: View {
                 refusedRestore = "That passage couldn’t be put back: the writing had moved on. Nothing was changed."
                 // What it refused was drawn from marks it may no longer
                 // agree with, so it is told them again.
-                reviewSession.marksRejected()
+                reviewSession.marksNeedResend()
             }
         }
     }

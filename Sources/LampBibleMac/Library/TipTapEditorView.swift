@@ -322,6 +322,8 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     /// The page could not place the marks it was sent — its text was a
     /// moment ahead of the host's — so the host sends them again.
     var onReviewMarksRejected: (() -> Void)?
+    /// The page took the marks and drew them.
+    var onReviewMarksDrawn: (() -> Void)?
     /// The review marks shown, as the writing's Markdown with markers, kept
     /// so every load puts them back: a document loaded into the page starts
     /// with none.
@@ -915,7 +917,15 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         evaluate(
             "window.editorAPI.setReviewMarks ? window.editorAPI.setReviewMarks(\(argument), \(changes)) : true"
         ) { [weak self] placed in
-            if placed as? Bool == false { self?.onReviewMarksRejected?() }
+            // Both answers, not only the refusal. Whether the marks are
+            // drawn is what the writer is told about, and that is this
+            // one fact — not whether there are ranges to send, which
+            // there are in exactly the cases the page turns down.
+            if placed as? Bool == false {
+                self?.onReviewMarksRejected?()
+            } else if placed as? Bool == true {
+                self?.onReviewMarksDrawn?()
+            }
         }
     }
 
