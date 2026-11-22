@@ -41,6 +41,9 @@ enum AgentTurnPush {
         var title: String
         var subtitle: String
         var outcome: AgentTurnNotifications.Outcome
+        /// When the turn ended, taken as its send returned: what orders two
+        /// turns of one chat whose pushes are asked for out of turn.
+        var endedAt: Date
     }
 
     /// Whether this build may use the container: signed with CloudKit and
@@ -60,20 +63,42 @@ enum AgentTurnPush {
     /// a whole-record save ignores change tags, so the older could land
     /// last; and a sweep could delete a record refreshed after it looked.
     private static var tail: Task<Void, Never>?
+    /// The latest turn end asked for, by record. A writing turn's push waits
+    /// on its collect, in which a later turn of the same chat can end and be
+    /// pushed first; the line keeps the order asked for, not the order the
+    /// turns ended in, so an older end is refused here.
+    private static var latestEnd: [String: Date] = [:]
 
     /// Writes the record, best effort: a Mac not signed in to iCloud, or
     /// offline, leaves the phone to find the reply when it is next opened.
-    static func tell(_ ended: Ended) {
+    ///
+    /// `stillAllowed` is asked again once the save's turn in the line comes,
+    /// since a slow save ahead of it can outlast the device's trust or the
+    /// remote setting. `pairedDevices` bounds the sweep to this Mac's own
+    /// phones, so a second Mac on the account keeps its records.
+    static func tell(
+        _ ended: Ended,
+        stillAllowed: @escaping @MainActor () -> Bool,
+        pairedDevices: [String]
+    ) {
         guard isEntitled, AIFeatures.isEnabledNow, !KeptAgentChats.isQuitting else { return }
         let record = record(for: ended, showsReply: AgentTurnNotifications.showsReplyNow)
+        let name = record.recordID.recordName
+        if let latest = latestEnd[name], latest >= ended.endedAt { return }
+        latestEnd[name] = ended.endedAt
         let database = CKContainer(identifier: containerIdentifier).privateCloudDatabase
         let sweeps = !sweptThisLaunch
         sweptThisLaunch = true
         let previous = tail
         tail = Task.detached(priority: .utility) {
             await previous?.value
-            _ = try? await database.modifyRecords(saving: [record], deleting: [], savePolicy: .allKeys)
-            if sweeps { await sweep(database) }
+            let allowed = await MainActor.run {
+                stillAllowed() && AIFeatures.isEnabledNow && !KeptAgentChats.isQuitting
+            }
+            if allowed {
+                _ = try? await database.modifyRecords(saving: [record], deleting: [], savePolicy: .allKeys)
+            }
+            if sweeps { await sweep(database, devices: pairedDevices) }
         }
     }
 
@@ -104,7 +129,7 @@ enum AgentTurnPush {
         record["outcome"] = outcomeName(ended.outcome)
         record["summary"] = summary
         record["body"] = showsReply ? AgentTurnNotifications.body(for: ended.outcome, showsReply: true) : summary
-        record["endedAt"] = Date()
+        record["endedAt"] = ended.endedAt
         return record
     }
 
@@ -119,10 +144,15 @@ enum AgentTurnPush {
     /// Takes away records older than a day, once a launch. Overwriting keeps
     /// one per chat and phone already; this is for chats and phones gone.
     /// Run in the line with the saves (`tail`), so no save of this Mac's
-    /// lands between its looking and its deleting.
-    nonisolated private static func sweep(_ database: CKDatabase) async {
+    /// lands between its looking and its deleting, and only over this Mac's
+    /// own phones, so no other Mac's either.
+    nonisolated private static func sweep(_ database: CKDatabase, devices: [String]) async {
+        guard !devices.isEmpty else { return }
         let dayAgo = Date().addingTimeInterval(-24 * 60 * 60)
-        let query = CKQuery(recordType: recordType, predicate: NSPredicate(format: "endedAt < %@", dayAgo as NSDate))
+        let query = CKQuery(
+            recordType: recordType,
+            predicate: NSPredicate(format: "endedAt < %@ AND deviceID IN %@", dayAgo as NSDate, devices)
+        )
         guard let (results, _) = try? await database.records(matching: query, desiredKeys: [], resultsLimit: 200)
         else { return }
         let old = results.map(\.0)

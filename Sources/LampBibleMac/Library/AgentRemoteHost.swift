@@ -503,9 +503,15 @@ final class AgentRemoteHost: ObservableObject {
     /// A turn's end as the phone names the chat: a writing by its name; a
     /// reader chat as "Reader Chat", under the title its list gives it, or
     /// nothing for one still called "New Chat".
+    /// Whether a phone may still be told of a turn: remote chats allowed,
+    /// and the device paired and not forgotten. No connection is asked for.
+    private func mayStillPush(to device: String) -> Bool {
+        isAllowed && !revoked.contains(device) && devices.contains { $0.id == device }
+    }
+
     private func pushedEnd(
         of chat: LampAgentRemoteHosting.Chat, turn: UUID, device: String,
-        outcome: AgentTurnNotifications.Outcome
+        outcome: AgentTurnNotifications.Outcome, endedAt: Date
     ) -> AgentTurnPush.Ended {
         let (title, subtitle): (String, String) = switch chat {
         case .reader:
@@ -514,7 +520,8 @@ final class AgentRemoteHost: ObservableObject {
             (writing(id)?.title ?? "Writing", "")
         }
         return AgentTurnPush.Ended(
-            deviceID: device, chat: chat, turnID: turn, title: title, subtitle: subtitle, outcome: outcome
+            deviceID: device, chat: chat, turnID: turn, title: title, subtitle: subtitle,
+            outcome: outcome, endedAt: endedAt
         )
     }
 
@@ -839,6 +846,7 @@ final class AgentRemoteHost: ObservableObject {
         // How it ended, read now: the collecting below waits, and a turn
         // started in that wait, from this Mac or another phone, clears it.
         let outcome = taken ? open.model.lastTurnOutcome : nil
+        let endedAt = Date()
         // A poll part way through saving finishes before the last one looks,
         // or the last would read the writing from before that save.
         collecting?.cancel()
@@ -861,8 +869,12 @@ final class AgentRemoteHost: ObservableObject {
         // been forgotten, or remote chats turned off, during the collect,
         // and a reply's words must not go to a phone that is no longer
         // trusted. No live connection is asked for; that is the point.
-        if let outcome, isAllowed, !revoked.contains(device), devices.contains(where: { $0.id == device }) {
-            AgentTurnPush.tell(pushedEnd(of: open.chat, turn: turn, device: device, outcome: outcome))
+        if let outcome, mayStillPush(to: device) {
+            AgentTurnPush.tell(
+                pushedEnd(of: open.chat, turn: turn, device: device, outcome: outcome, endedAt: endedAt),
+                stillAllowed: { [weak self] in self?.mayStillPush(to: device) ?? false },
+                pairedDevices: devices.map(\.id)
+            )
         }
         runs[device]?.removeAll { $0.turn == turn }
         if runs[device]?.isEmpty == true { runs[device] = nil }

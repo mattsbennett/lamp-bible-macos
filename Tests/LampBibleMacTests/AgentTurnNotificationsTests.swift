@@ -52,7 +52,8 @@ struct AgentTurnNotificationsTests {
         let turn = UUID()
         let ended = AgentTurnPush.Ended(
             deviceID: "phone-1", chat: .reader(chat), turnID: turn,
-            title: "Reader Chat", subtitle: "", outcome: .replied("**Grace** is given.")
+            title: "Reader Chat", subtitle: "", outcome: .replied("**Grace** is given."),
+            endedAt: Date(timeIntervalSince1970: 1_000)
         )
         let record = AgentTurnPush.record(for: ended, showsReply: true)
         #expect(record.recordType == "AgentTurnEnded")
@@ -67,14 +68,14 @@ struct AgentTurnNotificationsTests {
         #expect(record["outcome"] as? String == "replied")
         #expect(record["summary"] as? String == "Replied.")
         #expect(record["body"] as? String == "Grace is given.")
-        #expect(record["endedAt"] is Date)
+        #expect(record["endedAt"] as? Date == Date(timeIntervalSince1970: 1_000))
     }
 
     @MainActor
     @Test func withoutTheReplyAllowedItsWordsAreNotWrittenAtAll() {
         let ended = AgentTurnPush.Ended(
             deviceID: "phone-1", chat: .writing("w-1"), turnID: UUID(),
-            title: "Sermon", subtitle: "", outcome: .replied("Secret words.")
+            title: "Sermon", subtitle: "", outcome: .replied("Secret words."), endedAt: Date()
         )
         let record = AgentTurnPush.record(for: ended, showsReply: false)
         #expect(record["kind"] as? String == "writing")
