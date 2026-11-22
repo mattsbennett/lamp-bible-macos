@@ -243,3 +243,142 @@ public enum LampAgentRemoteHosting {
         )
     }
 }
+
+
+/// What a phone is told a chat runs with, and how a choice it makes is taken
+/// into the chat: the same values, kept in the same place, as the menus over
+/// a window's chat (`AgentChatProviderChoice`), so a window and a phone on
+/// one chat always say the same thing.
+public extension LampAgentRemoteHosting {
+    /// A chat's model and effort under a provider, as its menus show them: its
+    /// own choice, else what the app remembers, "" for the provider's default.
+    /// For a provider whose effort rides on the model, the variant is shown as
+    /// the effort and the model without it, as the Mac's two menus show them.
+    static func chosen(
+        in choices: AgentChatChoices,
+        provider: AgentChatWireProvider,
+        appDefault: (String) -> String?
+    ) -> (model: String, effort: String) {
+        let modelKey = AgentChatModelChoice.defaultsKey(provider)
+        let effortKey = AgentChatEffortChoice.defaultsKey(provider)
+        let model = choices.value(for: modelKey, orAppDefault: appDefault(modelKey)) ?? ""
+        guard AgentChatEffortChoice.isCarriedByTheModel(provider) else {
+            return (model, choices.value(for: effortKey, orAppDefault: appDefault(effortKey)) ?? "")
+        }
+        return (
+            AgentChatModelChoice.separatingVariant(model).base,
+            AgentChatOpenCodeVariants.chosen(in: model) ?? ""
+        )
+    }
+
+    /// Why a phone's choice could not be taken.
+    enum ChoiceRefusal: Error, Equatable {
+        /// An effort for a provider that writes it on a model, with no model.
+        case effortNeedsModel
+        case unknownProvider
+    }
+
+    /// A phone's choice taken into a chat's own choices, as the menus take
+    /// one: a provider is set and its model and effort pinned from what the
+    /// app remembers; a model or effort is set for the chat's provider, on the
+    /// model's name where its effort rides there.
+    ///
+    /// - Returns: the chat's choices, and what the app should now remember,
+    ///   by defaults key, so the next new chat opens on it as it would after
+    ///   the same pick in a window.
+    static func applying(
+        _ change: LampAgentRemoteChoices,
+        to choices: AgentChatChoices,
+        appProviderID: String,
+        appProviderKey: String,
+        wire: (String) -> AgentChatWireProvider?,
+        appDefault: (String) -> String?
+    ) throws(ChoiceRefusal) -> (choices: AgentChatChoices, remembered: [String: String]) {
+        var updated = choices
+        var remembered: [String: String] = [:]
+        let currentProviderID = updated.value(for: AgentChatChoices.providerKey, orAppDefault: appProviderID)
+            ?? appProviderID
+        // A phone names the provider its model or effort was chosen for, so
+        // one that has since been moved elsewhere takes it for that provider
+        // and goes back to it, rather than handing it to another.
+        let providerID = change.provider ?? currentProviderID
+        guard let provider = wire(providerID) else { throw .unknownProvider }
+        let modelKey = AgentChatModelChoice.defaultsKey(provider)
+        let effortKey = AgentChatEffortChoice.defaultsKey(provider)
+
+        if let chosenProvider = change.provider, chosenProvider != currentProviderID || updated.value(for: AgentChatChoices.providerKey) == nil {
+            updated.set(chosenProvider, for: AgentChatChoices.providerKey)
+            remembered[appProviderKey] = chosenProvider
+            updated = AgentChatChoicesPin.pinning(
+                updated, providerID: chosenProvider, provider: provider,
+                model: appDefault(modelKey) ?? "", effort: appDefault(effortKey) ?? ""
+            ).choices
+        }
+        if let model = change.model {
+            let written = model.trimmingCharacters(in: .whitespacesAndNewlines)
+            updated.set(written, for: modelKey)
+            remembered[modelKey] = written
+        }
+        if let effort = change.effort {
+            let level = effort.trimmingCharacters(in: .whitespacesAndNewlines)
+            if AgentChatEffortChoice.isCarriedByTheModel(provider) {
+                let model = updated.value(for: modelKey, orAppDefault: appDefault(modelKey)) ?? ""
+                guard AgentChatEffortChoice.isAvailable(provider: provider, model: model) else {
+                    if level.isEmpty { return (updated, remembered) }
+                    throw .effortNeedsModel
+                }
+                let written = AgentChatOpenCodeVariants.applying(variant: level, to: model)
+                updated.set(written, for: modelKey)
+                remembered[modelKey] = written
+            } else {
+                updated.set(level, for: effortKey)
+                remembered[effortKey] = level
+            }
+        }
+        return (updated, remembered)
+    }
+
+    /// A provider as a phone's setup offers it: the names it stands behind,
+    /// what to type where it names none, and what a new chat opens on.
+    static func setupProvider(
+        id: String,
+        name: String,
+        shortName: String,
+        systemImage: String?,
+        wire: AgentChatWireProvider,
+        connection: LampAgentRemoteSetup.Connection,
+        appDefault: (String) -> String?
+    ) -> LampAgentRemoteSetup.Provider {
+        let defaults = chosen(in: AgentChatChoices(), provider: wire, appDefault: appDefault)
+        return LampAgentRemoteSetup.Provider(
+            id: id,
+            name: name,
+            shortName: shortName,
+            systemImage: systemImage,
+            connection: connection,
+            models: AgentChatModelChoice.aliases(wire),
+            modelHint: AgentChatModelChoice.hint(wire),
+            efforts: AgentChatEffortChoice.levels(wire),
+            effortHint: AgentChatEffortChoice.hint(wire),
+            effortIsOnTheModel: AgentChatEffortChoice.isCarriedByTheModel(wire),
+            defaultModel: defaults.model,
+            defaultEffort: defaults.effort
+        )
+    }
+}
+
+/// A chat's choices changed by something other than the pane showing it — a
+/// phone, through the host — so a window open on the chat reads them again
+/// rather than show, and keep writing back, the ones it loaded.
+public extension AgentChatChoicesStore {
+    static let changedElsewhere = Notification.Name("AgentChatChoicesStore.changedElsewhere")
+
+    static func announceChange(in workspace: URL) {
+        NotificationCenter.default.post(name: changedElsewhere, object: workspace.standardizedFileURL.path)
+    }
+
+    static func isChange(_ notification: Notification, in workspace: URL?) -> Bool {
+        guard let workspace, let path = notification.object as? String else { return false }
+        return path == workspace.standardizedFileURL.path
+    }
+}

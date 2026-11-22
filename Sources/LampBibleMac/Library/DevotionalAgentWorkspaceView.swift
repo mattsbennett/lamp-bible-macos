@@ -1288,6 +1288,10 @@ struct DevotionalAgentWorkspaceView: View {
         .onChange(of: selectedProvider) { _, _ in
             if let workspaceURL { loadChoices(in: workspaceURL) }
         }
+        // Moved to another provider, model or effort from a phone.
+        .onReceive(NotificationCenter.default.publisher(for: AgentChatChoicesStore.changedElsewhere)) { note in
+            if let workspaceURL, AgentChatChoicesStore.isChange(note, in: workspaceURL) { loadChoices(in: workspaceURL) }
+        }
         .task {
             try? await Task.sleep(for: .seconds(LampMotion.paneReveal))
             sessionCanMount = true

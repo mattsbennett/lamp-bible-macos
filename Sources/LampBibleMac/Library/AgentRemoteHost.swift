@@ -80,6 +80,9 @@ final class AgentRemoteHost: ObservableObject {
     private weak var libraryModel: LibraryModel?
 
     private var settingsObserver: AnyCancellable?
+    /// A chat's choices saved by a window's menus, for the phones following
+    /// it, which show what it runs with.
+    private var choicesObserver: AnyCancellable?
     private var pull: (@MainActor () async -> Void)?
 
     private var isAllowed: Bool {
@@ -98,6 +101,12 @@ final class AgentRemoteHost: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 MainActor.assumeIsolated { self?.followSettings() }
+            }
+        choicesObserver = NotificationCenter.default.publisher(for: AgentChatChoicesStore.saved)
+            .compactMap { $0.object as? String }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] path in
+                MainActor.assumeIsolated { self?.choicesSaved(inWorkspaceAt: path) }
             }
         #if DEBUG
         // A test client pairing with a code it chose, with no sheet to open.
@@ -266,6 +275,9 @@ final class AgentRemoteHost: ObservableObject {
         let model: NativeAgentChatModel
         var told = LampAgentRemoteChatState()
         var watching: AnyCancellable?
+        /// The provider, model and effort the device was last told the chat
+        /// runs with, so a change made in a window's menus is told too.
+        var toldChoices: [String?] = []
 
         var id: String { chat.id }
 
@@ -412,6 +424,10 @@ final class AgentRemoteHost: ObservableObject {
             open.model.cancel()
         case .startChat:
             track(peer) { await self.startChat(message, from: peer) }
+        case .getSetup:
+            track(peer) { await self.sendSetup(to: peer, requestID: message.requestID) }
+        case .setChoices:
+            setChoices(message, from: peer)
         case .ping:
             send(.pong, to: peer)
         default:
@@ -487,17 +503,33 @@ final class AgentRemoteHost: ObservableObject {
         let workspace = workspace(of: chat, root: root)
         let continuing = Self.hostingProvider(continuingProvider(for: chat, in: workspace))
         let isRunning = KeptAgentChats.isRunning(in: workspace)
-        switch chat {
+        let summary: LampAgentRemoteChatSummary? = switch chat {
         case .reader(let id):
-            return LampAgentRemoteHosting.summary(
+            LampAgentRemoteHosting.summary(
                 chatID: id, transcripts: transcripts(in: workspace), continuing: continuing, isRunning: isRunning
             )
         case .writing(let id):
-            guard let writing = writing(id) else { return nil }
-            return LampAgentRemoteHosting.summary(
-                writing: Self.listed(writing), transcripts: transcripts(in: workspace), continuing: continuing, isRunning: isRunning
-            )
+            writing(id).flatMap { writing in
+                LampAgentRemoteHosting.summary(
+                    writing: Self.listed(writing), transcripts: transcripts(in: workspace), continuing: continuing, isRunning: isRunning
+                )
+            }
         }
+        return summary.map { Self.withChoices($0, in: workspace) }
+    }
+
+    /// A summary with the model and effort its chat runs with, as the menus
+    /// over a window on it would show them.
+    nonisolated private static func withChoices(_ summary: LampAgentRemoteChatSummary, in workspace: URL) -> LampAgentRemoteChatSummary {
+        guard let wire = AIProviderCLI(rawValue: summary.provider)?.wireProvider else { return summary }
+        let chosen = LampAgentRemoteHosting.chosen(
+            in: AgentChatChoicesStore.load(in: workspace), provider: wire,
+            appDefault: { UserDefaults.standard.string(forKey: $0) }
+        )
+        var summary = summary
+        summary.model = chosen.model
+        summary.effort = chosen.effort
+        return summary
     }
 
     /// A turn's end as the phone names the chat: a writing by its name; a
@@ -531,9 +563,9 @@ final class AgentRemoteHost: ObservableObject {
         case .reader: nil
         case .writing(let id): self.writing(id).map(Self.listed)
         }
-        return LampAgentRemoteHosting.untitled(
+        return Self.withChoices(LampAgentRemoteHosting.untitled(
             chat, Self.hostingProvider(continuingProvider(for: chat, in: workspace)), title: title, writing: writing, isRunning: isRunning
-        )
+        ), in: workspace)
     }
 
     /// Every reader chat and writing chat, newest first, read off the main
@@ -548,10 +580,11 @@ final class AgentRemoteHost: ObservableObject {
         let writingProvider = Self.writingAppProviderID
         let writings = (libraryModel?.devotionals ?? []).map(Self.listed)
         let read = await Task.detached(priority: .userInitiated) {
-            LampAgentRemoteHosting.readSummaries(libraryRootURL: root, providers: providers, appProviderID: readerProvider)
+            (LampAgentRemoteHosting.readSummaries(libraryRootURL: root, providers: providers, appProviderID: readerProvider)
                 + LampAgentRemoteHosting.readWritingSummaries(
                     libraryRootURL: root, writings: writings, providers: providers, appProviderID: writingProvider
-                )
+                ))
+            .map { (workspace: $0.workspace, summary: Self.withChoices($0.summary, in: $0.workspace)) }
         }.value
         guard isConnected(peer) else { return }
         let summaries = read.map { item -> LampAgentRemoteChatSummary in
@@ -626,6 +659,7 @@ final class AgentRemoteHost: ObservableObject {
     /// changes in it.
     private func follow(_ open: OpenChat, summary: LampAgentRemoteChatSummary, for peer: Peer, requestID: UUID?) -> OpenChat {
         open.told = Self.state(of: open.model, askedBy: askedBy)
+        open.toldChoices = Self.choices(of: summary)
         peer.open = open
         send(.snapshot(LampAgentRemoteChatUpdates.snapshot(summary: summary, state: open.told), requestID: requestID), to: peer)
         watch(open, for: peer)
@@ -713,6 +747,180 @@ final class AgentRemoteHost: ObservableObject {
         )
     }
 
+    // MARK: Setup
+
+    /// Each provider's connection as last checked, and when. Checking runs
+    /// each CLI's sign-in check in a login shell, and Antigravity's opens a
+    /// session, so it is done at most once a few minutes for every phone.
+    private var connections: [AIProviderCLI: LampAgentRemoteSetup.Connection] = [:]
+    private var checkingConnections: Task<Void, Never>?
+    private static let connectionsKeptFor: TimeInterval = 5 * 60
+
+    private static func connection(_ state: AIProviderConnectionState, at date: Date) -> LampAgentRemoteSetup.Connection {
+        typealias C = LampAgentRemoteSetup.Connection
+        return switch state {
+        case .checking: C(state: C.checking)
+        case .connected: C(state: C.connected, checkedAt: date)
+        case .notInstalled: C(state: C.notInstalled, checkedAt: date)
+        case .notConnected: C(state: C.notConnected, checkedAt: date)
+        case .unavailable(let reason): C(state: C.unavailable, detail: reason, checkedAt: date)
+        }
+    }
+
+    private func setup() -> LampAgentRemoteSetup {
+        let defaults = UserDefaults.standard
+        let providers = AIProviderCLI.allCases.map { provider in
+            LampAgentRemoteHosting.setupProvider(
+                id: provider.rawValue, name: provider.name, shortName: provider.shortName,
+                systemImage: provider.systemImage, wire: provider.wireProvider,
+                connection: connections[provider] ?? .init(state: LampAgentRemoteSetup.Connection.checking),
+                appDefault: { defaults.string(forKey: $0) }
+            )
+        }
+        let scope = defaults.string(forKey: "agent.moduleAccess.scope")
+            .flatMap(AgentModuleAccessScope.init(rawValue:)) ?? .enabledModules
+        return LampAgentRemoteSetup(
+            providers: providers,
+            readerProvider: ReaderChatTurns.appProviderID,
+            writingProvider: Self.writingAppProviderID,
+            access: .init(
+                readOnly: true,
+                modulesEnabled: defaults.object(forKey: "agent.moduleAccess.enabled") as? Bool ?? true,
+                allModules: scope != .enabledModules,
+                personalStudy: defaults.object(forKey: "agent.moduleAccess.personal") as? Bool ?? false
+            )
+        )
+    }
+
+    /// The setup as it stands, at once; then again once any connection not
+    /// checked lately has been, if that changed anything.
+    private func sendSetup(to peer: Peer, requestID: UUID?) async {
+        let sent = setup()
+        send(.setup(sent, requestID: requestID), to: peer)
+        let now = Date()
+        let stale = AIProviderCLI.allCases.filter { provider in
+            guard let checked = connections[provider]?.checkedAt else { return true }
+            return now.timeIntervalSince(checked) > Self.connectionsKeptFor
+        }
+        guard !stale.isEmpty else { return }
+        if checkingConnections == nil {
+            checkingConnections = Task { [weak self] in
+                let checked = await withTaskGroup(of: (AIProviderCLI, AIProviderConnectionState).self) { group in
+                    for provider in stale {
+                        group.addTask { (provider, await AIProviderCommandRunner.connectionState(for: provider)) }
+                    }
+                    var states: [(AIProviderCLI, AIProviderConnectionState)] = []
+                    for await state in group { states.append(state) }
+                    return states
+                }
+                guard let self else { return }
+                let at = Date()
+                for (provider, state) in checked { self.connections[provider] = Self.connection(state, at: at) }
+                self.checkingConnections = nil
+            }
+        }
+        await checkingConnections?.value
+        guard isConnected(peer), mayAct(peer) else { return }
+        let checked = setup()
+        if checked != sent { send(.setup(checked), to: peer) }
+    }
+
+    /// Takes a phone's choice into a chat's own choices, and what the app
+    /// remembers, as a pick in the chat's menus in a window would.
+    private func applyChoices(_ change: LampAgentRemoteChoices, for chat: LampAgentRemoteHosting.Chat, in workspace: URL) throws {
+        let defaults = UserDefaults.standard
+        // Pinned first, as a pane pins a chat on showing it, so a change of
+        // only the model leaves its provider and effort where they were
+        // rather than following the next pick made in another chat.
+        _ = AgentChatOwnChoices.pinned(in: workspace, appProviderID: Self.appProviderID(for: chat))
+        let appProviderKey = switch chat {
+        case .reader: "reader.chat.provider"
+        case .writing: "devotional.agent.provider"
+        }
+        let applied = try LampAgentRemoteHosting.applying(
+            change, to: AgentChatChoicesStore.load(in: workspace),
+            appProviderID: Self.appProviderID(for: chat), appProviderKey: appProviderKey,
+            wire: { AIProviderCLI(rawValue: $0)?.wireProvider },
+            appDefault: { defaults.string(forKey: $0) }
+        )
+        try AgentChatChoicesStore.save(applied.choices, in: workspace)
+        for (key, value) in applied.remembered { defaults.set(value, forKey: key) }
+        AgentChatChoicesStore.announceChange(in: workspace)
+    }
+
+    /// A chat moved to another provider, model or effort from a phone. The
+    /// runner reads a chat's choices as each turn starts, so a change while
+    /// one runs would land only on the next and nothing would say so: it is
+    /// refused until the turn ends. Answered with the chat's snapshot under
+    /// its new choices, which for another provider is that provider's side of
+    /// the conversation, as a window shows it.
+    private func setChoices(_ message: LampAgentRemoteMessage, from peer: Peer) {
+        guard let change = message.choices, let chatID = message.chatID,
+              let chat = LampAgentRemoteHosting.Chat(id: chatID), let root = libraryRootURL,
+              summary(of: chat) != nil || peer.open?.chat == chat
+        else {
+            send(.failed(LampAgentRemoteFailure.notFound, "That chat isn't on this Mac.", requestID: message.requestID, chatID: message.chatID), to: peer)
+            return
+        }
+        let workspace = workspace(of: chat, root: root)
+        if case .writing(let id) = chat, writing(id)?.isEditable == false {
+            send(.failed(LampAgentRemoteFailure.notAllowed, "That writing can't be changed by an assistant.", requestID: message.requestID, chatID: chatID), to: peer)
+            return
+        }
+        guard !KeptAgentChats.isBusy(in: workspace) else {
+            send(.failed(LampAgentRemoteFailure.busy, "Wait for the reply to finish, then change who answers.", requestID: message.requestID, chatID: chatID), to: peer)
+            return
+        }
+        do {
+            try applyChoices(change, for: chat, in: workspace)
+        } catch LampAgentRemoteHosting.ChoiceRefusal.effortNeedsModel {
+            let name = AIProviderCLI(rawValue: change.provider ?? continuingProvider(for: chat, in: workspace).rawValue)?.shortName ?? "This provider"
+            send(.failed(LampAgentRemoteFailure.notAllowed, "Name a model first: \(name) sets effort as a variant of the model.", requestID: message.requestID, chatID: chatID), to: peer)
+            return
+        } catch {
+            send(.failed(LampAgentRemoteFailure.notAllowed, error.localizedDescription, requestID: message.requestID, chatID: chatID), to: peer)
+            return
+        }
+        // The chat followed again, on what it now runs with, by this device
+        // and by any other following it: each holds the model of the
+        // provider it opened on, and would go on sending to it.
+        refollow(chat, for: peer, requestID: message.requestID)
+        for other in peers.values where other !== peer && other.open?.chat == chat && isConnected(other) {
+            refollow(chat, for: other, requestID: nil)
+        }
+    }
+
+    private static func choices(of summary: LampAgentRemoteChatSummary) -> [String?] {
+        [summary.provider, summary.model, summary.effort]
+    }
+
+    /// A chat's choices were saved, by a window's menus or by this host: each
+    /// device following it is told, unless it already has been, and
+    /// follows it again under another provider.
+    private func choicesSaved(inWorkspaceAt path: String) {
+        for peer in peers.values where isConnected(peer) {
+            guard let open = peer.open, open.workspace.standardizedFileURL.path == path else { continue }
+            // A chat cleared while followed is still the one followed.
+            let summary = summary(of: open.chat)
+                ?? untitled(open.chat, workspace: open.workspace, isRunning: open.model.isRunning)
+            if Self.choices(of: summary) != open.toldChoices {
+                refollow(open.chat, for: peer, requestID: nil)
+            }
+        }
+    }
+
+    /// Follows a chat again under its current choices: a chat cleared on this
+    /// Mac while followed has no summary, and is followed as untitled.
+    private func refollow(_ chat: LampAgentRemoteHosting.Chat, for peer: Peer, requestID: UUID?) {
+        do {
+            let (model, workspace) = try model(for: chat)
+            let summary = summary(of: chat) ?? untitled(chat, workspace: workspace, isRunning: model.isRunning)
+            _ = follow(OpenChat(chat: chat, workspace: workspace, model: model), summary: summary, for: peer, requestID: requestID)
+        } catch {
+            send(.failed(LampAgentRemoteFailure.needsSetup, error.localizedDescription, requestID: requestID, chatID: chat.id), to: peer)
+        }
+    }
+
     private func startChat(_ message: LampAgentRemoteMessage, from peer: Peer) async {
         guard let newChat = message.newChat,
               [LampAgentRemoteChatSummary.reader, LampAgentRemoteChatSummary.writing].contains(newChat.kind) else {
@@ -767,13 +975,27 @@ final class AgentRemoteHost: ObservableObject {
             // nothing was said in yet: its pane may have pinned one already.
             let chosen = newChat.provider.flatMap(AIProviderCLI.init(rawValue:))
             let isWriting = if case .writing = chat { true } else { false }
-            if summary(of: chat) == nil, chosen != nil || !isWriting {
+            // New: nothing said in it, and no first turn on its way from a
+            // window or another device, whose choices these would overwrite.
+            let isNew = summary(of: chat) == nil && !KeptAgentChats.isBusy(in: workspace)
+            if isNew, chosen != nil || !isWriting {
                 let provider = chosen
                     ?? AIProviderCLI(rawValue: Self.appProviderID(for: chat)) ?? .codex
                 var choices = AgentChatChoicesStore.load(in: workspace)
                 choices.set(provider.rawValue, for: AgentChatChoices.providerKey)
                 try AgentChatChoicesStore.save(choices, in: workspace)
                 _ = AgentChatOwnChoices.pinned(in: workspace, appProviderID: provider.rawValue)
+            }
+            // And the model and effort the phone opened it on, as though
+            // picked in the chat's menus once it was made: a writing's too,
+            // on whichever provider it has.
+            let picked = LampAgentRemoteChoices(model: newChat.model, effort: newChat.effort)
+            if isNew, !picked.isEmpty {
+                do {
+                    try applyChoices(picked, for: chat, in: workspace)
+                } catch LampAgentRemoteHosting.ChoiceRefusal.effortNeedsModel {
+                    // The chat still starts, on the model's default.
+                }
             }
 
             let (model, _) = try model(for: chat)
@@ -804,6 +1026,11 @@ final class AgentRemoteHost: ObservableObject {
             send(.failed(LampAgentRemoteFailure.busy, "A reply is still arriving in this chat.", requestID: requestID, chatID: open.id), to: peer)
             return
         }
+        // Held from here, while the prompt is prepared and before the model
+        // says it is running, so a change of provider from another device
+        // can't move the chat out from under the turn (`setChoices`).
+        KeptAgentChats.beginTurn(in: open.workspace)
+        defer { KeptAgentChats.endTurn(in: open.workspace) }
         let conversation = open.model.conversationID
         let prompt: String
         switch open.chat {

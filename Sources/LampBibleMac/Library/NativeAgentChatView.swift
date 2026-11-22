@@ -1426,6 +1426,27 @@ enum KeptAgentChats {
         AIProviderCLI.allCases.contains { existing(provider: $0, workspace: workspace)?.isRunning == true }
     }
 
+    /// The turns being prepared or run on each workspace, from any pane or
+    /// device: between Send and the model saying it runs, a turn is already
+    /// bound to its provider's model, so the chat may not be moved to
+    /// another provider under it (`AgentRemoteHost.setChoices`).
+    private static var turnsInHand: [String: Int] = [:]
+
+    static func beginTurn(in workspace: URL) {
+        turnsInHand[workspace.standardizedFileURL.path, default: 0] += 1
+    }
+
+    static func endTurn(in workspace: URL) {
+        let key = workspace.standardizedFileURL.path
+        guard let count = turnsInHand[key] else { return }
+        turnsInHand[key] = count > 1 ? count - 1 : nil
+    }
+
+    /// A turn is being prepared or a reply is arriving on this workspace.
+    static func isBusy(in workspace: URL) -> Bool {
+        turnsInHand[workspace.standardizedFileURL.path] != nil || isRunning(in: workspace)
+    }
+
     static func model(
         provider: AIProviderCLI,
         workspace: URL,
@@ -2864,13 +2885,17 @@ struct NativeAgentChatView: View {
             return false
         }
         isPreparing = true
+        // Held for the whole turn, so a phone can't move the chat to another
+        // provider while this one is being prepared for the model it has.
+        KeptAgentChats.beginTurn(in: workspaceFolder)
         // The conversation this message was written in. Preparing waits,
         // and New Chat is allowed during that wait.
         let conversation = model.conversationID
         // Started now, and on the main actor until it first waits, so the
         // reader's place is read at Send and not after a navigation.
-        Task {
+        Task { [workspaceFolder] in
             defer { isPreparing = false }
+            defer { KeptAgentChats.endTurn(in: workspaceFolder) }
             do {
                 let contextualPrompt = try await preparePrompt(prompt)
                 submissionError = nil

@@ -358,6 +358,9 @@ public enum AgentChatChoicesStore {
         AgentChatTranscriptStore.directory(in: workspace).appendingPathComponent(filename)
     }
 
+    /// Posted on every save, with the workspace's path, on the saving thread.
+    public static let saved = Notification.Name("AgentChatChoicesStore.saved")
+
     /// A missing or damaged file reads as a chat with no choices of its own,
     /// so it falls back to the app's defaults rather than refusing to open.
     public static func load(in workspace: URL) -> AgentChatChoices {
@@ -378,6 +381,8 @@ public enum AgentChatChoicesStore {
         var data = try encoder.encode(choices)
         data.append(0x0A)
         try data.write(to: url, options: .atomic)
+        // For a phone following this chat, which shows what it runs with.
+        NotificationCenter.default.post(name: saved, object: workspace.standardizedFileURL.path)
     }
 }
 

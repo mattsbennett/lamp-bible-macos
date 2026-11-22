@@ -406,6 +406,11 @@ struct ReaderChatSidebarView: View {
             loadStartedWritings()
         }
         .onChange(of: provider) { _, _ in loadChoices() }
+        // Moved to another provider, model or effort from a phone: shown,
+        // and run, as the phone left it.
+        .onReceive(NotificationCenter.default.publisher(for: AgentChatChoicesStore.changedElsewhere)) { note in
+            if AgentChatChoicesStore.isChange(note, in: workspace) { loadChoices() }
+        }
         // A provider not installed or not signed in: the setup opens, with
         // its picker beside the chat's Connect, so another can be chosen.
         // As the writing assistant does.
