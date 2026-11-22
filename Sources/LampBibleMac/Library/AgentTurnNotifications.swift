@@ -157,47 +157,129 @@ extension Notification.Name {
     static let lampShowAgentTurn = Notification.Name("lampShowAgentTurn")
 }
 
-/// Whether a pane is where the reader is looking: its window is the key
-/// window, Lamp is the active app, and the pane has room on screen. A pane
-/// folded to no width, a tab behind another or a window in the background
-/// is not being watched, and a turn that ends there is worth telling.
-struct WatchedPaneProbe: ViewModifier {
-    let changed: (Bool) -> Void
-    @Environment(\.controlActiveState) private var activeState
-    @State private var hasRoom = false
-    @State private var isShown = false
+/// Whether a pane is where the reader is looking, asked at the moment a
+/// turn ends rather than tracked: Lamp is active, the pane's window is the
+/// key window, and the pane is drawn there with room. A reader tab behind
+/// another is hidden at the AppKit level (`ReaderTabHosts`) and never told
+/// so in SwiftUI, and a pane folded to no width keeps its views, so only
+/// the view itself can say whether it is seen.
+@MainActor
+final class PaneVisibility {
+    fileprivate weak var view: NSView?
 
-    private var watched: Bool { isShown && hasRoom && activeState == .key }
+    var isWatched: Bool {
+        guard NSApp.isActive, let view, let window = view.window,
+              window.isKeyWindow, window.isVisible, !window.isMiniaturized,
+              !view.isHiddenOrHasHiddenAncestor else { return false }
+        let shown = view.visibleRect
+        return shown.width > 1 && shown.height > 1
+    }
+}
 
-    func body(content: Content) -> some View {
-        content
-            .onGeometryChange(for: Bool.self) { $0.size.width > 1 && $0.size.height > 1 } action: { hasRoom = $0 }
-            .onAppear { isShown = true }
-            .onDisappear { isShown = false }
-            .onChange(of: watched, initial: true) { _, now in changed(now) }
+/// Puts a pane's `PaneVisibility` on a view that fills it.
+private struct PaneVisibilityProbe: NSViewRepresentable {
+    let visibility: PaneVisibility
+
+    final class Probe: NSView {
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+
+    func makeNSView(context: Context) -> Probe {
+        let probe = Probe()
+        visibility.view = probe
+        return probe
+    }
+
+    func updateNSView(_ probe: Probe, context: Context) {
+        visibility.view = probe
     }
 }
 
 extension View {
-    func reportsWatched(_ changed: @escaping (Bool) -> Void) -> some View {
-        modifier(WatchedPaneProbe(changed: changed))
+    func reportsVisibility(to visibility: PaneVisibility) -> some View {
+        background {
+            PaneVisibilityProbe(visibility: visibility)
+                .accessibilityHidden(true)
+        }
     }
 }
 
-/// A library window's answer to a clicked turn notification: a reader chat
-/// one of its tabs holds is brought forward in it; a writing is opened by the
-/// frontmost library window alone, so two windows do not both open it.
-/// Kept out of the library view's body, which is at the type checker's limit.
+/// The writing panes open on each writing, so a Terminal turn, which any of
+/// them may be the one to read in, is quiet if any of them is seen.
+@MainActor
+enum WritingPaneVisibility {
+    private static var panes: [String: [AnyHashable: PaneVisibility]] = [:]
+
+    static func register(_ visibility: PaneVisibility, writingID: String, token: AnyHashable) {
+        panes[writingID, default: [:]][token] = visibility
+    }
+
+    static func unregister(writingID: String, token: AnyHashable) {
+        panes[writingID]?[token] = nil
+        if panes[writingID]?.isEmpty == true { panes[writingID] = nil }
+    }
+
+    static func isWatched(writingID: String) -> Bool {
+        panes[writingID]?.values.contains { $0.isWatched } ?? false
+    }
+}
+
+/// The windows that can answer a clicked turn notification: library
+/// windows, and writing windows, which can open a writing though they hold
+/// no reader chats. One of them opens a writing, so two do not. With no
+/// window open at all, a click only brings Lamp forward.
+@MainActor
+enum AgentTurnRouteWindows {
+    fileprivate static let windows = NSHashTable<NSWindow>.weakObjects()
+
+    static func target() -> NSWindow? {
+        if let key = NSApp.keyWindow, windows.contains(key) { return key }
+        return NSApp.orderedWindows.first { windows.contains($0) && $0.isVisible }
+            ?? NSApp.windows.first { windows.contains($0) }
+    }
+}
+
+/// A window's answer to a clicked turn notification: a reader chat one of
+/// its tabs holds is brought forward in it; a writing is opened by one
+/// window alone, the key one or the frontmost. Kept out of the library
+/// view's body, which is at the type checker's limit.
 struct AgentTurnRouteReceiver: ViewModifier {
     /// Shows the chat if this window holds it, and says whether it did.
-    let showReaderChat: (UUID) -> Bool
+    /// Nil for a window that holds no reader chats.
+    var showReaderChat: ((UUID) -> Bool)?
     @Environment(\.openWindow) private var openWindow
-    @State private var host = CommandPaletteWindows.Host()
+    @State private var host = Host()
+
+    final class Host {
+        weak var window: NSWindow?
+    }
+
+    private struct Registrar: NSViewRepresentable {
+        let host: Host
+
+        final class Probe: NSView {
+            var host: Host?
+            override func hitTest(_ point: NSPoint) -> NSView? { nil }
+            override func viewDidMoveToWindow() {
+                super.viewDidMoveToWindow()
+                host?.window = window
+                if let window { AgentTurnRouteWindows.windows.add(window) }
+            }
+        }
+
+        func makeNSView(context: Context) -> Probe {
+            let probe = Probe()
+            probe.host = host
+            return probe
+        }
+
+        func updateNSView(_ probe: Probe, context: Context) {}
+    }
 
     func body(content: Content) -> some View {
         content
             .background {
-                CommandPaletteWindows.Registrar(host: host)
+                Registrar(host: host)
                     .frame(width: 0, height: 0)
                     .accessibilityHidden(true)
             }
@@ -205,13 +287,11 @@ struct AgentTurnRouteReceiver: ViewModifier {
                 guard let route = note.object as? AgentTurnRoute else { return }
                 switch route {
                 case .readerChat(let chat):
-                    if showReaderChat(chat) {
+                    if showReaderChat?(chat) == true {
                         host.window?.makeKeyAndOrderFront(nil)
                     }
                 case .writing(let id):
-                    guard let window = host.window,
-                          window === CommandPaletteWindows.target() ?? CommandPaletteWindows.frontmostLibrary()
-                    else { return }
+                    guard let window = host.window, window === AgentTurnRouteWindows.target() else { return }
                     openWindow(
                         id: "devotional-editor",
                         value: DevotionalEditorRequest(devotionalID: id, opensAgentPane: true)

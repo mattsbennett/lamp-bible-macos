@@ -1128,9 +1128,11 @@ struct DevotionalAgentWorkspaceView: View {
     @State private var terminalExitCode: Int32?
     @State private var terminalCommand = ""
     @State private var terminalCapture = TerminalCaptureState()
-    /// Whether this pane is where the reader is looking, so a Terminal turn
-    /// ending here unwatched can say so (`AgentTurnNotifications`).
-    @State private var paneIsWatched = false
+    /// Whether this pane is seen, so a Terminal turn ending unwatched can
+    /// say so (`AgentTurnNotifications`). Registered by writing, since any
+    /// pane open on it may be the one whose poll reads the turn in.
+    @State private var visibility = PaneVisibility()
+    @State private var visibilityToken = UUID()
     /// The last Terminal reply a notification was sent for, so one reply is
     /// told once however many polls find it.
     @State private var notifiedTerminalReply: UUID?
@@ -1240,7 +1242,13 @@ struct DevotionalAgentWorkspaceView: View {
                 sessionPane
             }
         }
-        .reportsWatched { paneIsWatched = $0 }
+        .reportsVisibility(to: visibility)
+        .onAppear {
+            WritingPaneVisibility.register(visibility, writingID: devotionalID, token: visibilityToken)
+        }
+        .onDisappear {
+            WritingPaneVisibility.unregister(writingID: devotionalID, token: visibilityToken)
+        }
         .onChange(of: errorMessage) { _, message in
             if message != nil { showsSetup = true }
         }
@@ -2625,16 +2633,21 @@ struct DevotionalAgentWorkspaceView: View {
     }
 
     /// Tells of a Terminal reply that arrived while nobody was looking, as a
-    /// chat's turn does when it ends (`NativeAgentChatModel.finish`). Only a
-    /// reply made since this launch: the first poll of a session can bring
-    /// in replies from before it, which are not news.
+    /// chat's turn does when it ends (`NativeAgentChatModel.finish`).
+    ///
+    /// From the launch as it is recorded on disk, not from this pane's own
+    /// state: with the writing open in two windows, either one's poll can
+    /// be the one that reads the turn in, and only the window that started
+    /// Terminal knows it started it. Only a reply made since that launch:
+    /// the first poll of a session can bring in replies from before it,
+    /// which are not news.
     private func notifyOfTerminalReply(in workspace: URL) {
-        guard AgentTurnNotifications.isEnabledNow, !(paneIsWatched && NSApp.isActive),
-              let provider = terminalCapture.provider,
-              let launchedAt = terminalCapture.launchedAt,
-              let last = AgentChatTranscriptStore.load(providerID: provider.rawValue, in: workspace)
+        guard AgentTurnNotifications.isEnabledNow,
+              !WritingPaneVisibility.isWatched(writingID: devotionalID),
+              let launch = AgentTerminalCaptureStore.loadLaunchRecord(in: workspace),
+              let last = AgentChatTranscriptStore.load(providerID: launch.providerID, in: workspace)
                   .messages.last,
-              last.role == .assistant, last.date >= launchedAt, last.id != notifiedTerminalReply
+              last.role == .assistant, last.date >= launch.launchedAt, last.id != notifiedTerminalReply
         else { return }
         notifiedTerminalReply = last.id
         AgentTurnNotifications.post(

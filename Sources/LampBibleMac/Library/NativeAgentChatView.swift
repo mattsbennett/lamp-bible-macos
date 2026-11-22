@@ -1512,19 +1512,23 @@ final class NativeAgentChatModel: ObservableObject {
     /// sends when it ends unwatched (`AgentTurnNotifications`). Set by the
     /// host and kept when its pane goes, since a reply outlives its pane.
     var notificationContext: AgentTurnNotificationContext?
-    /// The panes on this chat that are where the reader is looking
-    /// (`WatchedPaneProbe`). Per pane, as the observers are.
-    private var watchingPanes: Set<AnyHashable> = []
+    /// The panes showing this chat, each able to say whether it is seen
+    /// (`PaneVisibility`). Per pane, as the observers are.
+    private var panes: [AnyHashable: PaneVisibility] = [:]
     /// Whether the run in progress should say when it ends: not one a phone
     /// asked for, whose person is on the phone.
     private var notifiesThisRun = true
 
-    func setWatched(_ watched: Bool, by token: AnyHashable) {
-        if watched { watchingPanes.insert(token) } else { watchingPanes.remove(token) }
+    func showsIn(_ visibility: PaneVisibility, for token: AnyHashable) {
+        panes[token] = visibility
     }
 
-    /// Whether anyone is looking at this chat now.
-    private var isWatched: Bool { NSApp.isActive && !watchingPanes.isEmpty }
+    func stopShowing(for token: AnyHashable) {
+        panes[token] = nil
+    }
+
+    /// Whether anyone is looking at this chat now, asked as its turn ends.
+    private var isWatched: Bool { panes.values.contains { $0.isWatched } }
 
     func stopObservingQueueReady(for token: AnyHashable) {
         queueObservers.removeValue(forKey: token)
@@ -2759,6 +2763,8 @@ struct NativeAgentChatView: View {
     /// This pane's name among the panes sharing one chat, so that each is
     /// told which turn is running rather than only the last to appear.
     @State private var paneToken = UUID()
+    /// Whether this pane is seen, for a turn that ends while it is not.
+    @State private var visibility = PaneVisibility()
     /// The turn the shared chat is on, as this pane last heard it.
     @State private var observedTurn: UUID?
     @State private var submissionError: String?
@@ -3072,6 +3078,7 @@ struct NativeAgentChatView: View {
         }
         .onAppear {
             model.observeQueueReady(for: paneToken) { drainQueue() }
+            model.showsIn(visibility, for: paneToken)
             // Into state, not straight on to the host. A closure
             // registered here keeps the view struct it was made with, and
             // a plain `let` in that struct — the draft the writing held
@@ -3088,7 +3095,7 @@ struct NativeAgentChatView: View {
         .onChange(of: notificationContext, initial: true) { _, context in
             if let context { model.notificationContext = context }
         }
-        .reportsWatched { model.setWatched($0, by: paneToken) }
+        .reportsVisibility(to: visibility)
         .onChange(of: model.isRunning, initial: true) { _, running in
             onRunningChanged(running)
             // The reply has landed, so the next message waiting goes. One at
@@ -3101,10 +3108,7 @@ struct NativeAgentChatView: View {
         .onDisappear {
             model.stopObservingTurn(for: paneToken)
             model.stopObservingQueueReady(for: paneToken)
-            // Said here too: a probe's change may not be delivered to a
-            // view that has gone, and a pane left counted as watching would
-            // keep every later turn quiet.
-            model.setWatched(false, by: paneToken)
+            model.stopShowing(for: paneToken)
             // And told so. A host that goes on holding the turn it was last
             // told about would mark everything written afterwards — by a run
             // that outlives this pane, or by the person — as that turn's

@@ -220,6 +220,9 @@ struct LampBibleMacApp: App {
                 .environmentObject(libraryModel)
                 .environmentObject(syncController)
                 .lampWritingToolsGate()
+                // A clicked turn notification can open a writing from here
+                // too, when no library window is open to do it.
+                .modifier(AgentTurnRouteReceiver())
         }
         .restorationBehavior(.disabled)
         .defaultSize(width: 1_180, height: 780)
