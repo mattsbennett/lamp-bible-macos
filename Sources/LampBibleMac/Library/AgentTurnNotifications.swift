@@ -204,8 +204,9 @@ extension View {
     }
 }
 
-/// The writing panes open on each writing, so a Terminal turn, which any of
-/// them may be the one to read in, is quiet if any of them is seen.
+/// The writing panes showing a running Terminal session, by writing, so a
+/// Terminal turn, which any pane on the writing may be the one to read in,
+/// is quiet if one that shows the conversation is seen.
 @MainActor
 enum WritingPaneVisibility {
     private static var panes: [String: [AnyHashable: PaneVisibility]] = [:]

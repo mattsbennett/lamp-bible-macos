@@ -1246,8 +1246,15 @@ struct DevotionalAgentWorkspaceView: View {
             }
         }
         .reportsVisibility(to: visibility)
-        .onAppear {
-            WritingPaneVisibility.register(visibility, writingID: devotionalID, token: visibilityToken)
+        // Counted only while it shows a running Terminal session: a second
+        // window on the same writing showing the launch button shows none
+        // of the conversation, and must not keep a reply in the first quiet.
+        .onChange(of: showsTerminalSession, initial: true) { _, shows in
+            if shows {
+                WritingPaneVisibility.register(visibility, writingID: devotionalID, token: visibilityToken)
+            } else {
+                WritingPaneVisibility.unregister(writingID: devotionalID, token: visibilityToken)
+            }
         }
         .onDisappear {
             WritingPaneVisibility.unregister(writingID: devotionalID, token: visibilityToken)
@@ -2628,6 +2635,12 @@ struct DevotionalAgentWorkspaceView: View {
         // Assigned only on a real change: this runs several times a second, and
         // every assignment would redraw the terminal pane.
         if capture != terminalCapture { terminalCapture = capture }
+    }
+
+    /// Whether this pane shows a running Terminal session, which is what a
+    /// Terminal reply is seen in.
+    private var showsTerminalSession: Bool {
+        sessionMode == .terminal && activeProvider != nil
     }
 
     /// What a notification of this writing's turns is headed with.
