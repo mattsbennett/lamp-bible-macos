@@ -167,6 +167,30 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
     /// background server) leaves the group on its own.
     private func endWhatTheRunLeft(_ process: AgentSpawnedProcess) {
         process.signalGroup(SIGKILL)
+        // And what left the group: see `AgentRunMembers`.
+        lock.lock()
+        let members = runMembers
+        runMembers = nil
+        lock.unlock()
+        members?.endAll()
+    }
+
+    /// Every process the running run has started, including those that
+    /// left its group; see `AgentRunMembers`.
+    private var runMembers: AgentRunMembers?
+
+    /// Starts recording a run's processes, every two seconds until the run
+    /// ends.
+    private func recordMembers(of process: AgentSpawnedProcess) -> DispatchSourceTimer {
+        let members = AgentRunMembers(rootPID: process.processIdentifier)
+        lock.lock()
+        runMembers = members
+        lock.unlock()
+        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        timer.schedule(deadline: .now() + 0.5, repeating: 2)
+        timer.setEventHandler { members.sample() }
+        timer.resume()
+        return timer
     }
 
     /// Runs the provider, handing `onLine` each line of its output as it
@@ -219,13 +243,17 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
     /// left of the group is also killed as the run ends; see
     /// `endWhatTheRunLeft`.
     private func stop(_ process: AgentSpawnedProcess) {
+        lock.lock()
+        let members = runMembers
+        lock.unlock()
         process.terminate()
         DispatchQueue.global().asyncAfter(deadline: .now() + Self.stopGraceSeconds) {
             // Whether or not the provider has exited: a child that ignored
             // the ask and holds the output open would otherwise keep the run
             // from ever ending. Once the run has released the process, this
-            // does nothing.
+            // does nothing; the recorded members are checked by identity.
             process.signalGroup(SIGKILL)
+            members?.endAll()
         }
     }
 
@@ -289,6 +317,8 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
 
             guard !isCancelled else { return .stoppedBeforeStarting }
             try AgentHelperProcesses.launch(process)
+            let recording = recordMembers(of: process)
+            defer { recording.cancel() }
             // And once more, now there is something to terminate. Stop
             // between the guard above and this line found an assigned but
             // unstarted process and killed nothing, so the provider ran on
@@ -443,6 +473,8 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
 
             guard !isCancelled else { return .stoppedBeforeStarting }
             try AgentHelperProcesses.launch(process)
+            let recording = recordMembers(of: process)
+            defer { recording.cancel() }
             if isCancelled { stop(process) }
             let watchdog = watchForStall(in: process)
             defer { watchdog.cancel() }

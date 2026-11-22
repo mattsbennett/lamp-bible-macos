@@ -1833,3 +1833,130 @@ public enum AgentACPRun {
         return missing.isEmpty ? base : (base == "/" ? "" : base) + "/" + missing.joined(separator: "/")
     }
 }
+
+/// Every process a run has started, recorded as the run goes, so ending the
+/// run reaches the ones that left its process group.
+///
+/// A process group holds what a CLI starts unless it leaves on purpose, and
+/// some do: Claude Code's Bash commands and Codex's command runner each
+/// start a session of their own. While the CLI runs it ends them itself;
+/// if it crashes, they are orphaned — handed to launchd, no longer anyone's
+/// descendants — and could go on rewriting a draft after the turn was
+/// saved, or after an undo. So the run's descendants are sampled every
+/// couple of seconds and once more at the end, each known by its number
+/// and start time, and what is still running with that identity is ended.
+/// A known process's own children are found from it, so an orphan's
+/// children are found too.
+///
+/// Spared: a detached process that is itself one of the agent CLIs —
+/// OpenCode's shared background server, which `opencode run` can start and
+/// which serves every OpenCode session, not this run.
+public final class AgentRunMembers: @unchecked Sendable {
+    public struct Member: Hashable, Sendable {
+        public let pid: pid_t
+        public let startedSeconds: Int
+        public let startedMicroseconds: Int32
+    }
+
+    private struct Row {
+        let member: Member
+        let parent: pid_t
+        let group: pid_t
+        let name: String
+    }
+
+    /// The agent CLIs' own process names, as the kernel records them.
+    public static let agentNames: Set<String> = ["claude", "codex", "opencode", "agy", "antigravity"]
+
+    private let lock = NSLock()
+    private let root: Member?
+    private var known: [pid_t: Member] = [:]
+
+    public init(rootPID: pid_t) {
+        root = Self.table().first { $0.member.pid == rootPID }?.member
+    }
+
+    /// Records every descendant of the run's process, and of every process
+    /// already recorded, that is running now.
+    public func sample() {
+        let table = Self.table()
+        var children: [pid_t: [Row]] = [:]
+        for row in table { children[row.parent, default: []].append(row) }
+        let alive = Dictionary(table.map { ($0.member.pid, $0.member) }, uniquingKeysWith: { first, _ in first })
+        lock.lock()
+        defer { lock.unlock() }
+        var frontier: [pid_t] = []
+        if let root, alive[root.pid] == root { frontier.append(root.pid) }
+        frontier += known.values.filter { alive[$0.pid] == $0 }.map(\.pid)
+        var seen = Set(frontier)
+        while let next = frontier.popLast() {
+            for child in children[next] ?? [] where !seen.contains(child.member.pid) {
+                seen.insert(child.member.pid)
+                if Self.isSpared(child) { continue }
+                known[child.member.pid] = child.member
+                frontier.append(child.member.pid)
+            }
+        }
+    }
+
+    /// Looks once more, then kills every recorded process still running as
+    /// the process it was recorded as, and the group of any that leads one.
+    public func endAll() {
+        sample()
+        let table = Self.table()
+        let alive = Dictionary(table.map { ($0.member.pid, $0) }, uniquingKeysWith: { first, _ in first })
+        lock.lock()
+        let members = Array(known.values)
+        lock.unlock()
+        for member in members {
+            // Judged as it is now: a process keeps its number and start
+            // time when it replaces itself with another program, so one
+            // recorded as a launcher may since have become an agent's server.
+            guard let row = alive[member.pid], row.member == member, !Self.isSpared(row) else { continue }
+            if row.group == member.pid { killpg(member.pid, SIGKILL) }
+            kill(member.pid, SIGKILL)
+        }
+    }
+
+    /// How many processes have been recorded; for tests.
+    public var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return known.count
+    }
+
+    private static func isSpared(_ row: Row) -> Bool {
+        isSpared(name: row.name, pid: row.member.pid, group: row.group)
+    }
+
+    /// A process leading its own group, named as one of the agent CLIs — the
+    /// kernel's name for it, which is its program file's, so a link named
+    /// like one does not count.
+    static func isSpared(name: String, pid: pid_t, group: pid_t) -> Bool {
+        group == pid && agentNames.contains(name)
+    }
+
+    private static func table() -> [Row] {
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
+        var size = 0
+        guard sysctl(&mib, 4, nil, &size, nil, 0) == 0 else { return [] }
+        let stride = MemoryLayout<kinfo_proc>.stride
+        var processes = [kinfo_proc](repeating: kinfo_proc(), count: size / stride + 32)
+        size = processes.count * stride
+        guard sysctl(&mib, 4, &processes, &size, nil, 0) == 0 else { return [] }
+        return processes.prefix(size / stride).map { process in
+            var command = process.kp_proc.p_comm
+            let name = withUnsafeBytes(of: &command) { bytes in
+                String(decoding: bytes.prefix { $0 != 0 }, as: UTF8.self)
+            }
+            let started = process.kp_proc.p_un.__p_starttime
+            return Row(
+                member: Member(pid: process.kp_proc.p_pid, startedSeconds: started.tv_sec,
+                               startedMicroseconds: started.tv_usec),
+                parent: process.kp_eproc.e_ppid,
+                group: process.kp_eproc.e_pgid,
+                name: name
+            )
+        }
+    }
+}

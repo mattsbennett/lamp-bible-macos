@@ -945,3 +945,61 @@ struct AgentSpawnedProcessTests {
         #expect(gone)
     }
 }
+
+/// What a run started that left its group: Claude Code's Bash commands and
+/// Codex's command runner start sessions of their own.
+struct AgentRunMembersTests {
+    /// Starts `script` under /bin/sh in a group of its own, returning the
+    /// process and the first line it prints.
+    private func start(_ script: String) throws -> (AgentSpawnedProcess, String) {
+        let process = AgentSpawnedProcess()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", script]
+        process.standardOutput = output
+        try process.run()
+        var line = Data()
+        while true {
+            let byte = output.fileHandleForReading.readData(ofLength: 1)
+            if byte.isEmpty || byte == Data([0x0A]) { break }
+            line += byte
+        }
+        return (process, String(decoding: line, as: UTF8.self))
+    }
+
+    private func isAlive(_ pid: pid_t) -> Bool { kill(pid, 0) == 0 }
+
+    @Test func anOrphanInASessionOfItsOwnIsStillEnded() throws {
+        // A command that starts its own session, as a tool runner does,
+        // left behind when the shell that started it exits.
+        let (process, printed) = try start(
+            #"/usr/bin/python3 -c 'import os, time; os.setsid(); time.sleep(30)' & echo $!; sleep 1; exit 0"#
+        )
+        let orphan = try #require(pid_t(printed))
+        let members = AgentRunMembers(rootPID: process.processIdentifier)
+        members.sample()
+        #expect(members.count >= 1)
+        process.waitUntilExit()
+        process.signalGroup(SIGKILL)
+        // The group kill does not reach it: it is in a session of its own.
+        #expect(isAlive(orphan))
+        members.endAll()
+        var gone = false
+        for _ in 0..<100 where !gone {
+            gone = !isAlive(orphan)
+            if !gone { Thread.sleep(forTimeInterval: 0.05) }
+        }
+        #expect(gone)
+        process.release()
+    }
+
+    @Test func onlyADetachedAgentCLIIsSpared() {
+        // OpenCode's background server: its own group, its own program.
+        #expect(AgentRunMembers.isSpared(name: "opencode", pid: 500, group: 500))
+        // The same name inside the run's group is part of the run.
+        #expect(!AgentRunMembers.isSpared(name: "opencode", pid: 500, group: 400))
+        // A detached tool command is not spared.
+        #expect(!AgentRunMembers.isSpared(name: "python3", pid: 500, group: 500))
+        #expect(!AgentRunMembers.isSpared(name: "zsh", pid: 500, group: 500))
+    }
+}
