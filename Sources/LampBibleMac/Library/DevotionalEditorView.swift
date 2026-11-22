@@ -808,6 +808,10 @@ struct DevotionalEditorView: View {
     /// The ids of restores this editor made, so that the copy its edits
     /// are kept as takes those and not another window's.
     @State private var restoresMadeHere: Set<UUID> = []
+    /// The settle now running, so the next waits for it: they are
+    /// written down in the order their saves committed, not the order
+    /// their proving happens to finish in.
+    @State private var settling: Task<Void, Never>?
 
     /// A newer stored copy than the one held, arrived while this editor had
     /// edits of its own, and those edits not yet kept elsewhere. Nothing is
@@ -2817,7 +2821,18 @@ struct DevotionalEditorView: View {
         guard let key else { return }
         let owing = WritingReviewObligations.shared.owing(for: key)
         guard !owing.isEmpty else { return }
-        Task {
+        // One settle at a time, in the order the saves committed.
+        //
+        // Each takes its obligations as its save commits, which is
+        // right, and then proves them off the actor, which takes as
+        // long as the writing is big. Two saves close together can
+        // therefore finish the other way round, and the later one's
+        // bookkeeping — written first — is then overwritten by the
+        // earlier one's, which was reading what was owed before any of
+        // this. Flagged by the iOS session from their own.
+        let earlier = settling
+        settling = Task {
+            await earlier?.value
             // Off the main actor. Proving a restore aligns the whole
             // writing against the text it was made in, which iOS measured
             // at about 2.7 seconds for a writing of twelve thousand
