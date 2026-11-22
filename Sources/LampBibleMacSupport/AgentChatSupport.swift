@@ -1850,8 +1850,9 @@ public enum AgentACPRun {
 ///
 /// Spared: OpenCode's shared background server, which `opencode run` can
 /// start and which serves every OpenCode session, not this run — a process
-/// leading its own group whose program is `opencode`. Only that: a detached
-/// `codex` or `claude` a tool started is this run's work, not a service.
+/// leading its own group whose program is `opencode` and whose arguments
+/// are `serve --service`, as OpenCode 2 starts it. Only that: a detached
+/// `opencode run`, `codex` or `claude` a tool started is this run's work.
 ///
 /// Sampling narrows rather than closes the gap: a command started and
 /// orphaned between two samples is never seen. Closing it would take
@@ -1870,9 +1871,6 @@ public final class AgentRunMembers: @unchecked Sendable {
         let name: String
     }
 
-    /// The programs whose detached processes are shared services, not a
-    /// run's work, by the kernel's name for them.
-    public static let sharedServiceNames: Set<String> = ["opencode"]
 
     private let lock = NSLock()
     private let root: Member?
@@ -1880,6 +1878,9 @@ public final class AgentRunMembers: @unchecked Sendable {
     /// Set by `endAll`, after which nothing more is recorded: a sample
     /// still running when the run ended must not add to what was ended.
     private var ended = false
+    /// Held for the whole of `endAll`, so a second caller — a stop's grace
+    /// period and the run's own end — returns only once the kills are sent.
+    private let ending = NSLock()
 
     public init(rootPID: pid_t) {
         root = Self.table().first { $0.member.pid == rootPID }?.member
@@ -1918,6 +1919,8 @@ public final class AgentRunMembers: @unchecked Sendable {
     /// Looks once more, then kills every recorded process still running as
     /// the process it was recorded as, and the group of any that leads one.
     public func endAll() {
+        ending.lock()
+        defer { ending.unlock() }
         sample()
         let table = Self.table()
         let alive = Dictionary(table.map { ($0.member.pid, $0) }, uniquingKeysWith: { first, _ in first })
@@ -1944,14 +1947,42 @@ public final class AgentRunMembers: @unchecked Sendable {
     }
 
     private static func isSpared(_ row: Row) -> Bool {
-        isSpared(name: row.name, pid: row.member.pid, group: row.group)
+        // Arguments only for a candidate: reading them is a second call.
+        guard row.group == row.member.pid, row.name == "opencode" else { return false }
+        return isSpared(name: row.name, pid: row.member.pid, group: row.group,
+                        arguments: arguments(of: row.member.pid) ?? [])
     }
 
-    /// A process leading its own group whose program is a shared service's —
-    /// the kernel's name for it, which is its program file's, so a link
-    /// named like one does not count.
-    static func isSpared(name: String, pid: pid_t, group: pid_t) -> Bool {
-        group == pid && sharedServiceNames.contains(name)
+    /// OpenCode's background service: leading its own group, its program
+    /// `opencode` — the kernel's name for it, which is its program file's,
+    /// so a link named like one does not count — started as
+    /// `opencode serve --service`.
+    static func isSpared(name: String, pid: pid_t, group: pid_t, arguments: [String]) -> Bool {
+        group == pid && name == "opencode" && Array(arguments.dropFirst()) == ["serve", "--service"]
+    }
+
+    /// A process's arguments, its program's name first, from the kernel; nil
+    /// if they cannot be read.
+    static func arguments(of pid: pid_t) -> [String]? {
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size = 0
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return nil }
+        var buffer = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0 else { return nil }
+        // The argument count, the executable's path, padding, then the
+        // arguments, each ended by a zero byte.
+        let count = buffer.withUnsafeBytes { $0.load(as: Int32.self) }
+        var index = MemoryLayout<Int32>.size
+        while index < size, buffer[index] != 0 { index += 1 }
+        while index < size, buffer[index] == 0 { index += 1 }
+        var arguments: [String] = []
+        while arguments.count < count, index < size {
+            let start = index
+            while index < size, buffer[index] != 0 { index += 1 }
+            arguments.append(String(decoding: buffer[start..<index], as: UTF8.self))
+            index += 1
+        }
+        return arguments
     }
 
     private static func table() -> [Row] {

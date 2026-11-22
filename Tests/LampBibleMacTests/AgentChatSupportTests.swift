@@ -993,14 +993,27 @@ struct AgentRunMembersTests {
         process.release()
     }
 
-    @Test func onlyOpenCodesSharedServerIsSpared() {
-        // OpenCode's background server: its own group, its own program.
-        #expect(AgentRunMembers.isSpared(name: "opencode", pid: 500, group: 500))
-        // The same name inside the run's group is part of the run.
-        #expect(!AgentRunMembers.isSpared(name: "opencode", pid: 500, group: 400))
-        // A detached agent a tool started is the run's work, not a service.
-        #expect(!AgentRunMembers.isSpared(name: "codex", pid: 500, group: 500))
-        #expect(!AgentRunMembers.isSpared(name: "claude", pid: 500, group: 500))
-        #expect(!AgentRunMembers.isSpared(name: "python3", pid: 500, group: 500))
+    @Test func onlyOpenCodesBackgroundServiceIsSpared() {
+        let service = ["opencode", "serve", "--service"]
+        // As OpenCode 2 starts it: its own group, its own program.
+        #expect(AgentRunMembers.isSpared(name: "opencode", pid: 500, group: 500, arguments: service))
+        // The same inside the run's group is part of the run.
+        #expect(!AgentRunMembers.isSpared(name: "opencode", pid: 500, group: 400, arguments: service))
+        // A detached `opencode run` a tool started is the run's work.
+        #expect(!AgentRunMembers.isSpared(name: "opencode", pid: 500, group: 500,
+                                          arguments: ["opencode", "run", "edit the draft"]))
+        #expect(!AgentRunMembers.isSpared(name: "opencode", pid: 500, group: 500,
+                                          arguments: ["opencode", "serve"]))
+        #expect(!AgentRunMembers.isSpared(name: "codex", pid: 500, group: 500, arguments: service))
+        #expect(!AgentRunMembers.isSpared(name: "python3", pid: 500, group: 500, arguments: []))
+    }
+
+    @Test func argumentsAreReadFromTheKernel() throws {
+        let process = AgentSpawnedProcess()
+        process.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        process.arguments = ["30"]
+        try process.run()
+        defer { process.signalGroup(SIGKILL); process.waitUntilExit(); process.release() }
+        #expect(AgentRunMembers.arguments(of: process.processIdentifier) == ["/bin/sleep", "30"])
     }
 }
