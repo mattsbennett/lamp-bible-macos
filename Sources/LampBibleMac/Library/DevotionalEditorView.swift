@@ -2445,6 +2445,19 @@ struct DevotionalEditorView: View {
             guard askedIn != nil else { return }
             reviewSession?.marksRejected(askedIn: askedIn)
         }
+        // The page's redo branch, which decides whether a passage the
+        // writer undid may be kept for a Redo. Attached where the
+        // coordinator is made, and told `false` by the page's own
+        // `ready` rather than by anything this view does: a page that
+        // survives a view coming and going never says `ready` again,
+        // and a host resetting on its own lifecycle would let go of
+        // passages that are still redoable.
+        coordinator.onRedoAvailable = { available, discarded, text in
+            guard let writingID = reviewKey?.writingID else { return }
+            WritingReviewObligations.shared.redo(
+                available: available, discarded: discarded, standingIn: text, for: writingID
+            )
+        }
         coordinator.onReviewMarksDrawn = { [weak reviewSession] in
             let askedIn = reviewKey
             guard askedIn != nil else { return }
@@ -2889,14 +2902,31 @@ struct DevotionalEditorView: View {
         let (stands, waiting, dormant) = LampWritingReview.RestorePlan.settlement(
             pending: pending, inSaved: answers, inCurrent: current
         )
-        // A passage the writer has undone keeps its obligation and gives
-        // up its place in the queue. Redo puts the restored wording back
-        // without the page asking anything — it only reports that its
-        // marks are stale — so dropped outright it would be owed by
-        // nobody, and the save that then held it would record nothing:
-        // no restoration to the assistant, and no mark on the words it
-        // put back and nobody has read. Found by the iOS session.
-        let owed = waiting.union(dormant)
+        // A passage the writer has undone is kept only while the page
+        // says a Redo of it is still possible.
+        //
+        // Keeping it is what a Redo needs: the page puts the restored
+        // wording back without asking the host anything, so an
+        // obligation dropped at the undo is owed by nobody, and the
+        // save that then holds it records nothing — no restoration to
+        // the assistant, and no mark on words it put back that nobody
+        // has read.
+        //
+        // Keeping it past the end of its redo branch is worse. A
+        // restore whose replacement is empty — a deletion put back — is
+        // proved only negatively: `standing` says it stands when the
+        // assistant's words are not there. Held long enough, an
+        // ordinary edit elsewhere makes that true by accident, and the
+        // next save records a restoration the writer never made.
+        //
+        // So the page is asked rather than guessed at. It reports its
+        // redo depth as its history changes, and on `ready`, where a
+        // fresh page has none. Where it has not spoken, nothing is
+        // kept: of the two failures, recording nothing is the one to
+        // have. Both halves of this were found by the iOS session,
+        // against their own version of it, and these are their rules.
+        let heldForRedo = WritingReviewObligations.shared.canRedo(key.writingID) ? dormant : []
+        let owed = waiting.union(heldForRedo)
         guard !stands.isEmpty else {
             if owed.count != pending.count {
                 WritingReviewObligations.shared.stillOwed(owing.pending(owed), for: key.writingID)
@@ -2915,9 +2945,12 @@ struct DevotionalEditorView: View {
             owing.restore, held: owing.held, for: key, only: stands,
             remarkingUnread: !cleared
         ) { kept in
-            // `owed`, not `waiting`: a passage the writer has undone is
-            // dormant rather than finished, so the obligation stays and
-            // a later Redo can still be recorded.
+            // `owed`, not `waiting`: a passage held for a Redo is not
+            // finished with. `bodyCommitted` below still asks
+            // `waiting`, deliberately — a passage held for a Redo was
+            // proved absent from this very body, so it has no claim on
+            // that body's commit. Do not make the two agree on
+            // symmetry grounds.
             if kept, owed.isEmpty {
                 WritingReviewObligations.shared.settled(owing.id, for: key.writingID)
             } else {
@@ -2927,6 +2960,7 @@ struct DevotionalEditorView: View {
                 // it written down later against the text it was made
                 // in, with nothing having proved it at all.
                 var again = owing.pending(kept ? owed : pending)
+                again.dormant = kept ? heldForRedo : owing.dormantMarks
                 again.bodyCommitted = waiting.isEmpty
                 again.cleared = cleared
                 WritingReviewObligations.shared.stillOwed(again, for: key.writingID)

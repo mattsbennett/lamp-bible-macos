@@ -51,6 +51,74 @@ final class WritingReviewObligations {
         (owed[key.writingID] ?? []).filter { $0.document == key.document }
     }
 
+    /// Whether the page for a writing can still redo.
+    ///
+    /// The page says so as its history changes, and on `ready` — where a
+    /// fresh page has none — so the host never has to guess. Nothing is
+    /// kept dormant for a writing this is false for.
+    private var redoAvailable: Set<String> = []
+
+    func canRedo(_ writingID: String) -> Bool { redoAvailable.contains(writingID) }
+
+    /// The page's word on its redo branch.
+    ///
+    /// `available` is whether a Redo can be done now. `discarded` is
+    /// whether an ordinary edit has just thrown the branch away.
+    ///
+    /// They are not the same thing, and this is the trap: using up the
+    /// last Redo also leaves none available. Dropping on `available`
+    /// turning false would therefore let the passage go at the very
+    /// moment the Redo brought it back. So only `discarded` drops.
+    /// After the last Redo the passage is in the text again, and the
+    /// next save finds it standing and records it before the question
+    /// can arise.
+    ///
+    /// The rules are the iOS session's, who found this in the first
+    /// round against their own version. A fresh page means
+    /// `(available: false, discarded: true)`: it has no history, and
+    /// nothing kept for a branch that no longer exists is worth having.
+    func redo(
+        available: Bool, discarded: Bool, standingIn text: String?, for writingID: String
+    ) {
+        if available {
+            redoAvailable.insert(writingID)
+        } else {
+            redoAvailable.remove(writingID)
+        }
+        guard discarded else { return }
+        guard owed[writingID]?.contains(where: { !$0.dormantMarks.isEmpty }) == true else { return }
+        var kept: [WritingReviewSession.OwedRestore] = []
+        for var owing in owed[writingID] ?? [] {
+            let dormant = owing.dormantMarks
+            guard !dormant.isEmpty else {
+                kept.append(owing)
+                continue
+            }
+            // A Redo may have brought a passage back while more Redo
+            // was left, and only then did an edit throw the branch
+            // away. Such a passage stands in the text the page sent
+            // with the discard: it is not dormant any more, and stays
+            // owed for the save to judge. Only those still absent go.
+            let standing: Set<UUID>
+            if let text {
+                let answers = owing.restore.plan.standingByMark(from: owing.held, in: text)
+                standing = Set(dormant.filter { answers[$0] == .stands })
+            } else {
+                standing = []
+            }
+            let letGo = dormant.subtracting(standing)
+            owing.dormant = []
+            owing.pending = owing.pendingMarks.subtracting(letGo)
+            // An obligation exists to write passages down. With none
+            // left it has nothing to do, so it goes with them.
+            if owing.pending?.isEmpty == false {
+                kept.append(owing)
+            }
+        }
+        owed[writingID] = kept.isEmpty ? nil : kept
+        write()
+    }
+
     /// Said when the writer clears, so a record written later does not put
     /// a mark back over a passage they have answered.
     func wasCleared(for key: WritingReviewKey) {
@@ -691,6 +759,19 @@ final class WritingReviewSession: ObservableObject {
         var pending: Set<UUID>?
 
         var pendingMarks: Set<UUID> { pending ?? Set(restore.plan.marks) }
+
+        /// Passages the writer has undone, kept only while a Redo of
+        /// them is still possible. Core returns these from `settlement`
+        /// as `dormant`; they are held here rather than dropped so that
+        /// a Redo — which the page performs without asking the host
+        /// anything — is still recorded. They are let go the moment the
+        /// page says its redo branch is gone, because a passage kept
+        /// past that point can be proved by accident: a restore whose
+        /// replacement is empty stands whenever the assistant's words
+        /// are absent, which an unrelated edit eventually makes true.
+        var dormant: Set<UUID>?
+
+        var dormantMarks: Set<UUID> { dormant ?? [] }
 
         /// The document beside the writing this restore was made in, or
         /// nil for its own prose. Kept inside the record rather than in

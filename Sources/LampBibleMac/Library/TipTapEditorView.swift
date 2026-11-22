@@ -322,6 +322,10 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     /// The page could not place the marks it was sent — its text was a
     /// moment ahead of the host's — so the host sends them again.
     var onReviewMarksRejected: (() -> Void)?
+    /// `(available, discarded, text)` from the page's history. The
+    /// text comes with a discard, since a Redo may have brought a
+    /// passage back before the branch was thrown away.
+    var onRedoAvailable: ((Bool, Bool, String?) -> Void)?
     /// The page took the marks and drew them.
     var onReviewMarksDrawn: (() -> Void)?
     /// The review marks shown, as the writing's Markdown with markers, kept
@@ -514,6 +518,12 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
 
         switch type {
         case "ready":
+            // A fresh page has no history, so nothing may be held for a
+            // redo branch that does not exist. Said here and nowhere
+            // else: a page that survives never says `ready` again, and
+            // a host that reset on its own view's comings and goings
+            // would let go of passages still redoable.
+            onRedoAvailable?(false, true, nil)
             becomeReady()
 
         case "painted":
@@ -668,6 +678,18 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         // no longer describes it.
         case "reviewMarksStale":
             onReviewMarksRejected?()
+
+        // The page's redo branch. `available` is whether a Redo can be
+        // done now; `discarded` is whether an ordinary edit has just
+        // thrown the branch away. Using up the last Redo gives
+        // `(false, false)` — not a discard, since the passage is back
+        // in the text and the next save will record it.
+        case "redoAvailable":
+            onRedoAvailable?(
+                body["available"] as? Bool ?? false,
+                body["discarded"] as? Bool ?? false,
+                (body["markdown"] as? String).map(portableMarkdown(from:))
+            )
 
         case "reviewRestore":
             guard let id = body["id"] as? String else { return }
