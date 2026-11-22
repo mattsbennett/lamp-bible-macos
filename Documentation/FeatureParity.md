@@ -336,3 +336,21 @@ matched the notes editor's own setting all along. This app's reader has
 been replaced (0953460); the phone's was never the defect. If its blocks
 later come from core too, that is parity work on a correct reader, not a
 fix.
+
+**Seen drawn, 2026-11-22.** The card was adopted onto `LampProse` in
+0953460 and drawn in the running app, from a Debug build against core
+36c43ff with its own library under `CFFIXED_USER_HOME` and sync off, with
+a writing imported through core's own import. What the window showed, each
+of these a divergence the old reader had: a soft-wrapped line joined into
+its sentence; a quoted stanza keeping the break between its two `>` lines;
+a numbered item that wraps in the source drawn whole and numbered from
+the writer's own 1 and 2; a nested bullet one step in rather than the two
+that counting spaces gave; and the table, the escaped backtick, the fenced
+block with its language, the bold and the code span all as written.
+
+A harness could not show this. `NSHostingView` in a test drew an empty
+34pt view, because the card reads its content in a task a hosted view
+never runs — the trap recorded in the session memory as
+`swiftui-empty-group-task-never-runs`. Driving the real app is what works
+here, and the eleven mapping tests exist because of what the harness
+could not reach.
