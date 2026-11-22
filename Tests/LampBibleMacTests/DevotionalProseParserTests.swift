@@ -53,6 +53,53 @@ struct DevotionalProseParserTests {
         ])
     }
 
+    /// A note's lines are the writer's own.
+    ///
+    /// Both note editors run with `setLineBreaks(true)`, so Enter writes a
+    /// bare newline and the writer sees the lines they typed. Read without
+    /// that setting, those lines were joined with spaces and a note typed as
+    /// three lines came back as one — on the Mac only, since the phone's
+    /// note reader splits on the newline and the editor shows the breaks.
+    @Test func anotesLinesAreKeptWhereTheWriterPutThem() {
+        let blocks = DevotionalProseParser.parse(
+            """
+            Grace
+            Mercy
+            Peace
+            """,
+            lineBreaks: true
+        )
+
+        #expect(blocks == [.paragraph("Grace\nMercy\nPeace")])
+    }
+
+    /// The same text, read as writing prose, still joins: a soft-wrapped
+    /// line there is a continuation, not a break the writer asked for.
+    @Test func prosestillJoinsWhatTheWriterSoftWrapped() {
+        let blocks = DevotionalProseParser.parse(
+            """
+            Grace
+            Mercy
+            Peace
+            """
+        )
+
+        #expect(blocks == [.paragraph("Grace Mercy Peace")])
+    }
+
+    /// A quoted stanza keeps its lines too, for the same reason.
+    @Test func aquotedStanzaKeepsItsLinesInANote() {
+        let blocks = DevotionalProseParser.parse(
+            """
+            > She gave what she had,
+            > and it was everything.
+            """,
+            lineBreaks: true
+        )
+
+        #expect(blocks == [.quote(["She gave what she had,\nand it was everything."])])
+    }
+
     @Test func wrappedLinesStayInOneParagraph() {
         // A soft-wrapped source line is not a new paragraph, and joining with a
         // space is what stops "watching,and" appearing in the preview.

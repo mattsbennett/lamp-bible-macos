@@ -91,7 +91,11 @@ struct DevotionalContentView: View {
             if renderedContent?.source != source {
                 renderedContent = nil
             }
-            let blocks = await DevotionalContentRenderer.shared.render(source)
+            // A note is typed in an editor with line breaks on, so it is read
+        // with them on; writing prose is not.
+        let blocks = await DevotionalContentRenderer.shared.render(
+            source, lineBreaks: mediaScope == .note
+        )
             guard !Task.isCancelled, source == markdown else { return }
             let content = RenderedDevotionalContent(source: source, blocks: blocks)
             renderedContent = content
@@ -578,8 +582,10 @@ private actor DevotionalContentRenderer {
     private var cache: [String: [RenderedDevotionalBlock]] = [:]
     private var cacheOrder: [String] = []
 
-    func render(_ markdown: String) -> [RenderedDevotionalBlock] {
-        if let cached = cache[markdown] {
+    func render(_ markdown: String, lineBreaks: Bool) -> [RenderedDevotionalBlock] {
+        // The same text reads two ways, so the setting is part of the key.
+        let key = "\(lineBreaks ? "b" : "-")\(markdown)"
+        if let cached = cache[key] {
             return cached
         }
         // Runs are numbered across the whole document, in reading order, so a
@@ -592,7 +598,7 @@ private actor DevotionalContentRenderer {
                 // One `.text` run holds every consecutive prose line, so it has to
                 // be split back into headings, quotes, lists and paragraphs before
                 // any of them can be styled.
-                return DevotionalProseParser.parse(value).map {
+                return DevotionalProseParser.parse(value, lineBreaks: lineBreaks).map {
                     .prose(RenderedProseBlock($0, numbering: &numbering))
                 }
             case .image(let caption, let url):
@@ -601,8 +607,8 @@ private actor DevotionalContentRenderer {
                 return [.audio(label: label, url: url)]
             }
         }
-        cache[markdown] = rendered
-        cacheOrder.append(markdown)
+        cache[key] = rendered
+        cacheOrder.append(key)
         if cacheOrder.count > cacheLimit {
             cache.removeValue(forKey: cacheOrder.removeFirst())
         }

@@ -1288,7 +1288,19 @@ public enum DevotionalProseParser {
         return trimmed.count >= fence.length
     }
 
-    public static func parse(_ text: String) -> [DevotionalProseBlock] {
+    /// `lineBreaks` is the editor's own setting, carried through to the
+    /// reader so the two agree about what a newline means.
+    ///
+    /// Writing prose is typed with it off: a soft-wrapped source line is a
+    /// continuation, and joining with a space is what stops "watching,and"
+    /// appearing. Notes are typed with it on (`setLineBreaks(true)`, which
+    /// both note editors ask for), so a line the writer put in is a line
+    /// they get back. Reading a note with it off is how a note typed as
+    /// three lines came back as one.
+    public static func parse(
+        _ text: String, lineBreaks: Bool = false
+    ) -> [DevotionalProseBlock] {
+        let joiner = lineBreaks ? "\n" : " "
         var blocks: [DevotionalProseBlock] = []
         var paragraphLines: [String] = []
         var bulletItems: [DevotionalListLine] = []
@@ -1297,7 +1309,7 @@ public enum DevotionalProseParser {
 
         func flushParagraph() {
             let joined = paragraphLines
-                .joined(separator: " ")
+                .joined(separator: joiner)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if !joined.isEmpty { blocks.append(.paragraph(joined)) }
             paragraphLines.removeAll()
@@ -1328,14 +1340,14 @@ public enum DevotionalProseParser {
             for line in quoteLines {
                 if line.trimmingCharacters(in: .whitespaces).isEmpty {
                     if !current.isEmpty {
-                        paragraphs.append(current.joined(separator: " "))
+                        paragraphs.append(current.joined(separator: joiner))
                         current.removeAll()
                     }
                 } else {
                     current.append(line)
                 }
             }
-            if !current.isEmpty { paragraphs.append(current.joined(separator: " ")) }
+            if !current.isEmpty { paragraphs.append(current.joined(separator: joiner)) }
             if !paragraphs.isEmpty { blocks.append(.quote(paragraphs)) }
             quoteLines.removeAll()
         }
