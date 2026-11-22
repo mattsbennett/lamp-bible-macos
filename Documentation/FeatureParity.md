@@ -301,9 +301,10 @@ the two already fixed.
 **The undone restore stays without an interface.** Recommended to the
 owner on 2026-11-22 as "leave it with no UI, and close the item — not as a
 deferred decision, but because the behaviour is already right", and
-answered "otherwise agreed on 3". That is the whole of the exchange, set
-down as it happened: the recommendation was specific, the agreement was to
-it, and nothing further was asked. The reasoning
+answered "otherwise agreed on 3", and asked again later which decisions
+were meant, then closed both: "those 2 can be closed". So this is settled,
+and the exchange is set down as it happened rather than as a reading of
+it. The reasoning
 is worth keeping because the item reads like a gap and is not one:
 `dormant` does not mean dropped. `LampWritingReviewStore.swift` says it
 exactly — "still owed, out of the queue, and recorded by a later save that
@@ -325,8 +326,9 @@ The one real cost is that a regression here would be invisible to a
 writer too. That argues for coverage, not interface, and it has unit tests
 and the theorem.
 
-**`NoteMarkdownRenderer` on the phone is left as it is.** Not because
-migrating it was refused — the question was the wrong way round. It was
+**`NoteMarkdownRenderer` on the phone is left as it is.** Closed by the
+owner on 2026-11-22, with the entry above. Not because migrating it was
+refused — the question was the wrong way round. It was
 recorded here as the phone deliberately diverging from core, and the
 measurement said otherwise: the reader that disagreed with the editor was
 this app's, on 77 of 138 real writings, and the phone's line-by-line split
