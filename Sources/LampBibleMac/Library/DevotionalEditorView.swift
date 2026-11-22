@@ -2437,12 +2437,14 @@ struct DevotionalEditorView: View {
             )
         }
         coordinator.onReviewMarksRejected = { [weak reviewSession] in
-            guard reviewKey != nil else { return }
-            reviewSession?.marksRejected()
+            let askedIn = reviewKey
+            guard askedIn != nil else { return }
+            reviewSession?.marksRejected(askedIn: askedIn)
         }
         coordinator.onReviewMarksDrawn = { [weak reviewSession] in
-            guard reviewKey != nil else { return }
-            reviewSession?.marksDrawn()
+            let askedIn = reviewKey
+            guard askedIn != nil else { return }
+            reviewSession?.marksDrawn(askedIn: askedIn)
         }
     }
 
@@ -2479,7 +2481,7 @@ struct DevotionalEditorView: View {
             // tells the writer the opposite of the truth.
             Label(
                 reviewSession.count == 1 ? "1 to Review" : "\(reviewSession.count) to Review",
-                systemImage: reviewSession.isUnshown
+                systemImage: reviewMarksUnshown
                     ? "exclamationmark.circle" : "checkmark.circle"
             )
         }
@@ -2489,8 +2491,17 @@ struct DevotionalEditorView: View {
         // writing and a document can see the count is a different one.
     }
 
+    /// Whether the warning applies: only where the page is what is
+    /// drawing the marks. In the Markdown editor they are drawn from
+    /// ranges, with no Markdown to parse and nothing to refuse, so an
+    /// answer the hidden page gave about its own copy says nothing
+    /// about what the writer is looking at.
+    private var reviewMarksUnshown: Bool {
+        reviewSession.isUnshown && isEditingVisually
+    }
+
     private var reviewHelp: String {
-        if reviewSession.isUnshown {
+        if reviewMarksUnshown {
             return """
                 \(reviewSession.count == 1 ? "A passage" : "Passages") the assistant changed \
                 that this editor cannot mark in place. Use Next Change to step through \

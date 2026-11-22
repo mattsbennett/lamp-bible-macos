@@ -373,6 +373,12 @@ final class WritingReviewSession: ObservableObject {
     /// settles. The visual page is not sent the marks again for it, unless
     /// it refused the last ones.
     func textChanged(_ text: String) {
+        // A new text is a new question. The page may well take the
+        // marks for it, and until it has answered there is nothing to
+        // warn about — an undo that puts back text the page was happy
+        // with would otherwise keep the warning over marks the writer
+        // can see.
+        if isUnshown, text != self.text { isUnshown = false }
         guard text != self.text else { return }
         self.text = text
         guard review != nil else { return }
@@ -382,7 +388,13 @@ final class WritingReviewSession: ObservableObject {
     /// The page could not place the marks it was sent: its text was not
     /// this one. They go again once the text settles.
     /// The page would not draw the marks it was sent.
-    func marksRejected() {
+    ///
+    /// `askedIn` is what it was sent for. The page answers after a turn
+    /// of its own and the writer can open another document meanwhile;
+    /// an answer about the outline must not put a warning over the
+    /// notes, which may be perfectly well marked.
+    func marksRejected(askedIn: WritingReviewKey? = nil) {
+        if let askedIn, askedIn != key { return }
         needsResend = true
         // Said on the first refusal, not the second.
         //
@@ -407,7 +419,8 @@ final class WritingReviewSession: ObservableObject {
     /// ranges exist in exactly the cases the page turns down, so
     /// clearing on those would clear the warning whenever it was most
     /// deserved.
-    func marksDrawn() {
+    func marksDrawn(askedIn: WritingReviewKey? = nil) {
+        if let askedIn, askedIn != key { return }
         if isUnshown { isUnshown = false }
     }
 
