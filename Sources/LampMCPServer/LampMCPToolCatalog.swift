@@ -385,11 +385,53 @@ public enum LampMCPToolCatalog {
         ),
     ]
 
+    /// Making a deck's animations into video. Offered only to a session
+    /// opened on a writing's workspace, which is where it writes.
+    public static let animationTools: [Tool] = [
+        Tool(
+            name: "render_animation",
+            description: """
+            Turn an animation into a looping video for a slide. Write an HTML \
+            page in the workspace's Assets folder that draws a scene, with \
+            three.js imported as "three" (Lamp supplies it; nothing loads from \
+            the network), and sets window.lamp = { duration, render(t) }: \
+            render draws the frame at t seconds and may be async; render(duration) \
+            must look like render(0) so the loop closes. Lamp draws every frame \
+            itself and writes a video and its first frame beside the page, \
+            named after the page and what was drawn (Assets/name-1a2b3c4d.mp4 \
+            and .jpg), for an image block's video and assetPath. The names \
+            change whenever the animation does, so write them into the deck \
+            again after every render. Returns frames from across the loop to look at. Needs a \
+            session opened on a writing's workspace.
+            """,
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "page": string("The page, relative to the workspace, such as Assets/tabernacle.html."),
+                    "width": integer("Pixel width, even, 128 to 3840. Defaults to 1920."),
+                    "height": integer("Pixel height, even, 128 to 3840. Defaults to 1080; use the slide's shape for a background."),
+                    "duration": integer("Loop length in seconds, 1 to 20, when the page does not set window.lamp.duration."),
+                    "fps": integer("Frames a second, 12 to 60. Defaults to 30."),
+                ]),
+                "additionalProperties": .bool(false),
+                "required": .array([.string("page")]),
+            ]),
+            annotations: .init(
+                readOnlyHint: false,
+                // It replaces an earlier video and still of the same name.
+                destructiveHint: true,
+                idempotentHint: true,
+                openWorldHint: false
+            )
+        ),
+    ]
+
     /// Everything a session with a workspace is offered.
     public static func tools(workspace: Bool) -> [Tool] {
         // `workspaceTools` is offered either way now: with a workspace it
         // serves that writing, and without one it takes a named writing.
         tools + deckTools + writingTools + chatTools + writeTools + writingImportTools + workspaceTools
+            + (workspace ? animationTools : [])
     }
 
     /// Reading Lamp's own record of the reader's other chats, so a question

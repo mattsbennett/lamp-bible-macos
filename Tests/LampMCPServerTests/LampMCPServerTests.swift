@@ -18,18 +18,22 @@ struct LampMCPServerTests {
         let all = LampMCPToolCatalog.tools(workspace: true)
         #expect(LampMCPToolCatalog.tools.count == 18)
         #expect(LampMCPToolCatalog.deckTools.count == 4)
+        #expect(LampMCPToolCatalog.animationTools.count == 1)
+        // It writes beside the page in a workspace, so only a session with one is offered it.
+        #expect(!LampMCPToolCatalog.tools(workspace: false).contains { $0.name == "render_animation" })
         #expect(LampMCPToolCatalog.writingTools.count == 2)
         #expect(LampMCPToolCatalog.writeTools.count == 3)
         #expect(LampMCPToolCatalog.writingImportTools.count == 3)
         // Both read-only: chats are read, never changed.
         #expect(LampMCPToolCatalog.chatTools.count == 2)
-        #expect(all.count == 33)
+        #expect(all.count == 34)
         #expect(Set(all.map(\.name)).count == all.count)
 
         // import_writings asks Lamp to show files for review, and what the
         // person accepts can replace a writing's text, so it says it writes.
-        let writing = Set(LampMCPToolCatalog.writeTools.map(\.name)).union(["import_writings"])
-        #expect(writing == ["write_writing_draft", "add_reading_plan", "start_writing", "import_writings"])
+        // render_animation writes a video and still into the workspace.
+        let writing = Set(LampMCPToolCatalog.writeTools.map(\.name)).union(["import_writings", "render_animation"])
+        #expect(writing == ["write_writing_draft", "add_reading_plan", "start_writing", "import_writings", "render_animation"])
         for tool in all {
             if writing.contains(tool.name) {
                 #expect(

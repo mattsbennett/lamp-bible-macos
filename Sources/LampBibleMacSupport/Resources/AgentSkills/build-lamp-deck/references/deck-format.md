@@ -612,6 +612,76 @@ same `tint`, drifting if it drifts.
   a background loop short. Slide Studio refuses one over 100 MB.
 - **One a slide:** a slide plays one video, the picture behind it's or else the
   first. Any other is shown as its still, and Lamp warns.
+
+### An animation: `render_animation`
+
+For something a still cannot show — a model of the tabernacle turning, light
+moving over a landscape, a journey's line drawn across a map, a structure
+building up — write the animation as a web page and have Lamp make it into a
+video. Lamp draws the page a frame at a time on a clock it holds, so nothing
+of yours runs while the deck is presented: the room sees a video, which goes
+on an image block like any other.
+
+Write the page in `Assets`, beside the deck, in UTF-8. It imports three.js as `three`
+(Lamp supplies version 0.170, the core library only; nothing loads from the
+network), may read other files in its own folder, and sets `window.lamp`:
+
+```html
+<!doctype html><html><head></head><body style="margin:0">
+<script type="module">
+import * as THREE from "three";
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color("#111827");
+const camera = new THREE.PerspectiveCamera(35, innerWidth / innerHeight, 0.1, 100);
+// … build the scene …
+const duration = 12;
+window.lamp = {
+  duration,
+  render(t) {
+    const turn = (t / duration) * Math.PI * 2;   // one full turn: t = duration looks as t = 0
+    camera.position.set(Math.sin(turn) * 8, 3, Math.cos(turn) * 8);
+    camera.lookAt(0, 0, 0);
+    renderer.render(scene, camera);
+  },
+  // ready: a promise to wait for first, while textures in the folder load
+};
+</script></body></html>
+```
+
+Then call `render_animation` with `"page": "Assets/tabernacle.html"`. It writes
+a video and its still beside the page, named after it and what was drawn, such
+as `Assets/tabernacle-1a2b3c4d.mp4` and `Assets/tabernacle-1a2b3c4d.jpg`, and
+returns frames from across the loop: look at them, and fix the page until they
+show what you meant. Use the pair it names on an image block, with `assetPath`
+the still and `video` the video, and an `altText` that says what moves. The
+names change whenever the animation does, which is how Lamp knows to bring in
+the new video: after every render, write the names it returned into the deck.
+
+- **Everything the page loads must be there.** A file it asks for that is
+  missing, outside its folder, or over 64 MB, and any error it throws, stops
+  the render with the reason, rather than making a video of a broken scene.
+  Nothing from the network loads at all; Lamp reports most attempts, but a
+  CSS `url()` to the network simply draws nothing, so look at the frames.
+- **Time comes only from `t`.** Never `Date.now()`, `performance.now()` or
+  `requestAnimationFrame`; Lamp calls `render(t)` for each frame. Seed any
+  randomness, so the page draws the same each time.
+- **Close the loop.** Make `render(duration)` look like `render(0)`: tie every
+  motion to `t / duration` going once, or a whole number of times, round.
+- **Size:** `width` and `height` default to 1920 × 1080, a widescreen slide's
+  shape; for a 4:3 deck behind the slide use 1440 × 1080. A framed animation
+  can be any shape. A loop runs from 1 to 20 seconds.
+- **Behind words:** the words are coloured for the still, the first frame, and
+  cannot follow the animation. Keep where the words fall quiet and of one
+  tone, or put the animation beside the words instead.
+- **Put words on the slide, not in the animation.** Lamp sets the slide's words
+  to fit and read; text drawn into a video does neither.
+- **A reconstruction is a reconstruction.** Model what the text describes, say
+  in the caption or the talk that it is a reconstruction, and leave out detail
+  you cannot check.
+
 - Choose quiet footage whose colours stay near the still's: water, clouds,
   candlelight. Words are set once, for the still, and cannot follow a video
   that turns from dark to light.

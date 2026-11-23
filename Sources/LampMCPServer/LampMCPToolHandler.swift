@@ -297,6 +297,9 @@ public actor LampMCPToolHandler {
         case "render_deck":
             return try await renderDeck(arguments)
 
+        case "render_animation":
+            return try await renderAnimation(arguments)
+
         case "find_place":
             guard let names = strings(arguments["names"]), !names.isEmpty else {
                 throw LampMCPToolError.missingArgument("names")
@@ -403,6 +406,70 @@ public actor LampMCPToolHandler {
             ),
             isError: false
         )
+    }
+
+    /// Draws an agent's animation page to a looping video and its still,
+    /// beside the page in this session's workspace, and sends back frames
+    /// from across the loop to look at.
+    ///
+    /// Only a session opened on a workspace: what is written lands in the
+    /// folder the agent already writes its deck in, and nowhere else.
+    private func renderAnimation(_ arguments: [String: Value]) async throws -> CallTool.Result {
+        guard let workspaceURL else { throw LampMCPToolError.animationNeedsWorkspace }
+        let page = try requiredString("page", in: arguments)
+        let folder = workspaceURL.standardizedFileURL.resolvingSymlinksInPath()
+        let pageURL = folder.appendingPathComponent(page).standardizedFileURL.resolvingSymlinksInPath()
+        guard LampPresentationDeckValidator.isSafeAssetPath(page),
+              ["html", "htm"].contains(pageURL.pathExtension.lowercased()),
+              pageURL.path.hasPrefix(folder.path + "/")
+        else {
+            throw LampMCPToolError.invalidArgument(
+                "page", "an .html page inside the workspace, such as Assets/scene.html"
+            )
+        }
+        guard let three = LampBundledSkills.catalogURL?
+            .appendingPathComponent("build-lamp-deck/scene/three.module.min.js"),
+            FileManager.default.fileExists(atPath: three.path)
+        else { throw LampMCPToolError.noSkills }
+        let base = pageURL.deletingPathExtension()
+        let rendered = try await LampAnimationRenderer.render(
+            page: pageURL,
+            three: three,
+            videoURL: base.appendingPathExtension("mp4"),
+            stillURL: base.appendingPathExtension("jpg"),
+            options: .init(
+                width: arguments["width"]?.intValue ?? 1_920,
+                height: arguments["height"]?.intValue ?? 1_080,
+                framesPerSecond: arguments["fps"]?.intValue ?? 30,
+                duration: arguments["duration"]?.intValue.map(Double.init),
+                fingerprintsNames: true
+            )
+        )
+        let relative = { (url: URL) in String(url.path.dropFirst(folder.path.count + 1)) }
+        let report: [String: Value] = [
+            "video": .string(relative(rendered.videoURL)),
+            "still": .string(relative(rendered.stillURL)),
+            "seconds": .double(rendered.duration),
+            "frames": .int(rendered.frameCount),
+            "bytes": .int(Int(rendered.videoBytes)),
+            "use": .string(
+                "On an image block: \"assetPath\": \"\(relative(rendered.stillURL))\", "
+                    + "\"video\": \"\(relative(rendered.videoURL))\". These names change whenever the animation does: write them "
+                    + "into the deck again after each render. Look at the frames before using it."
+            ),
+        ]
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        var content: [Tool.Content] = [
+            .text(text: String(decoding: try encoder.encode(report), as: UTF8.self), annotations: nil, _meta: nil),
+        ]
+        for sample in rendered.samples {
+            content.append(.text(text: String(format: "At %.1f s", sample.seconds), annotations: nil, _meta: nil))
+            content.append(.image(
+                data: sample.jpeg.base64EncodedString(), mimeType: "image/jpeg", annotations: nil, _meta: nil
+            ))
+        }
+        return CallTool.Result(content: content, structuredContent: .object(report), isError: false)
     }
 
     /// Replaces a writing's draft, if the writer has not moved it underneath.
@@ -1020,6 +1087,7 @@ public enum LampMCPToolError: Error, LocalizedError, Equatable, Sendable {
     case missingArgument(String)
     case invalidArgument(String, String)
     case noWorkspace
+    case animationNeedsWorkspace
     case noSkills
     case accessDisabled
     case personalContentNotAllowed
@@ -1045,6 +1113,12 @@ public enum LampMCPToolError: Error, LocalizedError, Equatable, Sendable {
             This session serves no agent workspace, so name the writing: pass \
             `writing_id`, from list_writings, for the writing whose history \
             you want.
+            """
+        case .animationNeedsWorkspace:
+            """
+            render_animation writes its video beside the page in a writing's \
+            workspace, and this session serves none. Ask from a session opened \
+            on the writing whose deck it is for.
             """
         case .noSkills:
             """

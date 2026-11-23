@@ -1814,7 +1814,7 @@ public enum AgentACPRun {
         "list_reading_plans", "list_writings", "lookup_dictionary_keys", "plan_writing_import",
         "read_book_section", "read_chat", "read_commentary", "read_devotional", "read_passage",
         "read_plan_day", "read_quiz_questions", "read_skill", "read_study_material", "read_writing",
-        "render_deck", "search_dictionary", "search_library", "start_writing", "validate_deck",
+        "render_animation", "render_deck", "search_dictionary", "search_library", "start_writing", "validate_deck",
         "write_writing_draft", "writing_changes", "writing_import_status",
     ]
 
