@@ -805,8 +805,11 @@ struct DevotionalEditorView: View {
     /// Several at once: restore a passage, let its save be overtaken,
     /// restore another, and the writing holds both while neither is
     /// written down. One slot lost the first.
-    /// The ids of restores this editor made, so that the copy its edits
-    /// are kept as takes those and not another window's.
+    /// The ids of restores this editor made in the writing's prose, so that
+    /// the copy its edits are kept as takes those and not another window's.
+    /// Not one made in a document beside it: the copy holds the prose and
+    /// none of those, so its restore stays owed where the document is, and
+    /// that document's save settles it.
     @State private var restoresMadeHere: Set<UUID> = []
     /// The settle now running, so the next waits for it: they are
     /// written down in the order their saves committed, not the order
@@ -2801,7 +2804,7 @@ struct DevotionalEditorView: View {
                 return
             }
             WritingReviewObligations.shared.stillOwed(owing, for: identifier)
-            restoresMadeHere.insert(owing.id)
+            if owing.document == nil { restoresMadeHere.insert(owing.id) }
             // The writing's save, which is the one that commits the prose.
             // A restore made in a document is saved by that document's own
             // save, which settles it there; this still runs, and settles
@@ -3132,8 +3135,9 @@ struct DevotionalEditorView: View {
                 owing.document = askedIn?.document
                 WritingReviewObligations.shared.stillOwed(owing, for: identifier)
                 // Made here, as `keepRestore`'s are, so a newer copy arriving
-                // before the save carries it with the writer's own edits.
-                restoresMadeHere.insert(owing.id)
+                // before the save carries one made in the prose with the
+                // writer's own edits.
+                if owing.document == nil { restoresMadeHere.insert(owing.id) }
                 return
             }
             switch made {
