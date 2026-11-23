@@ -35,6 +35,12 @@ protocol WritingFindTarget: AnyObject {
 /// find bar found.
 @MainActor
 protocol WritingReplaceTarget: WritingFindTarget {
+    /// Whether this surface can be written to as it stands.
+    ///
+    /// Conformance says a surface is able to replace; this says whether it
+    /// can right now. A page showing a writing read-only answers false.
+    var canReplaceNow: Bool { get }
+
     /// Replaces the current match, as one change Undo takes back, and makes
     /// the next match after it current.
     func replaceCurrent(with replacement: String, completion: @escaping (WritingFindStatus) -> Void)
@@ -83,7 +89,14 @@ final class WritingFindController {
 
     /// Whether the surface on screen can be written to. A preview cannot, and
     /// is offered Find alone.
-    var canReplace: Bool { target is any WritingReplaceTarget }
+    ///
+    /// Asked of the target rather than read off its type: one surface is the
+    /// same object in two modes. The editor page conforms to the replacing
+    /// protocol because it can replace while it is being edited, and the same
+    /// page shows a writing read-only — where the page itself refuses to
+    /// replace. Going by the type alone drew a Replace field there that did
+    /// nothing when used.
+    var canReplace: Bool { replaceTarget?.canReplaceNow ?? false }
 
     private var replaceTarget: (any WritingReplaceTarget)? { target as? any WritingReplaceTarget }
 

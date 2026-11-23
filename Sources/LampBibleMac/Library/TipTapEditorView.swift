@@ -68,6 +68,8 @@ struct TipTapEditorView: NSViewRepresentable {
     /// place the editor inside their own scrolling column rather than giving it
     /// a pane of its own. See `TipTapEditorCoordinator.applyCompactLayout`.
     var compactLayout = false
+    /// What the page shows the writing as. A preview passes `.read`.
+    var viewMode: TipTapViewMode = .edit
     /// What the empty editor says, when not the bundle's own.
     var placeholder: String?
     /// Whether a single line break is a line break rather than a space. Notes
@@ -104,6 +106,7 @@ struct TipTapEditorView: NSViewRepresentable {
         coordinator.updateRichMediaIDs(Set(mediaReferences.map(\.id)))
         coordinator.onContentChanged = bindingUpdater
         coordinator.usesCompactLayout = compactLayout
+        coordinator.setViewMode(viewMode)
         coordinator.usesLineBreaks = lineBreaks
         coordinator.setFootnoteClicks(footnoteClicks)
         coordinator.setMediaMap(coordinator.mediaMap(
@@ -127,6 +130,8 @@ struct TipTapEditorView: NSViewRepresentable {
     func updateNSView(_ webView: WKWebView, context: Context) {
         let coordinator = context.coordinator
         coordinator.hostWantsVisible = isVisible
+        // A pooled page comes back in whatever mode its last host left it.
+        coordinator.setViewMode(viewMode)
         coordinator.updateMediaScopeID(mediaScopeID)
         coordinator.updateRichMediaIDs(Set(mediaReferences.map(\.id)))
         coordinator.onContentChanged = bindingUpdater
@@ -337,6 +342,10 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     private var mediaScopeID: String
     private var richMediaIDs: Set<String>
     private var isReady = false
+    /// What the page is showing the writing as. The page is editable only in
+    /// `edit`; in `read` it draws the same writing, with its own marks,
+    /// footnotes and media, and refuses to be typed into.
+    private(set) var viewMode: TipTapViewMode = .edit
     private var pendingContent: String?
     /// The editor's own Markdown for the text it was last given, before any edit.
     private var markdownAsLoaded: String?
@@ -564,6 +573,7 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         guard !isReady else { return }
         isReady = true
         if usesCompactLayout { applyCompactLayout() }
+        applyViewMode()
         evaluate("window.editorAPI.setLineBreaks(\(usesLineBreaks))")
         if let mediaMap = pendingMediaMap {
             pendingMediaMap = nil
@@ -1327,7 +1337,40 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
 
 /// The bundle searches the document as it is shown, a block at a time, so
 /// what the find bar finds in the visual editor is the text a reader sees.
+extension TipTapEditorCoordinator {
+    /// Shows the writing as `mode` does.
+    ///
+    /// The page has had this all along — our bundle is the phone's build,
+    /// and the phone has read a writing in the page since it had modes. The
+    /// Mac simply never called it, and drew a reader of its own instead.
+    func setViewMode(_ mode: TipTapViewMode) {
+        guard viewMode != mode else { return }
+        viewMode = mode
+        guard isReady else { return }
+        applyViewMode()
+    }
+
+    fileprivate func applyViewMode() {
+        evaluate("window.editorAPI.setMode(\"\(viewMode.rawValue)\")")
+    }
+}
+
+/// What the page shows a writing as.
+enum TipTapViewMode: String {
+    /// Read-only, as the writing reads.
+    case read
+    /// Written in.
+    case edit
+    /// Shown to a room.
+    case present
+}
+
 extension TipTapEditorCoordinator: WritingReplaceTarget {
+    /// The page refuses to replace unless it is editable, which it is only
+    /// in `edit`. Said here so the find bar does not draw a Replace field
+    /// that would do nothing.
+    var canReplaceNow: Bool { viewMode == .edit }
+
     func setSearch(
         _ query: String,
         options: WritingFindOptions,

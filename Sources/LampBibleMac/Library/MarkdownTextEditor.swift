@@ -298,6 +298,9 @@ struct WritingTextEdits: Equatable {
 /// carries on when the Markdown surface comes back or shows another file.
 @MainActor
 final class MarkdownTextFinder: WritingReplaceTarget {
+    /// This one is only ever put on an editable text view.
+    var canReplaceNow: Bool { true }
+
     var onFindStatusChanged: ((WritingFindStatus) -> Void)?
     private weak var textView: NSTextView?
     private var query = ""
