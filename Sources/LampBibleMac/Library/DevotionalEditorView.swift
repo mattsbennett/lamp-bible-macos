@@ -3029,6 +3029,10 @@ struct DevotionalEditorView: View {
             // one file's words into another.
             return
         }
+        // The document it was asked in, by every route: the plan is worked
+        // out off the main actor, and the writer can open another meanwhile,
+        // which may hold the same words.
+        let askedIn = askedIn ?? reviewKey
         // Held while the plan is worked out, off the main actor, as a restore
         // being made is: a second press meanwhile would plan against the
         // same text and race the first.
@@ -3041,7 +3045,7 @@ struct DevotionalEditorView: View {
             let restore = await reviewSession.pageRestore(ids: ids, pageText: pageText)
             isRestoring = false
             // Left for another document while it was worked out.
-            if let askedIn, askedIn != reviewKey { return }
+            guard askedIn == reviewKey else { return }
             guard let restore else {
                 // The page has changed nothing, so saying so is the whole of
                 // it: it asked about passages this cannot place.

@@ -1226,6 +1226,12 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         // indent (1.35em) and the item's (0.15em) further into the margin.
         'html .ProseMirror li .review-clear, html .ProseMirror li .review-restore { margin-left: calc(-30px - 1.5em); }',
         'html body.mode-edit .ProseMirror li .review-clear:has(~ .review-restore) { margin-left: calc(-56px - 1.5em); }',
+        // A table's cell has no margin of its own to hold them, so there
+        // they go at the right of its first line, as the phone has them,
+        // and its words wrap a little sooner: in the margin, a cell's
+        // buttons sat over the cell before it.
+        'html .ProseMirror :is(td, th) .review-clear, html .ProseMirror :is(td, th) .review-restore { position: static; float: right; margin: calc((1lh - 22px) / 2) 0 0 4px; }',
+        'html body.mode-edit .ProseMirror :is(td, th) .review-clear:has(~ .review-restore) { margin-left: 4px; }',
         // A rule, an image or an audio block the assistant changed, which has
         // no words to wash: the block itself.
         'html .review-mark-block { background: rgba(232, 176, 44, 0.22); outline: 1px dotted rgba(178, 120, 0, 0.7); outline-offset: 4px; }',
