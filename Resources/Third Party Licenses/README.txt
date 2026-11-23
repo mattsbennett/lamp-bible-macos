@@ -12,6 +12,8 @@ Swift packages (in the app and its lamp-mcp helper):
 - Swift Atomics 1.3.1 — Apache-2.0 — Swift-Atomics-Apache-2.0.txt
 - Swift Collections 1.6.0 — Apache-2.0 — Swift-Collections-Apache-2.0.txt
 - Swift System 1.8.0 — Apache-2.0 — Swift-System-Apache-2.0.txt
+- swift-cmark 0.9.0 — BSD-2-Clause AND MIT — swift-cmark-BSD-2-Clause+MIT.txt
+- swift-markdown 0.9.0 — Apache-2.0 — swift-markdown-Apache-2.0.txt
 - SwiftLog 1.15.0 — Apache-2.0 — SwiftLog-Apache-2.0.txt
 - SwiftNIO 2.101.3 — Apache-2.0 — SwiftNIO-Apache-2.0.txt
 - SwiftTerm 1.20.0 — MIT — SwiftTerm-MIT.txt
