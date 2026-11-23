@@ -147,6 +147,22 @@ final class WritingReviewObligations {
         write()
     }
 
+    /// Said once a Mark All as Reviewed has landed: the restores owed when it
+    /// was pressed (`ids`) read every mark they make again.
+    func markedAll(for key: WritingReviewKey, among ids: Set<UUID>) {
+        guard var list = owed[key.writingID] else { return }
+        var changed = false
+        for index in list.indices where list[index].document == key.document && ids.contains(list[index].id) {
+            if list[index].clearedAll != true {
+                list[index].clearedAll = true
+                changed = true
+            }
+        }
+        guard changed else { return }
+        owed[key.writingID] = list
+        write()
+    }
+
     /// Said once a record is safely written.
     func settled(_ id: UUID, for writingID: String) {
         guard owed[writingID]?.contains(where: { $0.id == id }) == true else { return }
@@ -642,9 +658,20 @@ final class WritingReviewSession: ObservableObject {
     }
 
     func clearAll() {
-        if let key { WritingReviewObligations.shared.wasCleared(for: key, all: true) }
-        let written = change { $0.clearingAll() }
-        if let writingID { WritingReviewObligations.shared.clearing(writingID) { await written?.value } }
+        // The restores owed as Mark All is pressed: the only ones it reads.
+        let owedNow = key.map { Set(WritingReviewObligations.shared.owing(for: $0).map(\.id)) } ?? []
+        if let key { WritingReviewObligations.shared.wasCleared(for: key) }
+        let landed = Landed()
+        let written = change({ $0.clearingAll() }) { landed.value = $0 }
+        guard let writingID else { return }
+        // That it read every mark is said once its write has landed: a Mark
+        // All that did not land read nothing in the writing, and must not be
+        // taken to have read the marks a copy holds.
+        WritingReviewObligations.shared.clearing(writingID) { [key] in
+            await written?.value
+            guard landed.value, let key else { return }
+            WritingReviewObligations.shared.markedAll(for: key, among: owedNow)
+        }
     }
 
     // MARK: - Putting a wording back
@@ -927,17 +954,20 @@ final class WritingReviewSession: ObservableObject {
             // (`remarksRead`, worked out at the clear, from the restore
             // itself): whole, retired; in part, the clearance alone, which
             // touches no mark but its own.
-            var read = owed.remarksRead ?? []
-            if owed.clearedAll == true {
-                read.formUnion(owed.pendingMarks.union(owed.keptLetGo ?? []).map(LampWritingReview.remarkID(restoring:)))
-            }
+            // Only its own: the marks it could have filed, its passages still
+            // owed or let go by this keep. Another restore of the same words,
+            // made since, makes a mark of the same id, which this one's
+            // reading, of words since undone and let go, has no claim on.
+            let own = Set(owed.pendingMarks.union(owed.keptLetGo ?? []).map(LampWritingReview.remarkID(restoring:)))
+            var read = (owed.remarksRead ?? []).intersection(own)
+            if owed.clearedAll == true { read.formUnion(own) }
             for id in read where present.contains(id) {
                 record.marks.removeAll { $0.id == id }
                 record.retired.append(LampWritingReview.Retirement(id: id, retiredAt: today))
                 retiring = true
             }
             let parts = (owed.remarkClearances ?? []).filter { part in
-                present.contains(part.markID) && !read.contains(part.markID)
+                own.contains(part.markID) && present.contains(part.markID) && !read.contains(part.markID)
                     && !record.clearances.contains { $0.id == part.id }
             }
             if !parts.isEmpty {

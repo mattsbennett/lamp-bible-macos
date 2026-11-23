@@ -344,6 +344,15 @@ struct WritingReviewSessionTests {
         // A selection elsewhere reads none of it, and the mark stays.
         let elsewhere = (typedOn as NSString).range(of: "more")
         #expect(WritingReviewSession.remarksRead(by: elsewhere, in: typedOn, of: owed) == nil)
+        // An earlier restore of the same words, cleared and then undone, so
+        // a save left it nothing owed but its reading: a later restore of
+        // them makes a mark of the same id, which that reading has no claim
+        // on, and it stays unread.
+        var earlier = owed.pending([])
+        earlier.cleared = true
+        earlier.remarksRead = reading.whole
+        let alongside = next(review, filed: once, saved: held, restores: [earlier, owed])
+        #expect(!retires(alongside) && marks(alongside))
         // Nothing a clear read is retired where no pass filed it.
         #expect(!retires(next(review, filed: nil, saved: third, restores: [readThere])))
         // And a mark the writing gains after the clear, over the words it
