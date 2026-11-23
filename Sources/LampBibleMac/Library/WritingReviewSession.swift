@@ -491,7 +491,7 @@ final class WritingReviewSession: ObservableObject {
     /// page's, pressed before a turn's draft reached it), and carried whole
     /// into it, a mark with no words there would be retired by a clear of
     /// some other passage.
-    private func clear(range: NSRange, in text: String) {
+    private func clear(range: NSRange, in text: String, drawsAnyway: Bool = false) {
         guard let writingID else { return }
         if let key { WritingReviewObligations.shared.wasCleared(for: key) }
         remember(text)
@@ -503,7 +503,7 @@ final class WritingReviewSession: ObservableObject {
         // from that point touches nothing and the writer watches the
         // mark stay (core's `takingInSyntax`).
         let asked = LampWritingReviewMarkdown.takingInSyntax(range, of: text)
-        change { $0.clearing(asked, in: text, carryingFrom: known) }
+        change(drawsAnyway: drawsAnyway) { $0.clearing(asked, in: text, carryingFrom: known) }
     }
 
     /// Clears the range the visual page marked in the Markdown it sent.
@@ -527,12 +527,19 @@ final class WritingReviewSession: ObservableObject {
     /// meanwhile: an answer let through then clears a passage of a file
     /// nobody touched, which matching the text does not catch — two
     /// documents can begin with the same words.
+    ///
+    /// The page takes the block's marks off as it is pressed, before this
+    /// answers, so it is always answered with the marks drawn again: where
+    /// the record comes back unchanged, the write fails, or the range
+    /// cannot be placed, nothing else would put back what the page took off.
     func clear(markedMarkdown marked: String, pageText: String? = nil, askedIn: WritingReviewKey? = nil) {
         if let askedIn, askedIn != key { return }
         if let range = LampWritingReview.markedRange(in: marked, of: text) {
-            clear(range: range, in: text)
+            clear(range: range, in: text, drawsAnyway: true)
         } else if let pageText, let range = LampWritingReview.markedRange(in: marked, of: pageText) {
-            clear(range: range, in: pageText)
+            clear(range: range, in: pageText, drawsAnyway: true)
+        } else {
+            draw(sendsMarks: true)
         }
     }
 
@@ -823,7 +830,10 @@ final class WritingReviewSession: ObservableObject {
     /// its lock for as long as a long manuscript takes to compare — and
     /// takes up what was written, with the file's date read under the same
     /// lock. Counted as a pending write, so quitting waits for a clear.
+    /// `drawsAnyway` draws the marks again and sends them however the write
+    /// goes, for a change the page has already shown (`clear(markedMarkdown:)`).
     private func change(
+        drawsAnyway: Bool = false,
         _ edit: @escaping @Sendable (LampWritingReview) -> LampWritingReview,
         then: @escaping (Bool) -> Void = { _ in }
     ) {
@@ -841,10 +851,14 @@ final class WritingReviewSession: ObservableObject {
             then(written != nil)
             // Not for a writing or document left since, nor once marks
             // were turned off.
-            guard let self, let written, self.writingID == writingID,
+            guard let self, self.writingID == writingID,
                   self.document == document, self.store != nil
             else { return }
-            self.apply(written.review, date: written.modified)
+            guard let written else {
+                if drawsAnyway { self.draw(sendsMarks: true) }
+                return
+            }
+            self.apply(written.review, date: written.modified, drawsAnyway: drawsAnyway)
         }
     }
 
@@ -873,11 +887,11 @@ final class WritingReviewSession: ObservableObject {
         apply(read.modified == nil ? nil : read.review, date: read.modified)
     }
 
-    private func apply(_ review: LampWritingReview?, date: Date?) {
+    private func apply(_ review: LampWritingReview?, date: Date?, drawsAnyway: Bool = false) {
         fileDate = date
         let isFirstRead = !hasRead
         hasRead = true
-        guard review != self.review || isFirstRead else { return }
+        guard review != self.review || isFirstRead || drawsAnyway else { return }
         self.review = review
         draw(sendsMarks: true)
     }

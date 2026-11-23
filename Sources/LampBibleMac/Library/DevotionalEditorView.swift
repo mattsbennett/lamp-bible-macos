@@ -3107,11 +3107,20 @@ struct DevotionalEditorView: View {
         // The page's answer is part of the restore, and nothing of it is
         // written anywhere until the answer comes: quitting waits.
         LampPendingWrites.shared.begin()
+        let askedIn = reviewKey
         tipTapCoordinator.restoreWording(restored, expected: base) { made in
             // Let go only once whatever comes next has taken its own
             // count: at zero, quitting goes, and between the two there
             // would be nothing to wait for.
             defer { LampPendingWrites.shared.end() }
+            // Another document opened while the page worked: its text can
+            // hold the same words, and the answer written into it would put
+            // one file's wording into another.
+            guard reviewKey == askedIn else {
+                isRestoring = false
+                refusedRestore = "Another document was opened while that was being put back, so nothing was changed."
+                return
+            }
             switch made {
             case .done(let held):
                 // A turn can have landed in the writing while the page was

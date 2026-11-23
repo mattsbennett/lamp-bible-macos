@@ -1223,9 +1223,14 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         'html .ProseMirror .review-clear::before { content: "\\u2713"; font-size: 14px; line-height: 1; }',
         'html .ProseMirror .review-clear:hover { background: rgba(232, 176, 44, 0.22); }',
         // A list item's buttons sit past its bullet, not on it: the list's
-        // indent (1.35em) and the item's (0.15em) further into the margin.
-        'html .ProseMirror li .review-clear, html .ProseMirror li .review-restore { margin-left: calc(-30px - 1.5em); }',
-        'html body.mode-edit .ProseMirror li .review-clear:has(~ .review-restore) { margin-left: calc(-56px - 1.5em); }',
+        // indent (1.35em) and the item's (0.15em) further into the margin,
+        // in the item's own em, taken where the item is and handed down
+        // as a length: in the button's em, a heading in the item, its
+        // type twice the size, moved them off the window's edge.
+        '@property --lamp-review-item-em { syntax: "<length>"; inherits: true; initial-value: 0px; }',
+        'html .tiptap li { --lamp-review-item-em: 1em; }',
+        'html .ProseMirror li .review-clear, html .ProseMirror li .review-restore { margin-left: calc(-30px - 1.5 * var(--lamp-review-item-em)); }',
+        'html body.mode-edit .ProseMirror li .review-clear:has(~ .review-restore) { margin-left: calc(-56px - 1.5 * var(--lamp-review-item-em)); }',
         // A table's cell has no margin of its own to hold them, so there
         // they go at the right of its first line, as the phone has them,
         // and its words wrap a little sooner: in the margin, a cell's
