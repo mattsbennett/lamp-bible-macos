@@ -182,6 +182,45 @@ struct WritingReviewSessionTests {
         try await waitUntil { session.count == 1 }
     }
 
+    /// The page takes a block's marks off as its ✓ is pressed, so every
+    /// clear from it is answered with the marks, drawn again and sent: one
+    /// that changes nothing in the record, and one this cannot place,
+    /// would otherwise leave whatever the page took off, off.
+    @Test func aClearFromThePageIsAlwaysAnsweredWithTheMarks() async throws {
+        let root = try library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LampWritingReviewStore(rootURL: root)
+        let id = "answered-\(UUID().uuidString)"
+        let new = "One alpha three.\n\nFour five six."
+        try store.save(LampWritingReview(writingID: id).markingAssistantChange(
+            from: "One two three.\n\nFour five six.", to: new
+        ))
+        let session = WritingReviewSession()
+        var sent = 0
+        session.onMarksChanged = { _, _ in sent += 1 }
+        let following = Task { await session.follow(writingID: id, text: new, libraryRootURL: root, isShown: true) }
+        defer { following.cancel() }
+        try await waitUntil { session.count == 1 && sent > 0 }
+        let before = try store.review(writingID: id)
+
+        // A block with no marks in it: the record is unchanged.
+        let settled = sent
+        session.clear(
+            markedMarkdown: new.replacingOccurrences(
+                of: "Four five six.", with: "\(LampWritingReview.markStart)Four five six.\(LampWritingReview.markEnd)"
+            ),
+            pageText: new
+        )
+        try await waitUntil { sent > settled }
+        #expect(try store.review(writingID: id) == before)
+
+        // Text neither here nor the page's: nothing can be placed.
+        let placed = sent
+        session.clear(markedMarkdown: "Elsewhere \(LampWritingReview.markStart)entirely\(LampWritingReview.markEnd).")
+        try await waitUntil { sent > placed }
+        #expect(try store.review(writingID: id) == before)
+    }
+
     /// Codex's case: markers can change how the page writes what is round
     /// them, so the marked Markdown with its markers taken out is text the
     /// page never held. A page that sends no text of its own clears only
