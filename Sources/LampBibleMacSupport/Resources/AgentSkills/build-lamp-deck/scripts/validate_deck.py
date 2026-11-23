@@ -884,6 +884,11 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
             errors.append("theme.id: a theme ID is required")
         if theme.get("typeface") is not None and not nonempty(theme.get("typeface")):
             errors.append("theme.typeface: expected a font family or system style")
+        if theme.get("headingTypeface") is not None and not nonempty(theme.get("headingTypeface")):
+            errors.append(
+                "theme.headingTypeface: expected a font family or system style; "
+                "omit it to use the body's"
+            )
         for key in ("backgroundColor", "foregroundColor", "accentColor"):
             value = theme.get(key)
             if not isinstance(value, str) or HEX_COLOR.fullmatch(value) is None:
@@ -977,6 +982,22 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
             warnings.append(f"{path}.speakerNotes: exceeds 5,000 characters")
         if not isinstance(slide.get("isHidden"), bool):
             errors.append(f"{path}.isHidden: expected true or false")
+        # A slide's own ground: the words take whichever of the theme's two
+        # ground colours reads better on it, as Lamp draws them.
+        ground = slide.get("backgroundColor")
+        if ground is not None:
+            if not isinstance(ground, str) or HEX_COLOR.fullmatch(ground) is None:
+                errors.append(f"{path}.backgroundColor: expected #RRGGBB")
+            elif isinstance(theme, dict):
+                best = max(
+                    (contrast_ratio(theme.get(key, ""), ground) or 0.0)
+                    for key in ("foregroundColor", "backgroundColor")
+                )
+                if best < 4.5:
+                    warnings.append(
+                        f"{path}.backgroundColor: neither of the theme's colours reads well on "
+                        f"this background: the words contrast at only {best:.1f}:1; aim for 4.5:1 or more"
+                    )
         reveal = slide.get("reveal")
         if reveal is not None and not isinstance(reveal, str):
             errors.append(f"{path}.reveal: expected 'together' or 'stepwise'")

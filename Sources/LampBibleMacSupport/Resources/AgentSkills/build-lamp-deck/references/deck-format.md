@@ -16,18 +16,71 @@
 
 ## Theme
 
-Theme fields are `id`, `backgroundColor`, `foregroundColor`, `accentColor`, and optional `typeface` and `highlights` (see Emphasis). Colours use `#RRGGBB`. `typeface` applies presentation-wide; use `system-sans`, `system-serif`, or an installed font family name, and omit it for Lamp Rounded. Prefer one of the built-in themes:
+Theme fields are `id`, `backgroundColor`, `foregroundColor`, `accentColor`, and optional `typeface`, `headingTypeface` and `highlights` (see Emphasis). Colours use `#RRGGBB`.
+
+### Typefaces
+
+`typeface` is the deck's body text, and its headings too unless
+`headingTypeface` names another. Headings are titles, subtitles and the
+headings of columns. Each takes `system-rounded` (Lamp Rounded),
+`system-sans`, `system-serif`, or an installed font family name. Omit
+`typeface` for Lamp Rounded, and omit `headingTypeface` for headings in the
+body's face.
+
+A heading face apart from the body is the simplest way to give a deck
+character: a serif title over sans body text, or the reverse. Keep to two
+faces. A family another device does not have is drawn in its system font
+there, so prefer the `system-` styles for a deck that will travel.
+
+### Built-in themes
+
+Prefer one of Lamp's themes. Copy its colours exactly:
+
+| `id` | Name | `backgroundColor` | `foregroundColor` | `accentColor` | Highlight palette |
+| --- | --- | --- | --- | --- | --- |
+| `lamp-dark` | Lamp Dark | `#111827` | `#F9FAFB` | `#F59E0B` | `#60A5FA` `#F87171` `#34D399` `#C4B5FD` |
+| `parchment` | Parchment | `#F4EBD8` | `#29221B` | `#8B4513` | `#1E5A8C` `#A3242C` `#3F6B2A` `#6B3F8C` |
+| `olive-grove` | Olive Grove | `#1C251C` | `#F2EFE4` | `#C8B35A` | `#8EC5E8` `#E8968A` `#A8D08D` `#C9A8E0` |
+| `linen` | Linen | `#F8F6F1` | `#1C1C1E` | `#B4432C` | `#1F5FA8` `#8E2C5A` `#2E6B3A` `#7A4FA0` |
+| `harbour` | Harbour | `#E9EEF2` | `#13202C` | `#1F5FA8` | `#0F6E78` `#B3261E` `#2E6B3A` `#7A4FA0` |
+| `vespers` | Vespers | `#241318` | `#F7EEE9` | `#E39B5C` | `#8FB8E8` `#F28B9B` `#9FD19A` `#C9A8E8` |
+| `nocturne` | Nocturne | `#0E1A2B` | `#EEF3F8` | `#7DB7E8` | `#F2B66D` `#F28B9B` `#8FD3A8` `#C9A8E8` |
 
 ```json
 {
-  "id": "lamp-dark",
-  "backgroundColor": "#111827",
-  "foregroundColor": "#F9FAFB",
-  "accentColor": "#F59E0B"
+  "id": "olive-grove",
+  "backgroundColor": "#1C251C",
+  "foregroundColor": "#F2EFE4",
+  "accentColor": "#C8B35A",
+  "headingTypeface": "system-serif",
+  "highlights": { "grace": "#8EC5E8", "law": "#E8968A" }
 }
 ```
 
-The alternative built-in theme is `parchment` with background `#F4EBD8`, foreground `#29221B`, and accent `#8B4513`.
+The palette is not a field. It lists colours that read on the theme's ground
+and stand apart from its accent: a blue, a red, a green and a violet. Take a
+deck's `highlights` from it. When the writer switches theme in Slide Studio,
+each highlight keeps its name and takes the new theme's colour nearest in hue,
+so a deck that set grace in blue still sets it in blue.
+
+### A slide's own background
+
+Set `backgroundColor` on a slide to give it a ground of its own, for a section
+break or a slide set apart. The theme's accent, or its `foregroundColor` for a
+slide in reverse, are the natural choices. The words take whichever of the
+theme's two colours reads better on that ground. The accent and highlights are
+kept where they still reach 3:1, and take the words' colour where they do not.
+Nothing else needs setting:
+
+```json
+{ "id": "…", "layout": "title", "backgroundColor": "#C8B35A",
+  "blocks": [{ "id": "…", "kind": "title", "text": "Part Two: The Response" }],
+  "speakerNotes": "", "isHidden": false }
+```
+
+Use it sparingly: a deck where every slide changes colour has no section breaks
+left to mark. A ground on which neither theme colour reaches 4.5:1 is a
+warning. A picture behind the slide covers its ground.
 
 ## Slide
 

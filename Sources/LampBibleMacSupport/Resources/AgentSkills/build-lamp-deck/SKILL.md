@@ -43,6 +43,7 @@ Lamp Bible detects a valid changed artifact and imports it into Slide Studio aut
 - Use speaker notes for delivery prompts, transitions, context, and material intentionally omitted from the screen.
 - Do not put complete manuscript paragraphs on slides by default.
 - Use semantic layouts and block roles. Do not invent coordinates, font sizes, animations, or unsupported fields.
+- Choose one of Lamp's themes from the format reference, and take any highlights from its palette. A `headingTypeface` apart from the body (a serif title over sans text, or the reverse) gives a deck character; keep to two faces. Give a slide its own `backgroundColor` only to set it apart, such as a section break.
 - The only motion a deck has is a slide's `reveal` and `revealsEmphasis` and the deck's `transition`; see "Presenting" in the format reference. Reveal a slide only where the order of its parts matters to the talk, such as a passage read a verse at a time or a list built point by point. Most slides should arrive whole.
 - Use an `image` block only when the referenced asset exists in the workspace and provide meaningful `altText`.
 - Prefer public-domain or openly licensed pictures, and keep a note of each one's source and licence beside the deck. Credit a picture that is not openly licensed on its own slide.

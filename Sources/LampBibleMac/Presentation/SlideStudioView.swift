@@ -301,13 +301,48 @@ struct SlideStudioView: View {
         min(max(inspectorWidth, 300), 430)
     }
 
-    private func typefaceName(_ typeface: String?) -> String {
+    private func typefaceName(_ typeface: String?, unset: String) -> String {
         switch typeface {
-        case nil, "": "Lamp Rounded"
+        case nil, "": unset
+        case "system-rounded": "Lamp Rounded"
         case "system-sans": "System Sans"
         case "system-serif": "System Serif"
         case let family?: family
         }
+    }
+
+    /// A deck typeface: Lamp's three, then the families this Mac has. `unset`
+    /// names what nil means here — Lamp Rounded for the body, the body's own
+    /// for headings, which can then still choose Lamp Rounded by name.
+    private func typefaceMenu(_ typeface: Binding<String?>, unset: String) -> some View {
+        let named = ["", "system-rounded", "system-sans", "system-serif"]
+        return Menu(typefaceName(typeface.wrappedValue, unset: unset)) {
+            Picker(unset, selection: Binding(
+                get: { typeface.wrappedValue ?? "" },
+                set: { typeface.wrappedValue = $0.isEmpty ? nil : $0 }
+            )) {
+                Text(unset).tag("")
+                if unset != "Lamp Rounded" {
+                    Text("Lamp Rounded").tag("system-rounded")
+                }
+                Text("System Sans").tag("system-sans")
+                Text("System Serif").tag("system-serif")
+                Divider()
+                ForEach(typefaceFamilies, id: \.self) { family in
+                    Text(family).tag(family)
+                }
+                // Before the list arrives, and for a family this Mac doesn't
+                // have, the deck's own still needs a tag.
+                if let family = typeface.wrappedValue, !named.contains(family),
+                   !typefaceFamilies.contains(family) {
+                    Text(family).tag(family)
+                }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        }
+        .lampMenu()
+        .controlSize(.small)
     }
 
     private var issues: [LampPresentationDeckIssue] {
@@ -799,6 +834,13 @@ struct SlideStudioView: View {
                                 }
                             }
                             Divider().padding(.vertical, 18)
+                            StudioInspectorSection("Background") {
+                                StudioSlideBackground(
+                                    slide: slideBinding,
+                                    theme: deckBinding.wrappedValue.theme
+                                )
+                            }
+                            Divider().padding(.vertical, 18)
                             StudioInspectorSection("Content") {
                                 VStack(spacing: 18) {
                                     ForEach(slideBinding.blocks) { $block in
@@ -869,32 +911,17 @@ struct SlideStudioView: View {
                                 StudioStackedField("Theme") {
                                     themeChoices(deck: deckBinding.wrappedValue)
                                 }
-                                StudioInspectorRow("Typeface") {
-                                    Menu(typefaceName(deckBinding.wrappedValue.theme.typeface)) {
-                                        Picker("Typeface", selection: Binding(
-                                            get: { deckBinding.wrappedValue.theme.typeface ?? "" },
-                                            set: { deckBinding.theme.typeface.wrappedValue = $0.isEmpty ? nil : $0 }
-                                        )) {
-                                            Text("Lamp Rounded").tag("")
-                                            Text("System Sans").tag("system-sans")
-                                            Text("System Serif").tag("system-serif")
-                                            Divider()
-                                            ForEach(typefaceFamilies, id: \.self) { family in
-                                                Text(family).tag(family)
-                                            }
-                                            // Before the list arrives, and for a family this
-                                            // Mac doesn't have, the deck's own still needs a tag.
-                                            if let family = deckBinding.wrappedValue.theme.typeface,
-                                               !["", "system-sans", "system-serif"].contains(family),
-                                               !typefaceFamilies.contains(family) {
-                                                Text(family).tag(family)
-                                            }
-                                        }
-                                        .pickerStyle(.inline)
-                                        .labelsHidden()
-                                    }
-                                    .lampMenu()
-                                    .controlSize(.small)
+                                // Headings and body apart, the commonest way a
+                                // deck looks designed: a serif title over sans
+                                // body text, or the reverse.
+                                StudioInspectorRow("Headings") {
+                                    typefaceMenu(
+                                        deckBinding.theme.headingTypeface,
+                                        unset: "Same as Body"
+                                    )
+                                }
+                                StudioInspectorRow("Body") {
+                                    typefaceMenu(deckBinding.theme.typeface, unset: "Lamp Rounded")
                                 }
                             }
                         }
@@ -908,16 +935,22 @@ struct SlideStudioView: View {
     }
 
     private func themeChoices(deck: LampPresentationDeck) -> some View {
-        let builtIn = [LampPresentationTheme.lampDark, .parchment]
+        let builtIn = LampPresentationTheme.builtIn
         let isCustom = !builtIn.contains { $0.id == deck.theme.id }
         let themes: [(theme: LampPresentationTheme, name: String)] =
             (isCustom ? [(deck.theme, "This Deck’s")] : [])
-            + [(.lampDark, "Lamp Dark"), (.parchment, "Parchment")]
+            + builtIn.map { ($0, LampPresentationTheme.displayName(of: $0.id) ?? $0.id) }
         let sample = deck.slides.first ?? LampPresentationSlide(layout: .title, blocks: [])
-        return HStack(alignment: .top, spacing: 10) {
+        // Three across: seven side by side were too small to judge by.
+        return LazyVGrid(
+            columns: Array(repeating: GridItem(.flexible(), spacing: 10, alignment: .top), count: 3),
+            spacing: 12
+        ) {
             ForEach(themes, id: \.theme.id) { entry in
                 let isChosen = entry.theme.id == deck.theme.id
-                let shown = Self.theme(entry.theme, typeface: deck.theme.typeface)
+                // Drawn as choosing it would leave the deck: its typefaces,
+                // and its highlights in this theme's palette.
+                let shown = isChosen ? deck.theme : entry.theme.applied(over: deck.theme)
                 Button {
                     if !isChosen { applyTheme(entry.theme.id) }
                 } label: {
@@ -952,12 +985,6 @@ struct SlideStudioView: View {
         }
     }
 
-    /// A theme in the deck's own typeface, as choosing it would leave it.
-    private static func theme(_ theme: LampPresentationTheme, typeface: String?) -> LampPresentationTheme {
-        var themed = theme
-        themed.typeface = typeface
-        return themed
-    }
 
     private enum InspectorPane: String, CaseIterable, Identifiable {
         case slide = "Slide"
@@ -1654,21 +1681,13 @@ struct SlideStudioView: View {
     }
 
     /// Changes the deck's colours and keeps what the author chose besides
-    /// them: the typeface, and the highlights emphasised words name, which the
-    /// validator then holds to the new background.
+    /// them: the typefaces, and the highlights emphasised words name, each
+    /// recoloured from the new theme's palette in the hue it had, so it reads
+    /// on the new ground (`LampPresentationTheme.applied(over:)`).
     private func applyTheme(_ themeID: String) {
-        let typeface = deck?.theme.typeface
-        let highlights = deck?.theme.highlights
-        var newTheme: LampPresentationTheme
-        switch themeID {
-        case LampPresentationTheme.parchment.id:
-            newTheme = .parchment
-        default:
-            newTheme = .lampDark
-        }
-        newTheme.typeface = typeface
-        newTheme.highlights = highlights
-        deck?.theme = newTheme
+        guard let current = deck?.theme,
+              let chosen = LampPresentationTheme.builtIn.first(where: { $0.id == themeID }) else { return }
+        deck?.theme = chosen.applied(over: current)
     }
 
     private func presentDeck() {
@@ -2943,5 +2962,84 @@ private struct StudioRevealControls: View {
         case (false, true): return "Arrives whole; one click lights the emphasised words."
         case (false, false): return "Nothing here to bring in a part at a time, and no emphasis to light, so the slide arrives whole."
         }
+    }
+}
+
+/// A slide's own ground: the theme's, the theme's accent or its words' colour
+/// (a slide set apart, such as a section break), or any colour. Lamp sets the
+/// words in whichever of the theme's colours reads on it, so there is nothing
+/// else to choose.
+private struct StudioSlideBackground: View {
+    @Binding var slide: LampPresentationSlide
+    let theme: LampPresentationTheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                swatch(nil, name: "Theme")
+                swatch(theme.accentColor, name: "Accent")
+                swatch(theme.foregroundColor, name: "Inverse")
+                ColorPicker(
+                    "Other colour",
+                    selection: Binding(
+                        get: { Color(slideHex: slide.backgroundColor ?? theme.backgroundColor) },
+                        set: { slide.backgroundColor = $0.slideHex }
+                    ),
+                    supportsOpacity: false
+                )
+                .labelsHidden()
+                .help("Any colour; the words take whichever of the theme’s colours reads on it")
+            }
+            if let ground = slide.backgroundColor,
+               let ink = theme.ink(on: ground), ink.contrast < 4.5 {
+                Text("The words are hard to read on this colour. Choose a lighter or darker one.")
+                    .font(.caption)
+                    .foregroundStyle(Color.lampSecondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func swatch(_ hex: String?, name: String) -> some View {
+        let isChosen = slide.backgroundColor?.uppercased() == hex?.uppercased()
+        let shown = hex ?? theme.backgroundColor
+        return Button {
+            slide.backgroundColor = hex
+        } label: {
+            VStack(spacing: 4) {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(Color(slideHex: shown))
+                    .frame(width: 34, height: 22)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .strokeBorder(
+                                isChosen ? Color.primary.opacity(0.7) : Color.lampCardStroke,
+                                lineWidth: isChosen ? 2 : 1
+                            )
+                    }
+                Text(name)
+                    .font(.caption2.weight(isChosen ? .semibold : .regular))
+                    .foregroundStyle(isChosen ? AnyShapeStyle(.primary) : AnyShapeStyle(Color.lampSecondaryText))
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(name) background")
+        .accessibilityAddTraits(isChosen ? .isSelected : [])
+    }
+}
+
+private extension Color {
+    init(slideHex: String) {
+        let color = LampPresentationColor(hex: slideHex) ?? LampPresentationColor(red: 0, green: 0, blue: 0)
+        self.init(.sRGB, red: color.red, green: color.green, blue: color.blue)
+    }
+
+    /// `#RRGGBB` in sRGB, as a deck stores a colour.
+    var slideHex: String? {
+        guard let srgb = NSColor(self).usingColorSpace(.sRGB) else { return nil }
+        func channel(_ value: CGFloat) -> String {
+            String(format: "%02X", Int((min(max(value, 0), 1) * 255).rounded()))
+        }
+        return "#" + channel(srgb.redComponent) + channel(srgb.greenComponent) + channel(srgb.blueComponent)
     }
 }

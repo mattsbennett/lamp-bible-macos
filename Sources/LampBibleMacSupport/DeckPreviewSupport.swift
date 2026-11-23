@@ -176,7 +176,13 @@ enum LampDeckPreview {
                 plain.scale = 1
                 measured = plain.cgImage ?? image
             }
-            let measurement = Measurement(image: measured, theme: deck.theme)
+            // Measured against the ground the slide is drawn on: its own,
+            // where it sets one, or every pixel of it would count as ink.
+            let measurement = Measurement(
+                image: measured,
+                ground: slide.backgroundColor.flatMap { LampPresentationColor(hex: $0) != nil ? $0 : nil }
+                    ?? deck.theme.backgroundColor
+            )
             var notes: [String] = []
             if let background = slide.plan.background, resolve(background) != nil, treatment == nil {
                 notes.append("The picture behind this slide could not be read, so it was drawn "
@@ -410,8 +416,8 @@ enum LampDeckPreview {
         let textHeight: Int
         let clipped: Bool
 
-        init(image: CGImage, theme: LampPresentationTheme) {
-            let background = Measurement.channels(of: theme.backgroundColor) ?? (0, 0, 0)
+        init(image: CGImage, ground: String) {
+            let background = Measurement.channels(of: ground) ?? (0, 0, 0)
             let bytesPerPixel = 4
             let bytesPerRow = image.width * bytesPerPixel
             var pixels = [UInt8](repeating: 0, count: image.height * bytesPerRow)

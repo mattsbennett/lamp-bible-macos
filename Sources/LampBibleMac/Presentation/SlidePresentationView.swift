@@ -52,7 +52,7 @@ struct SlidePresentationView: View {
                     // stays whole beneath it until it has gone. Both fading
                     // at once over the black dimmed the screen midway, even
                     // between two slides of the same colour.
-                    .transition(.asymmetric(insertion: .opacity, removal: .heldUntilCovered))
+                    .transition(.lampSlide)
                     // Each slide above the one before it, whichever way the
                     // presenter moves, and above the black throughout.
                     .zIndex(Double(slideLayer) + 1)
@@ -146,13 +146,10 @@ struct SlidePresentationView: View {
         // Read at the moment of the move rather than from the environment:
         // the remote's handler is installed once and would keep the value
         // the presentation opened with.
-        let animation: Animation? = if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            nil
-        } else if changesSlide {
-            (deck?.transition ?? .dissolve) == .cut ? nil : .easeInOut(duration: 0.45)
-        } else {
-            .easeInOut(duration: 0.35)
-        }
+        let animation = (deck?.transition ?? .dissolve).animation(
+            changesSlide: changesSlide,
+            reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        )
         withAnimation(animation) {
             if changesSlide { slideLayer += 1 }
             position = next
@@ -416,18 +413,3 @@ private final class SlidePresentationWindowView: NSView {
     }
 }
 
-/// A slide leaving during a dissolve: drawn as it is, untouched, for as long
-/// as the slide arriving over it takes to fade in. Its modifier differs only
-/// in a value nothing reads, which is enough for SwiftUI to keep the view
-/// until the animation ends instead of removing it at once.
-private struct HeldUntilCovered: ViewModifier, Animatable {
-    var animatableData: Double
-
-    func body(content: Content) -> some View { content }
-}
-
-private extension AnyTransition {
-    static var heldUntilCovered: AnyTransition {
-        .modifier(active: HeldUntilCovered(animatableData: 0), identity: HeldUntilCovered(animatableData: 1))
-    }
-}
