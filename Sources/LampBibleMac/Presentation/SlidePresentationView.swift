@@ -42,6 +42,9 @@ struct SlidePresentationView: View {
                     store: LampPresentationDeckStore(rootURL: model.library.rootURL)
                 )
                     .revealed(atStep: position.step)
+                    // In front of the room, so a picture set to drift does,
+                    // from when this slide arrived (each has its own id).
+                    .presenting()
                     .aspectRatio(deck.aspectRatio.ratio, contentMode: .fit)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     // One view per slide, so a change of slide is the old one

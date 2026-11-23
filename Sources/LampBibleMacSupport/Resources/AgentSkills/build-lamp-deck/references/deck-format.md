@@ -575,6 +575,20 @@ Absent, a picture is drawn as it is. The words over a tinted picture are
 coloured for it as tinted. Prefer one tint across a deck to a different one on
 each slide.
 
+### A picture that drifts: `motion`
+
+Set `"motion": "drift"` on an image block, behind the slide or beside the
+prose, and while the slide is presented the picture closes in by 3% over a
+minute, then as slowly back: a picture behind the slide on its `focus`, one
+beside the words on its middle. The words over a drifting picture are coloured
+for everything that passes under them, so they read throughout. It is meant to be
+felt rather than seen: a still photograph behind a long passage stops looking
+frozen. Thumbnails, Slide Studio, PDFs and anyone with Reduce Motion on see it
+still. Absent, or `none`, the picture is still.
+
+Use it on a few pictures that stay up a while: a title, a passage read over a
+landscape. Not on every slide, and never on a chart, which Lamp warns of.
+
 ## Charts
 
 A `chart` block puts a figure from Lamp's Strong's analysis on a slide: where a

@@ -472,6 +472,19 @@ struct DeckValidatorAgreementTests {
                 }(),
             ])
         }(),
+        // Drift: on pictures behind and beside the words, which is fine,
+        // and on a body and a caption, which cannot drift.
+        LampPresentationDeck(title: "Drift", slides: [
+            .init(layout: .titleAndBody, blocks: [
+                .init(kind: .title, text: "Heading"),
+                .init(kind: .body, text: "Words.", motion: .drift),
+                .init(kind: .image, assetPath: "Assets/a.jpg", altText: "A", placement: .background, motion: .drift),
+            ]),
+            .init(layout: .image, blocks: [
+                .init(kind: .image, assetPath: "Assets/b.jpg", altText: "B", motion: .drift),
+                .init(kind: .caption, text: "A credit", motion: .drift),
+            ]),
+        ]),
         // Nothing to say about a well-formed deck.
         LampPresentationDeck(title: "Clean", slides: [
             .init(layout: .titleAndBody, blocks: [

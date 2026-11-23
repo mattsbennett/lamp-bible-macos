@@ -136,6 +136,7 @@ SPEAKER_NOTES_SOURCES = {"authored", "manuscript"}
 TRANSITIONS = {"dissolve", "cut"}
 REVEALS = {"together", "stepwise"}
 TINTS = {"none", "duotone", "muted"}
+MOTIONS = {"none", "drift"}
 FIGURES = {"none", "timeline", "chiasm", "parallel", "map"}
 # The most places a map names before its names crowd each other. Mirrors
 # `LampPresentationDeckValidator.mostMapPlaces`.
@@ -1487,6 +1488,15 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
                     warnings.append(f"{block_path}.tint: {tint!r} is not a tint Lamp draws, so the picture is drawn as it is")
                 elif tint != "none" and kind != "image":
                     warnings.append(f"{block_path}.tint: only a picture can be tinted")
+            # Lamp reads an unknown motion as none, so the picture is still.
+            motion = block.get("motion")
+            if motion is not None:
+                if not isinstance(motion, str):
+                    errors.append(f"{block_path}.motion: expected 'drift'")
+                elif motion not in MOTIONS:
+                    warnings.append(f"{block_path}.motion: {motion!r} is not a motion Lamp draws, so the picture is still")
+                elif motion != "none" and kind != "image":
+                    warnings.append(f"{block_path}.motion: only a picture can drift")
             placement = block.get("placement")
             if placement is not None:
                 if placement not in PLACEMENTS:

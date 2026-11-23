@@ -1915,6 +1915,21 @@ private struct LampSlideBlockEditor: View {
                     .controlSize(.small)
                 }
                 .help("Duotone draws the picture in the theme’s accent and ground; Muted quiets it toward the ground")
+                // Off unless asked for, and only while presenting: Studio
+                // and thumbnails keep the picture still.
+                StudioStackedField("Motion") {
+                    LampSegmentedPicker(
+                        "Motion",
+                        selection: Binding(
+                            get: { block.motion == LampPresentationImageMotion.none ? nil : block.motion },
+                            set: { block.motion = $0 }
+                        ),
+                        items: [.init(id: nil, title: LampPresentationImageMotion.none.displayName)]
+                            + [.init(id: Optional(LampPresentationImageMotion.drift), title: LampPresentationImageMotion.drift.displayName)]
+                    )
+                    .controlSize(.small)
+                }
+                .help("While presenting, Drift closes in on the picture by 3% over a minute and back, too slowly to see it move")
                 // Only a picture behind the slide is cropped, so only it has
                 // a focus to set.
                 if block.placement == .background {
