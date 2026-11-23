@@ -1216,35 +1216,48 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         // a check in the margin to clear a paragraph, none while presenting.
         'html .review-mark { background: rgba(232, 176, 44, 0.22); border-bottom: 1px dotted rgba(178, 120, 0, 0.7); }',
         'html .review-point { display: inline-block; width: 0; height: 1.1em; vertical-align: text-bottom; border-left: 2px solid rgba(178, 120, 0, 0.7); margin: 0 1px; }',
-        // Out of the text's flow, where the block's first line starts,
-        // and moved into the margin from there: inline, the ↺ beside the
-        // ✓ pushed that line in by its own width, and before a rule or a
-        // picture the two took a line of their own, which went when they
-        // did. Inline still, for where it starts: as a block, in a list
-        // item WebKit starts it a line down. Centred on the line by the box
-        // itself, a glyph in a 22px circle: `inline-block` with a line
-        // height left it where the font's metrics put it, up and to the
-        // left of the middle.
-        'html .ProseMirror .review-clear { position: absolute; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; margin: calc((1lh - 22px) / 2) 0 0 -30px; padding: 0; border: none; border-radius: 11px; background: transparent; color: rgba(178, 120, 0, 0.8); font: inherit; cursor: pointer; user-select: none; }',
+        // In a block of text, inline at its first line's start and moved
+        // into the margin by margins that, with the box, take no width, so
+        // the line keeps its place: the ✓ alone, -30 + 22 + 8; with the ↺
+        // beside it, -56 + 22 + 4 and 0 + 22 + 8. Inline so that
+        // `vertical-align: middle` can set each on the middle of the
+        // line's lower-case letters: centred on the line's box instead,
+        // in a serif whose letters sit low in their line, they rode high
+        // of the words. A glyph in a 22px circle, centred by the box.
+        'html .ProseMirror .review-clear { display: inline-flex; vertical-align: middle; align-items: center; justify-content: center; width: 22px; height: 22px; margin: 0 8px 0 -30px; padding: 0; border: none; border-radius: 11px; background: transparent; color: rgba(178, 120, 0, 0.8); font: inherit; cursor: pointer; user-select: none; }',
         // With a ↺ beside it, which is shown only while editing, further out.
-        'html body.mode-edit .ProseMirror .review-clear:has(~ .review-restore) { margin-left: -56px; }',
-        'html .ProseMirror .review-clear::before { content: "\\u2713"; font-size: 14px; line-height: 1; }',
+        'html body.mode-edit .ProseMirror .review-clear:has(~ .review-restore) { margin: 0 4px 0 -56px; }',
+        // In the system's face whatever the writing's is, so each glyph sits
+        // the same in its circle in serif and sans alike; lifted two points,
+        // where its ink stands at the middle of the line's lower-case
+        // letters rather than low of it (measured in both faces).
+        'html .ProseMirror .review-clear::before { content: "\\u2713"; font: 14px/1 -apple-system, system-ui, sans-serif; transform: translateY(-2px); }',
         'html .ProseMirror .review-clear:hover { background: rgba(232, 176, 44, 0.22); }',
         // A list item's buttons sit past its bullet, not on it: the list's
         // indent (1.35em) and the item's (0.15em) further into the margin,
         // in the item's own em, taken where the item is and handed down
         // as a length: in the button's em, a heading in the item, its
-        // type twice the size, moved them off the window's edge.
+        // type twice the size, moved them off the window's edge. Still
+        // taking no width: what goes out on the left comes back on the
+        // right.
         '@property --lamp-review-item-em { syntax: "<length>"; inherits: true; initial-value: 0px; }',
         'html .tiptap li { --lamp-review-item-em: 1em; }',
-        'html .ProseMirror li .review-clear, html .ProseMirror li .review-restore { margin-left: calc(-30px - 1.5 * var(--lamp-review-item-em)); }',
-        'html body.mode-edit .ProseMirror li .review-clear:has(~ .review-restore) { margin-left: calc(-56px - 1.5 * var(--lamp-review-item-em)); }',
+        'html .ProseMirror li .review-clear { margin-left: calc(-30px - 1.5 * var(--lamp-review-item-em)); margin-right: calc(8px + 1.5 * var(--lamp-review-item-em)); }',
+        'html body.mode-edit .ProseMirror li .review-clear:has(~ .review-restore) { margin-left: calc(-56px - 1.5 * var(--lamp-review-item-em)); margin-right: 4px; }',
+        'html .ProseMirror li .review-restore { margin-right: calc(8px + 1.5 * var(--lamp-review-item-em)); }',
+        // Beside a rule, a picture or an audio block, which has no line to
+        // stand in: out of the flow there, where the block starts, or
+        // inline the two took a line of their own above it, which went
+        // when they did. Centred on the first line's box.
+        'html body .ProseMirror > .review-clear, html body .ProseMirror > .review-restore { position: absolute; margin: calc((1lh - 22px) / 2) 0 0 -30px; }',
+        'html body.mode-edit .ProseMirror > .review-clear:has(~ .review-restore) { margin: calc((1lh - 22px) / 2) 0 0 -56px; }',
+        // More particular than the ↺'s own placement in a line, below.
         // A table's cell has no margin of its own to hold them, so there
         // they go at the right of its first line, as the phone has them,
         // and its words wrap a little sooner: in the margin, a cell's
         // buttons sat over the cell before it.
-        'html .ProseMirror :is(td, th) .review-clear, html .ProseMirror :is(td, th) .review-restore { position: static; float: right; margin: calc((1lh - 22px) / 2) 0 0 4px; }',
-        'html body.mode-edit .ProseMirror :is(td, th) .review-clear:has(~ .review-restore) { margin-left: 4px; }',
+        'html .ProseMirror :is(td, th) .review-clear, html .ProseMirror :is(td, th) .review-restore { float: right; margin: calc((1lh - 22px) / 2) 0 0 4px; }',
+        'html body.mode-edit .ProseMirror :is(td, th) .review-clear:has(~ .review-restore) { margin: calc((1lh - 22px) / 2) 0 0 4px; }',
         // A rule, an image or an audio block the assistant changed, which has
         // no words to wash: the block itself.
         'html .review-mark-block { background: rgba(232, 176, 44, 0.22); outline: 1px dotted rgba(178, 120, 0, 0.7); outline-offset: 4px; }',
@@ -1258,8 +1271,8 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         // and what it would do written out — for a passage the assistant
         // only took words out of, that is the one way to see it.
         // Placed and centred as the tick is, between it and the text.
-        'html .ProseMirror .review-restore { position: absolute; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; margin: calc((1lh - 22px) / 2) 0 0 -30px; padding: 0; border: none; border-radius: 11px; background: transparent; color: rgba(178, 120, 0, 0.8); font: inherit; cursor: pointer; user-select: none; }',
-        'html .ProseMirror .review-restore::before { content: "\\u21BA"; font-size: 14px; line-height: 1; }',
+        'html .ProseMirror .review-restore { display: inline-flex; vertical-align: middle; align-items: center; justify-content: center; width: 22px; height: 22px; margin: 0 8px 0 0; padding: 0; border: none; border-radius: 11px; background: transparent; color: rgba(178, 120, 0, 0.8); font: inherit; cursor: pointer; user-select: none; }',
+        'html .ProseMirror .review-restore::before { content: "\\u21BA"; font: 14px/1 -apple-system, system-ui, sans-serif; transform: translateY(-2px); }',
         'html .ProseMirror .review-restore:hover { background: rgba(232, 176, 44, 0.22); }',
         'html .review-mark.review-current { background: rgba(232, 176, 44, 0.42); border-bottom-style: solid; }',
         'html .review-point.review-current { border-left-width: 3px; box-shadow: 0 0 0 2px rgba(232, 176, 44, 0.35); }',
