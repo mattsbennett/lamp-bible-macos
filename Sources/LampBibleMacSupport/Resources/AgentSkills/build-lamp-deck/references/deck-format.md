@@ -589,6 +589,33 @@ still. Absent, or `none`, the picture is still.
 Use it on a few pictures that stay up a while: a title, a passage read over a
 landscape. Not on every slide, and never on a chart, which Lamp warns of.
 
+### A picture that moves: `video`
+
+An image block can name a short video to play in the picture's place while the
+slide is presented: silent, looping, cropped around the same `focus`, in the
+same `tint`, drifting if it drifts.
+
+```json
+{ "id": "…", "kind": "image", "text": "", "assetPath": "Assets/sea-still.jpg",
+  "video": "Assets/sea.mp4", "altText": "Waves on the Sea of Galilee",
+  "placement": "background" }
+```
+
+- **Keep `assetPath`.** It is the video's still, shown in thumbnails, Slide
+  Studio, PDFs, with Reduce Motion on, and by older versions of Lamp, and the
+  words over the picture are coloured for it. It should be a frame of the
+  video. Slide Studio's Choose Video takes the first frame for you; an agent
+  delivering a video must deliver a still beside it.
+- **Formats:** `.mp4`, `.mov` or `.m4v`. Anything else is shown as its still,
+  and Lamp warns.
+- **Size:** a deck's files travel with it to every device it syncs to, so keep
+  a background loop short. Slide Studio refuses one over 100 MB.
+- **One a slide:** a slide plays one video, the picture behind it's or else the
+  first. Any other is shown as its still, and Lamp warns.
+- Choose quiet footage whose colours stay near the still's: water, clouds,
+  candlelight. Words are set once, for the still, and cannot follow a video
+  that turns from dark to light.
+
 ## Charts
 
 A `chart` block puts a figure from Lamp's Strong's analysis on a slide: where a

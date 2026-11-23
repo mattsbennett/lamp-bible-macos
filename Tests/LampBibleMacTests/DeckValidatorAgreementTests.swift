@@ -485,6 +485,30 @@ struct DeckValidatorAgreementTests {
                 .init(kind: .caption, text: "A credit", motion: .drift),
             ]),
         ]),
+        // Video: played on a picture, not on words, not in a format Lamp
+        // does not play.
+        LampPresentationDeck(title: "Video", slides: [
+            .init(layout: .titleAndBody, blocks: [
+                .init(kind: .title, text: "Heading"),
+                .init(kind: .body, text: "Words.", video: "Assets/a.mp4"),
+                .init(kind: .image, assetPath: "Assets/a.jpg", altText: "A", placement: .background, video: "Assets/a.mov"),
+            ]),
+            .init(layout: .image, blocks: [
+                .init(kind: .image, assetPath: "Assets/b.jpg", altText: "B", video: "Assets/b.webm"),
+            ]),
+            // A background Lamp cannot play leaves the framed one to play.
+            .init(layout: .titleAndBody, blocks: [
+                .init(kind: .title, text: "Heading"),
+                .init(kind: .image, assetPath: "Assets/e.jpg", altText: "E", placement: .background, video: "Assets/e.webm"),
+                .init(kind: .image, assetPath: "Assets/f.jpg", altText: "F", video: "Assets/f.mp4"),
+            ]),
+            // Two videos: the one behind the slide plays, though it comes second.
+            .init(layout: .titleAndBody, blocks: [
+                .init(kind: .title, text: "Heading"),
+                .init(kind: .image, assetPath: "Assets/c.jpg", altText: "C", video: "Assets/c.mp4"),
+                .init(kind: .image, assetPath: "Assets/d.jpg", altText: "D", placement: .background, video: "Assets/d.mp4"),
+            ]),
+        ]),
         // Nothing to say about a well-formed deck.
         LampPresentationDeck(title: "Clean", slides: [
             .init(layout: .titleAndBody, blocks: [

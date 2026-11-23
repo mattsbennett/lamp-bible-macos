@@ -137,6 +137,7 @@ TRANSITIONS = {"dissolve", "cut"}
 REVEALS = {"together", "stepwise"}
 TINTS = {"none", "duotone", "muted"}
 MOTIONS = {"none", "drift"}
+VIDEO_EXTENSIONS = {"mp4", "mov", "m4v"}
 FIGURES = {"none", "timeline", "chiasm", "parallel", "map"}
 # The most places a map names before its names crowd each other. Mirrors
 # `LampPresentationDeckValidator.mostMapPlaces`.
@@ -805,6 +806,16 @@ def undrawn_in_layout(layout: str, blocks: list, variant: object = None) -> list
     return sorted(set(undrawn))
 
 
+def video_playable(path):
+    """Whether Lamp plays the video at `path`, by extension, as core's
+    `LampPresentationVideo.isPlayable` judges it."""
+    name = path.split("/")[-1]
+    dot = name.rfind(".")
+    if dot <= 0:
+        return False
+    return name[dot + 1:].lower() in VIDEO_EXTENSIONS
+
+
 def safe_asset_path(value):
     """Mirror Lamp's own check: a relative path that cannot leave the folder.
 
@@ -1384,6 +1395,21 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
             continue
         if not blocks and slide.get("layout") != "blank":
             errors.append(f"{path}.blocks: this layout requires content")
+        # One video plays on a slide: the picture behind it's, else the first
+        # that has one, of those Lamp can play. Mirrors core.
+        videos = [
+            index for index, block in enumerate(blocks)
+            if isinstance(block, dict) and block.get("kind") == "image"
+            and isinstance(block.get("video"), str) and safe_asset_path(block["video"])
+            and video_playable(block["video"])
+        ]
+        played_video = next((index for index in videos if is_background(blocks[index])), videos[0] if videos else None)
+        for index in videos:
+            if index != played_video:
+                warnings.append(
+                    f"{path}.blocks[{index}].video: a slide plays one video, the picture behind it's "
+                    "or else the first; this picture is shown still"
+                )
         block_ids: set[str] = set()
         for block_index, block in enumerate(blocks):
             block_path = f"{path}.blocks[{block_index}]"
@@ -1497,6 +1523,21 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
                     warnings.append(f"{block_path}.motion: {motion!r} is not a motion Lamp draws, so the picture is still")
                 elif motion != "none" and kind != "image":
                     warnings.append(f"{block_path}.motion: only a picture can drift")
+            # A video plays in a picture's place while presenting; the
+            # picture stays as its still. Mirrors core's checks on `video`.
+            video = block.get("video")
+            if video is not None:
+                if not isinstance(video, str):
+                    errors.append(f"{block_path}.video: expected a path such as Assets/clip.mp4")
+                elif not safe_asset_path(video):
+                    errors.append(
+                        f"{block_path}.video: use a relative path inside the presentation folder, "
+                        "such as Assets/clip.mp4"
+                    )
+                elif kind != "image":
+                    warnings.append(f"{block_path}.video: only a picture can play a video; this one is not played")
+                elif not video_playable(video):
+                    warnings.append(f"{block_path}.video: Lamp plays .mp4, .mov and .m4v video; this picture is shown still")
             placement = block.get("placement")
             if placement is not None:
                 if placement not in PLACEMENTS:
@@ -1556,6 +1597,12 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
                         f"{path}.blocks[{index}].assetPath: no file at {asset!r}; "
                         "the slide renders a placeholder until the image is delivered "
                         "beside the deck"
+                    )
+                video = block.get("video")
+                if isinstance(video, str) and safe_asset_path(video) and not (deck_directory / video).is_file():
+                    warnings.append(
+                        f"{path}.blocks[{index}].video: no file at {video!r}; "
+                        "the picture is shown still until the video is delivered beside the deck"
                     )
 
         # Blocks the layout will never draw. Saying nothing here is what sent

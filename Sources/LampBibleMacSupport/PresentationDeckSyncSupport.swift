@@ -319,12 +319,33 @@ public enum LampPresentationDeckSync {
         fileManager: FileManager
     ) throws {
         guard isPlainDirectory(source, fileManager: fileManager) else { return }
-        let keys: Set<URLResourceKey> = [.isRegularFileKey, .isSymbolicLinkKey, .contentModificationDateKey]
+        let keys: Set<URLResourceKey> = [
+            .isRegularFileKey, .isSymbolicLinkKey, .contentModificationDateKey, .fileSizeKey,
+        ]
         for url in try fileManager.contentsOfDirectory(
             at: source, includingPropertiesForKeys: Array(keys), options: [.skipsHiddenFiles]
         ) {
             let values = try url.resourceValues(forKeys: keys)
             guard values.isRegularFile == true, values.isSymbolicLink != true else { continue }
+            // Newest wins, to the millisecond as the merge counts, so a copy
+            // already held that is newer would be kept anyway: don't read
+            // either. One as new and the same size is taken to be the same
+            // file, as the phone takes it: the bytes would only decide a tie
+            // between two different files of one name, written in the same
+            // millisecond at the same size, and Slide Studio names every
+            // file it writes afresh. A deck's videos run to many megabytes,
+            // and this runs on every sync.
+            if let held = try? destination.appendingPathComponent(url.lastPathComponent)
+                .resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey]),
+               held.isRegularFile == true,
+               let heldDate = held.contentModificationDate,
+               let incomingDate = values.contentModificationDate {
+                let heldTick = (heldDate.timeIntervalSince1970 * 1_000).rounded(.down)
+                let incomingTick = (incomingDate.timeIntervalSince1970 * 1_000).rounded(.down)
+                if heldTick > incomingTick || (heldTick == incomingTick && held.fileSize == values.fileSize) {
+                    continue
+                }
+            }
             let incoming = LampPresentationAssetRevision(
                 name: url.lastPathComponent, data: try Data(contentsOf: url),
                 modifiedAt: values.contentModificationDate ?? .distantPast

@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import CoreText
 import ImageIO
 import LampCore
@@ -223,6 +224,11 @@ struct SlideStudioView: View {
     @State private var typefaceFamilies: [String] = []
     @State private var saveTask: Task<Void, Never>?
     @State private var statusMessage = ""
+    /// The picture blocks a chosen video is being prepared for, by slide id
+    /// and block id, each with the choice that is to land: its still taken,
+    /// and a copy made smaller where it must be. A later choice for the same
+    /// block replaces the token, so the earlier one is dropped when it ends.
+    @State private var preparingVideos: [String: UUID] = [:]
     @State private var errorMessage: String?
     @State private var isLoading = true
     @State private var showingDeleteConfirmation = false
@@ -463,6 +469,9 @@ struct SlideStudioView: View {
             inbox.setWindow(windowToken, showing: nil)
             saveTask?.cancel()
             saveNow()
+            // A video still being prepared would land after the save, in a
+            // deck no longer shown; it is dropped, and its files with it.
+            preparingVideos.removeAll()
         }
     }
 
@@ -852,6 +861,8 @@ struct SlideStudioView: View {
                                                 updateScriptureCitation(citation, after: block.id)
                                             },
                                             chooseImage: { chooseImage(for: block.id) },
+                                            chooseVideo: { chooseVideo(for: block.id) },
+                                            isPreparingVideo: preparingVideos["\(selectedSlide?.id ?? "")/\(block.id)"] != nil,
                                             remove: { removeBlock(block.id) }
                                         )
                                         if block.id != slideBinding.blocks.wrappedValue.last?.id {
@@ -1614,6 +1625,8 @@ struct SlideStudioView: View {
             return
         }
 
+        // A picture chosen now outranks a video still being prepared.
+        preparingVideos["\(slideID)/\(blockID)"] = nil
         deck?.slides[slideIndex].blocks[blockIndex].assetPath =
             "\(LampPresentationDeckStore.assetsDirectoryName)/\(name)"
         if deck?.slides[slideIndex].blocks[blockIndex].altText?
@@ -1621,6 +1634,131 @@ struct SlideStudioView: View {
             deck?.slides[slideIndex].blocks[blockIndex].altText =
                 source.deletingPathExtension().lastPathComponent
         }
+    }
+
+    /// Copies a video into the library to play in a picture's place while
+    /// presenting, and makes its first frame the picture: the still shown
+    /// everywhere else, and what the words over it are coloured for.
+    ///
+    /// Kept to `LampPresentationVideo.largestFileBytes`, since every file a
+    /// deck names travels with it to each device it syncs to.
+    private func chooseVideo(for blockID: String) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = LampPresentationVideo.extensions.sorted().compactMap { UTType(filenameExtension: $0) }
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = "Choose a short video to play, silent and looping, while this slide is presented."
+        guard panel.runModal() == .OK, let source = panel.url else { return }
+        // Block ids are unique within a slide, not across the deck, so the
+        // block is found again in the slide it was chosen on.
+        guard let slideID = selectedSlide?.id, let deckID = deck?.id else { return }
+        guard LampPresentationVideo.isPlayable(source.lastPathComponent) else {
+            errorMessage = "Lamp plays .mp4, .mov and .m4v video."
+            return
+        }
+        let formatter = ByteCountFormatter()
+        let limit = formatter.string(fromByteCount: LampPresentationVideo.largestFileBytes)
+        let size = (try? source.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
+        // Too large to copy as it is: offered smaller, in HEVC, silent and
+        // no larger than 1080p, which usually brings a clip to a fraction of
+        // its size at a picture the room cannot tell apart.
+        let reencodes = size > LampPresentationVideo.largestFileBytes
+        if reencodes {
+            let alert = NSAlert()
+            alert.messageText = "Make this video smaller?"
+            alert.informativeText = "It is \(formatter.string(fromByteCount: size)). A deck's videos travel with it to "
+                + "every device it syncs to, so Lamp keeps each to \(limit). Lamp can save a smaller copy, "
+                + "silent and at most 1080p; your original is left as it is."
+            alert.addButton(withTitle: "Make Smaller")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+
+        let assets = store.assetsDirectoryURL
+        let stem = UUID().uuidString.lowercased()
+        let videoName = "\(stem).\(reencodes ? "mp4" : source.pathExtension.lowercased())"
+        let stillName = "\(stem).jpg"
+        let preparing = "\(slideID)/\(blockID)"
+        let token = UUID()
+        preparingVideos[preparing] = token
+        Task { @MainActor in
+            defer { if preparingVideos[preparing] == token { preparingVideos[preparing] = nil } }
+            let video = assets.appendingPathComponent(videoName)
+            let stillFile = assets.appendingPathComponent(stillName)
+            do {
+                try FileManager.default.createDirectory(at: assets, withIntermediateDirectories: true)
+                let still = try await Self.firstFrameJPEG(of: source)
+                if reencodes {
+                    try await Self.smallerCopy(of: source, to: video)
+                    let made = (try? video.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
+                    guard made <= LampPresentationVideo.largestFileBytes else {
+                        try? FileManager.default.removeItem(at: video)
+                        errorMessage = "Even smaller, this video is \(formatter.string(fromByteCount: made)), over "
+                            + "Lamp's \(limit) for a deck's video. Choose a shorter clip."
+                        return
+                    }
+                } else {
+                    try FileManager.default.copyItem(at: source, to: video)
+                }
+                try still.write(to: stillFile, options: .atomic)
+            } catch {
+                try? FileManager.default.removeItem(at: video)
+                try? FileManager.default.removeItem(at: stillFile)
+                errorMessage = "Lamp could not use that video: \(error.localizedDescription)"
+                return
+            }
+            // Dropped, and its files with it, when the author has since
+            // chosen another video for the block, opened another deck, or
+            // removed the slide or block: nothing would name the files, and
+            // a video is too large to leave for a later prune.
+            guard preparingVideos[preparing] == token,
+                  deck?.id == deckID,
+                  let slideIndex = deck?.slides.firstIndex(where: { $0.id == slideID }),
+                  let blockIndex = deck?.slides[slideIndex].blocks.firstIndex(where: { $0.id == blockID })
+            else {
+                try? FileManager.default.removeItem(at: video)
+                try? FileManager.default.removeItem(at: stillFile)
+                return
+            }
+            let directory = LampPresentationDeckStore.assetsDirectoryName
+            deck?.slides[slideIndex].blocks[blockIndex].assetPath = "\(directory)/\(stillName)"
+            deck?.slides[slideIndex].blocks[blockIndex].video = "\(directory)/\(videoName)"
+            if deck?.slides[slideIndex].blocks[blockIndex].altText?
+                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                deck?.slides[slideIndex].blocks[blockIndex].altText = source.deletingPathExtension().lastPathComponent
+            }
+        }
+    }
+
+    /// `source` re-encoded in HEVC at no more than 1080p, without its sound,
+    /// which a slide never plays, keeping the turn it is shown at.
+    private static func smallerCopy(of source: URL, to destination: URL) async throws {
+        let asset = AVURLAsset(url: source)
+        guard let track = try await asset.loadTracks(withMediaType: .video).first else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        let composition = AVMutableComposition()
+        guard let pictures = composition.addMutableTrack(
+            withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid
+        ) else { throw CocoaError(.fileWriteUnknown) }
+        let range = try await track.load(.timeRange)
+        try pictures.insertTimeRange(range, of: track, at: .zero)
+        pictures.preferredTransform = try await track.load(.preferredTransform)
+        guard let session = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetHEVC1920x1080)
+        else { throw CocoaError(.fileWriteUnknown) }
+        try await session.export(to: destination, as: .mp4)
+    }
+
+    /// The video's first frame, upright, as a JPEG.
+    private static func firstFrameJPEG(of url: URL) async throws -> Data {
+        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+        generator.appliesPreferredTrackTransform = true
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+        let (image, _) = try await generator.image(at: .zero)
+        guard let data = NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.9])
+        else { throw CocoaError(.fileWriteUnknown) }
+        return data
     }
 
     private func addBlock(_ kind: LampPresentationBlockKind) {
@@ -1809,6 +1947,8 @@ private struct LampSlideBlockEditor: View {
     var imageURL: URL? = nil
     let updateCitation: (String) -> Void
     let chooseImage: () -> Void
+    let chooseVideo: () -> Void
+    var isPreparingVideo = false
     let remove: () -> Void
 
     var body: some View {
@@ -1862,6 +2002,8 @@ private struct LampSlideBlockEditor: View {
                             get: { block.assetPath ?? "" },
                             set: { block.assetPath = $0 }
                         ))
+                        // The video being prepared sets the picture when done.
+                        .disabled(isPreparingVideo)
                         .textFieldStyle(.plain)
                         .font(.callout)
                         .lineLimit(1)
@@ -1869,10 +2011,37 @@ private struct LampSlideBlockEditor: View {
                         .labelsHidden()
                         .help(block.assetPath ?? "")
                         Button("Choose Image…", systemImage: "photo", action: chooseImage)
+                        .disabled(isPreparingVideo)
                         .buttonStyle(.lampSecondary)
                         .controlSize(.small)
                             .controlSize(.small)
                             .help("Copy an image into this library and use it here")
+                        // A video plays only while presenting; the picture
+                        // above is its still everywhere else.
+                        if let video = block.video {
+                            HStack(spacing: 6) {
+                                Label((video as NSString).lastPathComponent, systemImage: "film")
+                                    .font(.callout)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                    .foregroundStyle(.secondary)
+                                    .help("Plays silently, looping, while the slide is presented; the picture is its still")
+                                Button("Remove Video", systemImage: "xmark.circle") { block.video = nil }
+                                    .labelStyle(.iconOnly)
+                                    .buttonStyle(.borderless)
+                                    .help("Show the picture alone")
+                            }
+                        } else if isPreparingVideo {
+                            HStack(spacing: 6) {
+                                ProgressView().controlSize(.small)
+                                Text("Preparing video…").font(.callout).foregroundStyle(.secondary)
+                            }
+                        } else {
+                            Button("Choose Video…", systemImage: "film", action: chooseVideo)
+                                .buttonStyle(.lampSecondary)
+                                .controlSize(.small)
+                                .help("Copy a short video into this library to play, silent and looping, while presenting; its first frame becomes the picture")
+                        }
                     }
                 }
                 StudioStackedField("Description") {

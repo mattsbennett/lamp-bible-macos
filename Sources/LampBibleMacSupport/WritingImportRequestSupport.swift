@@ -194,7 +194,7 @@ public enum LampWritingImportRequests {
                 if let directory = delivered.assetsDirectory,
                    let parsed = try? LampPresentationDeckStore.decodeUnvalidated(delivered.data) {
                     let base = directory.resolvingSymlinksInPath().standardizedFileURL.path
-                    for path in Set(parsed.slides.flatMap(\.blocks).compactMap(\.assetPath))
+                    for path in Set(parsed.slides.flatMap(\.blocks).flatMap(\.assetPaths))
                     where LampPresentationDeckValidator.isSafeAssetPath(path) {
                         // Only a file truly inside the deck's folder: a linked
                         // `Assets` must not carry in one from elsewhere.
