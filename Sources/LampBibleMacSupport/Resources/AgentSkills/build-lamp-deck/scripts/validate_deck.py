@@ -132,6 +132,8 @@ SHARED_PICTURE_SLOT = {"image", "chart"}
 # image takes the other half of the slide.
 CROWDING_CEILING = 900
 SPEAKER_NOTES_SOURCES = {"authored", "manuscript"}
+TRANSITIONS = {"dissolve", "cut"}
+REVEALS = {"together", "stepwise"}
 MANUSCRIPT_CHECKS = {"skip"}
 # Notes can only follow writing Lamp holds.
 MANUSCRIPT_SOURCE_KINDS = {"devotional", "writing"}
@@ -934,6 +936,18 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
                 f"source, and this deck's is {kind!r}"
             )
 
+    # Lamp reads an unknown transition or reveal as its default, so a deck
+    # from a newer Lamp still opens; a value of the wrong type stops the
+    # whole deck from opening.
+    transition = deck.get("transition")
+    if transition is not None and not isinstance(transition, str):
+        errors.append("transition: expected 'dissolve' or 'cut'")
+    elif isinstance(transition, str) and transition not in TRANSITIONS:
+        warnings.append(
+            f"transition: {transition!r} is not a transition Lamp draws, so slides dissolve; "
+            "use 'dissolve' or 'cut'"
+        )
+
     theme_highlights = theme.get("highlights") if isinstance(theme, dict) else None
     highlight_names = set(theme_highlights) if isinstance(theme_highlights, dict) else set()
 
@@ -963,6 +977,17 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
             warnings.append(f"{path}.speakerNotes: exceeds 5,000 characters")
         if not isinstance(slide.get("isHidden"), bool):
             errors.append(f"{path}.isHidden: expected true or false")
+        reveal = slide.get("reveal")
+        if reveal is not None and not isinstance(reveal, str):
+            errors.append(f"{path}.reveal: expected 'together' or 'stepwise'")
+        elif isinstance(reveal, str) and reveal not in REVEALS:
+            warnings.append(
+                f"{path}.reveal: {reveal!r} is not a way Lamp reveals a slide, so it arrives whole; "
+                "use 'stepwise'"
+            )
+        reveals_emphasis = slide.get("revealsEmphasis")
+        if reveals_emphasis is not None and not isinstance(reveals_emphasis, bool):
+            errors.append(f"{path}.revealsEmphasis: expected true or false")
         anchor = slide.get("notesAnchor")
         if anchor is not None and not isinstance(anchor, str):
             errors.append(f"{path}.notesAnchor: expected a string")

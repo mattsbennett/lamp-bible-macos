@@ -795,6 +795,7 @@ struct SlideStudioView: View {
                                     StudioLayoutPicker(selection: slideBinding.layout)
                                     Toggle("Skip while presenting", isOn: slideBinding.isHidden)
                                     .tint(Color.lampAccentMuted)
+                                    StudioRevealControls(slide: slideBinding)
                                 }
                             }
                             Divider().padding(.vertical, 18)
@@ -847,6 +848,20 @@ struct SlideStudioView: View {
                                     }
                                 }
                                 .labelsHidden()
+                                }
+                                // A dissolve or a cut, and nothing showier: a
+                                // slide that moves draws the eye from what it
+                                // says. Absent in the file means a dissolve.
+                                StudioInspectorRow("Transition") {
+                                    Picker("Transition", selection: Binding(
+                                        get: { deckBinding.wrappedValue.transition ?? .dissolve },
+                                        set: { deckBinding.transition.wrappedValue = $0 == .dissolve ? nil : $0 }
+                                    )) {
+                                        ForEach(LampPresentationTransition.allCases) { transition in
+                                            Text(transition.displayName).tag(transition)
+                                        }
+                                    }
+                                    .labelsHidden()
                                 }
                                 // The themes as the deck's own first slide
                                 // drawn in each, so the choice is seen rather
@@ -2885,6 +2900,48 @@ private struct LayoutSketch: View {
             ForEach(0..<count, id: \.self) { index in
                 bar(index == count - 1 ? width * 0.62 : width, height * 0.07, faint)
             }
+        }
+    }
+}
+
+/// Whether a slide brings its content in a part at a time while presenting,
+/// and whether its emphasised words light up last. Says how many clicks that
+/// makes, since that is what the presenter has to remember.
+private struct StudioRevealControls: View {
+    @Binding var slide: LampPresentationSlide
+
+    var body: some View {
+        let plan = slide.revealPlan
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle("Reveal one part at a time", isOn: Binding(
+                get: { slide.reveal == .stepwise },
+                set: { slide.reveal = $0 ? .stepwise : nil }
+            ))
+            .tint(Color.lampAccentMuted)
+            .help("Each passage, list item or column fades in on a click")
+            Toggle("Light up emphasis last", isOn: Binding(
+                get: { slide.revealsEmphasis == true },
+                set: { slide.revealsEmphasis = $0 ? true : nil }
+            ))
+            .tint(Color.lampAccentMuted)
+            .help("Emphasised words take their colour on a click of their own")
+            if slide.reveal == .stepwise || slide.revealsEmphasis == true {
+                Text(Self.summary(plan))
+                    .font(.caption)
+                    .foregroundStyle(Color.lampSecondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private static func summary(_ plan: LampPresentationRevealPlan) -> String {
+        let parts = max(plan.units.count - 1, 0)
+        let rest = parts == 1 ? "one click brings in the rest" : "\(parts) clicks bring in the rest"
+        switch (parts > 0, plan.emphasisStep) {
+        case (true, true): return "Arrives with its first part; \(rest), then one more lights the emphasis."
+        case (true, false): return "Arrives with its first part; \(rest)."
+        case (false, true): return "Arrives whole; one click lights the emphasised words."
+        case (false, false): return "Nothing here to bring in a part at a time, and no emphasis to light, so the slide arrives whole."
         }
     }
 }

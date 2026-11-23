@@ -10,7 +10,12 @@ struct SlidePresentationView: View {
     let request: SlidePresentationRequest
 
     @State private var deck: LampPresentationDeck?
-    @State private var currentIndex = 0
+    /// The slide on screen and how far into its reveal; see
+    /// `LampPresentationPosition` for what a click does.
+    @State private var position = LampPresentationPosition()
+    /// Counts changes of slide, so the slide arriving is always drawn above
+    /// the one leaving.
+    @State private var slideLayer = 0
     @State private var isBlack = false
     @State private var errorMessage: String?
     @State private var presentationStartedAt = Date()
@@ -18,6 +23,8 @@ struct SlidePresentationView: View {
     private var visibleSlides: [LampPresentationSlide] {
         deck?.slides.filter { !$0.isHidden } ?? []
     }
+
+    private var currentIndex: Int { position.slide }
 
     private var currentSlide: LampPresentationSlide? {
         guard visibleSlides.indices.contains(currentIndex) else { return nil }
@@ -34,8 +41,21 @@ struct SlidePresentationView: View {
                     deck: deck,
                     store: LampPresentationDeckStore(rootURL: model.library.rootURL)
                 )
+                    .revealed(atStep: position.step)
                     .aspectRatio(deck.aspectRatio.ratio, contentMode: .fit)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // One view per slide, so a change of slide is the old one
+                    // giving way to the new — a dissolve when animated, a cut
+                    // when not — while a step within it fades its parts in.
+                    .id(currentSlide.id)
+                    // The arriving slide fades in over the one leaving, which
+                    // stays whole beneath it until it has gone. Both fading
+                    // at once over the black dimmed the screen midway, even
+                    // between two slides of the same colour.
+                    .transition(.asymmetric(insertion: .opacity, removal: .heldUntilCovered))
+                    // Each slide above the one before it, whichever way the
+                    // presenter moves, and above the black throughout.
+                    .zIndex(Double(slideLayer) + 1)
                     .opacity(isBlack ? 0 : 1)
             } else if let errorMessage {
                 ContentUnavailableView(
@@ -53,6 +73,8 @@ struct SlidePresentationView: View {
 
             if isBlack {
                 Color.black.ignoresSafeArea()
+                    // Over the slide, which now has an order of its own.
+                    .zIndex(Double(Int32.max))
             }
         }
         .contentShape(Rectangle())
@@ -66,7 +88,7 @@ struct SlidePresentationView: View {
                 broadcastRemoteState()
             }
         }
-        .onChange(of: currentIndex) { broadcastRemoteState() }
+        .onChange(of: position) { broadcastRemoteState() }
         .onChange(of: isBlack) { broadcastRemoteState() }
         .onDisappear { remoteHost.commandHandler = nil }
         .background(SlidePresentationWindowController(handleCommand: handleKeyboardCommand))
@@ -99,7 +121,7 @@ struct SlidePresentationView: View {
                 return
             }
             deck = loaded
-            currentIndex = 0
+            position = LampPresentationPosition()
             presentationStartedAt = Date()
             broadcastRemoteState()
         } catch {
@@ -108,17 +130,32 @@ struct SlidePresentationView: View {
     }
 
     private func advance() {
-        guard currentIndex < visibleSlides.count - 1 else { return }
-        withAnimation(.easeInOut(duration: 0.18)) {
-            currentIndex += 1
-            isBlack = false
-        }
+        if let next = position.advanced(in: visibleSlides) { move(to: next) }
     }
 
     private func retreat() {
-        guard currentIndex > 0 else { return }
-        withAnimation(.easeInOut(duration: 0.18)) {
-            currentIndex -= 1
+        if let previous = position.retreated(in: visibleSlides) { move(to: previous) }
+    }
+
+    /// Moves to `next` the way the deck asks: a part fades in, a slide
+    /// dissolves into the next unless the deck cuts. Unhurried, since a
+    /// change the room notices as motion has taken too long or gone too far,
+    /// and nothing at all with Reduce Motion on.
+    private func move(to next: LampPresentationPosition) {
+        let changesSlide = next.slide != position.slide
+        // Read at the moment of the move rather than from the environment:
+        // the remote's handler is installed once and would keep the value
+        // the presentation opened with.
+        let animation: Animation? = if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            nil
+        } else if changesSlide {
+            (deck?.transition ?? .dissolve) == .cut ? nil : .easeInOut(duration: 0.45)
+        } else {
+            .easeInOut(duration: 0.35)
+        }
+        withAnimation(animation) {
+            if changesSlide { slideLayer += 1 }
+            position = next
             isBlack = false
         }
     }
@@ -148,10 +185,7 @@ struct SlidePresentationView: View {
 
     private func goToSlide(at index: Int) {
         guard visibleSlides.indices.contains(index) else { return }
-        withAnimation(.easeInOut(duration: 0.18)) {
-            currentIndex = index
-            isBlack = false
-        }
+        move(to: LampPresentationPosition(slide: index, step: 0))
     }
 
     private func broadcastRemoteState() {
@@ -172,8 +206,9 @@ struct SlidePresentationView: View {
                 nextSlide: visibleSlides.indices.contains(nextIndex) ? visibleSlides[nextIndex] : nil,
                 elapsedSeconds: max(0, Int(Date().timeIntervalSince(presentationStartedAt))),
                 isBlackout: isBlack,
-                canGoPrevious: currentIndex > 0,
-                canGoNext: currentIndex < visibleSlides.count - 1
+                canGoPrevious: position.retreated(in: visibleSlides) != nil,
+                canGoNext: position.advanced(in: visibleSlides) != nil,
+                currentRevealStep: position.step
             )
         )
     }
@@ -378,5 +413,21 @@ private final class SlidePresentationWindowView: NSView {
             guard case .presentation(let command) = self else { return nil }
             return command
         }
+    }
+}
+
+/// A slide leaving during a dissolve: drawn as it is, untouched, for as long
+/// as the slide arriving over it takes to fade in. Its modifier differs only
+/// in a value nothing reads, which is enough for SwiftUI to keep the view
+/// until the animation ends instead of removing it at once.
+private struct HeldUntilCovered: ViewModifier, Animatable {
+    var animatableData: Double
+
+    func body(content: Content) -> some View { content }
+}
+
+private extension AnyTransition {
+    static var heldUntilCovered: AnyTransition {
+        .modifier(active: HeldUntilCovered(animatableData: 0), identity: HeldUntilCovered(animatableData: 1))
     }
 }

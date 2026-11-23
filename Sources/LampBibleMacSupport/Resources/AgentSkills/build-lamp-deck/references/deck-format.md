@@ -577,6 +577,76 @@ back of a room, and `"by": "section"` is usually the better picture. That limit
 is about bars: a `columns` chart of all 27 New Testament books is exactly what
 columns are for.
 
+## Presenting: reveals and transitions
+
+Motion in a Lamp deck is deliberately quiet. Slides dissolve into each other,
+and content fades in where it will sit. Nothing flies in, spins or zooms, and
+Reduce Motion turns all of it off.
+
+### Between slides
+
+Set `transition` on the deck to `dissolve`, which is the default when the field
+is absent, or to `cut`. There is nothing else to choose, and nothing to set per
+slide.
+
+### A slide a part at a time
+
+Set `"reveal": "stepwise"` on a slide to bring its content in one part per
+click while presenting:
+
+| Layout | One part is |
+| --- | --- |
+| `scripture`, `quotation`, `title-and-body`, `title`, `closing` | each `scripture`, `quotation` or `body` block, with a passage's `citation` arriving alongside its last block, under the words it credits; each item of a list |
+| `two-column` | each column, its heading and passages together |
+| `blank` | each prose block; each item of a list |
+| `image` | nothing: an image slide arrives whole |
+
+- **The first part arrives with the slide**, so no click lands on an empty
+  slide.
+- **Titles, pictures, charts and credits are there from the start.**
+- **Parts still to come are laid out in their place and drawn clear,** so
+  nothing on the slide moves as each one arrives, and the type is the size it
+  will be when the slide is complete.
+- **Going back** returns to the previous slide as it was left, complete.
+- **Everywhere but the presenter**, including Slide Studio, thumbnails, the
+  remote's next slide and every PDF, shows the slide complete.
+
+Use it where the order of the words matters to the talk, such as a passage
+read a verse at a time, a list built point by point, or a contrast given one
+side before the other. Leave it off where the room needs the whole slide at
+once to follow you. A slide with fewer than two parts arrives whole, and Lamp
+warns.
+
+### Emphasis that lights up
+
+Set `"revealsEmphasis": true` on a slide whose blocks carry `emphasis`. The
+emphasised words are drawn in their weight but the plain text colour until a
+last click of their own, after every part has arrived. Then they take their
+colour. Nothing moves when they light, since their weight never changes. It
+suits a verse read through once and then looked at again for its key words.
+Without any emphasis on the slide it does nothing, and Lamp warns.
+
+```json
+{
+  "id": "…",
+  "layout": "scripture",
+  "reveal": "stepwise",
+  "revealsEmphasis": true,
+  "blocks": [
+    { "id": "…", "kind": "scripture", "text": "In the beginning was the Word,",
+      "emphasis": [{ "text": "the Word" }] },
+    { "id": "…", "kind": "scripture", "text": "and the Word was with God, and the Word was God." },
+    { "id": "…", "kind": "citation", "text": "John 1:1 (ESV)" }
+  ],
+  "speakerNotes": "",
+  "isHidden": false
+}
+```
+
+That slide arrives with the first line. One click brings the second line and
+the citation, and one more lights "the Word". Omit both fields for a slide that
+arrives whole. An older Lamp ignores them and shows the slide complete.
+
 ## Speaker notes from the manuscript
 
 A talk has two artifacts that must agree: the writing and the deck. Pasting the
