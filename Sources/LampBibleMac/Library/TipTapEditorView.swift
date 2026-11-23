@@ -1239,6 +1239,10 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         'html .ProseMirror .review-clear::before, html .ProseMirror .review-restore::before { position: absolute; left: 0; top: -11px; box-sizing: border-box; width: 22px; height: 22px; padding-bottom: 4px; display: flex; align-items: center; justify-content: center; border-radius: 11px; font: 14px/1 -apple-system, system-ui, sans-serif; }',
         'html .ProseMirror .review-clear::before { content: "\\u2713"; }',
         'html .ProseMirror .review-clear:hover::before, html .ProseMirror .review-restore:hover::before { background: rgba(232, 176, 44, 0.22); }',
+        // The button has no box of its own to draw a focus ring round, so
+        // the circle carries it, for a writer moving by keyboard.
+        'html .ProseMirror .review-clear:focus-visible, html .ProseMirror .review-restore:focus-visible { outline: none; }',
+        'html .ProseMirror .review-clear:focus-visible::before, html .ProseMirror .review-restore:focus-visible::before { outline: 2px solid -webkit-focus-ring-color; outline-offset: 1px; }',
         // A list item's buttons sit past its bullet, not on it: the list's
         // indent (1.35em) and the item's (0.15em) further into the margin,
         // in the item's own em, taken where the item is and handed down
@@ -1258,8 +1262,15 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         // Centred on the first line's box.
         'html body :is(.ProseMirror, blockquote, li, td, th) > .review-clear, html body :is(.ProseMirror, blockquote, li, td, th) > .review-restore { position: absolute; float: none; height: 0; margin: calc(1lh / 2) 0 0 -30px; }',
         'html body.mode-edit :is(.ProseMirror, blockquote, li, td, th) > .review-clear:has(~ .review-restore) { margin: calc(1lh / 2) 0 0 -56px; }',
-        'html body li > .review-clear, html body li > .review-restore { margin-left: calc(-30px - 1.5 * var(--lamp-review-item-em)); }',
-        'html body.mode-edit li > .review-clear:has(~ .review-restore) { margin-left: calc(-56px - 1.5 * var(--lamp-review-item-em)); }',
+        // More particular than the rule above, or a list item's offset lost
+        // to it and the ✓ and ↺ came apart.
+        'html body .ProseMirror li > .review-clear, html body .ProseMirror li > .review-restore { margin-left: calc(-30px - 1.5 * var(--lamp-review-item-em)); }',
+        'html body.mode-edit .ProseMirror li > .review-clear:has(~ .review-restore) { margin-left: calc(-56px - 1.5 * var(--lamp-review-item-em)); }',
+        // In a cell, which has no margin to stand in: at its right instead,
+        // the ✓ outermost, measured from the cell, which is placed for it.
+        'html .tiptap :is(td, th) { position: relative; }',
+        'html body .ProseMirror :is(td, th) > .review-clear, html body .ProseMirror :is(td, th) :is(blockquote, li) > .review-clear { left: auto; right: 4px; }',
+        'html body .ProseMirror :is(td, th) > .review-restore, html body .ProseMirror :is(td, th) :is(blockquote, li) > .review-restore { left: auto; right: 30px; }',
         // A table's cell has no margin of its own to hold them, so there
         // they go at the right of its first line, as the phone has them,
         // and its words wrap a little sooner: in the margin, a cell's
