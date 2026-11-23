@@ -1943,7 +1943,11 @@ private struct LampSlideBlockEditor: View {
                             "Figure",
                             selection: Binding(
                                 get: { block.figure == LampPresentationFigure.none ? nil : block.figure },
-                                set: { block.figure = $0 }
+                                set: { figure in
+                                    block.figure = figure
+                                    // Only a timeline zooms.
+                                    if figure != .timeline { block.zoom = nil }
+                                }
                             ),
                             items: [.init(id: nil, title: "None")]
                                 + [LampPresentationFigure.timeline, .chiasm, .parallel]
@@ -1956,6 +1960,9 @@ private struct LampSlideBlockEditor: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if block.figure == .timeline {
+                        StudioTimelineZoomControls(block: $block)
                     }
                 }
 
@@ -2977,6 +2984,80 @@ private struct LayoutSketch: View {
     }
 }
 
+/// A timeline too long for one slide, shown whole, then a few events at a
+/// time along the stretch chosen, then whole again with that stretch marked.
+/// Says how many clicks that takes, since the presenter has to know.
+private struct StudioTimelineZoomControls: View {
+    @Binding var block: LampPresentationBlock
+
+    var body: some View {
+        let count = block.listItemRuns.count
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle("Zoom in a few events at a time", isOn: Binding(
+                get: { block.zoom != nil },
+                set: { block.zoom = $0 ? LampPresentationTimelineZoom() : nil }
+            ))
+            .tint(Color.lampAccentMuted)
+            .help("Starts with the whole timeline; each click moves in and along it, then back out")
+            if let zoom = block.zoom {
+                let spans = LampPresentationTimelineZoom.spans
+                let span = min(max(zoom.span, spans.lowerBound), spans.upperBound)
+                Stepper(value: Binding(
+                    get: { span },
+                    set: { block.zoom?.span = $0 }
+                ), in: spans) {
+                    Text("\(span) events in view")
+                }
+                .controlSize(.small)
+                if count > 1 {
+                    // The stretch as stored, held to the events, whether or
+                    // not there are yet enough events to zoom.
+                    let from = min(max(zoom.from ?? 1, 1), count)
+                    let through = max(min(max(zoom.through ?? count, 1), count), from)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Stepper(value: Binding(
+                            get: { from },
+                            set: { value in
+                                block.zoom?.from = value == 1 ? nil : value
+                                if let through = block.zoom?.through, through < value { block.zoom?.through = value }
+                            }
+                        ), in: 1...count) {
+                            Text("Explore from event \(from)")
+                        }
+                        Stepper(value: Binding(
+                            get: { through },
+                            set: { value in
+                                block.zoom?.through = value == count ? nil : value
+                                if let from = block.zoom?.from, from > value { block.zoom?.from = value }
+                            }
+                        ), in: 1...count) {
+                            Text("through event \(through)")
+                        }
+                    }
+                    .controlSize(.small)
+                }
+                Text(Self.summary(block, count: count, span: span))
+                    .font(.caption)
+                    .foregroundStyle(Color.lampSecondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    static func summary(_ block: LampPresentationBlock, count: Int, span: Int) -> String {
+        guard count > span else {
+            return "A view of \(span) shows all \(count) events, so the timeline is drawn whole. "
+                + "Add events, or show fewer at a time."
+        }
+        // Read as a slide that draws figures would, since that is where the
+        // zoom is drawn; elsewhere the timeline is a list.
+        let moves = max(block.timelineViews(on: .titleAndBody).count - 2, 0)
+        guard moves > 0 else { return "Only a timeline zooms." }
+        let along = moves == 1 ? "one click zooms in" : "\(moves) clicks zoom in and move along"
+        return "Starts whole; \(along), and one more zooms back out with the stretch explored marked."
+    }
+}
+
 /// Whether a slide brings its content in a part at a time while presenting,
 /// and whether its emphasised words light up last. Says how many clicks that
 /// makes, since that is what the presenter has to remember.
@@ -3008,7 +3089,12 @@ private struct StudioRevealControls: View {
     }
 
     private static func summary(_ plan: LampPresentationRevealPlan) -> String {
-        let parts = max(plan.units.count - 1, 0)
+        // A zoomed timeline's moves are steps too, but not parts arriving;
+        // its own controls count those.
+        let moves = plan.units.flatMap { $0 }.filter {
+            if case .view(_, let index) = $0 { index > 0 } else { false }
+        }.count
+        let parts = max(plan.units.count - 1 - moves, 0)
         let rest = parts == 1 ? "one click brings in the rest" : "\(parts) clicks bring in the rest"
         switch (parts > 0, plan.emphasisStep) {
         case (true, true): return "Arrives with its first part; \(rest), then one more lights the emphasis."

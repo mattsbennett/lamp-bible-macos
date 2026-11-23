@@ -137,6 +137,11 @@ REVEALS = {"together", "stepwise"}
 TINTS = {"none", "duotone", "muted"}
 FIGURES = {"none", "timeline", "chiasm", "parallel"}
 MOST_TIMELINE_ENTRIES = 8
+# A zoomed timeline: how many events a view shows, and how many the whole can
+# hold. Mirrors `LampPresentationTimelineZoom`.
+ZOOM_SPANS = range(2, MOST_TIMELINE_ENTRIES + 1)
+DEFAULT_ZOOM_SPAN = 4
+MOST_ZOOMED_EVENTS = 40
 # The layouts that draw a figure. Mirrors `LampPresentationFigure.isDrawn`.
 FIGURE_LAYOUTS = {"title-and-body", "blank", "scripture", "quotation"}
 # What divides a timeline line's date from its event: a spaced dash or a bar.
@@ -373,6 +378,115 @@ def figure_lines(text: str) -> list[str]:
     return [line for line in lines if line]
 
 
+def shown_text_length(block: dict, layout) -> int:
+    """How much of a block's text the slide shows at once: a zoomed
+    timeline's `span` longest events, else all of it. Mirrors
+    `LampPresentationBlock.shownTextLength(on:)`."""
+    text = block.get("text") if isinstance(block.get("text"), str) else ""
+    span = drawn_zoom_span(block, layout)
+    if span is None:
+        return len(text)
+    return sum(sorted((len(line) for line in figure_lines(text)), reverse=True)[:span])
+
+
+def drawn_zoom(block: dict, layout) -> bool:
+    """Whether `block` is drawn as a zoomed timeline on `layout`. Mirrors
+    `LampPresentationBlock.drawnZoom(on:)`."""
+    return drawn_zoom_span(block, layout) is not None
+
+
+def drawn_zoom_span(block: dict, layout):
+    """The span a zoomed timeline is drawn with on `layout`, or None."""
+    if block.get("kind") != "body" or block.get("figure") != "timeline" or layout not in FIGURE_LAYOUTS:
+        return None
+    zoom = block.get("zoom")
+    if zoom is None:
+        return None
+    span = zoom.get("span") if isinstance(zoom, dict) else None
+    if isinstance(span, float) and span.is_integer() and abs(span) < 2 ** 53:
+        span = int(span)
+    if not isinstance(span, int) or isinstance(span, bool) or not -(2 ** 63) <= span < 2 ** 63:
+        span = DEFAULT_ZOOM_SPAN
+    span = min(max(span, ZOOM_SPANS.start), ZOOM_SPANS.stop - 1)
+    text = block.get("text") if isinstance(block.get("text"), str) else ""
+    return span if len(figure_lines(text)) > span else None
+
+
+def nothing_to_light(slide: dict) -> bool:
+    """Whether a slide surely has no emphasis to light last: none written,
+    or only in zoomed timelines, which are lit throughout, and no
+    comparison to mark. Swift also finds nothing where emphasis names words
+    the text lacks; that is left to it."""
+    if slide.get("variant") == "comparison" and slide.get("layout") == "two-column":
+        return False
+    blocks = slide.get("blocks") if isinstance(slide.get("blocks"), list) else []
+    return not any(
+        isinstance(block, dict) and block.get("emphasis") and not drawn_zoom(block, slide.get("layout"))
+        for block in blocks
+    )
+
+
+def zoom_issues(zoom, block: dict, block_path: str) -> tuple[list[str], list[str]]:
+    """Errors and warnings for a timeline's zoom. Mirrors `zoomIssues`; a
+    zoom Lamp cannot read is drawn with what it can, so its shape is an error
+    here only."""
+    path = f"{block_path}.zoom"
+    errors: list[str] = []
+    warnings: list[str] = []
+    # Lamp reads a zoom it cannot make sense of as the default one, and
+    # still warns of what that draws.
+    if not isinstance(zoom, dict):
+        errors.append(f"{path}: expected {{\"span\": 2-8, \"from\": n, \"through\": n}}")
+        zoom = {}
+
+    def number(key, default=None):
+        # As Swift's JSONDecoder reads an Int: a whole number, written with
+        # or without a point, that fits in 64 bits.
+        value = zoom.get(key)
+        if isinstance(value, bool):
+            return default
+        # A float only where it is exact: past 2**53 Python has already
+        # rounded what was written, which Swift may have refused.
+        if isinstance(value, float) and value.is_integer() and abs(value) < 2 ** 53:
+            value = int(value)
+        if isinstance(value, int) and -(2 ** 63) <= value < 2 ** 63:
+            return value
+        return default
+
+    for key in ("span", "from", "through"):
+        if zoom.get(key) is not None and number(key) is None:
+            errors.append(f"{path}.{key}: expected a whole number")
+    if block.get("kind") != "body" or block.get("figure") != "timeline":
+        return errors, [f"{path}: only a timeline zooms; this block is drawn without it"]
+    span = number("span", DEFAULT_ZOOM_SPAN)
+    drawn_span = min(max(span, ZOOM_SPANS.start), ZOOM_SPANS.stop - 1)
+    if span not in ZOOM_SPANS:
+        warnings.append(
+            f"{path}.span: a zoomed view shows {ZOOM_SPANS.start} to {ZOOM_SPANS.stop - 1} events; "
+            f"this one is drawn showing {drawn_span}"
+        )
+    text = block.get("text") if isinstance(block.get("text"), str) else ""
+    count = len(figure_lines(text))
+    if count <= drawn_span:
+        warnings.append(
+            f"{path}: a view of {drawn_span} events shows all {count} of this timeline, "
+            "so it is drawn whole without zooming"
+        )
+        return errors, warnings
+    for key in ("from", "through"):
+        value = number(key)
+        if value is not None and not 1 <= value <= count:
+            warnings.append(
+                f"{path}.{key}: the timeline's events are numbered 1 to {count}; {value} is held to the nearer end"
+            )
+    start, end = number("from"), number("through")
+    if start is not None and end is not None and start > end:
+        warnings.append(
+            f"{path}: a zoom's from comes after its through, so only event {min(max(start, 1), count)} is explored"
+        )
+    return errors, warnings
+
+
 def figure_warnings(figure: str, block: dict, block_path: str) -> list[str]:
     path = f"{block_path}.figure"
     if block.get("kind") != "body":
@@ -381,10 +495,16 @@ def figure_warnings(figure: str, block: dict, block_path: str) -> list[str]:
     lines = figure_lines(text)
     found: list[str] = []
     if figure == "timeline":
-        if len(lines) > MOST_TIMELINE_ENTRIES:
+        if block.get("zoom") is not None:
+            if len(lines) > MOST_ZOOMED_EVENTS:
+                found.append(
+                    f"{path}: a timeline of {len(lines)} events is too long to show whole, even as marks "
+                    f"along a line; keep a zoomed timeline to {MOST_ZOOMED_EVENTS}, or split it across slides"
+                )
+        elif len(lines) > MOST_TIMELINE_ENTRIES:
             found.append(
                 f"{path}: a timeline of {len(lines)} events is too crowded to read across a slide; "
-                f"keep it to {MOST_TIMELINE_ENTRIES}, or split it across slides"
+                f"keep it to {MOST_TIMELINE_ENTRIES}, zoom it, or split it across slides"
             )
         undated = [str(i + 1) for i, line in enumerate(lines) if not timeline_split(line)]
         if undated:
@@ -1117,6 +1237,11 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
         reveals_emphasis = slide.get("revealsEmphasis")
         if reveals_emphasis is not None and not isinstance(reveals_emphasis, bool):
             errors.append(f"{path}.revealsEmphasis: expected true or false")
+        elif reveals_emphasis is True and nothing_to_light(slide):
+            warnings.append(
+                f"{path}.revealsEmphasis: no words on this slide are emphasised, or only a zoomed "
+                "timeline's, which are lit throughout, so there is nothing to light up"
+            )
         anchor = slide.get("notesAnchor")
         if anchor is not None and not isinstance(anchor, str):
             errors.append(f"{path}.notesAnchor: expected a string")
@@ -1217,6 +1342,11 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
                             "as a list; a figure is drawn on title-and-body, blank, scripture and "
                             "quotation slides"
                         )
+            zoom = block.get("zoom")
+            if zoom is not None:
+                zoom_errors, zoom_warnings = zoom_issues(zoom, block, block_path)
+                errors.extend(zoom_errors)
+                warnings.extend(zoom_warnings)
             tint = block.get("tint")
             if tint is not None:
                 if not isinstance(tint, str):
@@ -1238,7 +1368,7 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
             text = block.get("text", "")
             if kind == "title" and isinstance(text, str) and len(text) > 90:
                 warnings.append(f"{block_path}.text: title may be too long")
-            if kind == "body" and isinstance(text, str) and len(text) > 700:
+            if kind == "body" and isinstance(text, str) and shown_text_length(block, slide.get("layout")) > 700:
                 warnings.append(f"{block_path}.text: body may be too dense")
             typography = block.get("typography")
             if typography is not None and typography not in TYPOGRAPHY:
@@ -1323,7 +1453,7 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
                 else {"body", "scripture", "quotation", "citation"}
             )
             drawn_text = sum(
-                len(block.get("text", ""))
+                shown_text_length(block, slide.get("layout"))
                 for block in blocks
                 if isinstance(block, dict) and block.get("kind") in counted
             )

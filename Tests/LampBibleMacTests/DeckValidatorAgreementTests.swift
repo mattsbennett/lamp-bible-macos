@@ -400,6 +400,48 @@ struct DeckValidatorAgreementTests {
                 slide(.init(source: source, by: .grammar, feature: .tense, style: .share, values: one)),
             ]
         }()),
+        // Timelines zoomed and not: too crowded unzoomed, a zoom too wide, a
+        // stretch outside the timeline, a stretch backwards, a zoom on a
+        // structure, and one well-formed.
+        {
+            func timeline(_ count: Int, zoom: LampPresentationTimelineZoom?) -> LampPresentationBlock {
+                .init(
+                    kind: .body,
+                    text: (1...count).map { "\($0) AD \u{2014} Event \($0)" }.joined(separator: "\n"),
+                    figure: .timeline,
+                    zoom: zoom
+                )
+            }
+            var chiasm = timeline(5, zoom: .init())
+            chiasm.figure = .chiasm
+            return LampPresentationDeck(title: "Zoom", slides: [
+                timeline(12, zoom: nil),
+                timeline(12, zoom: .init(span: 12)),
+                timeline(4, zoom: .init(span: 4)),
+                timeline(12, zoom: .init(span: 4, from: 0, through: 13)),
+                timeline(12, zoom: .init(span: 4, from: 8, through: 3)),
+                timeline(41, zoom: .init()),
+                chiasm,
+                timeline(20, zoom: .init(span: 5, from: 3, through: 9)),
+                // Long, but only four events show at once: not crowded.
+                {
+                    var long = timeline(24, zoom: .init())
+                    long.text = (1...24).map { "\($0) AD \u{2014} The church gathers in a new city" }
+                        .joined(separator: "\n")
+                    return long
+                }(),
+            ].map { .init(layout: .titleAndBody, blocks: [.init(kind: .title, text: "When"), $0]) }
+            + [
+                // Emphasis only in a zoomed timeline, lit throughout, leaves
+                // nothing to light last; nor does a slide with none at all.
+                {
+                    var block = timeline(12, zoom: .init())
+                    block.emphasis = [.init(text: "Event 3")]
+                    return .init(layout: .titleAndBody, blocks: [block], revealsEmphasis: true)
+                }(),
+                .init(layout: .titleAndBody, blocks: [.init(kind: .body, text: "Plain.")], revealsEmphasis: true),
+            ])
+        }(),
         // Nothing to say about a well-formed deck.
         LampPresentationDeck(title: "Clean", slides: [
             .init(layout: .titleAndBody, blocks: [

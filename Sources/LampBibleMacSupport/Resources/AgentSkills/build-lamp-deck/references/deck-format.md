@@ -273,7 +273,7 @@ are drawn as a list, and Lamp warns.
 
 | `figure` | Each line | Drawn as |
 | --- | --- | --- |
-| `timeline` | A date, a spaced dash, and what happened: `c. 1000 BC — David king in Jerusalem` | Events evenly along a line in the order written, the date above in the accent, the event below. Keep to 8. |
+| `timeline` | A date, a spaced dash, and what happened: `c. 1000 BC — David king in Jerusalem` | Events evenly along a line in the order written, the date above in the accent, the event below. Keep to 8, or zoom it. |
 | `chiasm` | One member of a mirrored structure, in order: the first pairs with the last, the second with the second-last, an odd line is the centre | Lettered A, B, C … C′, B′, A′ in the accent, and stepped in toward the centre. |
 | `parallel` | Lines in pairs, as Hebrew poetry sets them: a line, then the line that answers it | Lettered A, A′, B, B′, the answering line set in beneath its partner. |
 
@@ -298,6 +298,39 @@ are drawn as a list, and Lamp warns.
   to its centre.
 - **Emphasis works as anywhere else**, on a date, an event or a word in a
   structure.
+
+### A timeline longer than a slide: `zoom`
+
+A timeline of more than 8 events, up to 40, can be shown whole and then a few
+events at a time. Add `zoom` to the timeline block:
+
+```json
+{ "id": "…", "kind": "body", "figure": "timeline",
+  "zoom": { "span": 4, "from": 5, "through": 10 },
+  "text": "c. 2000 BC — Abraham called\n…" }
+```
+
+| Field | Meaning |
+| --- | --- |
+| `span` | How many events a zoomed-in view shows, 2 to 8. Defaults to 4. |
+| `from`, `through` | The first and last events explored, counted from 1. Absent, the whole timeline is explored. |
+
+The slide arrives showing the whole timeline, its dates thinned so none
+runs into the next. Each click then moves the view: in to the first `span`
+events of the stretch, along it (each move keeps the last event of the view
+before in sight), and back out to the whole, where the stretch explored is
+marked. Zoomed in, a small line under the timeline shows the whole and where
+the view is. A stretch of `span` events or fewer takes one view, centred on
+it.
+
+- **Every move is a click** whether or not the slide sets `"reveal":
+  "stepwise"`. With it, the timeline arrives whole on its own click; its events
+  do not arrive one at a time.
+- **Only a timeline zooms**, and only one with more events than `span`; Lamp
+  warns otherwise and draws it whole. A `from` or `through` outside the
+  timeline is held to the nearer end.
+- **Moves are unhurried and never overshoot**, and with Reduce Motion they
+  cut. A Lamp that does not know `zoom` draws the timeline whole.
 
 ## Quotations
 
