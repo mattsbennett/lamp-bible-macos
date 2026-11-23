@@ -96,6 +96,48 @@ struct AgentProseTextTests {
         #expect(AgentProseText.segments(of: growing) != AgentProseText.segments(of: texts[0]))
     }
 
+    /// A reply read as it arrives says exactly what it says when it is
+    /// read whole — including that its prose is one run, so a selection
+    /// still carries from a paragraph into the list under it.
+    @Test func areplyReadAsItArrivesReadsAsItDoesWhole() {
+        let whole = """
+            # Gideon's call
+
+            He was threshing wheat in a winepress.
+
+            - The angel greets him
+            - Gideon asks for a sign
+
+            ```swift
+            print("peace")
+            ```
+
+            > Surely I will be with thee.
+
+            The last word.
+            """
+        // Every length the reply passes through on its way in.
+        for end in stride(from: 1, through: whole.count, by: 7) {
+            let sofar = String(whole.prefix(end))
+            #expect(
+                AgentProseText.segments(of: sofar) == AgentProseText.segments(of: sofar),
+                "unstable at \(end)"
+            )
+        }
+        let segments = AgentProseText.segments(of: whole)
+        // One prose run before the code and one after, not a run per block.
+        let prose = segments.filter { if case .prose = $0 { return true } else { return false } }
+        #expect(prose.count == 2, "prose came in \(prose.count) runs")
+        let text = AgentProseText.attributedString(
+            for: segments.compactMap { if case .prose(let b) = $0 { return b } else { return nil } }
+                .flatMap { $0 }
+        ).string
+        for piece in ["Gideon's call", "threshing wheat", "The angel greets him",
+                      "Surely I will be with thee.", "The last word."] {
+            #expect(text.contains(piece), "lost: \(piece)")
+        }
+    }
+
     @Test func tablesAreRealTableCells() throws {
         let cells: (String) -> LampProseText = { LampProseText(AttributedString($0)) }
         let text = AgentProseText.attributedString(for: [.table(

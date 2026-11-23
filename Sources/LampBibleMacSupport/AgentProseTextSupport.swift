@@ -27,10 +27,32 @@ public enum AgentProseText {
     /// still arriving is read again each time, which is the cost of showing
     /// it as it comes.
     public static func segments(of markdown: String) -> [Segment] {
-        if let remembered = remembered(markdown) { return remembered }
-        let read = read(markdown)
-        remember(markdown, read)
-        return read
+        // Read a piece at a time, each piece remembered by its own text, so
+        // a reply that has grown by a few characters re-reads only the block
+        // it grew into. Core cuts only where a piece still reads as it would
+        // in the whole (`LampProse.pieces(of:)`).
+        var out: [Segment] = []
+        for piece in LampProse.pieces(of: markdown) {
+            let read: [Segment]
+            if let remembered = remembered(piece) {
+                read = remembered
+            } else {
+                read = self.read(piece)
+                remember(piece, read)
+            }
+            // Prose either side of a cut is one run again: the panel draws a
+            // run as one text view so a selection can carry from a paragraph
+            // into the list under it, and two views cannot be selected at
+            // once. The cut is ours, not the writer's, and must not show.
+            if case .prose(let blocks) = read.first,
+               case .prose(let standing)? = out.last {
+                out[out.count - 1] = .prose(standing + blocks)
+                out.append(contentsOf: read.dropFirst())
+            } else {
+                out.append(contentsOf: read)
+            }
+        }
+        return out
     }
 
     /// The last few replies read, newest last. A transcript redraws all of
