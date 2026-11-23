@@ -340,6 +340,9 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     var onReviewMarksPartlyDrawn: ((AnyHashable?, Int) -> Void)?
     /// What the review marks last sent were sent for.
     private var reviewMarksAskedIn: AnyHashable?
+    /// Whether the page has cleared a block since it was last sent marks:
+    /// the next marks go to it then, though they match the last.
+    private var pageClearedSinceMarks = false
     /// The review marks shown, as the writing's Markdown with markers, kept
     /// so every load puts them back: a document loaded into the page starts
     /// with none.
@@ -681,6 +684,10 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
             onFindStatusChanged?(Self.findStatus(from: body))
 
         case "reviewClear":
+            // The page has taken the block's marks off already, so the
+            // marks sent next go to it even if they are the ones it was
+            // last sent: they may be what puts back a mark it took off.
+            pageClearedSinceMarks = true
             guard let clear = reviewClear(from: body) else { return }
             onReviewClear?(clear)
 
@@ -924,7 +931,7 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     /// put back after each load.
     func setReviewMarks(_ marked: String?, changes: [LampWritingReview.Change?] = [], askedIn: AnyHashable? = nil) {
         reviewMarksAskedIn = askedIn
-        guard marked != reviewMarks || changes != reviewChanges else { return }
+        guard marked != reviewMarks || changes != reviewChanges || pageClearedSinceMarks else { return }
         reviewMarks = marked
         reviewChanges = changes
         applyReviewMarks()
@@ -932,6 +939,7 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
 
     private func applyReviewMarks() {
         guard isReady, hasLoadedContent else { return }
+        pageClearedSinceMarks = false
         // Marks are drawn while a writing is being written, never while it
         // is being read, and the count follows them. Owner's decision,
         // 2026-11-22. Refused here rather than left to each caller not to

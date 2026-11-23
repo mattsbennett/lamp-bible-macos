@@ -910,11 +910,16 @@ final class WritingReviewSession: ObservableObject {
         }
     }
 
-    private func draw(sendsMarks: Bool) {
+    private func draw(sendsMarks asked: Bool) {
         drawGeneration += 1
         let generation = drawGeneration
-        if sendsMarks { needsResend = false }
+        // Owed until a draw that sends them lands: a later draw supersedes
+        // this one (a typing settle while it is worked out), and the marks
+        // it was to send are then that draw's to send.
+        if asked { needsResend = true }
+        let sendsMarks = needsResend
         guard let review, !review.isEmpty else {
+            needsResend = false
             publish(
                 ranges: [], count: 0, restorable: [], marked: nil, changes: [],
                 note: noteForAgent(ranges: []), sendsMarks: sendsMarks
@@ -951,6 +956,7 @@ final class WritingReviewSession: ObservableObject {
                 )
             }.value
             guard let self, self.drawGeneration == generation else { return }
+            if sendsMarks { self.needsResend = false }
             self.publish(
                 ranges: drawn.0, count: drawn.1, restorable: drawn.3, marked: drawn.2,
                 changes: drawn.4, note: self.noteForAgent(ranges: drawn.0, in: text),

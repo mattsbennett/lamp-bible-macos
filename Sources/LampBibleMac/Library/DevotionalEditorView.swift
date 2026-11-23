@@ -785,6 +785,9 @@ struct DevotionalEditorView: View {
     @State private var heldRevision: Date?
     /// Whether a restore is being made and kept. One at a time.
     @State private var isRestoring = false
+    /// A restore the page made in a document left before its answer came,
+    /// which the switch's read of the page's edits leaves out.
+    @State private var restoreLeftBehind: String?
     /// Raised whenever the writing is replaced wholesale by something that
     /// is not the writer's own editing: a turn's draft, a newer copy from
     /// another device, a version put back from the history. A restore
@@ -3118,6 +3121,11 @@ struct DevotionalEditorView: View {
             // one file's wording into another.
             guard reviewKey == askedIn else {
                 isRestoring = false
+                // The page made it in the document it was showing, and the
+                // switch reads the page's edits into that document after
+                // this: left out there, so the writing is as it was rather
+                // than restored with nothing recorded.
+                if case .done(let held) = made { restoreLeftBehind = held }
                 refusedRestore = "Another document was opened while that was being put back, so nothing was changed."
                 return
             }
@@ -3358,6 +3366,10 @@ struct DevotionalEditorView: View {
                 DispatchQueue.main.async {
                     // Do not overwrite an edit made immediately after switching
                     // into the Markdown surface.
+                    if let latestMarkdown, latestMarkdown == restoreLeftBehind {
+                        restoreLeftBehind = nil
+                        return
+                    }
                     if let latestMarkdown, content == textBefore {
                         // The writer's own edits, read back off the page as
                         // the surface changes. Not a replacement of the
@@ -3370,6 +3382,10 @@ struct DevotionalEditorView: View {
         }
         coordinator.getEditedContent { latestMarkdown in
             DispatchQueue.main.async {
+                if let latestMarkdown, latestMarkdown == restoreLeftBehind {
+                    restoreLeftBehind = nil
+                    return
+                }
                 guard let latestMarkdown,
                       let index = workspaceDocuments.firstIndex(where: { $0.id == documentID }),
                       workspaceDocuments[index].text == textBefore
