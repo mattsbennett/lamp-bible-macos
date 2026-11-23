@@ -4767,7 +4767,15 @@ struct DevotionalEditorView: View {
                 saved: saved, text: text, proseTexts: proseTexts, known: known,
                 relinked: relinked, restores: restores
             )
-            if let carried { try store.update(writingID: copyID) { _ in carried } }
+            if let carried {
+                try store.update(writingID: copyID) { _ in carried }
+            } else if let filed = try? store.review(writingID: copyID),
+                      !filed.marks.isEmpty || !filed.restorations.isEmpty {
+                // Nothing to file now, but an earlier pass filed something
+                // for text this one no longer holds: the copy's record is
+                // what this pass worked out, which is nothing.
+                try store.update(writingID: copyID) { _ in LampWritingReview(writingID: copyID) }
+            }
             return waiting
         }.value
     }

@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 import LampCore
 #if canImport(LampBibleMacSupport)
@@ -802,22 +801,15 @@ final class WritingReviewSession: ObservableObject {
                 carryingFrom: proseTexts + [owed.restore.base, owed.held]
             )
             // The words it put back that the writer had not read are marked
-            // again, each as a new mark. The same in every pass, for the copy
-            // may be synced between passes, and a new id each time would
-            // bring back unread a passage cleared on another device: so each
-            // takes an id from its obligation and its words, which every pass
-            // writes alike. And none is kept that names the writing's own
-            // picture links, which the copy's text does not hold, so it could
-            // never be drawn there: unmarked, as core leaves words it cannot
-            // place, rather than marked where nothing stands.
-            record.marks = record.marks.compactMap { mark in
-                guard !standing.contains(mark.id) else { return mark }
-                guard !mark.pieces.contains(where: { relinked($0.text) != $0.text }) else { return nil }
-                return LampWritingReview.Mark(
-                    id: Self.remarkID(for: owed.id, pieces: mark.pieces),
-                    pieces: mark.pieces, version: mark.version,
-                    markedAt: mark.markedAt, turnID: mark.turnID
-                )
+            // again, under ids core takes from the marks restored
+            // (`LampWritingReview.remarkID`), so every pass makes the same
+            // mark as any other recorder of this restore would. None is kept
+            // that names the writing's own picture links, which the copy's
+            // text does not hold, so it could never be drawn there: unmarked,
+            // as core leaves words it cannot place, rather than marked where
+            // nothing stands.
+            record.marks.removeAll { mark in
+                !standing.contains(mark.id) && mark.pieces.contains { relinked($0.text) != $0.text }
             }
             // Where the restore's fresh marks are anchored.
             sources += [relinked(owed.restore.base), relinked(owed.held)]
@@ -833,23 +825,6 @@ final class WritingReviewSession: ObservableObject {
         }
         carried.writingID = copyID
         return (carried, waiting)
-    }
-
-    /// The id a kept copy gives a mark it makes again over words a restore
-    /// put back: the same for the same obligation and words, whichever pass
-    /// writes it. A name-based UUID (version 5's layout) of the two.
-    nonisolated static func remarkID(for obligation: UUID, pieces: [LampWritingReview.Piece]) -> UUID {
-        var name = obligation.uuidString
-        for piece in pieces {
-            name += "\u{1}\(piece.hint)\u{1}\(piece.text)\u{1}\(piece.before)\u{1}\(piece.after)"
-        }
-        var bytes = Array(SHA256.hash(data: Data(name.utf8)).prefix(16))
-        bytes[6] = (bytes[6] & 0x0F) | 0x50
-        bytes[8] = (bytes[8] & 0x3F) | 0x80
-        return UUID(uuid: (
-            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-            bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
-        ))
     }
 
     /// A restore the surface made that no save has carried to storage
