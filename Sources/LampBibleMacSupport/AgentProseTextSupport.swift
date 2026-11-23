@@ -20,7 +20,32 @@ public enum AgentProseText {
     /// joins, which is how an agent writes. This app read it with a block
     /// reader of its own, which disagreed with that editor on 77 of 138 real
     /// writings; an agent's prose is the same prose.
+    ///
+    /// Remembered by its text, because the view asks on every redraw and a
+    /// chat redraws every reply it holds each time the newest one grows. A
+    /// reply that has not changed is read once and then recalled; the one
+    /// still arriving is read again each time, which is the cost of showing
+    /// it as it comes.
     public static func segments(of markdown: String) -> [Segment] {
+        if let remembered = remembered(markdown) { return remembered }
+        let read = read(markdown)
+        remember(markdown, read)
+        return read
+    }
+
+    /// The last few replies read, newest last. A transcript redraws all of
+    /// its replies together, so this holds enough for a screenful.
+    private static let readings = LampProseReadingCache()
+
+    private static func remembered(_ markdown: String) -> [Segment]? {
+        readings.value(for: markdown)
+    }
+
+    private static func remember(_ markdown: String, _ segments: [Segment]) {
+        readings.store(segments, for: markdown)
+    }
+
+    private static func read(_ markdown: String) -> [Segment] {
         var segments: [Segment] = []
         var prose: [LampProseBlock] = []
         for block in LampProse.blocks(markdown, options: .writing) {
@@ -504,5 +529,29 @@ private extension NSFont {
             ]],
         ])
         return NSFont(descriptor: descriptor, size: pointSize) ?? self
+    }
+}
+
+/// The replies already read, kept by their text.
+///
+/// Small and oldest-out: a transcript's replies are read together and the
+/// one still arriving changes its text on every token, so holding many would
+/// keep every half-finished version of it.
+private final class LampProseReadingCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var entries: [(markdown: String, segments: [AgentProseText.Segment])] = []
+    private let limit = 24
+
+    func value(for markdown: String) -> [AgentProseText.Segment]? {
+        lock.lock()
+        defer { lock.unlock() }
+        return entries.last { $0.markdown == markdown }?.segments
+    }
+
+    func store(_ segments: [AgentProseText.Segment], for markdown: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        entries.append((markdown, segments))
+        if entries.count > limit { entries.removeFirst(entries.count - limit) }
     }
 }

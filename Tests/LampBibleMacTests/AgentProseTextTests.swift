@@ -72,6 +72,30 @@ struct AgentProseTextTests {
         #expect(link?.absoluteString == "lamp://read/43003016")
     }
 
+    /// A reply is remembered by its text, because the panel asks for it on
+    /// every redraw. The risk of that is a reply drawn as another one, so
+    /// what is checked here is that the reading always matches the text —
+    /// including past the point where the oldest readings are let go.
+    @Test func arememberedReplyIsAlwaysTheRightOne() {
+        let texts = (0..<40).map { "Reply **\($0)**\n\n- item \($0)\n\n```\ncode \($0)\n```" }
+        // Read once in order, then again out of order: whatever is recalled
+        // and whatever is read afresh must both be this reply's.
+        for text in texts { _ = AgentProseText.segments(of: text) }
+        for (index, text) in texts.enumerated().reversed() {
+            let segments = AgentProseText.segments(of: text)
+            guard case .prose(let blocks) = segments.first,
+                  case .code(_, let code) = segments.last
+            else { return #expect(Bool(false), "unexpected shape for \(index)") }
+            #expect(code == "code \(index)")
+            #expect(AgentProseText.attributedString(for: blocks).string.contains("Reply \(index)"))
+        }
+        // The same text twice reads the same.
+        #expect(AgentProseText.segments(of: texts[0]) == AgentProseText.segments(of: texts[0]))
+        // A reply that grows is not confused with the one it grew from.
+        let growing = texts[0] + "\n\nAnd a last word."
+        #expect(AgentProseText.segments(of: growing) != AgentProseText.segments(of: texts[0]))
+    }
+
     @Test func tablesAreRealTableCells() throws {
         let cells: (String) -> LampProseText = { LampProseText(AttributedString($0)) }
         let text = AgentProseText.attributedString(for: [.table(
