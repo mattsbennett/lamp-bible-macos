@@ -261,6 +261,10 @@ final class WritingReviewSession: ObservableObject {
     /// it, and the writer is told some are missing rather than that none
     /// are drawn.
     @Published private(set) var isPartlyShown = false
+    /// The warning stands because the page holds this text and could not
+    /// place every mark, not because it held another: typing does not lift
+    /// it, since the page keeps what it drew and is not asked again.
+    private var isUnplaceable = false
     /// What of those can be put back as the assistant found it, in the
     /// order they stand. Worked out with what is drawn, off the main actor,
     /// so the editor can offer a restore without asking for it: short of
@@ -280,6 +284,9 @@ final class WritingReviewSession: ObservableObject {
     var onMarksChanged: ((String?, [LampWritingReview.Change?]) -> Void)?
     /// The marks last sent, for an editor that is ready late.
     private(set) var markedMarkdown: String?
+    /// What they were sent for: the document the session was following
+    /// when it published them, which the page's answer is checked against.
+    private(set) var markedKey: WritingReviewKey?
     /// What was sent with them, one to each marked passage, in the order
     /// they stand — which is the order the page finds its markers in.
     private(set) var markedChanges: [LampWritingReview.Change?] = []
@@ -391,10 +398,10 @@ final class WritingReviewSession: ObservableObject {
         // warn about — an undo that puts back text the page was happy
         // with would otherwise keep the warning over marks the writer
         // can see.
-        if isUnshown, text != self.text {
-            isUnshown = false
-            isPartlyShown = false
-        }
+        //
+        // Not where only some were drawn: the page keeps those through
+        // typing and is not asked again, so the rest are still missing.
+        if isUnshown, !isUnplaceable, text != self.text { isUnshown = false }
         guard text != self.text else { return }
         self.text = text
         guard review != nil else { return }
@@ -425,6 +432,7 @@ final class WritingReviewSession: ObservableObject {
         // does land takes the warning with it.
         if !isUnshown, count > 0 { isUnshown = true }
         if isPartlyShown { isPartlyShown = false }
+        isUnplaceable = false
         guard resentFor != text else { return }
         resentFor = text
         scheduleDraw()
@@ -440,15 +448,19 @@ final class WritingReviewSession: ObservableObject {
         if let askedIn, askedIn != key { return }
         if isUnshown { isUnshown = false }
         if isPartlyShown { isPartlyShown = false }
+        isUnplaceable = false
     }
 
-    /// The page drew some of the marks and could not place the rest. Not a
+    /// The page holds this text and could not place every mark. Not a
     /// refusal: nothing is sent again, since the same marks would part the
-    /// same way, but the writer is told what is drawn is not all of it.
-    func marksPartlyDrawn(askedIn: WritingReviewKey? = nil) {
+    /// same way, but the writer is told what is drawn is not all of it —
+    /// or, where it drew none, that none are, as when it refuses.
+    func marksPartlyDrawn(askedIn: WritingReviewKey? = nil, drawn: Int) {
         if let askedIn, askedIn != key { return }
         if !isUnshown, count > 0 { isUnshown = true }
-        if !isPartlyShown, count > 0 { isPartlyShown = true }
+        let partly = drawn > 0 && count > 0
+        if isPartlyShown != partly { isPartlyShown = partly }
+        isUnplaceable = count > 0
     }
 
     /// Something else wants the marks sent again — a restore the page
@@ -968,6 +980,7 @@ final class WritingReviewSession: ObservableObject {
         if isUnshown, count == 0 {
             isUnshown = false
             isPartlyShown = false
+            isUnplaceable = false
         }
         if self.count != count { self.count = count }
         if self.restorable != restorable { self.restorable = restorable }
@@ -975,6 +988,7 @@ final class WritingReviewSession: ObservableObject {
         if sendsMarks {
             markedMarkdown = marked
             markedChanges = changes
+            markedKey = key
             onMarksChanged?(marked, changes)
         }
     }

@@ -2415,13 +2415,15 @@ struct DevotionalEditorView: View {
     /// not the open document's. Now that it follows the document, asking
     /// would only hide a document's own marks from its own page.
     private func connectReviewMarks(to coordinator: TipTapEditorCoordinator) {
-        coordinator.setReviewMarks(reviewSession.markedMarkdown, changes: reviewSession.markedChanges)
-        reviewSession.onMarksChanged = { [weak coordinator] marked, changes in
+        coordinator.setReviewMarks(
+            reviewSession.markedMarkdown, changes: reviewSession.markedChanges, askedIn: reviewSession.markedKey
+        )
+        reviewSession.onMarksChanged = { [weak coordinator, weak reviewSession] marked, changes in
             guard reviewKey != nil else {
                 coordinator?.setReviewMarks(nil, changes: [])
                 return
             }
-            coordinator?.setReviewMarks(marked, changes: changes)
+            coordinator?.setReviewMarks(marked, changes: changes, askedIn: reviewSession?.markedKey)
         }
         // Each answer carries the document it was asked about, and is
         // dropped if the writer has moved to another since. The page
@@ -2441,9 +2443,8 @@ struct DevotionalEditorView: View {
                 markedMarkdown: clear.marked, pageText: clear.pageText, askedIn: askedIn
             )
         }
-        coordinator.onReviewMarksRejected = { [weak reviewSession] in
-            let askedIn = reviewKey
-            guard askedIn != nil else { return }
+        coordinator.onReviewMarksRejected = { [weak reviewSession] asked in
+            guard let askedIn = asked as? WritingReviewKey else { return }
             reviewSession?.marksRejected(askedIn: askedIn)
         }
         // The page's redo branch, which decides whether a passage the
@@ -2453,15 +2454,13 @@ struct DevotionalEditorView: View {
         // survives a view coming and going never says `ready` again,
         // and a host resetting on its own lifecycle would let go of
         // passages that are still redoable.
-        coordinator.onReviewMarksDrawn = { [weak reviewSession] in
-            let askedIn = reviewKey
-            guard askedIn != nil else { return }
+        coordinator.onReviewMarksDrawn = { [weak reviewSession] asked in
+            guard let askedIn = asked as? WritingReviewKey else { return }
             reviewSession?.marksDrawn(askedIn: askedIn)
         }
-        coordinator.onReviewMarksPartlyDrawn = { [weak reviewSession] in
-            let askedIn = reviewKey
-            guard askedIn != nil else { return }
-            reviewSession?.marksPartlyDrawn(askedIn: askedIn)
+        coordinator.onReviewMarksPartlyDrawn = { [weak reviewSession] asked, drawn in
+            guard let askedIn = asked as? WritingReviewKey else { return }
+            reviewSession?.marksPartlyDrawn(askedIn: askedIn, drawn: drawn)
         }
     }
 
@@ -2469,7 +2468,9 @@ struct DevotionalEditorView: View {
     /// moves to something that has none.
     private func showReviewMarks(_ shown: Bool, on coordinator: TipTapEditorCoordinator) {
         if shown {
-            coordinator.setReviewMarks(reviewSession.markedMarkdown, changes: reviewSession.markedChanges)
+            coordinator.setReviewMarks(
+                reviewSession.markedMarkdown, changes: reviewSession.markedChanges, askedIn: reviewSession.markedKey
+            )
         } else {
             coordinator.setReviewMarks(nil, changes: [])
         }

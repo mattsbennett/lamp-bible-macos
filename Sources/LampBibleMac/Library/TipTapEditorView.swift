@@ -324,15 +324,22 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     /// changes anything: the host works out the writing that results and
     /// hands it back through `restoreWording`.
     var onReviewRestore: ((TipTapReviewRestore) -> Void)?
+    /// Each of these answers is given what the marks it answers were sent
+    /// for (`setReviewMarks(_:changes:askedIn:)`), not what the host is
+    /// showing when it arrives: the page answers after a turn of its own,
+    /// and the writer can have moved to another document meanwhile.
+    ///
     /// The page could not place the marks it was sent — its text was a
     /// moment ahead of the host's — so the host sends them again.
-    var onReviewMarksRejected: (() -> Void)?
+    var onReviewMarksRejected: ((AnyHashable?) -> Void)?
     /// The page took the marks and drew them.
-    var onReviewMarksDrawn: (() -> Void)?
-    /// The page drew some of the marks and not others: one mark's markers
-    /// made the document another where they fell, so it placed the rest
-    /// without them.
-    var onReviewMarksPartlyDrawn: (() -> Void)?
+    var onReviewMarksDrawn: ((AnyHashable?) -> Void)?
+    /// The page holds this text and could not draw every mark: one mark's
+    /// markers made the document another where they fell, so it placed the
+    /// rest without them. With how many it drew, which may be none.
+    var onReviewMarksPartlyDrawn: ((AnyHashable?, Int) -> Void)?
+    /// What the review marks last sent were sent for.
+    private var reviewMarksAskedIn: AnyHashable?
     /// The review marks shown, as the writing's Markdown with markers, kept
     /// so every load puts them back: a document loaded into the page starts
     /// with none.
@@ -681,7 +688,7 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         // back from, or a mark that was deleted, so what the page was told
         // no longer describes it.
         case "reviewMarksStale":
-            onReviewMarksRejected?()
+            onReviewMarksRejected?(reviewMarksAskedIn)
 
 
         case "reviewRestore":
@@ -915,7 +922,8 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     /// edge of what is still marked (`LampWritingReview.markedMarkdown`), or
     /// nil for none, and what a restore of each would come to. Kept, and
     /// put back after each load.
-    func setReviewMarks(_ marked: String?, changes: [LampWritingReview.Change?] = []) {
+    func setReviewMarks(_ marked: String?, changes: [LampWritingReview.Change?] = [], askedIn: AnyHashable? = nil) {
+        reviewMarksAskedIn = askedIn
         guard marked != reviewMarks || changes != reviewChanges else { return }
         reviewMarks = marked
         reviewChanges = changes
@@ -924,11 +932,18 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
 
     private func applyReviewMarks() {
         guard isReady, hasLoadedContent else { return }
-        let argument = reviewMarks.map { Self.javascriptString(editorMarkdown(from: $0)) } ?? "null"
+        // Marks are drawn while a writing is being written, never while it
+        // is being read, and the count follows them. Owner's decision,
+        // 2026-11-22. Refused here rather than left to each caller not to
+        // ask: a page shows a writing in both modes, and the preview takes
+        // its page from the same pool the editor does.
+        let marks = viewMode == .edit ? reviewMarks : nil
+        let argument = marks.map { Self.javascriptString(editorMarkdown(from: $0)) } ?? "null"
         // One to each marked passage, in the order the page finds them. A
         // page from before this takes the marks and ignores the rest.
         let changes = (try? JSONEncoder().encode(reviewChanges))
             .flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
+        let askedIn = reviewMarksAskedIn
         evaluate(
             "window.editorAPI.setReviewMarks ? window.editorAPI.setReviewMarks(\(argument), \(changes)) : true"
         ) { [weak self] placed in
@@ -937,11 +952,11 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
             // one fact — not whether there are ranges to send, which
             // there are in exactly the cases the page turns down.
             if placed as? Bool == false {
-                self?.onReviewMarksRejected?()
+                self?.onReviewMarksRejected?(askedIn)
             } else if placed as? Bool == true {
-                self?.onReviewMarksDrawn?()
+                self?.onReviewMarksDrawn?(askedIn)
             } else if let partly = placed as? [String: Any], (partly["unshown"] as? Int ?? 0) > 0 {
-                self?.onReviewMarksPartlyDrawn?()
+                self?.onReviewMarksPartlyDrawn?(askedIn, partly["drawn"] as? Int ?? 0)
             }
         }
     }
