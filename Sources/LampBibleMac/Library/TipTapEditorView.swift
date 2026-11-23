@@ -1219,30 +1219,31 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         // In a block of text, inline at its first line's start, and taking
         // no room in the line: no width, its margins giving back what its
         // box takes (the ✓ alone, -30 + 22 + 8; with the ↺ beside it,
-        // -56 + 22 + 4 and 0 + 22 + 8), and no height, so a line shorter
-        // than the circle (small type, a note's) keeps its height, and the
-        // first line is laid out as it is once the marks are cleared.
+        // -56 + 22 + 4 and 0 + 22 + 8), and no height, its margins above
+        // and below giving back the circle's (-11 + 22 - 11), so a line
+        // shorter than the circle (small type, a note's) keeps its height,
+        // and the first line is laid out as it is once the marks are
+        // cleared. The box is still the circle, so what is placed by it
+        // (the restore offer's panel, a focus ring) lands round the circle.
         // Inline so that `vertical-align: middle` sets it on the middle of
         // the line's lower-case letters: centred on the line's box instead,
         // in a serif whose letters sit low in their line, the buttons rode
-        // high of the words. The circle and its glyph are drawn about that
-        // point by the `::before`, which the button's clicks include.
-        'html .ProseMirror .review-clear, html .ProseMirror .review-restore { display: inline-block; position: relative; vertical-align: middle; width: 22px; height: 0; padding: 0; border: none; background: transparent; color: rgba(178, 120, 0, 0.8); font: inherit; cursor: pointer; user-select: none; }',
-        'html .ProseMirror .review-clear { margin: 0 8px 0 -30px; }',
-        'html .ProseMirror .review-restore { margin: 0 8px 0 0; }',
+        // high of the words.
+        'html .ProseMirror .review-clear, html .ProseMirror .review-restore { display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; box-sizing: border-box; width: 22px; height: 22px; padding: 0 0 4px; border-radius: 11px; border: none; background: transparent; color: rgba(178, 120, 0, 0.8); font: inherit; cursor: pointer; user-select: none; }',
+        'html .ProseMirror .review-clear { margin: -11px 8px -11px -30px; }',
+        'html .ProseMirror .review-restore { margin: -11px 8px -11px 0; }',
         // With a ↺ beside it, which is shown only while editing, further out.
-        'html body.mode-edit .ProseMirror .review-clear:has(~ .review-restore) { margin: 0 4px 0 -56px; }',
+        'html body.mode-edit .ProseMirror .review-clear:has(~ .review-restore) { margin: -11px 4px -11px -56px; }',
         // In the system's face whatever the writing's is, so each glyph sits
         // the same in its circle in serif and sans alike; lifted two points
-        // by the padding, where its ink stands at the middle of the line's
-        // lower-case letters rather than low of it (measured in both faces).
-        'html .ProseMirror .review-clear::before, html .ProseMirror .review-restore::before { position: absolute; left: 0; top: -11px; box-sizing: border-box; width: 22px; height: 22px; padding-bottom: 4px; display: flex; align-items: center; justify-content: center; border-radius: 11px; font: 14px/1 -apple-system, system-ui, sans-serif; }',
+        // by the button's padding, where its ink stands at the middle of the
+        // line's lower-case letters rather than low of it (measured in both
+        // faces).
+        'html .ProseMirror .review-clear::before, html .ProseMirror .review-restore::before { font: 14px/1 -apple-system, system-ui, sans-serif; }',
         'html .ProseMirror .review-clear::before { content: "\\u2713"; }',
-        'html .ProseMirror .review-clear:hover::before, html .ProseMirror .review-restore:hover::before { background: rgba(232, 176, 44, 0.22); }',
-        // The button has no box of its own to draw a focus ring round, so
-        // the circle carries it, for a writer moving by keyboard.
-        'html .ProseMirror .review-clear:focus-visible, html .ProseMirror .review-restore:focus-visible { outline: none; }',
-        'html .ProseMirror .review-clear:focus-visible::before, html .ProseMirror .review-restore:focus-visible::before { outline: 2px solid -webkit-focus-ring-color; outline-offset: 1px; }',
+        'html .ProseMirror .review-clear:hover, html .ProseMirror .review-restore:hover { background: rgba(232, 176, 44, 0.22); }',
+        // A focus ring round the circle, for a writer moving by keyboard.
+        'html .ProseMirror .review-clear:focus-visible, html .ProseMirror .review-restore:focus-visible { outline: 2px solid -webkit-focus-ring-color; outline-offset: 1px; }',
         // A list item's buttons sit past its bullet, not on it: the list's
         // indent (1.35em) and the item's (0.15em) further into the margin,
         // in the item's own em, taken where the item is and handed down
@@ -1260,12 +1261,16 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         // cell: out of the flow there, where the block starts, or inline
         // they took a line of their own above it, which went when they did.
         // Centred on the first line's box.
-        'html body :is(.ProseMirror, blockquote, li, td, th) > .review-clear, html body :is(.ProseMirror, blockquote, li, td, th) > .review-restore { position: absolute; float: none; height: 0; margin: calc(1lh / 2) 0 0 -30px; }',
-        'html body.mode-edit :is(.ProseMirror, blockquote, li, td, th) > .review-clear:has(~ .review-restore) { margin: calc(1lh / 2) 0 0 -56px; }',
+        'html body :is(.ProseMirror, blockquote, li, td, th) > .review-clear, html body :is(.ProseMirror, blockquote, li, td, th) > .review-restore { position: absolute; float: none; margin: calc((1lh - 22px) / 2) 0 0 -30px; }',
+        'html body.mode-edit :is(.ProseMirror, blockquote, li, td, th) > .review-clear:has(~ .review-restore) { margin: calc((1lh - 22px) / 2) 0 0 -56px; }',
         // More particular than the rule above, or a list item's offset lost
         // to it and the ✓ and ↺ came apart.
         'html body .ProseMirror li > .review-clear, html body .ProseMirror li > .review-restore { margin-left: calc(-30px - 1.5 * var(--lamp-review-item-em)); }',
         'html body.mode-edit .ProseMirror li > .review-clear:has(~ .review-restore) { margin-left: calc(-56px - 1.5 * var(--lamp-review-item-em)); }',
+        // In a quote inside a list item, the quote's own offset, not the
+        // item's: later than the item's rule, and as particular, so the ✓
+        // does not take the item's offset and the ↺ the quote's.
+        'html body.mode-edit .ProseMirror blockquote > .review-clear:has(~ .review-restore) { margin-left: -56px; }',
         // In a cell, which has no margin to stand in: at its right instead,
         // the ✓ outermost, measured from the cell, which is placed for it.
         'html .tiptap :is(td, th) { position: relative; }',
@@ -1274,11 +1279,9 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         // A table's cell has no margin of its own to hold them, so there
         // they go at the right of its first line, as the phone has them,
         // and its words wrap a little sooner: in the margin, a cell's
-        // buttons sat over the cell before it. A float needs its height for
-        // the words to wrap round it, so here the circle is the box.
-        'html .ProseMirror :is(td, th) .review-clear, html .ProseMirror :is(td, th) .review-restore { float: right; height: 22px; margin: calc((1lh - 22px) / 2) 0 0 4px; }',
+        // buttons sat over the cell before it.
+        'html .ProseMirror :is(td, th) .review-clear, html .ProseMirror :is(td, th) .review-restore { float: right; margin: calc((1lh - 22px) / 2) 0 0 4px; }',
         'html body.mode-edit .ProseMirror :is(td, th) .review-clear:has(~ .review-restore) { margin: calc((1lh - 22px) / 2) 0 0 4px; }',
-        'html .ProseMirror :is(td, th) .review-clear::before, html .ProseMirror :is(td, th) .review-restore::before { top: 0; }',
         // A rule, an image or an audio block the assistant changed, which has
         // no words to wash: the block itself.
         'html .review-mark-block { background: rgba(232, 176, 44, 0.22); outline: 1px dotted rgba(178, 120, 0, 0.7); outline-offset: 4px; }',
