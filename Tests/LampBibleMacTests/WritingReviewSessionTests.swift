@@ -242,6 +242,65 @@ struct WritingReviewSessionTests {
         #expect(restored(undone.record) == 0 && undone.waiting.isEmpty)
     }
 
+    /// From Codex's review of the kept copy's record: words a restore puts
+    /// back that the writer had not read are marked again, and every pass
+    /// gives that mark the same id, so a copy synced between passes and
+    /// cleared elsewhere does not come back unread. And a restore the
+    /// writing recorded for itself since it was asked still reaches a copy
+    /// left with no marks at all.
+    @Test func aKeptCopyMarksRestoredUnreadWordsAlikeEveryPass() throws {
+        let first = "The cat sat."
+        let second = "The dog sat."
+        let third = "The bird sat."
+        // The assistant's two turns: the second replaced words the writer
+        // had not read yet, so putting them back marks them again.
+        let review = LampWritingReview(writingID: "w")
+            .markingAssistantChange(from: first, to: second)
+            .markingAssistantChange(from: second, to: third)
+        let latest = try #require(review.located(in: third).first { located in
+            located.ranges.contains { (third as NSString).substring(with: $0).contains("bird") }
+        }?.id)
+        guard case .plan(let plan) = review.restoring(marks: [latest], in: third) else {
+            Issue.record("the second turn's passage can be put back")
+            return
+        }
+        let held = plan.applied(to: third)
+        #expect(held == second)
+        let owed = WritingReviewSession.OwedRestore(
+            restore: WritingReviewSession.PageRestore(base: third, restored: held, plan: plan), held: held
+        )
+        func pass(_ record: LampWritingReview, saved: String) -> LampWritingReview? {
+            WritingReviewSession.keptCopyRecord(
+                of: record, as: "copy", saved: saved, text: saved, proseTexts: [third], known: [third],
+                relinked: { $0 }, restores: [owed]
+            ).record
+        }
+        let once = try #require(pass(review, saved: held))
+        let again = try #require(pass(review, saved: held + " More."))
+        let marked = once.highlightedRanges(in: held).map { (held as NSString).substring(with: $0) }
+        #expect(marked.contains { $0.contains("dog") })
+        #expect(Set(once.marks.map(\.id)) == Set(again.marks.map(\.id)))
+
+        // Only the restored passage was marked, and the writing recorded
+        // the restore itself in between: the copy still gets the record.
+        let only = LampWritingReview(writingID: "w").markingAssistantChange(from: "One two.", to: "One alpha two.")
+        let alpha = try #require(only.located(in: "One alpha two.").first?.id)
+        guard case .plan(let deletion) = only.restoring(marks: [alpha], in: "One alpha two.") else {
+            Issue.record("the insertion can be taken back out")
+            return
+        }
+        let putBack = deletion.applied(to: "One alpha two.")
+        let recorded = only.restoringWording(deletion, from: "One alpha two.", to: putBack, carryingFrom: ["One alpha two."])
+        let owedDeletion = WritingReviewSession.OwedRestore(
+            restore: WritingReviewSession.PageRestore(base: "One alpha two.", restored: putBack, plan: deletion), held: putBack
+        )
+        let copy = WritingReviewSession.keptCopyRecord(
+            of: recorded, as: "copy", saved: putBack, text: putBack, proseTexts: ["One alpha two."],
+            known: ["One alpha two."], relinked: { $0 }, restores: [owedDeletion]
+        ).record
+        #expect(copy?.restorations.contains { $0.markID == alpha } == true)
+    }
+
     /// The page takes a block's marks off as its ✓ is pressed, so every
     /// clear from it is answered with the marks, drawn again and sent: one
     /// that changes nothing in the record, and one this cannot place,
