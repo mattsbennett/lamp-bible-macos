@@ -100,7 +100,7 @@ Supported layouts:
 | `title-and-body` | Heading with body text, optionally beside a picture |
 | `scripture` | Scripture text with citations, optionally beside a picture |
 | `quotation` | Quotation with attribution, optionally beside a picture |
-| `two-column` | Two related or contrasting columns, each with an optional heading and citation |
+| `two-column` | Two to four related or contrasting columns, each with an optional heading and citation |
 | `image` | Image-led slide with optional title, caption, and citations |
 | `closing` | Reflection, response, or closing thought, with any passages beneath |
 | `blank` | Deliberate free ordering of supported blocks |
@@ -129,9 +129,13 @@ short: past about 450 characters they shrink, and the validator says so. Like
 every layout, they can also carry a picture behind them (see "A picture
 behind the slide").
 
-### Two columns
+### Columns
 
-A `two-column` slide draws its title and two columns. A headed column is, in
+A `two-column` slide draws its title and two to four columns. The name is the
+layout's older one. Two columns suit a contrast; three or four suit
+translations or accounts set side by side. Past four, a column is too narrow to
+read from the back of a room, so a fifth is not drawn and Lamp warns. A headed
+column is, in
 order:
 
 - an optional `subtitle`, drawn as the column's heading in a heavier weight;
@@ -174,8 +178,46 @@ Without subtitles, each prose block is a column of its own and a citation
 attributes the column it follows — so an unheaded column carries one passage.
 
 Do not type a heading or a reference as the first or last line of a `body`
-block: it is drawn as body text like the lines around it. A third column, and a
+block: it is drawn as body text like the lines around it. A fifth column, and a
 citation with no passage in front of it, are not drawn and are reported.
+
+### Forms of a layout: `variant`
+
+Some layouts have a second form, set with `variant` on the slide. It is
+deliberately not a layout of its own: an older Lamp ignores a variant and
+draws the plain layout, where an unknown layout would stop the deck opening.
+
+| `variant` | On | Draws |
+| --- | --- | --- |
+| `statement` | `title`, `closing` | The `title` as large as the slide allows, in heavy type, then any `subtitle` and passages as a title slide sets them. One phrase that lands a point or opens a section: "Grace.", "Who do you say I am?" |
+| `word` | `title`, `closing` | A Hebrew or Greek word large: the `title` is the word, a `subtitle` its transliteration, and a `body` block its gloss. Any passages follow, with their citations. |
+| `comparison` | `two-column` | The columns, with the words each has and the others lack marked in the accent: translations of one passage, or two accounts of one event. |
+
+```json
+{ "id": "…", "layout": "title", "variant": "word",
+  "blocks": [
+    { "id": "…", "kind": "title", "text": "ἀγάπη" },
+    { "id": "…", "kind": "subtitle", "text": "agapē" },
+    { "id": "…", "kind": "body", "text": "love: affection, good will, benevolence" },
+    { "id": "…", "kind": "scripture", "text": "God is love." },
+    { "id": "…", "kind": "citation", "text": "1 John 4:8 (ESV)" }
+  ],
+  "speakerNotes": "", "isHidden": false }
+```
+
+**For a word slide**, take the word, its transliteration and its gloss from
+the lexicon `analyze_strongs` returns. Never write them from memory: a
+misspelt word or a wrong accent on a slide is read by the whole room.
+
+**For a comparison**, Lamp compares the columns' passages word by word,
+ignoring case and punctuation. With two columns, each is marked where the
+other lacks a word. With three or four, the first column is the reference: it
+is left plain, and each other column is marked where it departs from it, so
+put the translation the talk reads from first. Headings are never compared. Put one translation's passage in each column, headed by the
+translation's name, with its citation. The marks are drawn as emphasis, so
+`revealsEmphasis` lights them on a last click: read the passages through, then
+show where they part. Copy each passage exactly from its translation, since
+the marks are only as true as the wording.
 
 ### Type size
 

@@ -135,6 +135,15 @@ SPEAKER_NOTES_SOURCES = {"authored", "manuscript"}
 TRANSITIONS = {"dissolve", "cut"}
 REVEALS = {"together", "stepwise"}
 TINTS = {"none", "duotone", "muted"}
+# Forms of a layout, and the layouts each belongs to; mirrors
+# `LampPresentationSlideVariant.layouts`.
+VARIANTS = {
+    "none": None,
+    "statement": {"title", "closing"},
+    "word": {"title", "closing"},
+    "comparison": {"two-column"},
+}
+MOST_COLUMNS = 4
 MANUSCRIPT_CHECKS = {"skip"}
 # Notes can only follow writing Lamp holds.
 MANUSCRIPT_SOURCE_KINDS = {"devotional", "writing"}
@@ -331,6 +340,17 @@ def contrast_ratio(first: str, second: str) -> float | None:
 
 
 def undrawn_in_columns(blocks: list) -> list[tuple[int, str]]:
+    return read_columns(blocks)[1]
+
+
+def column_count(blocks: list) -> int:
+    """How many columns a column slide draws, up to four. Mirrors
+    `plan.columnGroups.count`, which a comparison needs two of."""
+    rest = [None if is_background(block) else block for block in blocks]
+    return min(len(read_columns(rest)[0]), MOST_COLUMNS)
+
+
+def read_columns(blocks: list) -> tuple[list[dict], list[tuple[int, str]]]:
     """Mirror of Lamp's two-column reading.
 
     A `subtitle` opens a column and names it; everything after it is that
@@ -340,7 +360,7 @@ def undrawn_in_columns(blocks: list) -> list[tuple[int, str]]:
     with its own citation.
 
     With no subtitles, every prose block is a column of its own and a citation
-    attributes the column it follows. Only the first two columns are drawn.
+    attributes the column it follows. Only the first four columns are drawn.
     """
     kinds = [b.get("kind") if isinstance(b, dict) else None for b in blocks]
     uses_headings = "subtitle" in kinds
@@ -392,9 +412,9 @@ def undrawn_in_columns(blocks: list) -> list[tuple[int, str]]:
             undrawn.append((index, str(kind)))
     # A column may end on an unattributed passage, which still draws.
     close(None)
-    for column in columns[2:]:
+    for column in columns[MOST_COLUMNS:]:
         undrawn.extend((index, str(kinds[index])) for index in column["indexes"])
-    return sorted(set(undrawn))
+    return columns, sorted(set(undrawn))
 
 
 def is_background(block: object) -> bool:
@@ -405,7 +425,7 @@ def is_background(block: object) -> bool:
     )
 
 
-def undrawn_blocks(layout: str, blocks: list) -> list[tuple[int, str]]:
+def undrawn_blocks(layout: str, blocks: list, variant: object = None) -> list[tuple[int, str]]:
     """Indexes and kinds of blocks this layout will not draw.
 
     A picture behind the slide is taken first, on every layout, and the rest
@@ -424,10 +444,10 @@ def undrawn_blocks(layout: str, blocks: list) -> list[tuple[int, str]]:
         )
         if credit is not None:
             rest[credit] = None
-    return sorted(set(undrawn_backgrounds + undrawn_in_layout(layout, rest)))
+    return sorted(set(undrawn_backgrounds + undrawn_in_layout(layout, rest, variant)))
 
 
-def undrawn_in_layout(layout: str, blocks: list) -> list[tuple[int, str]]:
+def undrawn_in_layout(layout: str, blocks: list, variant: object = None) -> list[tuple[int, str]]:
     if layout == "two-column":
         return undrawn_in_columns(blocks)
     capacity = LAYOUT_CAPACITY.get(layout)
@@ -444,7 +464,9 @@ def undrawn_in_layout(layout: str, blocks: list) -> list[tuple[int, str]]:
         if kind not in capacity:
             undrawn.append((index, str(kind)))
             continue
-        if layout in SHARED_SUBTITLE_SLOT and kind in {"subtitle", "body"}:
+        # A word slide draws its transliteration (subtitle) and its gloss
+        # (body) each in a place of its own, as Lamp's plan does.
+        if layout in SHARED_SUBTITLE_SLOT and kind in {"subtitle", "body"} and variant != "word":
             if subtitle_slot_taken:
                 undrawn.append((index, str(kind)))
             subtitle_slot_taken = True
@@ -507,7 +529,7 @@ def ignored_hint(layout: str, kind: str) -> str:
         return " beyond its heading and one line beneath it"
     if layout == "two-column":
         if kind in {"body", "subtitle", "scripture", "quotation"}:
-            return " beyond its first two columns"
+            return " beyond its first four columns"
         if kind == "citation":
             return " unless it directly follows the column it attributes"
         if kind in SHARED_PICTURE_SLOT:
@@ -999,6 +1021,29 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
                         f"{path}.backgroundColor: neither of the theme's colours reads well on "
                         f"this background: the words contrast at only {best:.1f}:1; aim for 4.5:1 or more"
                     )
+        variant = slide.get("variant")
+        if variant is not None:
+            if not isinstance(variant, str):
+                errors.append(f"{path}.variant: expected 'statement', 'word' or 'comparison'")
+            elif variant not in VARIANTS:
+                warnings.append(
+                    f"{path}.variant: {variant!r} is not a form Lamp draws, so the slide is drawn plain"
+                )
+            elif VARIANTS[variant] is not None and slide.get("layout") not in VARIANTS[variant]:
+                names = " or ".join(sorted(VARIANTS[variant]))
+                warnings.append(
+                    f"{path}.variant: a {variant} is a form of a {names} slide; "
+                    f"this {slide.get('layout')} slide is drawn plain"
+                )
+            elif (
+                variant == "comparison"
+                and isinstance(slide.get("blocks"), list)
+                and column_count(slide["blocks"]) < 2
+            ):
+                warnings.append(
+                    f"{path}.variant: a comparison marks the words in which columns differ, "
+                    "and this slide has fewer than two"
+                )
         reveal = slide.get("reveal")
         if reveal is not None and not isinstance(reveal, str):
             errors.append(f"{path}.reveal: expected 'together' or 'stepwise'")
@@ -1166,7 +1211,15 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
         # Blocks the layout will never draw. Saying nothing here is what sent
         # deck authors to read the renderer to find out why a slide was bare.
         if isinstance(blocks, list):
-            for index, kind in undrawn_blocks(slide.get("layout", ""), blocks):
+            layout_variant = slide.get("variant")
+            drawn_variant = (
+                layout_variant
+                if isinstance(layout_variant, str)
+                and VARIANTS.get(layout_variant) is not None
+                and slide.get("layout") in VARIANTS[layout_variant]
+                else None
+            )
+            for index, kind in undrawn_blocks(slide.get("layout", ""), blocks, drawn_variant):
                 layout = str(slide.get("layout"))
                 warnings.append(
                     f"{path}.blocks[{index}]: A {layout} slide does not draw "

@@ -66,13 +66,15 @@ struct DeckValidatorAgreementTests {
                 .init(kind: .scripture, text: "In the beginning was the Word."),
             ]),
         ]),
-        // A third column, and a caption with no picture.
+        // A fifth column, and a caption with no picture.
         LampPresentationDeck(title: "Spill", slides: [
             .init(layout: .twoColumn, blocks: [
-                .init(kind: .title, text: "Two ideas"),
+                .init(kind: .title, text: "Five ideas"),
                 .init(kind: .body, text: "First"),
                 .init(kind: .body, text: "Second"),
                 .init(kind: .body, text: "Third"),
+                .init(kind: .body, text: "Fourth"),
+                .init(kind: .body, text: "Fifth"),
             ]),
             .init(layout: .titleAndBody, blocks: [
                 .init(kind: .title, text: "Heading"),
@@ -80,8 +82,8 @@ struct DeckValidatorAgreementTests {
                 .init(kind: .caption, text: "Stranded"),
             ]),
         ]),
-        // Headed columns with their citations, then what two columns cannot
-        // hold: a third column, and a citation with nothing to attribute.
+        // Headed columns with their citations, then what four columns cannot
+        // hold: a fifth column, and a citation with nothing to attribute.
         LampPresentationDeck(title: "Columns", slides: [
             .init(layout: .twoColumn, blocks: [
                 .init(kind: .title, text: "Two searches"),
@@ -102,7 +104,34 @@ struct DeckValidatorAgreementTests {
                 .init(kind: .citation, text: "A second source"),
                 .init(kind: .subtitle, text: "Three"),
                 .init(kind: .body, text: "Third"),
+                .init(kind: .subtitle, text: "Four"),
+                .init(kind: .body, text: "Fourth"),
+                .init(kind: .subtitle, text: "Five"),
+                .init(kind: .body, text: "Fifth"),
             ]),
+        ]),
+        // A word slide draws its transliteration and its gloss, each once;
+        // a second gloss is not drawn. A statement and a comparison on the
+        // wrong layout are drawn plain.
+        LampPresentationDeck(title: "Forms", slides: [
+            .init(layout: .title, blocks: [
+                .init(kind: .title, text: "ἀγάπη"),
+                .init(kind: .subtitle, text: "agapē"),
+                .init(kind: .body, text: "love"),
+                .init(kind: .body, text: "a second gloss"),
+            ], variant: .word),
+            .init(layout: .scripture, blocks: [
+                .init(kind: .scripture, text: "In the beginning was the Word."),
+            ], variant: .statement),
+            .init(layout: .title, blocks: [
+                .init(kind: .title, text: "A title"),
+                .init(kind: .subtitle, text: "One line"),
+                .init(kind: .body, text: "Not drawn"),
+            ], variant: .comparison),
+            // A comparison with only one column to compare.
+            .init(layout: .twoColumn, blocks: [
+                .init(kind: .body, text: "Alone"),
+            ], variant: .comparison),
         ]),
         // Two credited passages under each heading, which both validators
         // now draw in full, and a trailing passage with no citation.

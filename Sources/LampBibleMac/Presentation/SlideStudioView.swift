@@ -828,6 +828,7 @@ struct SlideStudioView: View {
                             StudioInspectorSection("Layout") {
                                 VStack(alignment: .leading, spacing: 12) {
                                     StudioLayoutPicker(selection: slideBinding.layout)
+                                    StudioVariantControl(slide: slideBinding)
                                     Toggle("Skip while presenting", isOn: slideBinding.isHidden)
                                     .tint(Color.lampAccentMuted)
                                     StudioRevealControls(slide: slideBinding)
@@ -3137,5 +3138,74 @@ private struct StudioFocusPicker: View {
             return (Double(min(max(value / length, 0), 1)) * 100).rounded() / 100
         }
         return LampPresentationFocus(x: fraction(point.x, size.width), y: fraction(point.y, size.height))
+    }
+}
+
+/// A layout's forms, where it has any: a title slide as a statement or a
+/// word, columns that mark where they differ. Kept beside the layout rather
+/// than as layouts of their own, so an older Lamp draws the plain layout.
+private struct StudioVariantControl: View {
+    @Binding var slide: LampPresentationSlide
+
+    var body: some View {
+        controls
+            // A form the new layout has none of is dropped with the change,
+            // or it would be saved behind a control no longer shown and
+            // warned of with no way to clear it.
+            // Only when this slide's layout changes: moving to another slide
+            // reuses this control, and clearing that slide's variant would
+            // edit a slide no one touched.
+            .onChange(of: LayoutEdit(slide: slide.id, layout: slide.layout)) { old, new in
+                guard old.slide == new.slide, old.layout != new.layout else { return }
+                if let variant = slide.variant, variant != .none, !variant.layouts.contains(new.layout) {
+                    slide.variant = nil
+                }
+            }
+    }
+
+    private struct LayoutEdit: Equatable {
+        let slide: String
+        let layout: LampPresentationSlideLayout
+    }
+
+    @ViewBuilder
+    private var controls: some View {
+        switch slide.layout {
+        case .title, .closing:
+            VStack(alignment: .leading, spacing: 6) {
+                LampSegmentedPicker(
+                    "Form",
+                    selection: Binding(
+                        get: { slide.drawnVariant == .none ? nil : slide.drawnVariant },
+                        set: { slide.variant = $0 }
+                    ),
+                    items: [.init(id: nil, title: "Title")]
+                        + [LampPresentationSlideVariant.statement, .word]
+                            .map { .init(id: Optional($0), title: $0.displayName) }
+                )
+                .controlSize(.small)
+                Text(caption)
+                    .font(.caption)
+                    .foregroundStyle(Color.lampSecondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        case .twoColumn:
+            Toggle("Mark where the columns differ", isOn: Binding(
+                get: { slide.drawnVariant == .comparison },
+                set: { slide.variant = $0 ? .comparison : nil }
+            ))
+            .tint(Color.lampAccentMuted)
+            .help("Words one column has and the others do not are drawn in the accent: for translations of one passage, or two accounts of one event")
+        default:
+            EmptyView()
+        }
+    }
+
+    private var caption: String {
+        switch slide.drawnVariant {
+        case .statement: "The heading as large as the slide allows."
+        case .word: "The heading is the word; a subtitle its transliteration, a body line its gloss."
+        default: "A heading with a line beneath it."
+        }
     }
 }
