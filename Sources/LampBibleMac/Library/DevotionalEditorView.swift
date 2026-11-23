@@ -1203,6 +1203,7 @@ struct DevotionalEditorView: View {
         // too, so a quiet document said "Up to date" twice.
         .navigationTitle(title.isEmpty ? "New Writing" : title)
         .toolbar { editorToolbar }
+        .modifier(OpenWritingEditorRegistration(writingID: identifier))
         .task(id: request) {
             editorMode = .visual
             load()

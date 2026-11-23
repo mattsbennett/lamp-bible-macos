@@ -174,6 +174,15 @@ final class PaneVisibility {
         let shown = view.visibleRect
         return shown.width > 1 && shown.height > 1
     }
+
+    /// The window the pane is drawn in with room, whether or not it is in
+    /// front: what a click on a notification brings forward. Nil for a pane
+    /// folded away or in a tab behind another.
+    var shownWindow: NSWindow? {
+        guard let view, let window = view.window, !view.isHiddenOrHasHiddenAncestor else { return nil }
+        let shown = view.visibleRect
+        return shown.width > 1 && shown.height > 1 ? window : nil
+    }
 }
 
 /// Puts a pane's `PaneVisibility` on a view that fills it.
@@ -222,6 +231,53 @@ enum WritingPaneVisibility {
 
     static func isWatched(writingID: String) -> Bool {
         panes[writingID]?.values.contains { $0.isWatched } ?? false
+    }
+}
+
+/// The writing editors open anywhere, by writing: in place in a library
+/// window or in a window of their own. A click on a writing's notification
+/// brings forward the window already showing it, as it stands, rather than
+/// asking for a window — which, since the request also asked for the
+/// assistant, matched no window open and opened another at the default size
+/// with its writing list showing.
+@MainActor
+enum OpenWritingEditors {
+    private static var editors: [String: [UUID: PaneVisibility]] = [:]
+
+    static func register(_ visibility: PaneVisibility, writingID: String, token: UUID) {
+        editors[writingID, default: [:]][token] = visibility
+    }
+
+    static func unregister(writingID: String, token: UUID) {
+        editors[writingID]?[token] = nil
+        if editors[writingID]?.isEmpty == true { editors[writingID] = nil }
+    }
+
+    /// The key window if it shows the writing, else the frontmost that does.
+    static func window(showing writingID: String) -> NSWindow? {
+        let shown = (editors[writingID]?.values).map { $0.compactMap(\.shownWindow) } ?? []
+        guard !shown.isEmpty else { return nil }
+        if let key = NSApp.keyWindow, shown.contains(key) { return key }
+        return NSApp.orderedWindows.first { shown.contains($0) } ?? shown.first
+    }
+}
+
+/// Puts a writing editor in `OpenWritingEditors` for as long as it is open.
+struct OpenWritingEditorRegistration: ViewModifier {
+    let writingID: String
+    @State private var visibility = PaneVisibility()
+    @State private var token = UUID()
+
+    func body(content: Content) -> some View {
+        content
+            .reportsVisibility(to: visibility)
+            .onAppear { OpenWritingEditors.register(visibility, writingID: writingID, token: token) }
+            // A new writing is given its id when first saved.
+            .onChange(of: writingID) { old, new in
+                OpenWritingEditors.unregister(writingID: old, token: token)
+                OpenWritingEditors.register(visibility, writingID: new, token: token)
+            }
+            .onDisappear { OpenWritingEditors.unregister(writingID: writingID, token: token) }
     }
 }
 
@@ -293,6 +349,11 @@ struct AgentTurnRouteReceiver: ViewModifier {
                     }
                 case .writing(let id):
                     guard let window = host.window, window === AgentTurnRouteWindows.target() else { return }
+                    if let showing = OpenWritingEditors.window(showing: id) {
+                        if showing.isMiniaturized { showing.deminiaturize(nil) }
+                        showing.makeKeyAndOrderFront(nil)
+                        return
+                    }
                     openWindow(
                         id: "devotional-editor",
                         value: DevotionalEditorRequest(devotionalID: id, opensAgentPane: true)
