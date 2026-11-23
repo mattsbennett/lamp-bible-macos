@@ -3044,7 +3044,13 @@ struct DevotionalEditorView: View {
             return
         }
         isRestoring = true
+        // Counted from the asking, so quitting waits for the plan as it waits
+        // for the restore: worked out inline, it was made before Quit could be
+        // handled, and off the main actor a quit meanwhile went without it.
+        // Held until `makeRestore` has taken its own count.
+        LampPendingWrites.shared.begin()
         Task {
+            defer { LampPendingWrites.shared.end() }
             let restore = await reviewSession.pageRestore(ids: ids, pageText: pageText)
             isRestoring = false
             // Left for another document while it was worked out.
