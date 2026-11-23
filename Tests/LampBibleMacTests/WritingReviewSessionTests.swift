@@ -325,16 +325,34 @@ struct WritingReviewSessionTests {
         let afterOther = next(review, filed: once, saved: held, restores: [readOne])
         #expect(!retires(afterOther) && marks(afterOther))
 
-        // A selection over the restored words marked as reviewed, after a
-        // pass filed their mark: the next pass makes the same clear in the
-        // copy's record, and the mark is read there, as the writing's own
-        // record would have taken it.
+        // A selection over the restored words marked as reviewed: worked out
+        // at the clear, from the restore itself, it reads the mark the
+        // restore makes again, and a pass after one filed it retires it, as
+        // the writing's own record, holding that mark, would clear it.
+        let dog = (held as NSString).range(of: "dog")
+        let reading = try #require(WritingReviewSession.remarksRead(by: dog, in: held, of: owed))
+        #expect(reading.whole == filed)
         var readThere = owed
         readThere.cleared = true
-        let dog = (held as NSString).range(of: "dog")
-        readThere.clearedSpans = [WritingReviewSession.ClearedSpan(text: held, location: dog.location, length: dog.length)]
+        readThere.remarksRead = reading.whole
+        readThere.remarkClearances = reading.parts
         let afterSelection = next(review, filed: once, saved: held, restores: [readThere])
-        #expect(!marks(afterSelection))
+        #expect(retires(afterSelection) && !marks(afterSelection))
+        // Read in a later text, typed into elsewhere, it is the same mark.
+        let typedOn = held + " And more."
+        #expect(WritingReviewSession.remarksRead(by: dog, in: typedOn, of: owed)?.whole == filed)
+        // A selection elsewhere reads none of it, and the mark stays.
+        let elsewhere = (typedOn as NSString).range(of: "more")
+        #expect(WritingReviewSession.remarksRead(by: elsewhere, in: typedOn, of: owed) == nil)
+        // Nothing a clear read is retired where no pass filed it.
+        #expect(!retires(next(review, filed: nil, saved: third, restores: [readThere])))
+        // And a mark the writing gains after the clear, over the words it
+        // covered, is the writing's to decide: the clear's result names only
+        // the restore's own marks, so the pass leaves it.
+        let gained = once.markingAssistantChange(from: held, to: "The dog stood.")
+        let gainedIDs = Set(gained.marks.map(\.id)).subtracting(once.marks.map(\.id))
+        let afterGain = next(gained, filed: once, saved: "The dog stood.", restores: [readThere])
+        #expect(!gainedIDs.isEmpty && gainedIDs.isDisjoint(with: Set(afterGain?.retired.map(\.id) ?? [])))
 
         // Another device's recording reached the writing first, its mark
         // standing there: Mark All retires it all the same.

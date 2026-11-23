@@ -63,21 +63,10 @@ final class WritingReviewObligations {
     ///
     /// `all` for Mark All as Reviewed, which reads every mark there is,
     /// rather than a clear of some passages, which reads only theirs.
-    ///
-    /// `span` is a clear of some passages: the text it was made in and its
-    /// range, kept with each restore still owed, so a copy of the writer's
-    /// edits kept meanwhile can make the same clear in its own record, which
-    /// holds marks the writing's does not.
-    func wasCleared(
-        for key: WritingReviewKey, all: Bool = false, span: WritingReviewSession.ClearedSpan? = nil
-    ) {
+    func wasCleared(for key: WritingReviewKey, all: Bool = false) {
         guard var list = owed[key.writingID], !list.isEmpty else { return }
         var changed = false
         for index in list.indices where list[index].document == key.document {
-            if let span {
-                list[index].clearedSpans = (list[index].clearedSpans ?? []) + [span]
-                changed = true
-            }
             if !list[index].cleared {
                 list[index].cleared = true
                 changed = true
@@ -88,6 +77,64 @@ final class WritingReviewObligations {
             }
         }
         guard changed else { return }
+        owed[key.writingID] = list
+        write()
+    }
+
+    // MARK: Clears, one after another
+
+    /// The clears being made for each writing, in the order asked: the write
+    /// to its record, then what the clear read of the marks its owed
+    /// restores make again. A keep of the writer's edits waits for them, so
+    /// it never finishes with a clear asked for that no pass was given.
+    private var clearing: [String: Task<Void, Never>] = [:]
+    private var clearCounts: [String: (asked: Int, made: Int)] = [:]
+
+    /// `work` for a clear of `writingID`, after any clear asked before it.
+    func clearing(_ writingID: String, _ work: @escaping @MainActor () async -> Void) {
+        clearCounts[writingID, default: (0, 0)].asked += 1
+        let earlier = clearing[writingID]
+        clearing[writingID] = Task { @MainActor in
+            await earlier?.value
+            await work()
+            self.clearCounts[writingID, default: (0, 0)].made += 1
+        }
+    }
+
+    /// Returns once every clear asked for `writingID` so far is made.
+    func clearsMade(for writingID: String) async {
+        while let task = clearing[writingID] {
+            await task.value
+            if clearing[writingID] == task { clearing[writingID] = nil }
+        }
+    }
+
+    func clears(for writingID: String) -> (asked: Int, made: Int) { clearCounts[writingID] ?? (0, 0) }
+
+    /// What a clear of some passages (`range` in `text`) read of the marks
+    /// the owed restores make again over unread words they put back, kept
+    /// with each: ids read whole, and the parts cleared of the rest. Worked
+    /// out once, at the clear, from the restore itself, whose marks those
+    /// are, and in the writing's own text: a copy of the edits kept
+    /// meanwhile takes the result (`keptCopyRecord`), and no clear is ever
+    /// made again on a record that has gained other marks since.
+    func read(_ range: NSRange, in text: String, for key: WritingReviewKey) async {
+        let owing = owing(for: key)
+        guard !owing.isEmpty else { return }
+        let found = await Task.detached(priority: .userInitiated) {
+            owing.compactMap { owed in
+                WritingReviewSession.remarksRead(by: range, in: text, of: owed).map { (owed.id, $0) }
+            }
+        }.value
+        guard !found.isEmpty, var list = owed[key.writingID] else { return }
+        for (id, reading) in found {
+            // Settled or moved since: nothing of it is owed here.
+            guard let at = list.firstIndex(where: { $0.id == id }) else { continue }
+            list[at].remarksRead = (list[at].remarksRead ?? []).union(reading.whole)
+            // The whole set: what earlier clears cleared in part is carried
+            // in it, from the restore's own marks as they stood.
+            list[at].remarkClearances = reading.parts
+        }
         owed[key.writingID] = list
         write()
     }
@@ -530,12 +577,16 @@ final class WritingReviewSession: ObservableObject {
         // from that point touches nothing and the writer watches the
         // mark stay (core's `takingInSyntax`).
         let asked = LampWritingReviewMarkdown.takingInSyntax(range, of: text)
-        if let key {
-            WritingReviewObligations.shared.wasCleared(
-                for: key, span: ClearedSpan(text: text, location: asked.location, length: asked.length)
-            )
+        if let key { WritingReviewObligations.shared.wasCleared(for: key) }
+        let written = change(drawsAnyway: drawsAnyway) { $0.clearing(asked, in: text, carryingFrom: known) }
+        guard let key else { return }
+        // After the write to the writing's record, what the clear read of the
+        // marks its owed restores make again, which that record does not
+        // hold: one after another, so a keep can wait for them.
+        WritingReviewObligations.shared.clearing(writingID) {
+            await written?.value
+            await WritingReviewObligations.shared.read(asked, in: text, for: key)
         }
-        change(drawsAnyway: drawsAnyway) { $0.clearing(asked, in: text, carryingFrom: known) }
     }
 
     /// Clears the range the visual page marked in the Markdown it sent.
@@ -577,7 +628,8 @@ final class WritingReviewSession: ObservableObject {
 
     func clearAll() {
         if let key { WritingReviewObligations.shared.wasCleared(for: key, all: true) }
-        change { $0.clearingAll() }
+        let written = change { $0.clearingAll() }
+        if let writingID { WritingReviewObligations.shared.clearing(writingID) { await written?.value } }
     }
 
     // MARK: - Putting a wording back
@@ -813,18 +865,6 @@ final class WritingReviewSession: ObservableObject {
         // prunes them whenever it records.
         let today = Date()
         record.restorations.removeAll { today.timeIntervalSince($0.restoredAt) >= LampWritingReview.restorationWindow }
-        // The clears of some passages made while these were owed, made again
-        // in the copy's record as the writing's record took them: the copy
-        // holds marks the writing's does not (one a restore makes again over
-        // words it put back, filed by an earlier pass), and a clear covering
-        // their words reads them too.
-        var spans: [ClearedSpan] = []
-        for owed in restores {
-            for span in owed.clearedSpans ?? [] where !spans.contains(span) { spans.append(span) }
-        }
-        for span in spans {
-            record = record.clearing(span.range, in: span.text, carryingFrom: known + proseTexts)
-        }
         // The marks the copy holds before this pass records anything: the
         // only ones a Mark All while the keep ran can have read.
         let present = Set(record.marks.map(\.id))
@@ -867,14 +907,29 @@ final class WritingReviewSession: ObservableObject {
             // of the writing let go before. A clear of some other passage
             // reads none of them, as in the writing, where it touches only
             // the marks it covers.
+            //
+            // And a clear of some passages reads those its own result names
+            // (`remarksRead`, worked out at the clear, from the restore
+            // itself): whole, retired; in part, the clearance alone, which
+            // touches no mark but its own.
+            var read = owed.remarksRead ?? []
             if owed.clearedAll == true {
-                for mark in owed.pendingMarks.union(owed.keptLetGo ?? []) {
-                    let id = LampWritingReview.remarkID(restoring: mark)
-                    guard present.contains(id) else { continue }
-                    record.marks.removeAll { $0.id == id }
-                    record.retired.append(LampWritingReview.Retirement(id: id, retiredAt: today))
-                    retiring = true
-                }
+                read.formUnion(owed.pendingMarks.union(owed.keptLetGo ?? []).map(LampWritingReview.remarkID(restoring:)))
+            }
+            for id in read where present.contains(id) {
+                record.marks.removeAll { $0.id == id }
+                record.retired.append(LampWritingReview.Retirement(id: id, retiredAt: today))
+                retiring = true
+            }
+            let parts = (owed.remarkClearances ?? []).filter { part in
+                present.contains(part.markID) && !read.contains(part.markID)
+                    && !record.clearances.contains { $0.id == part.id }
+            }
+            if !parts.isEmpty {
+                record.clearances += parts
+                // Where they are anchored.
+                sources.append(relinked(owed.held))
+                retiring = true
             }
             guard !stands.isEmpty else { continue }
             let standing = Set(record.marks.map(\.id))
@@ -915,12 +970,39 @@ final class WritingReviewSession: ObservableObject {
         return (carried, waiting, dormant)
     }
 
-    /// A clear of some passages: the text it was made in, and its range there.
-    struct ClearedSpan: Codable, Hashable, Sendable {
-        let text: String
-        let location: Int
-        let length: Int
-        var range: NSRange { NSRange(location: location, length: length) }
+    /// The marks `owed` makes again over unread words it put back, alone,
+    /// as the writer's clears have left them so far: the same pieces under
+    /// the same ids as a pass of a keep files, from the restore itself.
+    nonisolated static func remarks(of owed: OwedRestore) -> LampWritingReview {
+        var made = LampWritingReview(writingID: "").restoringWording(
+            owed.restore.plan, from: owed.restore.base, to: owed.held,
+            only: owed.pendingMarks.union(owed.keptLetGo ?? [])
+        )
+        made.retired = []
+        made.restorations = []
+        let read = owed.remarksRead ?? []
+        made.marks.removeAll { read.contains($0.id) }
+        made.clearances = (owed.remarkClearances ?? []).filter { part in
+            made.marks.contains { $0.id == part.markID }
+        }
+        return made
+    }
+
+    /// What a clear of `range` in `text` reads of those marks: the ids read
+    /// whole, and the parts cleared of the rest, anchored in `owed.held`.
+    /// Nil where it reads none of them.
+    nonisolated static func remarksRead(
+        by range: NSRange, in text: String, of owed: OwedRestore
+    ) -> (whole: Set<UUID>, parts: [LampWritingReview.Clearance])? {
+        let before = remarks(of: owed)
+        // No unread words put back: nothing to read, and no alignment.
+        guard !before.marks.isEmpty else { return nil }
+        let after = before.clearing(range, in: text, carryingFrom: [owed.held])
+        let whole = Set(after.retired.map(\.id))
+        let parts = after.carryingToText(owed.held, from: [text]).clearances
+        // A carry that only drops a mark it cannot place is not a read.
+        guard !whole.isEmpty || parts.count != before.clearances.count else { return nil }
+        return (whole, parts)
     }
 
     /// A restore the surface made that no save has carried to storage
@@ -956,9 +1038,11 @@ final class WritingReviewSession: ObservableObject {
         /// as every obligation filed before this was kept has.
         var keptLetGo: Set<UUID>?
 
-        /// The clears of some passages made while this was owed, each with
-        /// the text it was made in (`WritingReviewObligations.wasCleared`).
-        var clearedSpans: [ClearedSpan]?
+        /// The marks this restore makes again over unread words it put back
+        /// that a clear of some passages read whole while it was owed, and
+        /// the parts cleared of the others (`WritingReviewObligations.read`).
+        var remarksRead: Set<UUID>?
+        var remarkClearances: [LampWritingReview.Clearance]?
 
         /// Whether that clear was Mark All as Reviewed, which reads every
         /// mark there is, the one a restore makes again among them. Nil for
@@ -1015,15 +1099,19 @@ final class WritingReviewSession: ObservableObject {
     /// lock. Counted as a pending write, so quitting waits for a clear.
     /// `drawsAnyway` draws the marks again and sends them however the write
     /// goes, for a change the page has already shown (`clear(markedMarkdown:)`).
+    @discardableResult
     private func change(
         drawsAnyway: Bool = false,
         _ edit: @escaping @Sendable (LampWritingReview) -> LampWritingReview,
         then: @escaping (Bool) -> Void = { _ in }
-    ) {
-        guard let store, let writingID else { return then(false) }
+    ) -> Task<Void, Never>? {
+        guard let store, let writingID else {
+            then(false)
+            return nil
+        }
         let document = document
         LampPendingWrites.shared.begin()
-        Task { [weak self] in
+        return Task { [weak self] in
             let written = await Task.detached(priority: .userInitiated) {
                 try? store.updating(writingID: writingID, document: document, edit)
             }.value

@@ -4643,7 +4643,7 @@ struct DevotionalEditorView: View {
     ) -> Bool {
         func state(_ list: [WritingReviewSession.OwedRestore]) -> [UUID: String] {
             Dictionary(list.map { owed in
-                (owed.id, "\(owed.cleared) \(owed.clearedAll == true) \(owed.clearedSpans?.count ?? 0) \(owed.pendingMarks.map(\.uuidString).sorted())")
+                (owed.id, "\(owed.cleared) \(owed.clearedAll == true) \(owed.remarksRead?.count ?? 0) \(owed.remarkClearances?.count ?? 0) \(owed.pendingMarks.map(\.uuidString).sorted())")
             }, uniquingKeysWith: { first, _ in first })
         }
         return state(taken) != state(now)
@@ -4683,12 +4683,20 @@ struct DevotionalEditorView: View {
             // passages its text could not answer for.
             var taken: [WritingReviewSession.OwedRestore] = []
             var waiting: [WritingReviewSession.OwedRestore] = []
+            // The clears made by the time the last pass was given its
+            // restores (`WritingReviewObligations.clearing`).
+            var clears = 0
             repeat {
+                // A clear still being made goes first: its write to the
+                // writing's record, which the pass reads, and what it read of
+                // the owed restores' own marks.
+                await WritingReviewObligations.shared.clearsMade(for: identifier)
                 await readPage()
                 snapshot = editsSnapshot()
                 // At the same moment as the snapshot, so each restore given
                 // to the carry is one the snapshot's text could hold.
                 taken = proseRestoresOwedHere
+                clears = WritingReviewObligations.shared.clears(for: identifier).made
                 // The copy's id is chosen before it is written, so a retry
                 // after any failure writes to the same copy.
                 let id = keptCopyID ?? UUID().uuidString
@@ -4720,6 +4728,12 @@ struct DevotionalEditorView: View {
                 // that has changed since (cleared, or some of it written
                 // down): no pass has answered for it as it now stands.
                 || Self.owedChanged(from: taken, to: proseRestoresOwedHere)
+                // A clear asked for that no pass has been given: its write to
+                // the writing's record, or what it read of the restores' own
+                // marks. With no restore owed, a clear landing after the last
+                // pass read the writing's record would otherwise never reach
+                // the copy.
+                || WritingReviewObligations.shared.clears(for: identifier).asked != clears
             // From that check to the newer version being shown there is no
             // suspension, so nothing is filed in between: what the last pass
             // was given leaves this writing now, and what its text could not
