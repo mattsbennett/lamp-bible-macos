@@ -1208,16 +1208,24 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         // a check in the margin to clear a paragraph, none while presenting.
         'html .review-mark { background: rgba(232, 176, 44, 0.22); border-bottom: 1px dotted rgba(178, 120, 0, 0.7); }',
         'html .review-point { display: inline-block; width: 0; height: 1.1em; vertical-align: text-bottom; border-left: 2px solid rgba(178, 120, 0, 0.7); margin: 0 1px; }',
-        // Centred by the box itself rather than by a line height: the
-        // tick is one glyph in a 22px circle, and `inline-block` with a
-        // line height leaves it where the font's metrics put it — up and
-        // to the left of the middle, which is where it sat.
-        'html .ProseMirror .review-clear { display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; width: 22px; height: 22px; margin: 0 8px 0 -30px; padding: 0; border: none; border-radius: 11px; background: transparent; color: rgba(178, 120, 0, 0.8); font: inherit; cursor: pointer; user-select: none; }',
+        // Out of the text's flow, where the block's first line starts,
+        // and moved into the margin from there: inline, the ↺ beside the
+        // ✓ pushed that line in by its own width, and before a rule or a
+        // picture the two took a line of their own, which went when they
+        // did. Inline still, for where it starts: as a block, in a list
+        // item WebKit starts it a line down. Centred on the line by the box
+        // itself, a glyph in a 22px circle: `inline-block` with a line
+        // height left it where the font's metrics put it, up and to the
+        // left of the middle.
+        'html .ProseMirror .review-clear { position: absolute; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; margin: calc((1lh - 22px) / 2) 0 0 -30px; padding: 0; border: none; border-radius: 11px; background: transparent; color: rgba(178, 120, 0, 0.8); font: inherit; cursor: pointer; user-select: none; }',
+        // With a ↺ beside it, which is shown only while editing, further out.
+        'html body.mode-edit .ProseMirror .review-clear:has(~ .review-restore) { margin-left: -56px; }',
         'html .ProseMirror .review-clear::before { content: "\\u2713"; font-size: 14px; line-height: 1; }',
         'html .ProseMirror .review-clear:hover { background: rgba(232, 176, 44, 0.22); }',
         // A list item's buttons sit past its bullet, not on it: the list's
         // indent (1.35em) and the item's (0.15em) further into the margin.
-        'html .ProseMirror li .review-clear { margin-left: calc(-30px - 1.5em); }',
+        'html .ProseMirror li .review-clear, html .ProseMirror li .review-restore { margin-left: calc(-30px - 1.5em); }',
+        'html body.mode-edit .ProseMirror li .review-clear:has(~ .review-restore) { margin-left: calc(-56px - 1.5em); }',
         // A rule, an image or an audio block the assistant changed, which has
         // no words to wash: the block itself.
         'html .review-mark-block { background: rgba(232, 176, 44, 0.22); outline: 1px dotted rgba(178, 120, 0, 0.7); outline-offset: 4px; }',
@@ -1230,8 +1238,8 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         // passage it would change shown stronger while its offer is open,
         // and what it would do written out — for a passage the assistant
         // only took words out of, that is the one way to see it.
-        // Centred the same way as the tick, and for the same reason.
-        'html .ProseMirror .review-restore { display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; width: 22px; height: 22px; margin: 0 8px 0 -8px; padding: 0; border: none; border-radius: 11px; background: transparent; color: rgba(178, 120, 0, 0.8); font: inherit; cursor: pointer; user-select: none; }',
+        // Placed and centred as the tick is, between it and the text.
+        'html .ProseMirror .review-restore { position: absolute; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; margin: calc((1lh - 22px) / 2) 0 0 -30px; padding: 0; border: none; border-radius: 11px; background: transparent; color: rgba(178, 120, 0, 0.8); font: inherit; cursor: pointer; user-select: none; }',
         'html .ProseMirror .review-restore::before { content: "\\u21BA"; font-size: 14px; line-height: 1; }',
         'html .ProseMirror .review-restore:hover { background: rgba(232, 176, 44, 0.22); }',
         'html .review-mark.review-current { background: rgba(232, 176, 44, 0.42); border-bottom-style: solid; }',

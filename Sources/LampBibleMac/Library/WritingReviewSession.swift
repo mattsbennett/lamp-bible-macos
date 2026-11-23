@@ -625,19 +625,34 @@ final class WritingReviewSession: ObservableObject {
     /// By id rather than by a range of text: the page widens a range to a
     /// whole link when it writes its markers, so two changes inside one
     /// link label came back under the first one's button.
-    func pageRestore(ids: String, pageText: String?) -> PageRestore? {
+    ///
+    /// Off the main actor: carrying the marks into the page's text and
+    /// planning reads every mark, a quarter of a second on a long writing,
+    /// and on the main actor that held the whole window still after the
+    /// press. Worked out from the record and texts as they stand when it is
+    /// asked; the page makes the edit only if it still holds `base`.
+    func pageRestore(ids: String, pageText: String?) async -> PageRestore? {
         guard let review else { return nil }
+        let text = text
+        let texts = texts
+        return await Task.detached(priority: .userInitiated) {
+            Self.pageRestore(ids: ids, pageText: pageText, review: review, text: text, texts: texts)
+        }.value
+    }
+
+    private nonisolated static func pageRestore(
+        ids: String, pageText: String?, review: LampWritingReview, text: String, texts: [String]
+    ) -> PageRestore? {
         let wanted = Set(ids.split(separator: ",").compactMap { UUID(uuidString: String($0)) })
         guard !wanted.isEmpty else { return nil }
-        _ = review
+        // The marks carried into a text, as drawing carries them (`live`).
+        func live(in text: String) -> LampWritingReview { review.carryingToText(text, from: texts) }
         // The page's own text first, since a plan made in it needs no
         // carrying at all.
-        if let pageText, let live = live(in: pageText),
-           case .plan(let plan) = live.restoring(marks: wanted, in: pageText) {
+        if let pageText, case .plan(let plan) = live(in: pageText).restoring(marks: wanted, in: pageText) {
             return PageRestore(base: pageText, restored: plan.applied(to: pageText), plan: plan)
         }
-        guard let live = live(in: text),
-              case .plan(let plan) = live.restoring(marks: wanted, in: text)
+        guard case .plan(let plan) = live(in: text).restoring(marks: wanted, in: text)
         else { return nil }
         // Then the writing as it is held, carried into the page's own
         // spelling of it.

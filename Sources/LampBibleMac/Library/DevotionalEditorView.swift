@@ -3029,17 +3029,31 @@ struct DevotionalEditorView: View {
             // one file's words into another.
             return
         }
-        guard let restore = reviewSession.pageRestore(ids: ids, pageText: pageText) else {
-            // The page has changed nothing, so saying so is the whole of
-            // it: it asked about passages this cannot place.
-            refusedRestore = "That passage couldn’t be put back. Try again once the writing has settled."
+        // Held while the plan is worked out, off the main actor, as a restore
+        // being made is: a second press meanwhile would plan against the
+        // same text and race the first.
+        guard !isRestoring else {
+            refusedRestore = "One passage is being put back already. Try again in a moment."
             return
         }
-        if let offered, Set(restore.plan.marks) != offered {
-            refusedRestore = "The writing changed while that was open, so nothing was put back."
-            return
+        isRestoring = true
+        Task {
+            let restore = await reviewSession.pageRestore(ids: ids, pageText: pageText)
+            isRestoring = false
+            // Left for another document while it was worked out.
+            if let askedIn, askedIn != reviewKey { return }
+            guard let restore else {
+                // The page has changed nothing, so saying so is the whole of
+                // it: it asked about passages this cannot place.
+                refusedRestore = "That passage couldn’t be put back. Try again once the writing has settled."
+                return
+            }
+            if let offered, Set(restore.plan.marks) != offered {
+                refusedRestore = "The writing changed while that was open, so nothing was put back."
+                return
+            }
+            makeRestore(restore)
         }
-        makeRestore(restore)
     }
 
     /// Makes a restore in whichever surface the writer is working in, and
