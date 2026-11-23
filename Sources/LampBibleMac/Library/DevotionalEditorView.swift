@@ -3086,6 +3086,13 @@ struct DevotionalEditorView: View {
             refusedRestore = "One passage is being put back already. Try again in a moment."
             return
         }
+        // The writer's edits are being kept as a copy while a newer version
+        // waits to be shown: a restore made now would be made in text that
+        // is on its way out.
+        guard newerCopy == nil else {
+            refusedRestore = "A newer version of this writing arrived, so nothing was put back."
+            return
+        }
         let base = restore.base
         let restored = restore.restored
         // The editor's own text, which the page's may be spelled
@@ -3166,6 +3173,20 @@ struct DevotionalEditorView: View {
                     isRestoring = false
                     refusedRestore = "A new draft arrived while that was being put back, so nothing was changed."
                     reviewSession.marksNeedResend()
+                    return
+                }
+                // A newer version arrived while the page worked. The page has
+                // made the restore, and keeping the edits as a copy reads it
+                // from the page into the copy: so it is owed, as any restore
+                // is, and the keep takes it into the copy's record with the
+                // rest. Not `keepRestore`, which would say nothing was put
+                // back, and save a writing that is being replaced.
+                guard newerCopy == nil else {
+                    isRestoring = false
+                    var owing = WritingReviewSession.OwedRestore(restore: restore, held: held)
+                    owing.document = reviewKey?.document
+                    WritingReviewObligations.shared.stillOwed(owing, for: identifier)
+                    if owing.document == nil { restoresMadeHere.insert(owing.id) }
                     return
                 }
                 keepRestore(
@@ -4603,7 +4624,23 @@ struct DevotionalEditorView: View {
         }
     }
 
+    /// The prose restores this editor made that are not yet written down.
+    private var proseRestoresOwedHere: [WritingReviewSession.OwedRestore] {
+        WritingReviewObligations.shared.owing(for: WritingReviewKey(writingID: identifier))
+            .filter { restoresMadeHere.contains($0.id) }
+    }
+
     /// The same, from inside a task that already counts as a pending write.
+    ///
+    /// The restores the writer made in these edits go with them into the
+    /// copy, written into the copy's marks by the same write that files its
+    /// marks (`carryReviewMarks`), and nothing is filed under the copy until
+    /// the passes are over. The copy's marks have one writer, so a pass that
+    /// files them afresh cannot lose a restore an earlier pass recorded: it
+    /// records it again, from the same obligation, against its own text.
+    /// A keep that fails leaves every obligation where it was, under this
+    /// writing, which still holds the edits; Try Again works it all out
+    /// again.
     private func keepEditsNow() async {
         do {
             // Saved again, under the same id, while typing goes on during the
@@ -4612,9 +4649,16 @@ struct DevotionalEditorView: View {
             // before it waits, and the editor is compared with that snapshot.
             var snapshot: EditsSnapshot
             var kept: LampDevotional?
+            // The restores the last pass's carry was given, and of those the
+            // passages its text could not answer for.
+            var taken: [WritingReviewSession.OwedRestore] = []
+            var waiting: [WritingReviewSession.OwedRestore] = []
             repeat {
                 await readPage()
                 snapshot = editsSnapshot()
+                // At the same moment as the snapshot, so each restore given
+                // to the carry is one the snapshot's text could hold.
+                taken = proseRestoresOwedHere
                 // The copy's id is chosen before it is written, so a retry
                 // after any failure writes to the same copy.
                 let id = keptCopyID ?? UUID().uuidString
@@ -4624,15 +4668,7 @@ struct DevotionalEditorView: View {
                     // Recorded before the marks are written, so a failure
                     // there leaves a retry writing to this copy.
                     keptCopyRevision = written.lastModified
-                    try await carryReviewMarks(of: snapshot, to: id)
-                    // The body that went into the copy is the one holding
-                    // any restore not yet written down — the original's
-                    // winning version may never have held it — so what is
-                    // owed goes with it, to be settled against the copy.
-                    WritingReviewObligations.shared.move(
-                        restoresMadeHere, from: identifier, to: id
-                    )
-                    restoresMadeHere = []
+                    waiting = try await carryReviewMarks(of: snapshot, to: id, restores: taken)
                     // Typed while this pass was saving: another pass.
                     await readPage()
                 } else {
@@ -4643,6 +4679,20 @@ struct DevotionalEditorView: View {
                     keptCopyRevision = nil
                 }
             } while kept == nil || editedFields != snapshot.fields
+                // A restore filed since the last pass's snapshot: its words
+                // may already be in the page, and no pass has answered for it.
+                || proseRestoresOwedHere.contains { owed in !taken.contains { $0.id == owed.id } }
+            // From that check to the newer version being shown there is no
+            // suspension, so nothing is filed in between: what the last pass
+            // was given leaves this writing now, and what its text could not
+            // answer for is owed to the copy.
+            if let kept {
+                WritingReviewObligations.shared.keptAsCopy(
+                    Set(taken.map(\.id)), of: identifier, as: kept.id, waiting: waiting
+                )
+            }
+            // None of them was made in the text about to be shown.
+            restoresMadeHere = []
             keptEdits = kept
             keptCopyID = nil
             keptCopyRevision = nil
@@ -4660,7 +4710,18 @@ struct DevotionalEditorView: View {
     /// copy, so its unread passages are still marked there. Whether or not
     /// marks are shown now: turned on again, the copy has them as the
     /// writing does.
-    private func carryReviewMarks(of snapshot: EditsSnapshot, to copyID: String) async throws {
+    ///
+    /// With them, `restores` that the copy's text proves: each written into
+    /// the writing's record first, where its marks still stand and the plan
+    /// was made, as a save of the writing would have settled it, and the
+    /// whole then carried. One write of the copy's record, worked out from
+    /// the writing's record, the snapshot and the restores alone, so filed
+    /// again by a later pass it comes out the same. Returns the passages the
+    /// copy's text could not answer for, which wait for a save of the copy.
+    private func carryReviewMarks(
+        of snapshot: EditsSnapshot, to copyID: String,
+        restores: [WritingReviewSession.OwedRestore]
+    ) async throws -> [WritingReviewSession.OwedRestore] {
         let originalID = identifier
         let store = LampWritingReviewStore(rootURL: model.library.rootURL)
         // Relinked alike in the texts the marks are carried from and the one
@@ -4669,13 +4730,19 @@ struct DevotionalEditorView: View {
         func relinked(_ text: String) -> String {
             text.replacingOccurrences(of: "lamp-media://\(originalID)/", with: "lamp-media://\(copyID)/")
         }
-        let known = snapshot.reviewTexts.map(relinked)
-        let text = relinked(snapshot.markdown)
-        try await Task.detached(priority: .userInitiated) {
-            var carried = try store.review(writingID: originalID).carryingToText(text, from: known)
-            guard !carried.marks.isEmpty else { return }
-            carried.writingID = copyID
-            try store.update(writingID: copyID) { _ in carried }
+        // The writing's own texts, where a restore's plan was made.
+        let saved = snapshot.markdown
+        let proseTexts = snapshot.reviewTexts
+        let known = proseTexts.map(relinked)
+        let text = relinked(saved)
+        return try await Task.detached(priority: .userInitiated) {
+            let (carried, waiting) = WritingReviewSession.keptCopyRecord(
+                of: try store.review(writingID: originalID), as: copyID,
+                saved: saved, text: text, proseTexts: proseTexts, known: known,
+                relinked: relinked, restores: restores
+            )
+            if let carried { try store.update(writingID: copyID) { _ in carried } }
+            return waiting
         }.value
     }
 

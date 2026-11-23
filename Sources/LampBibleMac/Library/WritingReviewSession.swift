@@ -92,19 +92,27 @@ final class WritingReviewObligations {
         write()
     }
 
-    /// Moves the named obligations to the copy the edits were kept as:
-    /// the body holding those restores went there, and the original's
-    /// winning version may never have held them.
+    /// The named restores leave a writing whose edits were kept as a copy.
+    ///
+    /// What the copy's text proved is already in the copy's record, written
+    /// with its marks by the pass that saved it (the editor's
+    /// `carryReviewMarks`). `waiting` is what that text could not answer
+    /// for: owed to the copy now, for a save of it that can.
     ///
     /// Named, not the writing's whole bucket: another window's restore
     /// can be parked under the same writing, and its body is not this
-    /// copy's.
-    func move(_ ids: Set<UUID>, from writingID: String, to copyID: String) {
+    /// copy's. And not one a save of the writing itself committed
+    /// (`bodyCommitted`): that record is the writing's own, which
+    /// `retryOwedRecords` still owes it. The copy's record holds it too.
+    func keptAsCopy(
+        _ ids: Set<UUID>, of writingID: String, as copyID: String,
+        waiting: [WritingReviewSession.OwedRestore]
+    ) {
         guard !ids.isEmpty, let list = owed[writingID] else { return }
-        let moving = list.filter { ids.contains($0.id) }
-        guard !moving.isEmpty else { return }
-        owed[copyID, default: []].append(contentsOf: moving)
-        owed[writingID] = list.filter { !ids.contains($0.id) }
+        let leaving = Set(list.filter { ids.contains($0.id) && !$0.bodyCommitted }.map(\.id))
+        guard !leaving.isEmpty else { return }
+        owed[writingID] = list.filter { !leaving.contains($0.id) }
+        owed[copyID, default: []].append(contentsOf: waiting.filter { leaving.contains($0.id) })
         write()
     }
 
@@ -753,6 +761,52 @@ final class WritingReviewSession: ObservableObject {
             ) },
             then: then
         )
+    }
+
+    /// The record a copy of a writing's edits is filed with: the writing's
+    /// `record`, with the `restores` that the copy's text proves written into
+    /// it first, where their marks still stand and their plans were made, as
+    /// a save of the writing would have settled them, and the whole carried
+    /// into the copy's `text`. Nil where there is nothing to file.
+    ///
+    /// Worked out from these alone, so a later pass of the keep, filing it
+    /// again, comes out the same: nothing recorded earlier is lost, nor
+    /// recorded twice. With the passages `saved`, the copy's text before its
+    /// picture links were rewritten, could not answer for.
+    nonisolated static func keptCopyRecord(
+        of record: LampWritingReview, as copyID: String,
+        saved: String, text: String, proseTexts: [String], known: [String],
+        relinked: (String) -> String, restores: [OwedRestore]
+    ) -> (record: LampWritingReview?, waiting: [OwedRestore]) {
+        var record = record
+        // Written down for the writing itself since they were asked for:
+        // carried with the rest, and not recorded twice.
+        let already = Set(record.restorations.map(\.markID))
+        var sources = known
+        var waiting: [OwedRestore] = []
+        var recorded = false
+        for owed in restores {
+            // Proved as a save of the writing proves it, by core's decision
+            // (`RestorePlan.settlement`).
+            let answers = owed.restore.plan.standingByMark(from: owed.held, in: saved)
+            let (stands, unknown, _) = LampWritingReview.RestorePlan.settlement(
+                pending: owed.pendingMarks.subtracting(already), inSaved: answers, inCurrent: answers
+            )
+            if !unknown.isEmpty { waiting.append(owed.pending(unknown)) }
+            guard !stands.isEmpty else { continue }
+            record = record.restoringWording(
+                owed.restore.plan, from: owed.restore.base, to: owed.held, only: stands,
+                remarkingUnread: !owed.cleared,
+                carryingFrom: proseTexts + [owed.restore.base, owed.held]
+            )
+            // Where the restore's fresh marks are anchored.
+            sources += [relinked(owed.restore.base), relinked(owed.held)]
+            recorded = true
+        }
+        var carried = record.carryingToText(text, from: sources)
+        guard recorded || !carried.marks.isEmpty else { return (nil, waiting) }
+        carried.writingID = copyID
+        return (carried, waiting)
     }
 
     /// A restore the surface made that no save has carried to storage

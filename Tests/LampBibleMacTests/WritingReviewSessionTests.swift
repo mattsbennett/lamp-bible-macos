@@ -182,6 +182,66 @@ struct WritingReviewSessionTests {
         try await waitUntil { session.count == 1 }
     }
 
+    /// A writer's edits kept as a copy, because a newer version came in,
+    /// take their restores with them: written into the copy's marks by the
+    /// same write that files them, worked out afresh by every pass of the
+    /// keep, so a pass filing the copy again (typing went on, the copy was
+    /// made anew, a failed pass was tried again) records each restore once,
+    /// against its own text. Fable's design, after six rounds in which a
+    /// restore moved to the copy was lost or left owed.
+    @Test func aKeptCopyRecordsItsRestoresOnceEveryPass() throws {
+        let old = "The quick brown fox jumps.\n\nAnd the slow dog sleeps."
+        let new = "The fast red fox jumps.\n\nAnd the sleepy dog rests."
+        let review = LampWritingReview(writingID: "w").markingAssistantChange(from: old, to: new)
+        // The first marked passage, in the first paragraph; the second
+        // paragraph's marks are left alone.
+        let first = try #require(review.located(in: new).first?.id)
+        guard case .plan(let plan) = review.restoring(marks: [first], in: new) else {
+            Issue.record("the first passage can be put back")
+            return
+        }
+        let held = plan.applied(to: new)
+        let owed = WritingReviewSession.OwedRestore(
+            restore: WritingReviewSession.PageRestore(base: new, restored: held, plan: plan), held: held
+        )
+        func pass(_ record: LampWritingReview, saved: String, as copy: String = "copy")
+            -> (record: LampWritingReview?, waiting: [WritingReviewSession.OwedRestore]) {
+            WritingReviewSession.keptCopyRecord(
+                of: record, as: copy, saved: saved, text: saved, proseTexts: [new], known: [new],
+                relinked: { $0 }, restores: [owed]
+            )
+        }
+        func restored(_ record: LampWritingReview?) -> Int {
+            record?.restorations.filter { $0.markID == first }.count ?? 0
+        }
+
+        // A pass, and a later one after more typing: each records it once,
+        // and keeps the other passage marked.
+        let once = pass(review, saved: held)
+        let typed = held + "\n\nMore."
+        let again = pass(review, saved: typed)
+        #expect(restored(once.record) == 1 && restored(again.record) == 1)
+        #expect(once.waiting.isEmpty && again.waiting.isEmpty)
+        #expect(once.record?.writingID == "copy")
+        let still = once.record?.highlightedRanges(in: held).map { (held as NSString).substring(with: $0) } ?? []
+        #expect(still.contains { $0.contains("sleepy") } && !still.contains { $0.contains("fast") })
+
+        // Made anew under another id: that copy records it too.
+        #expect(restored(pass(review, saved: held, as: "another").record) == 1)
+
+        // Already written down for the writing itself: not recorded twice,
+        // which would mark the words it put back a second time.
+        let recordedHere = review.restoringWording(plan, from: new, to: held, only: [first], carryingFrom: [new])
+        let carriedOn = pass(recordedHere, saved: held).record
+        #expect(restored(carriedOn) == 1)
+        #expect(carriedOn?.marks.count == once.record?.marks.count)
+
+        // Undone before the copy was saved: the copy's text does not hold
+        // it, so nothing is recorded and nothing waits.
+        let undone = pass(review, saved: new)
+        #expect(restored(undone.record) == 0 && undone.waiting.isEmpty)
+    }
+
     /// The page takes a block's marks off as its ✓ is pressed, so every
     /// clear from it is answered with the marks, drawn again and sent: one
     /// that changes nothing in the record, and one this cannot place,
