@@ -3012,6 +3012,12 @@ struct DevotionalEditorView: View {
     /// back for them: the editor is clean, and leaving it writes nothing.
     private func retryOwedRecords() {
         guard let key = reviewKey else { return }
+        // Not while the writer's edits are being kept as a copy: the keep
+        // writes these into the copy's record from the writing's, and one
+        // written into the writing's meanwhile would reach the copy as a
+        // mark of another id, or one naming the writing's own pictures. They
+        // stay with the writing, and are tried again once it is done.
+        guard newerCopy == nil else { return }
         for owing in WritingReviewObligations.shared.owing(for: key) where owing.bodyCommitted {
             reviewSession.recordRestore(
                 owing.restore, held: owing.held, for: key, only: owing.pendingMarks,
@@ -4624,6 +4630,19 @@ struct DevotionalEditorView: View {
         }
     }
 
+    /// Whether the restores owed now differ from those a pass was given:
+    /// one more, one fewer, or one cleared or partly written down since.
+    private static func owedChanged(
+        from taken: [WritingReviewSession.OwedRestore], to now: [WritingReviewSession.OwedRestore]
+    ) -> Bool {
+        func state(_ list: [WritingReviewSession.OwedRestore]) -> [UUID: String] {
+            Dictionary(list.map { owed in
+                (owed.id, "\(owed.cleared) \(owed.pendingMarks.map(\.uuidString).sorted())")
+            }, uniquingKeysWith: { first, _ in first })
+        }
+        return state(taken) != state(now)
+    }
+
     /// The prose restores this editor made that are not yet written down.
     private var proseRestoresOwedHere: [WritingReviewSession.OwedRestore] {
         WritingReviewObligations.shared.owing(for: WritingReviewKey(writingID: identifier))
@@ -4642,6 +4661,11 @@ struct DevotionalEditorView: View {
     /// writing, which still holds the edits; Try Again works it all out
     /// again.
     private func keepEditsNow() async {
+        // A record the writing's last save is still writing goes down first:
+        // the passes then read a record nothing else writes while they run,
+        // since the writing is not saved while a newer version waits, nor
+        // its restores retried (`retryOwedRecords`).
+        await settling?.value
         do {
             // Saved again, under the same id, while typing goes on during the
             // save, so the copy holds everything the writer typed before the
@@ -4679,9 +4703,11 @@ struct DevotionalEditorView: View {
                     keptCopyRevision = nil
                 }
             } while kept == nil || editedFields != snapshot.fields
-                // A restore filed since the last pass's snapshot: its words
-                // may already be in the page, and no pass has answered for it.
-                || proseRestoresOwedHere.contains { owed in !taken.contains { $0.id == owed.id } }
+                // A restore filed since the last pass's snapshot, whose words
+                // may already be in the page, or one the last pass was given
+                // that has changed since (cleared, or some of it written
+                // down): no pass has answered for it as it now stands.
+                || Self.owedChanged(from: taken, to: proseRestoresOwedHere)
             // From that check to the newer version being shown there is no
             // suspension, so nothing is filed in between: what the last pass
             // was given leaves this writing now, and what its text could not
