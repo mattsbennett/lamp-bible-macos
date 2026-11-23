@@ -63,10 +63,21 @@ final class WritingReviewObligations {
     ///
     /// `all` for Mark All as Reviewed, which reads every mark there is,
     /// rather than a clear of some passages, which reads only theirs.
-    func wasCleared(for key: WritingReviewKey, all: Bool = false) {
+    ///
+    /// `span` is a clear of some passages: the text it was made in and its
+    /// range, kept with each restore still owed, so a copy of the writer's
+    /// edits kept meanwhile can make the same clear in its own record, which
+    /// holds marks the writing's does not.
+    func wasCleared(
+        for key: WritingReviewKey, all: Bool = false, span: WritingReviewSession.ClearedSpan? = nil
+    ) {
         guard var list = owed[key.writingID], !list.isEmpty else { return }
         var changed = false
         for index in list.indices where list[index].document == key.document {
+            if let span {
+                list[index].clearedSpans = (list[index].clearedSpans ?? []) + [span]
+                changed = true
+            }
             if !list[index].cleared {
                 list[index].cleared = true
                 changed = true
@@ -510,7 +521,6 @@ final class WritingReviewSession: ObservableObject {
     /// some other passage.
     private func clear(range: NSRange, in text: String, drawsAnyway: Bool = false) {
         guard let writingID else { return }
-        if let key { WritingReviewObligations.shared.wasCleared(for: key) }
         remember(text)
         let known = texts
         // Reaching back over a line's own block syntax where the range
@@ -520,6 +530,11 @@ final class WritingReviewSession: ObservableObject {
         // from that point touches nothing and the writer watches the
         // mark stay (core's `takingInSyntax`).
         let asked = LampWritingReviewMarkdown.takingInSyntax(range, of: text)
+        if let key {
+            WritingReviewObligations.shared.wasCleared(
+                for: key, span: ClearedSpan(text: text, location: asked.location, length: asked.length)
+            )
+        }
         change(drawsAnyway: drawsAnyway) { $0.clearing(asked, in: text, carryingFrom: known) }
     }
 
@@ -798,6 +813,18 @@ final class WritingReviewSession: ObservableObject {
         // prunes them whenever it records.
         let today = Date()
         record.restorations.removeAll { today.timeIntervalSince($0.restoredAt) >= LampWritingReview.restorationWindow }
+        // The clears of some passages made while these were owed, made again
+        // in the copy's record as the writing's record took them: the copy
+        // holds marks the writing's does not (one a restore makes again over
+        // words it put back, filed by an earlier pass), and a clear covering
+        // their words reads them too.
+        var spans: [ClearedSpan] = []
+        for owed in restores {
+            for span in owed.clearedSpans ?? [] where !spans.contains(span) { spans.append(span) }
+        }
+        for span in spans {
+            record = record.clearing(span.range, in: span.text, carryingFrom: known + proseTexts)
+        }
         // The marks the copy holds before this pass records anything: the
         // only ones a Mark All while the keep ran can have read.
         let present = Set(record.marks.map(\.id))
@@ -888,6 +915,14 @@ final class WritingReviewSession: ObservableObject {
         return (carried, waiting, dormant)
     }
 
+    /// A clear of some passages: the text it was made in, and its range there.
+    struct ClearedSpan: Codable, Hashable, Sendable {
+        let text: String
+        let location: Int
+        let length: Int
+        var range: NSRange { NSRange(location: location, length: length) }
+    }
+
     /// A restore the surface made that no save has carried to storage
     /// yet, and that is therefore not written down.
     struct OwedRestore: Identifiable, Codable {
@@ -920,6 +955,10 @@ final class WritingReviewSession: ObservableObject {
         /// restore cleared since retires those marks there too. Nil for none,
         /// as every obligation filed before this was kept has.
         var keptLetGo: Set<UUID>?
+
+        /// The clears of some passages made while this was owed, each with
+        /// the text it was made in (`WritingReviewObligations.wasCleared`).
+        var clearedSpans: [ClearedSpan]?
 
         /// Whether that clear was Mark All as Reviewed, which reads every
         /// mark there is, the one a restore makes again among them. Nil for

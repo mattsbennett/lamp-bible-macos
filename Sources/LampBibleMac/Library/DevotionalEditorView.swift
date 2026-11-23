@@ -4636,13 +4636,14 @@ struct DevotionalEditorView: View {
     }
 
     /// Whether the restores owed now differ from those a pass was given:
-    /// one more, one fewer, or one cleared or partly written down since.
+    /// one more, one fewer, or one cleared (some passages, or all), or partly
+    /// written down, since.
     private static func owedChanged(
         from taken: [WritingReviewSession.OwedRestore], to now: [WritingReviewSession.OwedRestore]
     ) -> Bool {
         func state(_ list: [WritingReviewSession.OwedRestore]) -> [UUID: String] {
             Dictionary(list.map { owed in
-                (owed.id, "\(owed.cleared) \(owed.pendingMarks.map(\.uuidString).sorted())")
+                (owed.id, "\(owed.cleared) \(owed.clearedAll == true) \(owed.clearedSpans?.count ?? 0) \(owed.pendingMarks.map(\.uuidString).sorted())")
             }, uniquingKeysWith: { first, _ in first })
         }
         return state(taken) != state(now)

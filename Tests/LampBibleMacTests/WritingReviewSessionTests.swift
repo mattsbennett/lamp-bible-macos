@@ -325,6 +325,17 @@ struct WritingReviewSessionTests {
         let afterOther = next(review, filed: once, saved: held, restores: [readOne])
         #expect(!retires(afterOther) && marks(afterOther))
 
+        // A selection over the restored words marked as reviewed, after a
+        // pass filed their mark: the next pass makes the same clear in the
+        // copy's record, and the mark is read there, as the writing's own
+        // record would have taken it.
+        var readThere = owed
+        readThere.cleared = true
+        let dog = (held as NSString).range(of: "dog")
+        readThere.clearedSpans = [WritingReviewSession.ClearedSpan(text: held, location: dog.location, length: dog.length)]
+        let afterSelection = next(review, filed: once, saved: held, restores: [readThere])
+        #expect(!marks(afterSelection))
+
         // Another device's recording reached the writing first, its mark
         // standing there: Mark All retires it all the same.
         let recordedElsewhere = review.restoringWording(plan, from: third, to: held, carryingFrom: [third])
