@@ -850,6 +850,8 @@ struct DevotionalEditorView: View {
     /// the control is there while anything can come back, so a selection it
     /// will not act on owes the writer a reason.
     @State private var refusedRestore: String?
+    /// A restore made in the writing whose save has not yet recorded it.
+    @State private var restoreNotRecorded = false
     @State private var tipTapSelection = TipTapSelectionState()
     /// The text selected in the visual editor, read from the page a moment
     /// after the selection settles, while the agent pane is open to be told.
@@ -1326,6 +1328,7 @@ struct DevotionalEditorView: View {
         } message: { reason in
             Text(reason)
         }
+        .modifier(RestoreNotRecordedAlert(isPresented: $restoreNotRecorded))
         // Published only when the writings change, so this is not asked on
         // every keystroke. The new value is passed in: read off the model
         // here, it would still be the old one.
@@ -2809,14 +2812,16 @@ struct DevotionalEditorView: View {
             } else if let id = activeWorkspaceDocument?.id {
                 saveWorkspaceDocument(id)
             }
+            // The save hands its proof to a settle that runs on after it,
+            // off the main actor: until that has finished, every restore
+            // still reads as owed, and asking at once told the writer each
+            // one they made was not recorded.
+            await settling?.value
             guard let key = reviewKey,
                   WritingReviewObligations.shared.owing(for: key)
                     .contains(where: { $0.id == owing.id })
             else { return }
-            refusedRestore = """
-                The wording is back, but the writing hasn’t saved yet, so it isn’t recorded. \
-                Lamp will record it with the next save.
-                """
+            restoreNotRecorded = true
         }
     }
 
@@ -5220,4 +5225,18 @@ struct WritingAssistantOpenKey: PreferenceKey {
 
 extension EnvironmentValues {
     @Entry var writingEditorDone: WritingEditorDone?
+}
+
+/// Said when a restore is in the writing but no save has recorded it: its
+/// own modifier, since the editor's body is at the type checker's limit.
+private struct RestoreNotRecordedAlert: ViewModifier {
+    @Binding var isPresented: Bool
+
+    func body(content: Content) -> some View {
+        content.alert("Put back, but not recorded yet", isPresented: $isPresented) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("The wording is back, but the writing hasn’t saved yet, so it isn’t recorded. Lamp will record it with the next save.")
+        }
+    }
 }

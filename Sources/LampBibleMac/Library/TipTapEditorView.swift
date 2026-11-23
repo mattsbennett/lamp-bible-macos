@@ -1215,6 +1215,14 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         'html .ProseMirror .review-clear { display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; width: 22px; height: 22px; margin: 0 8px 0 -30px; padding: 0; border: none; border-radius: 11px; background: transparent; color: rgba(178, 120, 0, 0.8); font: inherit; cursor: pointer; user-select: none; }',
         'html .ProseMirror .review-clear::before { content: "\\u2713"; font-size: 14px; line-height: 1; }',
         'html .ProseMirror .review-clear:hover { background: rgba(232, 176, 44, 0.22); }',
+        // A list item's buttons sit past its bullet, not on it: the list's
+        // indent (1.35em) and the item's (0.15em) further into the margin.
+        'html .ProseMirror li .review-clear { margin-left: calc(-30px - 1.5em); }',
+        // A rule, an image or an audio block the assistant changed, which has
+        // no words to wash: the block itself.
+        'html .review-mark-block { background: rgba(232, 176, 44, 0.22); outline: 1px dotted rgba(178, 120, 0, 0.7); outline-offset: 4px; }',
+        'html body.dark .review-mark-block { background: rgba(240, 190, 70, 0.2); outline-color: rgba(240, 190, 70, 0.75); }',
+        'html body.mode-present .review-mark-block { background: none; outline: none; }',
         'html body.dark .review-mark { background: rgba(240, 190, 70, 0.2); border-bottom-color: rgba(240, 190, 70, 0.75); }',
         'html body.dark .review-point { border-left-color: rgba(240, 190, 70, 0.75); }',
         'html body.dark .ProseMirror .review-clear { color: rgba(240, 190, 70, 0.85); }',

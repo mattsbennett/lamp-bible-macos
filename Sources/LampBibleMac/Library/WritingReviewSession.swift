@@ -901,53 +901,24 @@ final class WritingReviewSession: ObservableObject {
         Task { [weak self] in
             let drawn = await Task.detached(priority: .userInitiated) {
                 let live = review.carryingToText(text, from: known)
-                let ranges = live.highlightedRanges(in: text)
-                // Markers moved to where the Markdown still reads as
-                // the writing, each passage carrying its own place.
-                //
-                // Placing can swap two of them: a change to a link's
-                // words and a change to where it points, when the
-                // second's markers come out of the address and go
-                // before the first. The page reads the place written
-                // after each marker and pairs by that, so neither of us
-                // is counting on the order they arrive in — and the
-                // page is the one that knows what it parsed, which no
-                // amount of working it out here can match.
-                let placed = sendsMarks
-                    ? live.markedMarkdown(in: text).map { LampWritingReviewMarkdown.drawable($0) }
-                    : nil
-                let changes = sendsMarks ? live.changes(in: text, ranges: ranges) : []
+                // Everything drawn, from one finding of the marks, each
+                // piece anchored in this text first so it is placed at a
+                // look: asked one by one, each found every mark again, and
+                // on a writing gone over many times a clear took seconds to
+                // show.
+                let drawing = live.drawing(in: text, forPlacing: sendsMarks)
+                // The page places the marks by where it writes each
+                // character of its document (its review-trace.js), each
+                // passage carrying its own place, which pairs it with its
+                // change whatever order the page finds them in.
+                let placed = drawing.markedMarkdown.map { LampWritingReviewMarkdown.drawable($0) }
                 return (
-                    ranges,
+                    drawing.ranges,
                     // Passages as drawn, not marks: see `passageCount`.
-                    live.passageCount(in: text),
-                    // Not placed, until the page can be told which
-                    // passage is which.
-                    //
-                    // Placing moves a marker to where the Markdown still
-                    // reads as the writing — out of a link's address,
-                    // outside a split run of stars. That can put two
-                    // passages in the other order: a change to a link's
-                    // words and a change to where it points come back
-                    // reversed. The page pairs what it is sent with the
-                    // passages it finds, in order, so the label would
-                    // carry the destination's restore and the
-                    // destination the label's — and a writer putting one
-                    // back would get the other.
-                    //
-                    // Its own check cannot see this. It proves the text
-                    // it parsed is the document it holds, which is true
-                    // either way; the order of the passages inside it is
-                    // another question. `numbered` answers that, and
-                    // waits on the page reading the places it writes.
-                    //
-                    // Unplaced, a marker in an address makes the copy
-                    // parse as something else and the page refuses the
-                    // lot: those passages go unmarked, which is poor but
-                    // honest. Marks against the wrong changes are not.
+                    drawing.passageCount,
                     placed,
-                    live.restorable(in: text),
-                    changes
+                    drawing.restorable,
+                    drawing.changes
                 )
             }.value
             guard let self, self.drawGeneration == generation else { return }
