@@ -316,6 +316,17 @@ struct WritingReviewSessionTests {
         ).record
         #expect(filed.isSubset(of: Set(onlyTheClear?.retired.map(\.id) ?? [])))
 
+        // And with no restore owed at all, the writer having read every mark
+        // while the keep ran: the record of that reading is filed.
+        let readAll = review.clearingAll()
+        #expect(readAll.marks.isEmpty && readAll.restorations.isEmpty && !readAll.retired.isEmpty)
+        let readCopy = WritingReviewSession.keptCopyRecord(
+            of: readAll, as: "copy", saved: third, text: third, proseTexts: [third], known: [third],
+            relinked: { $0 }, restores: []
+        ).record
+        #expect(readCopy != nil)
+        #expect(Set(readAll.retired.map(\.id)).isSubset(of: Set(readCopy?.retired.map(\.id) ?? [])))
+
         // Only the restored passage was marked, and the writing recorded
         // the restore itself in between: the copy still gets the record.
         let only = LampWritingReview(writingID: "w").markingAssistantChange(from: "One two.", to: "One alpha two.")

@@ -836,10 +836,12 @@ final class WritingReviewSession: ObservableObject {
         // the writing's record did: a restore the writing wrote down for
         // itself since it was asked is one of those, and with no marks left
         // the copy would otherwise get no record of it at all.
-        // And where it retires a cleared restore's marks, though nothing
-        // else is left: that retirement is what stops a copy synced with an
-        // earlier pass's mark from keeping it.
-        guard recorded || retiring || !carried.marks.isEmpty || !carried.restorations.isEmpty else {
+        // And where it holds only what the writer read: a retirement or a
+        // clearance, from a clear of the writing or of a restore, is what
+        // stops a copy synced with an earlier pass's record from keeping
+        // the marks it ends, however little else is left.
+        guard recorded || retiring || !carried.marks.isEmpty || !carried.restorations.isEmpty
+                || !carried.retired.isEmpty || !carried.clearances.isEmpty else {
             return (nil, waiting)
         }
         carried.writingID = copyID
