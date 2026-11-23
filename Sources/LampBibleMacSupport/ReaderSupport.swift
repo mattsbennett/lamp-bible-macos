@@ -1045,15 +1045,15 @@ public enum DevotionalMarkdownParser {
         // Without this a `![map](media/M)` written *as an example* inside
         // one became a picture, and the flush that put the picture after
         // its line cut the fence in half as well.
-        var fence: DevotionalProseParser.Fence?
+        var fence: Fence?
 
         for line in markdown.components(separatedBy: .newlines) {
             if let open = fence {
                 textLines.append(line)
-                if DevotionalProseParser.isFenceClosing(line, fence: open) { fence = nil }
+                if isFenceClosing(line, fence: open) { fence = nil }
                 continue
             }
-            if let open = DevotionalProseParser.fenceOpening(line) {
+            if let open = fenceOpening(line) {
                 fence = open
                 textLines.append(line)
                 continue
@@ -1193,43 +1193,39 @@ public enum DevotionalMarkdownParser {
         return spans
     }
 
+    /// An opening fence: how it was drawn, and what it says the code is.
+    private struct Fence {
+        let marker: Character
+        let length: Int
+        let language: String?
+    }
+
+    private static func fenceOpening(_ line: String) -> Fence? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard let marker = trimmed.first, marker == "`" || marker == "~" else { return nil }
+        let length = trimmed.prefix { $0 == marker }.count
+        guard length >= 3 else { return nil }
+        let info = trimmed.dropFirst(length).trimmingCharacters(in: .whitespaces)
+        // A backtick fence's info string cannot itself contain a backtick.
+        if marker == "`", info.contains("`") { return nil }
+        return Fence(
+            marker: marker,
+            length: length,
+            language: info.isEmpty ? nil : info
+        )
+    }
+
+    /// A closing fence is the same character, at least as long, and says nothing.
+    private static func isFenceClosing(_ line: String, fence: Fence) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.allSatisfy({ $0 == fence.marker }) else { return false }
+        return trimmed.count >= fence.length
+    }
+
     private static func isAudioURL(_ url: URL) -> Bool {
         if url.scheme == nil, url.path.hasPrefix("media/") { return true }
         return ["mp3", "m4a", "wav", "aac", "aiff", "caf"]
             .contains(url.pathExtension.lowercased())
-    }
-}
-
-/// One structural piece of devotional prose.
-///
-/// `AttributedString(markdown:)` renders inline emphasis faithfully but discards
-/// every block boundary, so a whole document handed to it comes back as a single
-/// run-on paragraph with its headings, quotes and list items butted together.
-/// Splitting the prose first is what lets the preview show the shape the author
-/// actually wrote.
-public enum DevotionalProseBlock: Equatable, Sendable {
-    case heading(level: Int, text: String)
-    case paragraph(String)
-    /// The paragraphs inside a block quote, already stripped of their `>` markers.
-    case quote([String])
-    case bulletList([String])
-    case numberedList([String])
-    case nestedBulletList([DevotionalListLine])
-    case nestedNumberedList([DevotionalListLine])
-    case table(headers: [String], rows: [[String]])
-    /// A fenced block, kept exactly as written: its whitespace and line breaks
-    /// are the content. `language` is the fence's info string, when it has one.
-    case codeBlock(language: String?, code: String)
-    case rule
-}
-
-public struct DevotionalListLine: Equatable, Sendable {
-    public let depth: Int
-    public let text: String
-
-    public init(depth: Int, text: String) {
-        self.depth = depth
-        self.text = text
     }
 }
 
@@ -1258,302 +1254,6 @@ public enum DevotionalHeadingMatch {
     }
 }
 
-public enum DevotionalProseParser {
-    /// An opening fence: how it was drawn, and what it says the code is.
-    fileprivate struct Fence {
-        let marker: Character
-        let length: Int
-        let language: String?
-    }
-
-    fileprivate static func fenceOpening(_ line: String) -> Fence? {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard let marker = trimmed.first, marker == "`" || marker == "~" else { return nil }
-        let length = trimmed.prefix { $0 == marker }.count
-        guard length >= 3 else { return nil }
-        let info = trimmed.dropFirst(length).trimmingCharacters(in: .whitespaces)
-        // A backtick fence's info string cannot itself contain a backtick.
-        if marker == "`", info.contains("`") { return nil }
-        return Fence(
-            marker: marker,
-            length: length,
-            language: info.isEmpty ? nil : info
-        )
-    }
-
-    /// A closing fence is the same character, at least as long, and says nothing.
-    fileprivate static func isFenceClosing(_ line: String, fence: Fence) -> Bool {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard trimmed.allSatisfy({ $0 == fence.marker }) else { return false }
-        return trimmed.count >= fence.length
-    }
-
-    /// `lineBreaks` is the editor's own setting, carried through to the
-    /// reader so the two agree about what a newline means.
-    ///
-    /// Writing prose is typed with it off: a soft-wrapped source line is a
-    /// continuation, and joining with a space is what stops "watching,and"
-    /// appearing. Notes are typed with it on (`setLineBreaks(true)`, which
-    /// both note editors ask for), so a line the writer put in is a line
-    /// they get back. Reading a note with it off is how a note typed as
-    /// three lines came back as one.
-    public static func parse(
-        _ text: String, lineBreaks: Bool = false
-    ) -> [DevotionalProseBlock] {
-        let joiner = lineBreaks ? "\n" : " "
-        var blocks: [DevotionalProseBlock] = []
-        var paragraphLines: [String] = []
-        var bulletItems: [DevotionalListLine] = []
-        var numberedItems: [DevotionalListLine] = []
-        var quoteLines: [String] = []
-
-        func flushParagraph() {
-            let joined = paragraphLines
-                .joined(separator: joiner)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if !joined.isEmpty { blocks.append(.paragraph(joined)) }
-            paragraphLines.removeAll()
-        }
-
-        func flushBullets() {
-            if !bulletItems.isEmpty {
-                blocks.append(bulletItems.allSatisfy { $0.depth == 0 }
-                    ? .bulletList(bulletItems.map(\.text))
-                    : .nestedBulletList(bulletItems))
-            }
-            bulletItems.removeAll()
-        }
-
-        func flushNumbered() {
-            if !numberedItems.isEmpty {
-                blocks.append(numberedItems.allSatisfy { $0.depth == 0 }
-                    ? .numberedList(numberedItems.map(\.text))
-                    : .nestedNumberedList(numberedItems))
-            }
-            numberedItems.removeAll()
-        }
-
-        func flushQuote() {
-            // Blank lines inside a quote separate its paragraphs.
-            var paragraphs: [String] = []
-            var current: [String] = []
-            for line in quoteLines {
-                if line.trimmingCharacters(in: .whitespaces).isEmpty {
-                    if !current.isEmpty {
-                        paragraphs.append(current.joined(separator: joiner))
-                        current.removeAll()
-                    }
-                } else {
-                    current.append(line)
-                }
-            }
-            if !current.isEmpty { paragraphs.append(current.joined(separator: joiner)) }
-            if !paragraphs.isEmpty { blocks.append(.quote(paragraphs)) }
-            quoteLines.removeAll()
-        }
-
-        /// Everything except the kind of block being started, so a list that
-        /// follows a paragraph does not swallow it.
-        func flushAll(except kind: PendingKind = .none) {
-            if kind != .paragraph { flushParagraph() }
-            if kind != .bullet { flushBullets() }
-            if kind != .numbered { flushNumbered() }
-            if kind != .quote { flushQuote() }
-        }
-
-        let lines = text.components(separatedBy: .newlines)
-        var lineIndex = 0
-        while lineIndex < lines.count {
-            let rawLine = lines[lineIndex]
-
-            // A fence suspends every other rule: inside it a `#` is a comment
-            // and a `-` is a minus sign, not a heading or a bullet.
-            if let fence = fenceOpening(rawLine) {
-                flushAll()
-                lineIndex += 1
-                var code: [String] = []
-                while lineIndex < lines.count, !isFenceClosing(lines[lineIndex], fence: fence) {
-                    code.append(lines[lineIndex])
-                    lineIndex += 1
-                }
-                // An unterminated fence runs to the end of the text, which is
-                // what a reader sees in every Markdown renderer.
-                if lineIndex < lines.count { lineIndex += 1 }
-                blocks.append(.codeBlock(
-                    language: fence.language,
-                    code: code.joined(separator: "\n")
-                ))
-                continue
-            }
-
-            if lineIndex + 1 < lines.count,
-               let headers = tableCells(rawLine),
-               let separators = tableCells(lines[lineIndex + 1]),
-               headers.count == separators.count,
-               separators.allSatisfy({ isTableSeparator($0) }) {
-                flushAll()
-                lineIndex += 2
-                var rows: [[String]] = []
-                while lineIndex < lines.count,
-                      let cells = tableCells(lines[lineIndex]),
-                      cells.count == headers.count {
-                    rows.append(cells)
-                    lineIndex += 1
-                }
-                blocks.append(.table(headers: headers, rows: rows))
-                continue
-            }
-            lineIndex += 1
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
-
-            if line.isEmpty {
-                // A blank line ends a paragraph and a list, but is kept inside a
-                // quote so the quote can hold more than one paragraph.
-                if !quoteLines.isEmpty {
-                    quoteLines.append("")
-                } else {
-                    flushAll()
-                }
-                continue
-            }
-
-            if isRule(line) {
-                flushAll()
-                blocks.append(.rule)
-                continue
-            }
-
-            if let heading = heading(from: line) {
-                flushAll()
-                blocks.append(heading)
-                continue
-            }
-
-            if let quoted = quoteContent(of: line) {
-                flushAll(except: .quote)
-                quoteLines.append(quoted)
-                continue
-            }
-
-            if let item = bulletContent(of: line) {
-                flushAll(except: .bullet)
-                bulletItems.append(DevotionalListLine(
-                    depth: rawLine.prefix { $0 == " " }.count / 2, text: item
-                ))
-                continue
-            }
-
-            if let item = numberedContent(of: line) {
-                flushAll(except: .numbered)
-                numberedItems.append(DevotionalListLine(
-                    depth: rawLine.prefix { $0 == " " }.count / 2, text: item
-                ))
-                continue
-            }
-
-            // A plain line under an open list item is the rest of that item.
-            //
-            // A blank line flushes the lists above, so a list is only still
-            // open here if the line before this one was part of it — which is
-            // the lazy continuation CommonMark and the editor both read. Taken
-            // as a paragraph instead, a list whose items wrap was cut into one
-            // list per item with the wrapped halves stranded as prose between
-            // them: a three-item outline read back as three lists and three
-            // paragraphs.
-            if !bulletItems.isEmpty {
-                let last = bulletItems.removeLast()
-                bulletItems.append(DevotionalListLine(
-                    depth: last.depth, text: last.text + joiner + line
-                ))
-                continue
-            }
-            if !numberedItems.isEmpty {
-                let last = numberedItems.removeLast()
-                numberedItems.append(DevotionalListLine(
-                    depth: last.depth, text: last.text + joiner + line
-                ))
-                continue
-            }
-
-            flushAll(except: .paragraph)
-            paragraphLines.append(line)
-        }
-
-        flushAll()
-        return blocks
-    }
-
-    private static func tableCells(_ line: String) -> [String]? {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard trimmed.hasPrefix("|"), trimmed.hasSuffix("|") else { return nil }
-        return trimmed.dropFirst().dropLast().split(
-            separator: "|", omittingEmptySubsequences: false
-        ).map { $0.trimmingCharacters(in: .whitespaces) }
-    }
-
-    private static func isTableSeparator(_ cell: String) -> Bool {
-        let dashes = cell.trimmingCharacters(in: CharacterSet(charactersIn: ":"))
-        return dashes.count >= 3 && dashes.allSatisfy { $0 == "-" }
-    }
-
-    private enum PendingKind {
-        case none
-        case paragraph
-        case bullet
-        case numbered
-        case quote
-    }
-
-    private static func isRule(_ line: String) -> Bool {
-        let compact = line.filter { !$0.isWhitespace }
-        guard compact.count >= 3 else { return false }
-        return compact.allSatisfy { $0 == "-" } ||
-            compact.allSatisfy { $0 == "*" } ||
-            compact.allSatisfy { $0 == "_" }
-    }
-
-    private static func heading(from line: String) -> DevotionalProseBlock? {
-        guard line.hasPrefix("#") else { return nil }
-        let hashes = line.prefix { $0 == "#" }
-        guard hashes.count <= 6 else { return nil }
-        let remainder = line.dropFirst(hashes.count)
-        // `#tagged` is not a heading; ATX headings require a space.
-        guard remainder.first == " " else { return nil }
-        let text = remainder.trimmingCharacters(in: .whitespaces)
-        guard !text.isEmpty else { return nil }
-        return .heading(level: hashes.count, text: text)
-    }
-
-    private static func quoteContent(of line: String) -> String? {
-        guard line.hasPrefix(">") else { return nil }
-        var remainder = Substring(line.dropFirst())
-        if remainder.first == " " { remainder = remainder.dropFirst() }
-        return String(remainder)
-    }
-
-    private static func bulletContent(of line: String) -> String? {
-        guard let marker = line.first, marker == "-" || marker == "*" || marker == "+" else {
-            return nil
-        }
-        let remainder = line.dropFirst()
-        guard remainder.first == " " else { return nil }
-        let item = remainder.trimmingCharacters(in: .whitespaces)
-        return item.isEmpty ? nil : item
-    }
-
-    private static func numberedContent(of line: String) -> String? {
-        let digits = line.prefix { $0.isNumber }
-        guard !digits.isEmpty else { return nil }
-        var remainder = line.dropFirst(digits.count)
-        guard let separator = remainder.first, separator == "." || separator == ")" else {
-            return nil
-        }
-        remainder = remainder.dropFirst()
-        guard remainder.first == " " else { return nil }
-        let item = remainder.trimmingCharacters(in: .whitespaces)
-        return item.isEmpty ? nil : item
-    }
-}
 import LampModuleKit
 
 public struct ReaderLocation: Codable, Equatable, Hashable, Sendable {

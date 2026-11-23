@@ -1,48 +1,28 @@
 import Foundation
+import LampCore
 import Testing
 @testable import LampBibleMacSupport
 
-/// An agent replies in Markdown. These cover the parsing the chat bubble now
-/// does, and in particular that moving agent replies out of a plain-text
-/// message kind did not cost the transcript its words.
+/// An agent replies in Markdown. These cover what the chat bubble makes of a
+/// whole reply — where it cuts a code panel out of the prose, and that the
+/// prose on either side keeps the shape the agent wrote.
+///
+/// The reading itself is core's, and core's suite holds it to the editor.
+/// What is this app's own is the cut: these ask about `Segment`, not about
+/// Markdown.
 struct AgentMessageRenderingTests {
-    @Test func readsATypicalAgentReply() {
-        let reply = """
-        Here is what I changed:
-
-        - renamed the helper
-        - added a test
-
-        ```swift
-        func greet() {
-            print("hello")
-        }
-        ```
-
-        Let me know if that reads right.
-        """
-        let blocks = DevotionalProseParser.parse(reply)
-        #expect(blocks.count == 4)
-        guard case .codeBlock(let language, let code) = blocks[2] else {
-            Issue.record("expected a fenced block, got \(blocks[2])")
-            return
-        }
-        #expect(language == "swift")
-        #expect(code.contains("    print(\"hello\")"), "indentation is the content")
-    }
-
-    @Test func keepsADiffsMarkersOutOfTheListParser() {
-        // Every line of a diff starts with - or +, which a list parser would
-        // claim. The fence has to win.
-        let blocks = DevotionalProseParser.parse("""
+    @Test func keepsADiffsMarkersOutOfTheList() {
+        // Every line of a diff starts with - or +, which a list would claim.
+        // The fence has to win, and the whole diff has to stay in the panel.
+        let segments = AgentProseText.segments(of: """
         ```diff
         - let total = items.count
         + let total = items.filter(\\.isActive).count
         ```
         """)
-        #expect(blocks.count == 1)
-        guard case .codeBlock(let language, let code) = blocks[0] else {
-            Issue.record("expected one fenced block, got \(blocks)")
+        #expect(segments.count == 1)
+        guard case .code(let language, let code) = segments[0] else {
+            Issue.record("expected one code segment, got \(segments)")
             return
         }
         #expect(language == "diff")
@@ -51,18 +31,18 @@ struct AgentMessageRenderingTests {
     }
 
     @Test func leavesTextWithNoMarkdownAsOneParagraph() {
-        let blocks = DevotionalProseParser.parse("Just a sentence.")
-        #expect(blocks.count == 1)
-        guard case .paragraph(let text) = blocks[0] else {
-            Issue.record("expected a paragraph, got \(blocks)")
+        let segments = AgentProseText.segments(of: "Just a sentence.")
+        guard case .prose(let blocks) = segments.first, segments.count == 1,
+              blocks.count == 1, case .paragraph(let text) = blocks[0] else {
+            Issue.record("expected one paragraph, got \(segments)")
             return
         }
-        #expect(text == "Just a sentence.")
+        #expect(text.plain == "Just a sentence.")
     }
 
-    /// Prose stays prose. Only a fenced block becomes code, which is the whole
-    /// point: an agent's reply is mostly sentences.
-    @Test func classifiesAMixedReplyBlockByBlock() {
+    /// Prose stays prose. Only a fenced block leaves the run, which is the
+    /// whole point: an agent's reply is mostly sentences.
+    @Test func cutsOnlyTheCodeOutOfAMixedReply() {
         let reply = """
         I renamed the helper and added a test.
 
@@ -83,23 +63,32 @@ struct AgentMessageRenderingTests {
 
         Let me know if that reads right.
         """
-        let kinds = DevotionalProseParser.parse(reply).map { block -> String in
-            switch block {
-            case .heading: "heading"
-            case .paragraph: "paragraph"
-            case .quote: "quote"
-            case .bulletList, .nestedBulletList: "bulletList"
-            case .numberedList, .nestedNumberedList: "numberedList"
-            case .table: "table"
-            case .codeBlock: "codeBlock"
-            case .rule: "rule"
+        let kinds = AgentProseText.segments(of: reply).map { segment -> [String] in
+            switch segment {
+            case .code: ["code"]
+            case .prose(let blocks): blocks.map(kind(of:))
             }
         }
         #expect(kinds == [
-            "paragraph", "heading", "bulletList", "codeBlock",
-            "table", "quote", "paragraph",
+            ["paragraph", "heading", "bulletList"],
+            ["code"],
+            ["table", "quote", "paragraph"],
         ], "got \(kinds)")
-        // One block of seven is code; the rest are drawn as ordinary text.
-        #expect(kinds.filter { $0 == "codeBlock" }.count == 1)
+    }
+
+    private func kind(of block: LampProseBlock) -> String {
+        switch block {
+        case .heading: "heading"
+        case .paragraph: "paragraph"
+        case .quote: "quote"
+        case .list(let ordered, _, _): ordered ? "numberedList" : "bulletList"
+        case .code: "code"
+        case .table: "table"
+        case .html: "html"
+        case .footnote: "footnote"
+        case .audio: "audio"
+        case .picture: "picture"
+        case .rule: "rule"
+        }
     }
 }

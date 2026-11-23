@@ -667,34 +667,6 @@ enum RenderedProseBlock: Sendable {
             }
         }
     }
-
-    init(_ block: DevotionalProseBlock, numbering: inout RunNumbering) {
-        switch block {
-        case .heading(let level, let text):
-            self = .heading(level: level, text: numbering.item(text))
-        case .paragraph(let text):
-            self = .paragraph(numbering.item(text))
-        case .quote(let paragraphs):
-            self = .quote(paragraphs.map { numbering.item($0) })
-        case .bulletList(let items):
-            self = .bulletList(items.map { numbering.item($0) })
-        case .numberedList(let items):
-            self = .numberedList(items.map { numbering.item($0) })
-        case .nestedBulletList(let items):
-            self = .nestedBulletList(items.map { RenderedListLine($0, numbering: &numbering) })
-        case .nestedNumberedList(let items):
-            self = .nestedNumberedList(items.map { RenderedListLine($0, numbering: &numbering) })
-        case .table(let headers, let rows):
-            self = .table(
-                headers: headers.map { numbering.item($0) },
-                rows: rows.map { row in row.map { numbering.item($0) } }
-            )
-        case .codeBlock(let language, let code):
-            self = .codeBlock(language: language, code: code)
-        case .rule:
-            self = .rule
-        }
-    }
 }
 
 struct RenderedListLine: Sendable {
@@ -704,11 +676,6 @@ struct RenderedListLine: Sendable {
     init(depth: Int, text: RenderedProseItem) {
         self.depth = depth
         self.text = text
-    }
-
-    init(_ item: DevotionalListLine, numbering: inout RunNumbering) {
-        depth = item.depth
-        text = numbering.item(item.text)
     }
 }
 
