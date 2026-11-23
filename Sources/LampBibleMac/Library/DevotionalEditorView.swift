@@ -3131,6 +3131,9 @@ struct DevotionalEditorView: View {
                 var owing = WritingReviewSession.OwedRestore(restore: restore, held: held)
                 owing.document = askedIn?.document
                 WritingReviewObligations.shared.stillOwed(owing, for: identifier)
+                // Made here, as `keepRestore`'s are, so a newer copy arriving
+                // before the save carries it with the writer's own edits.
+                restoresMadeHere.insert(owing.id)
                 return
             }
             switch made {
