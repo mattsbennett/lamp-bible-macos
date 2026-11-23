@@ -60,12 +60,21 @@ final class WritingReviewObligations {
 
     /// Said when the writer clears, so a record written later does not put
     /// a mark back over a passage they have answered.
-    func wasCleared(for key: WritingReviewKey) {
+    ///
+    /// `all` for Mark All as Reviewed, which reads every mark there is,
+    /// rather than a clear of some passages, which reads only theirs.
+    func wasCleared(for key: WritingReviewKey, all: Bool = false) {
         guard var list = owed[key.writingID], !list.isEmpty else { return }
         var changed = false
-        for index in list.indices where list[index].document == key.document && !list[index].cleared {
-            list[index].cleared = true
-            changed = true
+        for index in list.indices where list[index].document == key.document {
+            if !list[index].cleared {
+                list[index].cleared = true
+                changed = true
+            }
+            if all, list[index].clearedAll != true {
+                list[index].clearedAll = true
+                changed = true
+            }
         }
         guard changed else { return }
         owed[key.writingID] = list
@@ -552,7 +561,7 @@ final class WritingReviewSession: ObservableObject {
     }
 
     func clearAll() {
-        if let key { WritingReviewObligations.shared.wasCleared(for: key) }
+        if let key { WritingReviewObligations.shared.wasCleared(for: key, all: true) }
         change { $0.clearingAll() }
     }
 
@@ -784,6 +793,14 @@ final class WritingReviewSession: ObservableObject {
         // as successive saves of the writing add to its record, and nothing
         // one pass filed (and may have synced out) is dropped by a later one.
         var record = filed.map { $0.merged(with: record) } ?? record
+        // Restorations older than core keeps, which the writing's own record
+        // may still hold, are not joined back in: a save of the writing
+        // prunes them whenever it records.
+        let today = Date()
+        record.restorations.removeAll { today.timeIntervalSince($0.restoredAt) >= LampWritingReview.restorationWindow }
+        // The marks the copy holds before this pass records anything: the
+        // only ones a Mark All while the keep ran can have read.
+        let present = Set(record.marks.map(\.id))
         // Written down for the writing itself since they were asked for, or by
         // an earlier pass: carried with the rest, and not recorded twice.
         let already = Set(record.restorations.map(\.markID))
@@ -813,20 +830,23 @@ final class WritingReviewSession: ObservableObject {
             // the clear, or another device's recording of this restore may
             // have brought one into the writing's record since, and a copy
             // synced with either keeps it unless this record retires it.
-            // Only the marks this keep could have filed: its passages still
-            // owed, and those it let go after a pass may have filed them. A
-            // passage a save of the writing let go before the keep began was
-            // never marked here, and retiring its mark would hide the one a
-            // later restore of the same words makes, as the writing's save
-            // would not.
-            let filable = owed.pendingMarks.union(owed.keptLetGo ?? [])
-            if owed.cleared, !filable.isEmpty {
-                let now = Date()
-                retiring = true
-                for mark in filable {
+            // Marked All as Reviewed while the keep ran: the marks it made
+            // again over words it put back, which an earlier pass filed and the
+            // copy holds, were among those read, and are retired, as Mark All
+            // retires every mark in the writing. Only those: a mark no pass
+            // filed was never there to read, and retiring it would hide the
+            // one a later restore of the same words makes; and only for its
+            // own passages, still owed or let go by this keep, not one a save
+            // of the writing let go before. A clear of some other passage
+            // reads none of them, as in the writing, where it touches only
+            // the marks it covers.
+            if owed.clearedAll == true {
+                for mark in owed.pendingMarks.union(owed.keptLetGo ?? []) {
                     let id = LampWritingReview.remarkID(restoring: mark)
+                    guard present.contains(id) else { continue }
                     record.marks.removeAll { $0.id == id }
-                    record.retired.append(LampWritingReview.Retirement(id: id, retiredAt: now))
+                    record.retired.append(LampWritingReview.Retirement(id: id, retiredAt: today))
+                    retiring = true
                 }
             }
             guard !stands.isEmpty else { continue }
@@ -900,6 +920,11 @@ final class WritingReviewSession: ObservableObject {
         /// restore cleared since retires those marks there too. Nil for none,
         /// as every obligation filed before this was kept has.
         var keptLetGo: Set<UUID>?
+
+        /// Whether that clear was Mark All as Reviewed, which reads every
+        /// mark there is, the one a restore makes again among them. Nil for
+        /// none, as every obligation filed before this was kept has.
+        var clearedAll: Bool?
 
         /// Whether the writer cleared while this was owed.
         ///

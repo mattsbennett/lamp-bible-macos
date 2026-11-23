@@ -297,72 +297,81 @@ struct WritingReviewSessionTests {
         #expect(marked.contains { $0.contains("dog") })
         #expect(Set(once.marks.map(\.id)) == Set(again.marks.map(\.id)))
 
-        // Cleared while the keep ran: the next pass marks nothing again,
-        // and retires the mark an earlier pass filed, so a copy synced with
-        // it lets it go.
-        var cleared = owed
-        cleared.cleared = true
-        let afterClear = try #require(WritingReviewSession.keptCopyRecord(
-            of: review, as: "copy", saved: held, current: held, text: held, proseTexts: [third], known: [third],
-            relinked: { $0 }, restores: [cleared]
-        ).record)
         let filed = Set(once.marks.map(\.id)).subtracting(review.marks.map(\.id))
         #expect(!filed.isEmpty)
-        #expect(filed.isSubset(of: Set(afterClear.retired.map(\.id))))
-        #expect(afterClear.marks.allSatisfy { !filed.contains($0.id) })
+        func next(_ record: LampWritingReview, filed earlier: LampWritingReview?, saved: String,
+                  restores: [WritingReviewSession.OwedRestore]) -> LampWritingReview? {
+            WritingReviewSession.keptCopyRecord(
+                of: record, filed: earlier, as: "copy", saved: saved, current: saved, text: saved,
+                proseTexts: [third], known: [third, held], relinked: { $0 }, restores: restores
+            ).record
+        }
+        func retires(_ r: LampWritingReview?) -> Bool { filed.isSubset(of: Set(r?.retired.map(\.id) ?? [])) }
+        func marks(_ r: LampWritingReview?) -> Bool { r?.marks.contains { filed.contains($0.id) } == true }
 
-        // And where another device's recording of the restore reached the
-        // writing first, its mark standing there: the cleared restore needs
-        // no recording here, and its mark is still retired, not carried.
+        // Marked All as Reviewed while the keep ran, after a pass filed the
+        // mark: the next pass retires it, as Mark All retires every mark in
+        // the writing, so a copy synced with the earlier pass lets it go.
+        var readAll = owed
+        readAll.cleared = true
+        readAll.clearedAll = true
+        let afterClear = next(review, filed: once, saved: held, restores: [readAll])
+        #expect(retires(afterClear) && !marks(afterClear))
+
+        // A clear of some other passage leaves it: the writing's own save had
+        // recorded the restore by then, and that clear does not touch it.
+        var readOne = owed
+        readOne.cleared = true
+        let afterOther = next(review, filed: once, saved: held, restores: [readOne])
+        #expect(!retires(afterOther) && marks(afterOther))
+
+        // Another device's recording reached the writing first, its mark
+        // standing there: Mark All retires it all the same.
         let recordedElsewhere = review.restoringWording(plan, from: third, to: held, carryingFrom: [third])
         #expect(!Set(recordedElsewhere.marks.map(\.id)).isDisjoint(with: filed))
-        let overThat = try #require(WritingReviewSession.keptCopyRecord(
-            of: recordedElsewhere, as: "copy", saved: held, current: held, text: held, proseTexts: [third], known: [third],
-            relinked: { $0 }, restores: [cleared]
-        ).record)
-        #expect(filed.isSubset(of: Set(overThat.retired.map(\.id))))
-        #expect(overThat.marks.allSatisfy { !filed.contains($0.id) })
+        let overThat = next(recordedElsewhere, filed: nil, saved: held, restores: [readAll])
+        #expect(retires(overThat) && !marks(overThat))
 
-        // And where nothing else is left to file, every mark read and this
+        // Where nothing else is left to file, every mark read and this
         // restore not proved by the copy's text: the retirement is still
         // filed, not dropped with an empty record.
-        let onlyTheClear = WritingReviewSession.keptCopyRecord(
-            of: review.clearingAll(), as: "copy", saved: third, current: third, text: third, proseTexts: [third], known: [third],
-            relinked: { $0 }, restores: [cleared]
-        ).record
-        #expect(filed.isSubset(of: Set(onlyTheClear?.retired.map(\.id) ?? [])))
+        let onlyTheClear = next(review.clearingAll(), filed: once, saved: third, restores: [readAll])
+        #expect(retires(onlyTheClear))
 
-        // A cleared obligation a save of the writing had already left with
-        // nothing owed retires nothing: a later restore of the same words is
-        // marked, as the writing's own save would mark it.
-        var hollow = cleared.pending([])
-        hollow.cleared = true
-        let later = WritingReviewSession.keptCopyRecord(
-            of: review, as: "copy", saved: held, current: held, text: held, proseTexts: [third], known: [third],
-            relinked: { $0 }, restores: [hollow, owed]
-        ).record
-        #expect(!filed.isSubset(of: Set(later?.retired.map(\.id) ?? [])))
-        #expect(later?.marks.contains { filed.contains($0.id) } == true)
-        // But one a keep let go after a pass may have filed its mark goes on
-        // retiring it.
+        // Nothing retires a mark no pass filed: cleared and then undone
+        // before any pass, the restore is only let go, as the writing's save
+        // lets it go, and a later restore of the same words is marked.
+        let neverFiled = next(review, filed: nil, saved: third, restores: [readAll])
+        #expect(!retires(neverFiled))
+        var hollow = readAll.pending([])
+        hollow.clearedAll = true
+        let later = next(review, filed: nil, saved: held, restores: [hollow, owed])
+        #expect(!retires(later) && marks(later))
+        // But one the keep let go after a pass filed its mark goes on
+        // retiring it, under Mark All.
         var letGoHere = hollow
         letGoHere.keptLetGo = Set(plan.marks)
-        let retiredStill = WritingReviewSession.keptCopyRecord(
-            of: review, as: "copy", saved: third, current: third, text: third, proseTexts: [third], known: [third],
-            relinked: { $0 }, restores: [letGoHere]
-        ).record
-        #expect(filed.isSubset(of: Set(retiredStill?.retired.map(\.id) ?? [])))
+        #expect(retires(next(review, filed: once, saved: third, restores: [letGoHere])))
+
+        // And restorations older than core keeps are not carried back in.
+        var old = review
+        old.restorations = [LampWritingReview.Restoration(
+            markID: UUID(), turnID: nil, restored: "x", discarded: "y",
+            restoredAt: Date().addingTimeInterval(-LampWritingReview.restorationWindow - 60)
+        )]
+        let pruned = next(old, filed: once, saved: held, restores: [owed])
+        #expect(pruned?.restorations.allSatisfy { Date().timeIntervalSince($0.restoredAt) < LampWritingReview.restorationWindow } == true)
 
         // And with no restore owed at all, the writer having read every mark
         // while the keep ran: the record of that reading is filed.
-        let readAll = review.clearingAll()
-        #expect(readAll.marks.isEmpty && readAll.restorations.isEmpty && !readAll.retired.isEmpty)
+        let everyMarkRead = review.clearingAll()
+        #expect(everyMarkRead.marks.isEmpty && everyMarkRead.restorations.isEmpty && !everyMarkRead.retired.isEmpty)
         let readCopy = WritingReviewSession.keptCopyRecord(
-            of: readAll, as: "copy", saved: third, current: third, text: third, proseTexts: [third], known: [third],
+            of: everyMarkRead, as: "copy", saved: third, current: third, text: third, proseTexts: [third], known: [third],
             relinked: { $0 }, restores: []
         ).record
         #expect(readCopy != nil)
-        #expect(Set(readAll.retired.map(\.id)).isSubset(of: Set(readCopy?.retired.map(\.id) ?? [])))
+        #expect(Set(everyMarkRead.retired.map(\.id)).isSubset(of: Set(readCopy?.retired.map(\.id) ?? [])))
 
         // Only the restored passage was marked, and the writing recorded
         // the restore itself in between: the copy still gets the record.
