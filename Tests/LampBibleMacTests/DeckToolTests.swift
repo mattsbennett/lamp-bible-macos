@@ -549,4 +549,16 @@ struct DeckToolTests {
         }
         #expect(FileManager.default.fileExists(atPath: try #require(thrown).path) == false)
     }
+
+    @Test func findPlaceSaysWhichNameDrawsAndWhatAnAmbiguousOneCouldMean() throws {
+        let found = LampDeckTools.findPlaces(["Ephesus", "Antioch", "Gog", "Galil", "Atlantis"])
+        #expect(found[0].draws?.name == "Ephesus")
+        #expect(found[0].draws?.uncertain == false)
+        #expect(found[1].draws == nil)
+        #expect(found[1].candidates.map(\.name).contains("Antioch 2"))
+        #expect(found[2].draws?.uncertain == true)
+        #expect(found[3].draws == nil)
+        #expect(found[3].candidates.contains { $0.name == "Sea of Galilee" })
+        #expect(found[4].draws == nil && found[4].candidates.isEmpty)
+    }
 }

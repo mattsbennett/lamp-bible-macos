@@ -298,6 +298,81 @@ public enum LampDeckTools {
         )
     }
 
+    // MARK: - Places
+
+    /// One name looked up for a map: the place it draws, or what it could
+    /// mean.
+    public struct PlaceLookup: Codable, Sendable, Equatable {
+        public struct Place: Codable, Sendable, Equatable {
+            /// What to write on the map line.
+            public var name: String
+            /// What the map prints for it, without OpenBible's number.
+            public var printedAs: String
+            public var kind: String
+            public var firstVerse: String
+            /// OpenBible.info's confidence in the site, 0 to 100.
+            public var confidencePercent: Int
+            /// Drawn as an open ring, and the validator says so.
+            public var uncertain: Bool
+            public var latitude: Double
+            public var longitude: Double
+
+            init(_ place: LampMapPlace) {
+                name = place.name
+                printedAs = place.label
+                kind = place.kind.rawValue
+                firstVerse = place.firstVerse
+                confidencePercent = place.confidence / 10
+                uncertain = place.isUncertain
+                latitude = place.latitude
+                longitude = place.longitude
+            }
+        }
+
+        public var query: String
+        /// The place a line with this name draws; nil where it draws none.
+        public var draws: Place?
+        /// Where it draws none: the places it could mean, or those whose
+        /// names contain it.
+        public var candidates: [Place]
+        public var note: String
+    }
+
+    /// Looks up names for a map slide against the places Lamp ships
+    /// (OpenBible.info's Bible Geocoding Data).
+    public static func findPlaces(_ names: [String]) -> [PlaceLookup] {
+        names.map { name in
+            switch LampMapPlaces.match(name) {
+            case .place(let place):
+                return PlaceLookup(
+                    query: name, draws: .init(place), candidates: [],
+                    note: place.isUncertain
+                        ? "Draws, as an uncertain site; say so in the talk, or leave it off."
+                        : "Draws."
+                )
+            case .ambiguous(let places):
+                return PlaceLookup(
+                    query: name, draws: nil, candidates: places.map(PlaceLookup.Place.init),
+                    note: "Names more than one place, so it draws none; write the name of the one meant."
+                )
+            case .unknown:
+                func folded(_ text: String) -> String {
+                    text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+                }
+                let wanted = folded(name.trimmingCharacters(in: .whitespacesAndNewlines))
+                let near = wanted.isEmpty ? [] : LampMapPlaces.all.filter { place in
+                    folded(place.name).contains(wanted) || place.otherNames.contains { folded($0).contains(wanted) }
+                }
+                return PlaceLookup(
+                    query: name, draws: nil, candidates: near.prefix(12).map(PlaceLookup.Place.init),
+                    note: near.isEmpty
+                        ? "Not a place Lamp knows. Leave it off the map rather than guess a location."
+                        : "Not a place Lamp knows; these have it in their names."
+                )
+            }
+        }
+    }
+
     // MARK: -
 
     private static func encoded<Value: Encodable>(_ value: Value) throws -> Data {

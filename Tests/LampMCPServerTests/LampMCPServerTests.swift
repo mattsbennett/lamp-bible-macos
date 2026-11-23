@@ -17,13 +17,13 @@ struct LampMCPServerTests {
     @Test func onlyTheWriteToolsSayTheyWrite() {
         let all = LampMCPToolCatalog.tools(workspace: true)
         #expect(LampMCPToolCatalog.tools.count == 18)
-        #expect(LampMCPToolCatalog.deckTools.count == 3)
+        #expect(LampMCPToolCatalog.deckTools.count == 4)
         #expect(LampMCPToolCatalog.writingTools.count == 2)
         #expect(LampMCPToolCatalog.writeTools.count == 3)
         #expect(LampMCPToolCatalog.writingImportTools.count == 3)
         // Both read-only: chats are read, never changed.
         #expect(LampMCPToolCatalog.chatTools.count == 2)
-        #expect(all.count == 32)
+        #expect(all.count == 33)
         #expect(Set(all.map(\.name)).count == all.count)
 
         // import_writings asks Lamp to show files for review, and what the

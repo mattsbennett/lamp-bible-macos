@@ -56,6 +56,8 @@ BUNDLED_DB = REPOS / "lamp-bible-modules" / "modules_db" / "bundled_modules.db.z
 VERSIFICATION_DATA = (
     REPOS / "lamp-bible-core" / "Sources" / "LampModuleKit" / "LampVersificationData.swift"
 )
+# Written by core's Scripts/build-map-data.py beside the places it describes.
+MAP_NOTICE_SOURCE = REPOS / "lamp-bible-core" / "Sources" / "LampCore" / "Resources" / "Maps" / "NOTICE.txt"
 
 
 @dataclass(frozen=True)
@@ -158,6 +160,7 @@ EDITOR_NOTICE_FILES = [
 
 CROSSWIRE_NOTICE = "CrossWire-KJV-v3.1-NOTICE.txt"
 VERSIFICATION_NOTICE = "SIL-libpalaso-versification-MIT.txt"
+MAP_NOTICE = "Bible-maps-OpenBible-CC-BY-4.0-Natural-Earth.txt"
 
 LICENCE_NAMES = ("LICENSE", "LICENSE.txt", "LICENSE.md", "LICENCE", "COPYING")
 NOTICE_NAMES = ("NOTICE", "NOTICE.txt", "NOTICE.md")
@@ -426,6 +429,18 @@ def main() -> int:
     reference_rows = [
         f"- SIL libpalaso standard versifications, commit {commit[:7]} — MIT — {copyright_line}",
         f"  — {VERSIFICATION_NOTICE}",
+    ]
+    # Read from core, where the map data and its notice are built together.
+    if not MAP_NOTICE_SOURCE.exists():
+        raise NoticeError(
+            f"{MAP_NOTICE_SOURCE} is missing. Slide maps draw OpenBible.info's places (CC BY 4.0), "
+            "and their notice is written beside them by core's Scripts/build-map-data.py."
+        )
+    shutil.copy2(MAP_NOTICE_SOURCE, OUTPUT / MAP_NOTICE)
+    reference_rows += [
+        "- OpenBible.info Bible Geocoding Data — CC BY 4.0 — places on slide maps",
+        "- Natural Earth — public domain — land, water and relief on slide maps",
+        f"  — {MAP_NOTICE}",
     ]
 
     content_lines = []

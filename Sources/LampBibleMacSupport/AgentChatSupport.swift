@@ -1809,7 +1809,7 @@ public enum AgentACPRun {
     /// Lamp's own MCP tools, by name, as `lamp-mcp` offers them; a test holds
     /// this to the helper's catalogue.
     public static let lampToolNames: Set<String> = [
-        "add_reading_plan", "analyze_strongs", "build_deck", "draft_reading_plan", "import_writings",
+        "add_reading_plan", "analyze_strongs", "build_deck", "draft_reading_plan", "find_place", "import_writings",
         "list_book_sections", "list_books", "list_chats", "list_modules", "list_quiz_modules",
         "list_reading_plans", "list_writings", "lookup_dictionary_keys", "plan_writing_import",
         "read_book_section", "read_chat", "read_commentary", "read_devotional", "read_passage",

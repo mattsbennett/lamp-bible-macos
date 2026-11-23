@@ -28,6 +28,9 @@ and adds no packages of its own):
 Reference data (in lamp-bible-core):
 - SIL libpalaso standard versifications, commit b4f7a6d — MIT — Copyright (c) 2007-2026 SIL Global
   — SIL-libpalaso-versification-MIT.txt
+- OpenBible.info Bible Geocoding Data — CC BY 4.0 — places on slide maps
+- Natural Earth — public domain — land, water and relief on slide maps
+  — Bible-maps-OpenBible-CC-BY-4.0-Natural-Earth.txt
 
 These notices apply to the third-party components only. They do not change the licence of Lamp
 Bible itself or the rights in bundled Bible content. Bundled-content notices are published at

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import sys
 import unicodedata
@@ -135,7 +136,13 @@ SPEAKER_NOTES_SOURCES = {"authored", "manuscript"}
 TRANSITIONS = {"dissolve", "cut"}
 REVEALS = {"together", "stepwise"}
 TINTS = {"none", "duotone", "muted"}
-FIGURES = {"none", "timeline", "chiasm", "parallel"}
+FIGURES = {"none", "timeline", "chiasm", "parallel", "map"}
+# The most places a map names before its names crowd each other. Mirrors
+# `LampPresentationDeckValidator.mostMapPlaces`.
+MOST_MAP_PLACES = 16
+# Below this, OpenBible.info's confidence in a site is drawn as uncertain.
+# Mirrors `LampMapPlace.settledConfidence`.
+SETTLED_CONFIDENCE = 500
 MOST_TIMELINE_ENTRIES = 8
 # A zoomed timeline: how many events a view shows, and how many the whole can
 # hold. Mirrors `LampPresentationTimelineZoom`.
@@ -351,6 +358,113 @@ def contrast_ratio(first: str, second: str) -> float | None:
     return (max(a, b) + 0.05) / (min(a, b) + 0.05)
 
 
+def line_split(line: str):
+    """Where a line divides at its first spaced dash or bar, as (before,
+    after), or None. Mirrors `LampPresentationFigure.timelineSplit`."""
+    found = [line.find(sep) for sep in TIMELINE_SEPARATORS if line.find(sep) != -1]
+    if not found:
+        return None
+    start = min(found)
+    sep = next(s for s in TIMELINE_SEPARATORS if line.find(s) == start)
+    if start > 0 and start + len(sep) < len(line):
+        return line[:start], line[start + len(sep):]
+    return None
+
+
+_PLACES = None
+
+
+def places() -> list[dict]:
+    """The places a map can name, as Lamp ships them (OpenBible.info Bible
+    Geocoding Data, CC BY 4.0), from `places.json` beside this script."""
+    global _PLACES
+    if _PLACES is None:
+        document = json.loads((Path(__file__).resolve().parent / "places.json").read_text(encoding="utf-8"))
+        _PLACES = [dict(zip(document["fields"], row)) for row in document["places"]]
+    return _PLACES
+
+
+def place_key(name: str) -> str:
+    """A name as Lamp compares it: trimmed, ignoring case and accents."""
+    decomposed = unicodedata.normalize("NFD", name.strip(SWIFT_WHITESPACE))
+    return "".join(c for c in decomposed if unicodedata.category(c) != "Mn").casefold()
+
+
+def place_label(place: dict) -> str:
+    """A place's name as a map prints it, without OpenBible's number."""
+    name = place["name"]
+    head, _, tail = name.rpartition(" ")
+    return head if head and tail.isdigit() else name
+
+
+def match_place(name: str):
+    """("place", place), ("ambiguous", [places]) or ("unknown", None).
+    Mirrors `LampMapPlaces.match`."""
+    key = place_key(name)
+    named = [p for p in places() if place_key(p["name"]) == key]
+    if len(named) == 1:
+        return "place", named[0]
+    # Numbered places of the name, and places English Bibles call by it,
+    # together: one is the place, more is ambiguous.
+    candidates = {p["id"]: p for p in places() if place_key(place_label(p)) == key and place_label(p) != p["name"]}
+    candidates.update({p["id"]: p for p in places() if any(place_key(o) == key for o in p["otherNames"])})
+    found = sorted(candidates.values(), key=lambda p: p["name"])
+    if not found:
+        return "unknown", None
+    return ("place", found[0]) if len(found) == 1 else ("ambiguous", found)
+
+
+# Lamp's closest map, in degrees of latitude. Mirrors `LampMapFrame.closest`.
+CLOSEST_MAP = 1.0
+
+
+def too_close_to_tell_apart(a: dict, b: dict) -> bool:
+    """Mirrors `LampMapFrame.tooCloseToTellApart`."""
+    squeeze = math.cos((a["latitude"] + b["latitude"]) / 2 * math.pi / 180)
+    across = (a["longitude"] - b["longitude"]) * squeeze
+    up_down = a["latitude"] - b["latitude"]
+    return math.hypot(across, up_down) < CLOSEST_MAP / 60
+
+
+def map_warnings(lines: list[str], path: str) -> list[str]:
+    """Mirrors `LampPresentationDeckValidator.mapIssues`."""
+    found: list[str] = []
+    drawn: list[tuple[int, dict]] = []
+    if len(lines) > MOST_MAP_PLACES:
+        found.append(
+            f"{path}: a map of {len(lines)} places is too crowded to read; keep it to {MOST_MAP_PLACES}, "
+            "or split it across slides"
+        )
+    for index, line in enumerate(lines):
+        split = line_split(line)
+        name = (split[0] if split else line).strip(SWIFT_WHITESPACE)
+        kind, value = match_place(name)
+        where = f"map line {index + 1}, \u201c{name}\u201d,"
+        if kind == "unknown":
+            found.append(
+                f"{path}: {where} is not a place Lamp knows, so it is left off the map; name it as "
+                "OpenBible.info does (the find_place tool looks it up)"
+            )
+        elif kind == "ambiguous":
+            named = ", ".join(f"{p['name']} ({p['firstVerse']})" for p in value[:4])
+            found.append(f"{path}: {where} names more than one place, so it is left off the map; name one of {named}")
+        elif value["confidence"] < SETTLED_CONFIDENCE:
+            found.append(
+                f"{path}: {where} is drawn as an uncertain site: OpenBible.info's confidence in this "
+                f"location is {value['confidence'] // 10}%; say so in the talk, or leave it off"
+            )
+        if kind == "place":
+            drawn.append((index, value))
+    for offset, (index, place) in enumerate(drawn):
+        near = next(((i, p) for i, p in drawn[:offset] if too_close_to_tell_apart(p, place)), None)
+        if near:
+            found.append(
+                f"{path}: map lines {near[0] + 1} and {index + 1}, {near[1]['name']} and {place['name']}, "
+                "are too close together to tell apart on a map; their names are set off to the side"
+            )
+    return found
+
+
 def timeline_split(line: str) -> bool:
     """Whether a timeline line has a date and an event either side of a
     separator. Mirrors `LampPresentationFigure.timelineSplit`."""
@@ -420,8 +534,17 @@ def nothing_to_light(slide: dict) -> bool:
     if slide.get("variant") == "comparison" and slide.get("layout") == "two-column":
         return False
     blocks = slide.get("blocks") if isinstance(slide.get("blocks"), list) else []
+    def drawn_map(block: dict) -> bool:
+        # A map prints its places' names plain.
+        return (
+            block.get("kind") == "body" and block.get("figure") == "map"
+            and slide.get("layout") in FIGURE_LAYOUTS
+            and bool(figure_lines(block.get("text") if isinstance(block.get("text"), str) else ""))
+        )
+
     return not any(
-        isinstance(block, dict) and block.get("emphasis") and not drawn_zoom(block, slide.get("layout"))
+        isinstance(block, dict) and block.get("emphasis")
+        and not drawn_zoom(block, slide.get("layout")) and not drawn_map(block)
         for block in blocks
     )
 
@@ -512,6 +635,8 @@ def figure_warnings(figure: str, block: dict, block_path: str) -> list[str]:
                 f"{path}: timeline line {', '.join(undated)} has no date: write each as a date, "
                 "a spaced dash, and the event, such as \u201cc. 1000 BC \u2014 David king in Jerusalem\u201d"
             )
+    elif figure == "map":
+        found.extend(map_warnings(lines, path))
     elif figure == "chiasm" and len(lines) < 3:
         found.append(f"{path}: a chiasm needs at least three lines: a pair and its centre, or two pairs")
     elif figure == "parallel" and len(lines) % 2 == 1:
@@ -1342,6 +1467,13 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
                             "as a list; a figure is drawn on title-and-body, blank, scripture and "
                             "quotation slides"
                         )
+            map_options = block.get("map")
+            if map_options is not None:
+                route = map_options.get("route") if isinstance(map_options, dict) else None
+                if not isinstance(map_options, dict) or (route is not None and not isinstance(route, bool)):
+                    errors.append(f"{block_path}.map: expected {{\"route\": true or false}}")
+                if block.get("figure") != "map":
+                    warnings.append(f"{block_path}.map: only a map figure reads map options; this block is drawn without them")
             zoom = block.get("zoom")
             if zoom is not None:
                 zoom_errors, zoom_warnings = zoom_issues(zoom, block, block_path)

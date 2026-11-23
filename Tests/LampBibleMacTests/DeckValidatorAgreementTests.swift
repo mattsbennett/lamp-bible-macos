@@ -442,6 +442,36 @@ struct DeckValidatorAgreementTests {
                 .init(layout: .titleAndBody, blocks: [.init(kind: .body, text: "Plain.")], revealsEmphasis: true),
             ])
         }(),
+        // Maps: places found, one unknown, one shared by two places, one
+        // uncertain, too many, options on a list, and a map on a layout
+        // that draws none.
+        {
+            func map(_ lines: [String], route: Bool? = nil) -> LampPresentationBlock {
+                .init(kind: .body, text: lines.joined(separator: "\n"), figure: .map, map: .init(route: route))
+            }
+            var list = LampPresentationBlock(kind: .body, text: "A\nB", map: .init(route: true))
+            list.listStyle = .unordered
+            return LampPresentationDeck(title: "Maps", slides: [
+                .init(layout: .titleAndBody, blocks: [map(["Jerusalem", "Antioch 2 \u{2014} Pisidian Antioch"], route: true)]),
+                .init(layout: .titleAndBody, blocks: [map(["Atlantis"])]),
+                .init(layout: .titleAndBody, blocks: [map(["Antioch"])]),
+                .init(layout: .titleAndBody, blocks: [map(["Gog", "Magog"])]),
+                .init(layout: .blank, blocks: [map((1...17).map { _ in "Ephesus" })]),
+                .init(layout: .titleAndBody, blocks: [list]),
+                .init(layout: .twoColumn, blocks: [map(["Rome"]), .init(kind: .body, text: "Beside")]),
+                // A name more than one place goes by, counting other names.
+                .init(layout: .titleAndBody, blocks: [map(["Kadesh", "Carmel"])]),
+                // Places too close to draw apart.
+                .init(layout: .titleAndBody, blocks: [map(["Jerusalem", "Ophel", "Bethany"])]),
+                // A map's names are printed plain, so its emphasis lights
+                // nothing.
+                {
+                    var block = map(["Jerusalem", "Bethlehem"])
+                    block.emphasis = [.init(text: "Jerusalem")]
+                    return .init(layout: .titleAndBody, blocks: [block], revealsEmphasis: true)
+                }(),
+            ])
+        }(),
         // Nothing to say about a well-formed deck.
         LampPresentationDeck(title: "Clean", slides: [
             .init(layout: .titleAndBody, blocks: [
@@ -458,5 +488,13 @@ struct DeckValidatorAgreementTests {
             fromPython == fromSwift,
             "python said \(fromPython.sorted()), swift said \(fromSwift.sorted())"
         )
+    }
+
+    /// The deck skill checks map lines against its own copy of the places,
+    /// which must be the ones Lamp draws.
+    @Test func theSkillsPlacesAreTheOnesLampDraws() throws {
+        let copy = scriptURL.deletingLastPathComponent().appendingPathComponent("places.json")
+        let shipped = try #require(LampMapPlaces.resourceURL)
+        #expect(try Data(contentsOf: copy) == Data(contentsOf: shipped))
     }
 }

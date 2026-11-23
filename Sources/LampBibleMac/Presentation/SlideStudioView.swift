@@ -1799,6 +1799,7 @@ private struct LampSlideBlockEditor: View {
         case .timeline?: "One event per line: a date, a spaced dash, and what happened — “c. 1000 BC — David king in Jerusalem”."
         case .chiasm?: "One member per line, in order; the first pairs with the last, and an odd line is the centre."
         case .parallel?: "Lines in pairs: each line, then the line that answers it."
+        case .map?: "One place per line, as OpenBible.info names it. After a dash, what the map should call it — “Antioch 2 — Pisidian Antioch”."
         default: nil
         }
     }
@@ -1945,12 +1946,14 @@ private struct LampSlideBlockEditor: View {
                                 get: { block.figure == LampPresentationFigure.none ? nil : block.figure },
                                 set: { figure in
                                     block.figure = figure
-                                    // Only a timeline zooms.
+                                    // Only a timeline zooms, and only a map
+                                    // takes a route.
                                     if figure != .timeline { block.zoom = nil }
+                                    if figure != .map { block.map = nil }
                                 }
                             ),
                             items: [.init(id: nil, title: "None")]
-                                + [LampPresentationFigure.timeline, .chiasm, .parallel]
+                                + [LampPresentationFigure.timeline, .chiasm, .parallel, .map]
                                     .map { .init(id: Optional($0), title: $0.displayName) }
                         )
                         .controlSize(.small)
@@ -1963,6 +1966,9 @@ private struct LampSlideBlockEditor: View {
                     }
                     if block.figure == .timeline {
                         StudioTimelineZoomControls(block: $block)
+                    }
+                    if block.figure == .map {
+                        StudioMapControls(block: $block)
                     }
                 }
 
@@ -2980,6 +2986,61 @@ private struct LayoutSketch: View {
             ForEach(0..<count, id: \.self) { index in
                 bar(index == count - 1 ? width * 0.62 : width, height * 0.07, faint)
             }
+        }
+    }
+}
+
+/// A map's places as Lamp finds them, each line marked found, unsure, or not
+/// found, so a name that will not draw is caught here and not in front of a
+/// room; and whether the places are joined as a route.
+private struct StudioMapControls: View {
+    @Binding var block: LampPresentationBlock
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle("Join the places as a route", isOn: Binding(
+                get: { block.map?.route == true },
+                set: { block.map = $0 ? LampPresentationMapOptions(route: true) : nil }
+            ))
+            .tint(Color.lampAccentMuted)
+            .help("A line from each place to the next, in the order written, as for a journey")
+            ForEach(Array(block.mapStops.enumerated()), id: \.offset) { _, stop in
+                Label {
+                    Text(Self.describe(stop))
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: Self.symbol(stop))
+                        .foregroundStyle(stop.place.map { $0.isUncertain ? Color.lampSecondaryText : Color.lampAccentMuted } ?? .orange)
+                }
+                .font(.caption)
+                .foregroundStyle(Color.lampSecondaryText)
+            }
+            Text("Places from OpenBible.info, land from Natural Earth; both are credited on the map. Coastlines are today's.")
+                .font(.caption2)
+                .foregroundStyle(Color.lampSecondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private static func symbol(_ stop: LampMapStop) -> String {
+        switch stop.match {
+        case .place(let place): place.isUncertain ? "questionmark.circle" : "mappin.circle.fill"
+        case .ambiguous, .unknown: "exclamationmark.triangle.fill"
+        }
+    }
+
+    private static func describe(_ stop: LampMapStop) -> String {
+        switch stop.match {
+        case .place(let place):
+            let named = stop.label == place.name ? place.name : "\(stop.label) (\(place.name))"
+            return place.isUncertain
+                ? "\(named): an uncertain site, \(place.confidence / 10)% sure; drawn as an open ring"
+                : "\(named), \(place.firstVerse)"
+        case .ambiguous(let places):
+            let named = places.prefix(4).map { "\($0.name) (\($0.firstVerse))" }.joined(separator: ", ")
+            return "\(stop.name) could be \(named); write one of these"
+        case .unknown:
+            return "\(stop.name) is not a place Lamp knows, so it is left off"
         }
     }
 }

@@ -297,6 +297,12 @@ public actor LampMCPToolHandler {
         case "render_deck":
             return try await renderDeck(arguments)
 
+        case "find_place":
+            guard let names = strings(arguments["names"]), !names.isEmpty else {
+                throw LampMCPToolError.missingArgument("names")
+            }
+            return try result(LampDeckTools.findPlaces(names))
+
         case "list_writings":
             try requirePersonalContent()
             return try result(LampWritingWorkspace.listed(

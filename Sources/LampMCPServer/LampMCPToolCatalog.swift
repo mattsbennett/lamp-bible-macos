@@ -334,6 +334,22 @@ public enum LampMCPToolCatalog {
             ],
             required: ["deck"]
         ),
+        tool(
+            "find_place",
+            """
+            Look up places for a map slide (a body block with "figure": "map"). \
+            For each name: the place a map line with that name draws, or the \
+            places it could mean where several share it, or, where it names \
+            none, places whose names contain it. Each with the name to write \
+            on the map line, the first verse that names it, and how sure \
+            OpenBible.info is of its site; an uncertain one is drawn as \
+            uncertain. Never put a place on a map that this does not find.
+            """,
+            properties: [
+                "names": arrayOfStrings("Place names, such as [\"Antioch\", \"Sea of Galilee\"]."),
+            ],
+            required: ["names"]
+        ),
     ]
 
     /// Reading the writings that have an agent workspace.

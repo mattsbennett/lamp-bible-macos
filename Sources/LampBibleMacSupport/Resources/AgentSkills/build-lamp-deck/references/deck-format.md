@@ -276,6 +276,7 @@ are drawn as a list, and Lamp warns.
 | `timeline` | A date, a spaced dash, and what happened: `c. 1000 BC — David king in Jerusalem` | Events evenly along a line in the order written, the date above in the accent, the event below. Keep to 8, or zoom it. |
 | `chiasm` | One member of a mirrored structure, in order: the first pairs with the last, the second with the second-last, an odd line is the centre | Lettered A, B, C … C′, B′, A′ in the accent, and stepped in toward the centre. |
 | `parallel` | Lines in pairs, as Hebrew poetry sets them: a line, then the line that answers it | Lettered A, A′, B, B′, the answering line set in beneath its partner. |
+| `map` | A place the Bible names, as OpenBible.info names it; optionally a spaced dash and what the map should call it | The land around the places, each marked and named. See below. Keep to 16. |
 
 ```json
 { "id": "…", "kind": "body", "figure": "timeline",
@@ -298,6 +299,49 @@ are drawn as a list, and Lamp warns.
   to its centre.
 - **Emphasis works as anywhere else**, on a date, an event or a word in a
   structure.
+
+### Maps: `"figure": "map"`
+
+A map shows where the places a passage names are, on the land around them,
+drawn in the deck's colours with the hills shaded. Write one place per line:
+
+```json
+{ "id": "…", "kind": "body", "figure": "map", "map": { "route": true },
+  "text": "Antioch 1\nSeleucia\nSalamis\nPaphos\nPerga\nAntioch 2 — Pisidian Antioch\nIconium\nLystra\nDerbe" }
+```
+
+- **Name each place as OpenBible.info does.** Lamp ships OpenBible.info's
+  Bible Geocoding Data: about 1,250 places, each at its likeliest site. Where two
+  places share a name, OpenBible numbers them (`Antioch 1`, Syrian Antioch;
+  `Antioch 2`, Pisidian Antioch), and a bare `Antioch` is left off the map with
+  a warning. Look names up with the `find_place` tool, which says which name
+  draws, the first verse naming each candidate, and how sure the site is.
+- **After a spaced dash, what the map prints**:
+  `Antioch 2 — Pisidian Antioch`. Without one, the map prints the place's name
+  without OpenBible's number.
+- **Uncertain sites look uncertain.** Where OpenBible.info's confidence in a
+  site is under 50%, the place is an open ring rather than a dot, and the
+  validator says so. Many sites are disputed (Bethsaida, Emmaus, Gog and
+  Magog). Say so in the talk, or leave the place off; never present one as
+  settled.
+- **Towns are dots, areas are names.** A land, people or valley (`Galilee 1`,
+  `Persia`, `Cush 1`) is a name set wide over its middle; a sea or river is in
+  italic; a mountain is a small triangle.
+- **`"map": { "route": true }`** joins the places in the order written, for a
+  journey. With `"reveal": "stepwise"`, the places arrive one at a time, and the
+  route reaches each as it arrives.
+- **What the map covers**: Europe, Russia to the Pacific, North Africa, the
+  Near East, Arabia and Persia. The closest it goes is about the size of Galilee,
+  so places within a couple of kilometres of each other (the hills and quarters
+  of Jerusalem) share one mark, with their names set off to the side; the
+  validator says so. Name the city instead, or show those places another way.
+  The coastlines and rivers are today's, so a harbour that has since silted up
+  (Ephesus, Miletus) stands inland.
+- **The credit is drawn on the map** ("Places: OpenBible.info · Map: Natural
+  Earth"), as OpenBible.info's licence asks. Leave it there.
+- A map is drawn on `title-and-body`, `blank`, `scripture` and `quotation`
+  slides, filling the room under the heading. A Lamp that does not know maps
+  draws the place names as a list.
 
 ### A timeline longer than a slide: `zoom`
 
