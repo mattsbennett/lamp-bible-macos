@@ -114,20 +114,18 @@ ACCEPTED_GAPS: dict[str, str] = {
 # A rebuild of the iOS editor that adds, removes or upgrades no package then passes with no fresh
 # review, because rebuilt bytes cannot leave a package unlicensed. A package that does move stops
 # the run, which is exactly when EDITOR_NOTICE_FILES needs a file.
-MAC_EDITOR_SHA256 = "f059c205f1ca3ae3e89b762f3fccafe36f65c6beda0a33bf0bcbfa0023de422c"
-MAC_EDITOR_FROM = "ca60d74"
+MAC_EDITOR_SHA256 = "fb7a42f2667763f17882b7c21cc3617c518a4835021d5c12fb1ba19796aa3a55"
+MAC_EDITOR_FROM = "61aff21"
 MAC_EDITOR_REVIEW = (
-    "2026-11-19: the Mac's copy is the iOS editor's script built at ca60d74 — which sends a "
-    "review clear's unmarked page text beside the marked, keeps its markers out of links, gives "
-    "each marker the formatting under which the page's writing of what is round it is unchanged, "
-    "and sets a page's mode without reporting an edit — inside the "
-    "Mac's own page and styles, kept from its earlier copy (iOS c98d4f3, with Mac 450e42f's link "
-    "blue). The script is the iOS build's byte for byte, the `light` class toggle from the "
-    "iPhone redesign (7c13d54) included; nothing on the Mac styles that class, so it changes "
-    "nothing here. The difference between the two bundles is the stylesheet alone: the Mac does "
-    "not take the redesign's CSS, nor the phone's placing of a mark's clear button (eeae228), and "
-    "draws the review marks from its own injected writing-page sheet. No package moved between "
-    "c98d4f3 and ca60d74."
+    "2026-11-23: the Mac's copy is the iOS editor's build at 61aff21, script and page alike, "
+    "with the Mac's own stylesheet line kept in place of the phone's, as before. Between "
+    "ca60d74 and 61aff21 the script gained review marks drawn whole and quickly, a ✓ that takes "
+    "its block's marks off as it is pressed, code blocks saved between a fence longer than any "
+    "run of backticks in them, fenced code left alone by tidying and read by markdown-it, and a "
+    "lone CR read as a line end. The Mac draws the review buttons from its own injected "
+    "writing-page sheet. No package moved between ca60d74 and 61aff21: the lockfile lists the "
+    "same packages at the same versions; @tiptap/extension-code-block, which the starter kit "
+    "already brought in at 3.18.0, is now also named in package.json."
 )
 
 # Resolved but not linked into anything that ships.
