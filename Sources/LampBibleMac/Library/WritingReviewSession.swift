@@ -811,6 +811,18 @@ final class WritingReviewSession: ObservableObject {
             record.marks.removeAll { mark in
                 !standing.contains(mark.id) && mark.pieces.contains { relinked($0.text) != $0.text }
             }
+            // Cleared while owed, so not marked again: and said so, in the
+            // marks it would have made. An earlier pass may have filed one
+            // before the clear, and a copy synced with it keeps it unless
+            // this record retires it; left out, a sync brings it back.
+            if owed.cleared {
+                let now = Date()
+                for mark in stands {
+                    record.retired.append(LampWritingReview.Retirement(
+                        id: LampWritingReview.remarkID(restoring: mark), retiredAt: now
+                    ))
+                }
+            }
             // Where the restore's fresh marks are anchored.
             sources += [relinked(owed.restore.base), relinked(owed.held)]
             recorded = true

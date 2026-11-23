@@ -281,6 +281,20 @@ struct WritingReviewSessionTests {
         #expect(marked.contains { $0.contains("dog") })
         #expect(Set(once.marks.map(\.id)) == Set(again.marks.map(\.id)))
 
+        // Cleared while the keep ran: the next pass marks nothing again,
+        // and retires the mark an earlier pass filed, so a copy synced with
+        // it lets it go.
+        var cleared = owed
+        cleared.cleared = true
+        let afterClear = try #require(WritingReviewSession.keptCopyRecord(
+            of: review, as: "copy", saved: held, text: held, proseTexts: [third], known: [third],
+            relinked: { $0 }, restores: [cleared]
+        ).record)
+        let filed = Set(once.marks.map(\.id)).subtracting(review.marks.map(\.id))
+        #expect(!filed.isEmpty)
+        #expect(filed.isSubset(of: Set(afterClear.retired.map(\.id))))
+        #expect(afterClear.marks.allSatisfy { !filed.contains($0.id) })
+
         // Only the restored passage was marked, and the writing recorded
         // the restore itself in between: the copy still gets the record.
         let only = LampWritingReview(writingID: "w").markingAssistantChange(from: "One two.", to: "One alpha two.")
