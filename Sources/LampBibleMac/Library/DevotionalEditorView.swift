@@ -4811,9 +4811,11 @@ struct DevotionalEditorView: View {
         for (obligation, gone) in dormant {
             guard let owed = proseRestoresOwedHere.first(where: { $0.id == obligation }), !owed.bodyCommitted
             else { continue }
-            WritingReviewObligations.shared.stillOwed(
-                owed.pending(owed.pendingMarks.subtracting(gone)), for: identifier
-            )
+            var next = owed.pending(owed.pendingMarks.subtracting(gone))
+            // Remembered, with the obligation, for a cleared restore to go on
+            // retiring the marks an earlier pass may have filed for them.
+            next.keptLetGo = (owed.keptLetGo ?? []).union(gone)
+            WritingReviewObligations.shared.stillOwed(next, for: identifier)
         }
     }
 

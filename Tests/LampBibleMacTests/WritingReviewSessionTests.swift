@@ -332,6 +332,27 @@ struct WritingReviewSessionTests {
         ).record
         #expect(filed.isSubset(of: Set(onlyTheClear?.retired.map(\.id) ?? [])))
 
+        // A cleared obligation a save of the writing had already left with
+        // nothing owed retires nothing: a later restore of the same words is
+        // marked, as the writing's own save would mark it.
+        var hollow = cleared.pending([])
+        hollow.cleared = true
+        let later = WritingReviewSession.keptCopyRecord(
+            of: review, as: "copy", saved: held, current: held, text: held, proseTexts: [third], known: [third],
+            relinked: { $0 }, restores: [hollow, owed]
+        ).record
+        #expect(!filed.isSubset(of: Set(later?.retired.map(\.id) ?? [])))
+        #expect(later?.marks.contains { filed.contains($0.id) } == true)
+        // But one a keep let go after a pass may have filed its mark goes on
+        // retiring it.
+        var letGoHere = hollow
+        letGoHere.keptLetGo = Set(plan.marks)
+        let retiredStill = WritingReviewSession.keptCopyRecord(
+            of: review, as: "copy", saved: third, current: third, text: third, proseTexts: [third], known: [third],
+            relinked: { $0 }, restores: [letGoHere]
+        ).record
+        #expect(filed.isSubset(of: Set(retiredStill?.retired.map(\.id) ?? [])))
+
         // And with no restore owed at all, the writer having read every mark
         // while the keep ran: the record of that reading is filed.
         let readAll = review.clearingAll()

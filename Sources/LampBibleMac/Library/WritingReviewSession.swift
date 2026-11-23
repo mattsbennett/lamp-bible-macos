@@ -808,10 +808,17 @@ final class WritingReviewSession: ObservableObject {
             // the clear, or another device's recording of this restore may
             // have brought one into the writing's record since, and a copy
             // synced with either keeps it unless this record retires it.
-            if owed.cleared {
+            // Only the marks this keep could have filed: its passages still
+            // owed, and those it let go after a pass may have filed them. A
+            // passage a save of the writing let go before the keep began was
+            // never marked here, and retiring its mark would hide the one a
+            // later restore of the same words makes, as the writing's save
+            // would not.
+            let filable = owed.pendingMarks.union(owed.keptLetGo ?? [])
+            if owed.cleared, !filable.isEmpty {
                 let now = Date()
                 retiring = true
-                for mark in owed.restore.plan.marks {
+                for mark in filable {
                     let id = LampWritingReview.remarkID(restoring: mark)
                     record.marks.removeAll { $0.id == id }
                     record.retired.append(LampWritingReview.Retirement(id: id, retiredAt: now))
@@ -882,6 +889,12 @@ final class WritingReviewSession: ObservableObject {
         /// it has: a writing's obligations are one bucket, and each knows
         /// its own document.
         var document: String?
+
+        /// Passages a keep of the writer's edits let go, found undone, after
+        /// a pass may already have filed their marks again in the copy: a
+        /// restore cleared since retires those marks there too. Nil for none,
+        /// as every obligation filed before this was kept has.
+        var keptLetGo: Set<UUID>?
 
         /// Whether the writer cleared while this was owed.
         ///
