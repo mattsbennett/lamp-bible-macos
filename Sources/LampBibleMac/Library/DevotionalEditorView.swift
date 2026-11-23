@@ -4695,25 +4695,9 @@ struct DevotionalEditorView: View {
                     // What the writer holds now the save is done, which a
                     // save of the writing also asks about.
                     let current = editsSnapshot().markdown
-                    let carried = try await carryReviewMarks(
+                    waiting = try await carryReviewMarks(
                         of: snapshot, current: current, to: id, restores: taken
                     )
-                    waiting = carried.waiting
-                    // Passages found undone are let go at once, from the
-                    // obligation itself, as a save of the writing lets them
-                    // go: so neither a later pass nor a Try Again after a
-                    // failure takes words pasted back for a redo. The change
-                    // makes one more pass, which then asks only about the
-                    // rest.
-                    for (obligation, gone) in carried.dormant {
-                        guard let owed = proseRestoresOwedHere.first(where: { $0.id == obligation }) else { continue }
-                        let left = owed.pendingMarks.subtracting(gone)
-                        if left.isEmpty {
-                            WritingReviewObligations.shared.settled(obligation, for: identifier)
-                        } else {
-                            WritingReviewObligations.shared.stillOwed(owed.pending(left), for: identifier)
-                        }
-                    }
                     // Typed while this pass was saving: another pass.
                     await readPage()
                 } else {
@@ -4764,12 +4748,13 @@ struct DevotionalEditorView: View {
     /// whole then carried. One write of the copy's record, worked out from
     /// the writing's record, the snapshot and the restores alone, so filed
     /// again by a later pass it comes out the same. Returns the passages the
-    /// copy's text could not answer for, which wait for a save of the copy,
-    /// and those it shows undone, which the keep lets go.
+    /// copy's text could not answer for, which wait for a save of the copy.
+    /// Those it shows undone are let go before anything is written
+    /// (`letGo`).
     private func carryReviewMarks(
         of snapshot: EditsSnapshot, current: String, to copyID: String,
         restores: [WritingReviewSession.OwedRestore]
-    ) async throws -> (waiting: [WritingReviewSession.OwedRestore], dormant: [UUID: Set<UUID>]) {
+    ) async throws -> [WritingReviewSession.OwedRestore] {
         let originalID = identifier
         let store = LampWritingReviewStore(rootURL: model.library.rootURL)
         // Relinked alike in the texts the marks are carried from and the one
@@ -4783,12 +4768,20 @@ struct DevotionalEditorView: View {
         let proseTexts = snapshot.reviewTexts
         let known = proseTexts.map(relinked)
         let text = relinked(saved)
-        return try await Task.detached(priority: .userInitiated) {
-            let (carried, waiting, dormant) = WritingReviewSession.keptCopyRecord(
+        let worked = try await Task.detached(priority: .userInitiated) {
+            WritingReviewSession.keptCopyRecord(
                 of: try store.review(writingID: originalID), as: copyID,
                 saved: saved, current: current, text: text, proseTexts: proseTexts, known: known,
                 relinked: relinked, restores: restores
             )
+        }.value
+        // Before the record is written, as a save of the writing lets them go
+        // whether or not its marks go down: a write that fails leaves the
+        // decision made, and a Try Again does not take words pasted back
+        // since for a redo.
+        letGo(worked.dormant)
+        let carried = worked.record
+        try await Task.detached(priority: .userInitiated) {
             if let carried {
                 try store.update(writingID: copyID) { _ in carried }
             } else if let filed = try? store.review(writingID: copyID),
@@ -4798,8 +4791,30 @@ struct DevotionalEditorView: View {
                 // what this pass worked out, which is nothing.
                 try store.update(writingID: copyID) { _ in LampWritingReview(writingID: copyID) }
             }
-            return (waiting, dormant)
         }.value
+        return worked.waiting
+    }
+
+    /// The passages a pass of the keep found undone, taken out of their
+    /// obligations at once, as a save of the writing takes them out: so
+    /// neither a later pass nor a Try Again takes words pasted back for a
+    /// redo. The change makes one more pass, which asks only about the rest.
+    ///
+    /// The obligation stays, though nothing of it may be left, until the
+    /// keep is done (`keptAsCopy`): a cleared one goes on retiring the marks
+    /// it would have made in every pass, so a later pass's record, filed
+    /// afresh from the writing's, does not drop the retirement an earlier
+    /// one filed. And one a save of the writing itself committed is left
+    /// alone: the writing's body holds it still, and its record is owed
+    /// there.
+    private func letGo(_ dormant: [UUID: Set<UUID>]) {
+        for (obligation, gone) in dormant {
+            guard let owed = proseRestoresOwedHere.first(where: { $0.id == obligation }), !owed.bodyCommitted
+            else { continue }
+            WritingReviewObligations.shared.stillOwed(
+                owed.pending(owed.pendingMarks.subtracting(gone)), for: identifier
+            )
+        }
     }
 
     /// Everything a copy of the edits is made from, taken at once.
