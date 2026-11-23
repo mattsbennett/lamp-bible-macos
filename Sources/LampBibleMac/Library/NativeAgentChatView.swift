@@ -802,7 +802,11 @@ struct NativeAgentChatMessage: ChatMessage {
     }
 }
 
-/// What the running reply is doing, in a line under the header.
+/// What the running reply is doing, in the header beside Stop.
+///
+/// On a row of its own it made the header twice as tall for one short line,
+/// so it shares the row with the buttons and gives way to them: a long step
+/// is cut at the end rather than pushing Stop out of reach.
 ///
 /// The steps are the provider's own, read from its event stream: a tool call
 /// with the passage or query it was given, a thinking block, the reply being
@@ -829,11 +833,9 @@ private struct AgentActivityLine: View {
                 // the end a path is read from, so what is left is read
                 // left to right.
                 .truncationMode(.tail)
-            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 4)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .help(summary)
+        .accessibilityElement(children: .ignore)
         .accessibilityLabel(summary)
     }
 
@@ -3020,9 +3022,6 @@ struct NativeAgentChatView: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
             }
-            if model.isRunning, let activity = model.activity {
-                AgentActivityLine(activity: activity)
-            }
             // Under the header, beside Stop, rather than in the chat's input
             // slot: SwiftyChat lays that out at the input's own height.
             if let request = model.pendingApprovals.first {
@@ -3320,7 +3319,14 @@ struct NativeAgentChatView: View {
                     .font(.caption)
                     .foregroundStyle(connectionState.color)
             }
-            Spacer()
+            // In the Spacer's place, not beside one: a Spacer takes whatever
+            // it is offered, and the line would be left with nothing.
+            if model.isRunning, let activity = model.activity {
+                AgentActivityLine(activity: activity)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Spacer()
+            }
             if connectionState != .connected && connectionState != .checking {
                 Button("Connect", systemImage: "person.badge.key") { connect() }
                     .buttonStyle(.lampProminent)
