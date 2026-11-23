@@ -307,6 +307,15 @@ struct WritingReviewSessionTests {
         #expect(filed.isSubset(of: Set(overThat.retired.map(\.id))))
         #expect(overThat.marks.allSatisfy { !filed.contains($0.id) })
 
+        // And where nothing else is left to file, every mark read and this
+        // restore not proved by the copy's text: the retirement is still
+        // filed, not dropped with an empty record.
+        let onlyTheClear = WritingReviewSession.keptCopyRecord(
+            of: review.clearingAll(), as: "copy", saved: third, text: third, proseTexts: [third], known: [third],
+            relinked: { $0 }, restores: [cleared]
+        ).record
+        #expect(filed.isSubset(of: Set(onlyTheClear?.retired.map(\.id) ?? [])))
+
         // Only the restored passage was marked, and the writing recorded
         // the restore itself in between: the copy still gets the record.
         let only = LampWritingReview(writingID: "w").markingAssistantChange(from: "One two.", to: "One alpha two.")

@@ -785,6 +785,7 @@ final class WritingReviewSession: ObservableObject {
         var sources = known
         var waiting: [OwedRestore] = []
         var recorded = false
+        var retiring = false
         for owed in restores {
             // Proved as a save of the writing proves it, by core's decision
             // (`RestorePlan.settlement`).
@@ -801,6 +802,7 @@ final class WritingReviewSession: ObservableObject {
             // synced with either keeps it unless this record retires it.
             if owed.cleared {
                 let now = Date()
+                retiring = true
                 for mark in owed.restore.plan.marks {
                     let id = LampWritingReview.remarkID(restoring: mark)
                     record.marks.removeAll { $0.id == id }
@@ -834,7 +836,10 @@ final class WritingReviewSession: ObservableObject {
         // the writing's record did: a restore the writing wrote down for
         // itself since it was asked is one of those, and with no marks left
         // the copy would otherwise get no record of it at all.
-        guard recorded || !carried.marks.isEmpty || !carried.restorations.isEmpty else {
+        // And where it retires a cleared restore's marks, though nothing
+        // else is left: that retirement is what stops a copy synced with an
+        // earlier pass's mark from keeping it.
+        guard recorded || retiring || !carried.marks.isEmpty || !carried.restorations.isEmpty else {
             return (nil, waiting)
         }
         carried.writingID = copyID
