@@ -29,8 +29,12 @@ struct WrappingRow: Layout {
             var x = bounds.minX
             for index in row.indices {
                 let size = subviews[index].sizeThatFits(.unspecified)
+                // Centred in the row rather than hung from its top: a row
+                // mixes plain words with controls, and a control is taller
+                // than the words beside it, so hanging them all from the top
+                // left the words sitting high against it.
                 subviews[index].place(
-                    at: CGPoint(x: x, y: y),
+                    at: CGPoint(x: x, y: y + (row.height - size.height) / 2),
                     anchor: .topLeading,
                     proposal: ProposedViewSize(size)
                 )

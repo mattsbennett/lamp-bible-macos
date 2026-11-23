@@ -149,6 +149,12 @@ struct DevotionalsView: View {
     /// Find in the preview. The preview cannot be written to, so the bar it
     /// puts up offers Find and no Replace.
     @State private var previewFind = WritingFindController()
+    @State private var previewDetailsShown = false
+    @State private var previewFilesShown = false
+    /// The file being read beside the writing, by name, or nil for the
+    /// writing itself. Cleared when another writing is shown, since a file
+    /// belongs to the one it was kept beside.
+    @State private var shownFileName: String?
     @State private var previewFinder = WritingPreviewFinder()
     @State private var exportedURL: URL?
     /// The open writing's other files, beside its prose, with the writing
@@ -898,141 +904,170 @@ struct DevotionalsView: View {
     }
 
     private func devotionalDocument(_ devotional: LampDevotional) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                // Set as a book section's header is: an eyebrow, the title,
-                // its subtitle, then the passages it is about.
-                VStack(alignment: .leading, spacing: 10) {
+        // The writing is drawn by the editor's own page, read-only, so it
+        // reads exactly as it does while it is written and carries the
+        // page's review marks and footnotes. A web view scrolls itself and
+        // has no height of its own, so what is not the writing sits above it
+        // rather than scrolling with it — and sits in as little room as it
+        // can, because every point it takes is a point off the reading.
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 10) {
+                // One line above the writing's name: what it is, who wrote
+                // it, when, how long it takes, and what else is kept beside
+                // it. The row has to exist for the category anyway.
+                WrappingRow(spacing: 12) {
                     if let eyebrow = previewEyebrow(devotional) {
                         Text(eyebrow.uppercased())
                             .font(.system(size: 12, weight: .semibold))
                             .tracking(1.4)
                             .foregroundStyle(Color.lampSecondaryText)
                     }
-                    Text(devotional.title)
-                        .font(.system(
-                            size: max(devotionalFontSize * 1.8, 30),
-                            weight: .bold,
-                            design: devotionalTypeface.design
-                        ))
-                        .fixedSize(horizontal: false, vertical: true)
-                    if let subtitle = devotional.subtitle, !subtitle.isEmpty {
-                        Text(subtitle)
-                            .font(.system(
-                                size: max(devotionalFontSize * 1.15, 18),
-                                design: devotionalTypeface.design
-                            ))
-                            .foregroundStyle(.secondary)
-                    }
                     detailMetadata(devotional)
-                    if !devotional.keyScriptures.isEmpty {
-                        // Wraps: a writing can carry more references than
-                        // the pane has room for on one line.
-                        WrappingRow(spacing: 6) {
-                            ForEach(devotional.keyScriptures) { scripture in
-                                Button(scripture.displayDescription) {
-                                    openReference(scripture.startReference)
-                                }
-                                .buttonStyle(.lampSecondary)
-                                .controlSize(.small)
-                            }
-                        }
-                        .padding(.top, 3)
-                    }
+                    previewFilesMenu(devotional)
                 }
 
-                if let summary = devotional.summary, !summary.isEmpty {
-                    Text(summary)
+                Text(devotional.title)
+                    .font(.system(
+                        size: max(devotionalFontSize * 1.8, 30),
+                        weight: .bold,
+                        design: devotionalTypeface.design
+                    ))
+                    .fixedSize(horizontal: false, vertical: true)
+                if let subtitle = devotional.subtitle, !subtitle.isEmpty {
+                    Text(subtitle)
                         .font(.system(
-                            size: devotionalFontSize * 1.1,
+                            size: max(devotionalFontSize * 1.15, 18),
                             design: devotionalTypeface.design
                         ))
-                        .lineSpacing(devotionalLineSpacing)
-                        .foregroundStyle(.secondary)
-                }
-
-                Divider()
-
-                // The labels in the writing can be anything; a reader is shown
-                // 1, 2, 3 in reading order. Both halves come from one numbering
-                // so a marker and its note cannot disagree.
-                let numbered = LampDevotionalFootnotes.numbered(
-                    content: devotional.displayMarkdown,
-                    footnotes: devotional.footnotes
-                )
-                DevotionalContentView(
-                    markdown: LampDevotionalFootnotes.displayContent(numbered, linkingMarkers: true),
-                    libraryRootURL: model.library.rootURL,
-                    devotionalID: devotional.id,
-                    mediaReferences: devotional.mediaReferences,
-                    fontSize: devotionalFontSize,
-                    lineSpacing: devotionalLineSpacing,
-                    typeface: devotionalTypeface,
-                    // Without this an unwritten draft is a title over a divider
-                    // over nothing, which reads as a rendering failure.
-                    emptyState: AnyView(emptyDraftState(devotional)),
-                    titleShownAbove: devotional.title,
-                    // The writing itself is what Find searches. The notes
-                    // below it are a list of their own, and each preview
-                    // numbers its runs from the top of its own text.
-                    finder: previewFinder
-                )
-
-                if !numbered.footnotes.isEmpty || !numbered.preamble.isEmpty {
-                    Divider()
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Footnotes")
-                            .font(.headline)
-                        // Anything the writer put above the definitions is theirs
-                        // and is shown as the writing it is.
-                        if !numbered.preamble.isEmpty {
-                            DevotionalContentView(
-                                markdown: numbered.preamble,
-                                libraryRootURL: model.library.rootURL,
-                                devotionalID: devotional.id,
-                                mediaReferences: devotional.mediaReferences,
-                                fontSize: max(devotionalFontSize - 2, 11),
-                                lineSpacing: devotionalLineSpacing,
-                                typeface: devotionalTypeface
-                            )
-                        }
-                        DevotionalFootnoteList(
-                            footnotes: numbered.footnotes,
-                            fontSize: max(devotionalFontSize - 2, 11),
-                            lineSpacing: devotionalLineSpacing,
-                            typeface: devotionalTypeface,
-                            highlight: footnoteHighlight
-                        )
-                    }
-                    .foregroundStyle(.secondary)
-                }
-
-                let files = otherFiles(of: devotional)
-                if !files.isEmpty {
-                    Divider()
-                    otherFilesSection(files, of: devotional)
-                        // Each writing's files open folded, whatever was
-                        // open in the one before.
-                        .id(devotional.id)
-                }
-
-                if !devotional.tags.isEmpty {
-                    Text(devotional.tags.map { "#\($0)" }.joined(separator: "  "))
-                        .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
-            // A reading measure of about 70 characters, set from the text
-            // size so it holds as the size changes, and centred in the pane
-            // as a page is. A fixed 760 points made lines of 100 characters
-            // at the default size.
-            .frame(maxWidth: Self.readingMeasure(for: devotionalFontSize), alignment: .leading)
+            .frame(
+                maxWidth: Self.readingMeasure(for: devotionalFontSize),
+                alignment: .leading
+            )
             .padding(.horizontal, 40)
-            .padding(.top, 36)
-            .padding(.bottom, 48)
-            .frame(maxWidth: .infinity, alignment: .top)
+            .padding(.top, 20)
+            .padding(.bottom, 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Divider()
+
+            // Without this an unwritten draft is a title over a divider over
+            // nothing, which reads as a rendering failure.
+            if shownFileName == nil, !Self.hasWriting(devotional) {
+                emptyDraftState(devotional)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                TipTapEditorView(
+                    markdownContent: .constant(shownFileText(of: devotional)),
+                    fontSize: devotionalFontSize,
+                    mediaScopeID: devotional.id,
+                    libraryRootURL: model.library.rootURL,
+                    isVisible: true,
+                    mediaReferences: devotional.mediaReferences,
+                    viewMode: .read,
+                    // Read here, so a marker opens its note where it stands
+                    // rather than reporting a click for a field to answer.
+                    footnoteClicks: .popover,
+                    proseTypeface: devotionalTypeface,
+                    onCoordinatorReady: { coordinator in
+                        // The page is what Find searches now, and it is
+                        // read-only, so the bar offers Find alone.
+                        previewFind.attach(coordinator)
+                    }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
         .task(id: devotional.id) { await monitorOtherFiles(of: devotional.id) }
+        .onChange(of: devotional.id) { _, _ in shownFileName = nil }
+    }
+
+    /// What else is kept beside a writing, as a menu: the writing itself
+    /// first, then each file. Chosen, a file is read in the same page the
+    /// writing is, as the phone opens them (iOS 38ed0a8).
+    @ViewBuilder
+    private func previewFilesMenu(_ devotional: LampDevotional) -> some View {
+        let files = otherFiles(of: devotional)
+        if !files.isEmpty {
+            let titles = WorkspaceDocumentTitle.titles(
+                for: files.map { $0.url.lastPathComponent }
+            )
+            Menu {
+                // The writing itself is what the editor calls it, so the
+                // menu reads as its tabs do rather than inventing a name.
+                Button {
+                    shownFileName = nil
+                } label: {
+                    Label("Main Prose", systemImage: shownFileName == nil ? "checkmark" : "")
+                }
+                Divider()
+                ForEach(files) { file in
+                    let name = file.url.lastPathComponent
+                    let title = titles[name] ?? WorkspaceDocumentTitle.formatted(name)
+                    Button {
+                        shownFileName = name
+                    } label: {
+                        Label(
+                            Self.isBlank(file.contents) ? "\(title) — empty" : title,
+                            systemImage: shownFileName == name ? "checkmark" : ""
+                        )
+                    }
+                }
+            } label: {
+                Text(shownFileTitle(of: devotional) ?? "Main Prose")
+            }
+            .lampMenu()
+            // A row's control, so the small size the vocabulary gives a row,
+            // set in the row's own type, and sitting on its text's baseline
+            // rather than on its own box's.
+            .controlSize(.small)
+            .font(.callout)
+            .fixedSize()
+        }
+    }
+
+    /// What the file being read is called, the way the editor's tabs call
+    /// it, or nil when the writing itself is being read.
+    private func shownFileTitle(of devotional: LampDevotional) -> String? {
+        guard let shownFileName else { return nil }
+        let files = otherFiles(of: devotional).map { $0.url.lastPathComponent }
+        return WorkspaceDocumentTitle.titles(for: files)[shownFileName]
+            ?? WorkspaceDocumentTitle.formatted(shownFileName)
+    }
+
+    /// The Markdown the page shows: the writing, or the file chosen.
+    private func shownFileText(of devotional: LampDevotional) -> String {
+        guard let shownFileName else { return devotional.displayMarkdown }
+        let file = otherFiles(of: devotional).first { $0.url.lastPathComponent == shownFileName }
+        return file?.contents ?? devotional.displayMarkdown
+    }
+
+    /// One of the header's folds, as a word in its top row.
+    private func previewFold(_ title: String, isOn: Binding<Bool>) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) { isOn.wrappedValue.toggle() }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .rotationEffect(.degrees(isOn.wrappedValue ? 90 : 0))
+                Text(title)
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .foregroundStyle(Color.lampSecondaryText)
+            // The whole word opens it, as a disclosure's heading does.
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+    }
+
+    /// Whether a writing has anything to read, as against a draft with only
+    /// a title.
+    private static func hasWriting(_ devotional: LampDevotional) -> Bool {
+        !devotional.displayMarkdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// The column a writing is read in, in points, for a text size.
@@ -1131,7 +1166,7 @@ struct DevotionalsView: View {
             Label(hasOtherFiles ? "No Prose Yet" : "Nothing Written Yet", systemImage: "text.alignleft")
         } description: {
             if hasOtherFiles {
-                Text("The work so far is in this writing’s other files, below.")
+                Text("The work so far is in this writing’s other files.")
             } else {
                 Text(devotional.isEditable
                     ? "Open this draft in the editor to start writing."
@@ -1142,6 +1177,12 @@ struct DevotionalsView: View {
                 Button("Edit") { beginEditing(devotional) }
                     .buttonStyle(.lampProminent)
                     .controlSize(.small)
+            }
+            // Nothing written here yet, but something written beside it.
+            // The same picker as the header's, so the reader chooses which
+            // rather than being handed whichever happened to be first.
+            if hasOtherFiles {
+                previewFilesMenu(devotional)
             }
         }
         .frame(maxWidth: .infinity, alignment: .center)

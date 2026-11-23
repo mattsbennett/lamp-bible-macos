@@ -1373,6 +1373,17 @@ extension TipTapEditorCoordinator {
 
     fileprivate func applyViewMode() {
         evaluate("window.editorAPI.setMode(\"\(viewMode.rawValue)\")")
+        // The page leaves 200 points above a writing it is reading, for the
+        // phone, where a floating header lies over the page. Here the
+        // writing's own header is a band above it with a rule under it, so
+        // that much space read as the page having failed to draw.
+        let top = viewMode == .read ? 24 : 0
+        evaluate(
+            "document.documentElement.style.setProperty('--read-top-padding', '\(top)px')"
+        )
+        // Going into read takes the marks off, and coming out puts back
+        // whatever this page was holding.
+        applyReviewMarks()
     }
 }
 
