@@ -2989,7 +2989,13 @@ struct DevotionalEditorView: View {
                 // that can, and marking the remainder as committed had
                 // it written down later against the text it was made
                 // in, with nothing having proved it at all.
-                var again = owing.pending(kept ? owed : pending)
+                //
+                // A write that failed leaves the passages that stood owed
+                // again, and those still waiting, but not those this save
+                // found undone: owed with the rest, a retry recorded them as
+                // restored, since a retry asks no text again. They are let
+                // go whatever becomes of the record, as when nothing stood.
+                var again = owing.pending(kept ? owed : owed.union(stands))
                 again.bodyCommitted = waiting.isEmpty
                 again.cleared = cleared
                 WritingReviewObligations.shared.stillOwed(again, for: key.writingID)
