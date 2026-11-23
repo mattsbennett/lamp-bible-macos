@@ -1793,6 +1793,16 @@ private extension UTType {
 }
 
 private struct LampSlideBlockEditor: View {
+    /// What to type for each line of a figure.
+    static func figureHint(_ figure: LampPresentationFigure?) -> String? {
+        switch figure {
+        case .timeline?: "One event per line: a date, a spaced dash, and what happened — “c. 1000 BC — David king in Jerusalem”."
+        case .chiasm?: "One member per line, in order; the first pairs with the last, and an odd line is the centre."
+        case .parallel?: "Lines in pairs: each line, then the line that answers it."
+        default: nil
+        }
+    }
+
     @Binding var block: LampPresentationBlock
     /// Where an image block's picture is, so the inspector can show it.
     var imageURL: URL? = nil
@@ -1925,6 +1935,27 @@ private struct LampSlideBlockEditor: View {
                         Text("Enter one list item per line.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                    }
+                    // The lines drawn as a timeline or a passage's structure;
+                    // anything that does not know the figure shows the list.
+                    StudioStackedField("Figure") {
+                        LampSegmentedPicker(
+                            "Figure",
+                            selection: Binding(
+                                get: { block.figure == LampPresentationFigure.none ? nil : block.figure },
+                                set: { block.figure = $0 }
+                            ),
+                            items: [.init(id: nil, title: "None")]
+                                + [LampPresentationFigure.timeline, .chiasm, .parallel]
+                                    .map { .init(id: Optional($0), title: $0.displayName) }
+                        )
+                        .controlSize(.small)
+                    }
+                    if let hint = Self.figureHint(block.figure) {
+                        Text(hint)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
 

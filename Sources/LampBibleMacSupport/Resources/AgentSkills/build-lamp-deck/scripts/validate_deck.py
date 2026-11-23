@@ -135,6 +135,13 @@ SPEAKER_NOTES_SOURCES = {"authored", "manuscript"}
 TRANSITIONS = {"dissolve", "cut"}
 REVEALS = {"together", "stepwise"}
 TINTS = {"none", "duotone", "muted"}
+FIGURES = {"none", "timeline", "chiasm", "parallel"}
+MOST_TIMELINE_ENTRIES = 8
+# The layouts that draw a figure. Mirrors `LampPresentationFigure.isDrawn`.
+FIGURE_LAYOUTS = {"title-and-body", "blank", "scripture", "quotation"}
+# What divides a timeline line's date from its event: a spaced dash or a bar.
+# Mirrors `LampPresentationFigure.timelineSeparators`.
+TIMELINE_SEPARATORS = (" \u2014 ", " \u2013 ", " - ", " | ")
 # Forms of a layout, and the layouts each belongs to; mirrors
 # `LampPresentationSlideVariant.layouts`.
 VARIANTS = {
@@ -337,6 +344,61 @@ def contrast_ratio(first: str, second: str) -> float | None:
     if a is None or b is None:
         return None
     return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+
+
+def timeline_split(line: str) -> bool:
+    """Whether a timeline line has a date and an event either side of a
+    separator. Mirrors `LampPresentationFigure.timelineSplit`."""
+    found = [line.find(sep) for sep in TIMELINE_SEPARATORS if line.find(sep) != -1]
+    if not found:
+        return False
+    start = min(found)
+    sep = next(s for s in TIMELINE_SEPARATORS if line.find(s) == start)
+    return start > 0 and start + len(sep) < len(line)
+
+
+# What Lamp counts as space at a line's ends: Foundation's
+# whitespacesAndNewlines, zero-width space included, which Python's own
+# strip() keeps. And what ends a line: Swift's Character.isNewline.
+SWIFT_WHITESPACE = (
+    "\t\n\v\f\r \x85\xa0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006"
+    "\u2007\u2008\u2009\u200a\u200b\u2028\u2029\u202f\u205f\u3000"
+)
+SWIFT_NEWLINE = re.compile("\r\n|[\n\r\v\f\x85\u2028\u2029]")
+
+
+def figure_lines(text: str) -> list[str]:
+    """A figure's lines as Lamp reads them. Mirrors `listItemRuns`."""
+    lines = (line.strip(SWIFT_WHITESPACE) for line in SWIFT_NEWLINE.split(text))
+    return [line for line in lines if line]
+
+
+def figure_warnings(figure: str, block: dict, block_path: str) -> list[str]:
+    path = f"{block_path}.figure"
+    if block.get("kind") != "body":
+        return [f"{path}: only a body block is drawn as a figure; this one is drawn as it is"]
+    text = block.get("text") if isinstance(block.get("text"), str) else ""
+    lines = figure_lines(text)
+    found: list[str] = []
+    if figure == "timeline":
+        if len(lines) > MOST_TIMELINE_ENTRIES:
+            found.append(
+                f"{path}: a timeline of {len(lines)} events is too crowded to read across a slide; "
+                f"keep it to {MOST_TIMELINE_ENTRIES}, or split it across slides"
+            )
+        undated = [str(i + 1) for i, line in enumerate(lines) if not timeline_split(line)]
+        if undated:
+            found.append(
+                f"{path}: timeline line {', '.join(undated)} has no date: write each as a date, "
+                "a spaced dash, and the event, such as \u201cc. 1000 BC \u2014 David king in Jerusalem\u201d"
+            )
+    elif figure == "chiasm" and len(lines) < 3:
+        found.append(f"{path}: a chiasm needs at least three lines: a pair and its centre, or two pairs")
+    elif figure == "parallel" and len(lines) % 2 == 1:
+        found.append(
+            f"{path}: parallel lines go in pairs, and the last line here has no partner; it is drawn on its own"
+        )
+    return found
 
 
 def undrawn_in_columns(blocks: list) -> list[tuple[int, str]]:
@@ -1139,6 +1201,22 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
                         f"{block_path}.focus: a focus moves a picture behind the slide, which is cropped "
                         "to fill it; a picture beside the words is shown whole"
                     )
+            # A body block's lines drawn as a figure; anything that does not know
+            # the figure shows the lines as a list. Mirrors `figureIssues`.
+            figure = block.get("figure")
+            if figure is not None:
+                if not isinstance(figure, str):
+                    errors.append(f"{block_path}.figure: expected 'timeline', 'chiasm' or 'parallel'")
+                elif figure not in FIGURES:
+                    warnings.append(f"{block_path}.figure: {figure!r} is not a figure Lamp draws, so the lines are drawn as text")
+                elif figure != "none":
+                    warnings.extend(figure_warnings(figure, block, block_path))
+                    if kind == "body" and slide.get("layout") not in FIGURE_LAYOUTS:
+                        warnings.append(
+                            f"{block_path}.figure: a {slide.get('layout')} slide draws a figure's lines "
+                            "as a list; a figure is drawn on title-and-body, blank, scripture and "
+                            "quotation slides"
+                        )
             tint = block.get("tint")
             if tint is not None:
                 if not isinstance(tint, str):

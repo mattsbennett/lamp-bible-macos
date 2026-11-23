@@ -261,6 +261,44 @@ A scripture block may preserve the source chosen in Slide Studio with:
 
 The copied quotation remains in `text`, and its human-readable reference and translation belong in a separate `citation` block. `scriptureReference` is optional for compatibility with manually supplied quotations, but when present it is valid only on a `scripture` block and must describe a same-chapter ascending verse range.
 
+## Figures: timelines and structures
+
+A `body` block can draw its lines as a figure instead of as text. Set `figure`
+and write one entry to a line. The figure is the block's own words, so a Lamp
+that does not know the figure shows them as the list they are.
+
+A figure is drawn on `title-and-body`, `blank`, `scripture` and `quotation`
+slides. A title's line and a column are too narrow for one, so there the lines
+are drawn as a list, and Lamp warns.
+
+| `figure` | Each line | Drawn as |
+| --- | --- | --- |
+| `timeline` | A date, a spaced dash, and what happened: `c. 1000 BC — David king in Jerusalem` | Events evenly along a line in the order written, the date above in the accent, the event below. Keep to 8. |
+| `chiasm` | One member of a mirrored structure, in order: the first pairs with the last, the second with the second-last, an odd line is the centre | Lettered A, B, C … C′, B′, A′ in the accent, and stepped in toward the centre. |
+| `parallel` | Lines in pairs, as Hebrew poetry sets them: a line, then the line that answers it | Lettered A, A′, B, B′, the answering line set in beneath its partner. |
+
+```json
+{ "id": "…", "kind": "body", "figure": "timeline",
+  "text": "c. 1010 BC — David king in Hebron\nc. 1003 BC — David takes Jerusalem\nc. 966 BC — Solomon begins the temple\nc. 930 BC — The kingdom divides" }
+```
+
+- **Timeline dates are the writer's to give.** Biblical chronology is
+  disputed, so a timeline shows the dates the talk uses. It does not establish
+  them. Say "c." where a date is approximate, and keep one convention (BC/AD
+  or BCE/CE) across a deck. The dash between date and event is an em dash, an
+  en dash or a hyphen with a space on each side, or a `|`. A colon is not one,
+  so "John 3:16" never splits.
+- **A chiasm or parallel is a reading of the passage.** The writer has seen
+  that structure there, and the slide draws it; it does not prove it. Quote the
+  passage's words, or name each member with its verse
+  (`Genesis 6:10 — Noah's three sons`), so the room can check the shape against
+  the text.
+- **Each line arrives on its own click** when the slide sets `"reveal":
+  "stepwise"`: a timeline grows an event at a time, and a chiasm can be built in
+  to its centre.
+- **Emphasis works as anywhere else**, on a date, an event or a word in a
+  structure.
+
 ## Quotations
 
 Lamp sets a quotation rather than expecting you to. On `quotation`, `scripture`,
