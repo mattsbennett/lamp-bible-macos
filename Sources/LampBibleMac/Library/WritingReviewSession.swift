@@ -775,7 +775,7 @@ final class WritingReviewSession: ObservableObject {
     /// picture links were rewritten, could not answer for.
     nonisolated static func keptCopyRecord(
         of record: LampWritingReview, as copyID: String,
-        saved: String, text: String, proseTexts: [String], known: [String],
+        saved: String, current: String, text: String, proseTexts: [String], known: [String],
         relinked: (String) -> String, restores: [OwedRestore]
     ) -> (record: LampWritingReview?, waiting: [OwedRestore], dormant: [UUID: Set<UUID>]) {
         var record = record
@@ -784,17 +784,21 @@ final class WritingReviewSession: ObservableObject {
         let already = Set(record.restorations.map(\.markID))
         var sources = known
         var waiting: [OwedRestore] = []
-        // The passages each restore's text shows undone: let go, as a save
-        // of the writing lets them go, and not asked about again.
+        // The passages each restore's text shows undone, in the save and
+        // now: let go, as a save of the writing lets them go.
         var dormant: [UUID: Set<UUID>] = [:]
         var recorded = false
         var retiring = false
         for owed in restores {
             // Proved as a save of the writing proves it, by core's decision
             // (`RestorePlan.settlement`).
+            // Against what was saved, and against what the writer holds now
+            // the save is done (`current`), as a save of the writing is: a
+            // passage undone in the save and redone since waits, not let go.
             let answers = owed.restore.plan.standingByMark(from: owed.held, in: saved)
+            let now = current == saved ? answers : owed.restore.plan.standingByMark(from: owed.held, in: current)
             let (stands, unknown, undone) = LampWritingReview.RestorePlan.settlement(
-                pending: owed.pendingMarks.subtracting(already), inSaved: answers, inCurrent: answers
+                pending: owed.pendingMarks.subtracting(already), inSaved: answers, inCurrent: now
             )
             if !unknown.isEmpty { waiting.append(owed.pending(unknown)) }
             if !undone.isEmpty { dormant[owed.id] = undone }

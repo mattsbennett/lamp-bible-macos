@@ -4677,10 +4677,6 @@ struct DevotionalEditorView: View {
             // passages its text could not answer for.
             var taken: [WritingReviewSession.OwedRestore] = []
             var waiting: [WritingReviewSession.OwedRestore] = []
-            // Passages a pass found undone, by restore: let go for the rest
-            // of the keep, as a save of the writing lets them go, so words
-            // pasted back later are not taken for a restore never redone.
-            var letGo: [UUID: Set<UUID>] = [:]
             repeat {
                 await readPage()
                 snapshot = editsSnapshot()
@@ -4696,14 +4692,28 @@ struct DevotionalEditorView: View {
                     // Recorded before the marks are written, so a failure
                     // there leaves a retry writing to this copy.
                     keptCopyRevision = written.lastModified
-                    let given = taken.compactMap { owed -> WritingReviewSession.OwedRestore? in
-                        guard let gone = letGo[owed.id] else { return owed }
-                        let left = owed.pendingMarks.subtracting(gone)
-                        return left.isEmpty ? nil : owed.pending(left)
-                    }
-                    let carried = try await carryReviewMarks(of: snapshot, to: id, restores: given)
+                    // What the writer holds now the save is done, which a
+                    // save of the writing also asks about.
+                    let current = editsSnapshot().markdown
+                    let carried = try await carryReviewMarks(
+                        of: snapshot, current: current, to: id, restores: taken
+                    )
                     waiting = carried.waiting
-                    for (owed, gone) in carried.dormant { letGo[owed, default: []].formUnion(gone) }
+                    // Passages found undone are let go at once, from the
+                    // obligation itself, as a save of the writing lets them
+                    // go: so neither a later pass nor a Try Again after a
+                    // failure takes words pasted back for a redo. The change
+                    // makes one more pass, which then asks only about the
+                    // rest.
+                    for (obligation, gone) in carried.dormant {
+                        guard let owed = proseRestoresOwedHere.first(where: { $0.id == obligation }) else { continue }
+                        let left = owed.pendingMarks.subtracting(gone)
+                        if left.isEmpty {
+                            WritingReviewObligations.shared.settled(obligation, for: identifier)
+                        } else {
+                            WritingReviewObligations.shared.stillOwed(owed.pending(left), for: identifier)
+                        }
+                    }
                     // Typed while this pass was saving: another pass.
                     await readPage()
                 } else {
@@ -4757,7 +4767,7 @@ struct DevotionalEditorView: View {
     /// copy's text could not answer for, which wait for a save of the copy,
     /// and those it shows undone, which the keep lets go.
     private func carryReviewMarks(
-        of snapshot: EditsSnapshot, to copyID: String,
+        of snapshot: EditsSnapshot, current: String, to copyID: String,
         restores: [WritingReviewSession.OwedRestore]
     ) async throws -> (waiting: [WritingReviewSession.OwedRestore], dormant: [UUID: Set<UUID>]) {
         let originalID = identifier
@@ -4776,7 +4786,7 @@ struct DevotionalEditorView: View {
         return try await Task.detached(priority: .userInitiated) {
             let (carried, waiting, dormant) = WritingReviewSession.keptCopyRecord(
                 of: try store.review(writingID: originalID), as: copyID,
-                saved: saved, text: text, proseTexts: proseTexts, known: known,
+                saved: saved, current: current, text: text, proseTexts: proseTexts, known: known,
                 relinked: relinked, restores: restores
             )
             if let carried {

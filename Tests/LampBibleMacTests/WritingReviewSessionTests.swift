@@ -207,7 +207,7 @@ struct WritingReviewSessionTests {
         func pass(_ record: LampWritingReview, saved: String, as copy: String = "copy")
             -> (record: LampWritingReview?, waiting: [WritingReviewSession.OwedRestore], dormant: [UUID: Set<UUID>]) {
             WritingReviewSession.keptCopyRecord(
-                of: record, as: copy, saved: saved, text: saved, proseTexts: [new], known: [new],
+                of: record, as: copy, saved: saved, current: saved, text: saved, proseTexts: [new], known: [new],
                 relinked: { $0 }, restores: [owed]
             )
         }
@@ -243,10 +243,19 @@ struct WritingReviewSessionTests {
         // And it is said to be undone, so the keep lets it go for its
         // remaining passes: words pasted back later are not a redo.
         let undoneAsKept = WritingReviewSession.keptCopyRecord(
-            of: review, as: "copy", saved: new, text: new, proseTexts: [new], known: [new],
+            of: review, as: "copy", saved: new, current: new, text: new, proseTexts: [new], known: [new],
             relinked: { $0 }, restores: [owed]
         )
         #expect(undoneAsKept.dormant[owed.id] == [first])
+        // Undone in what the pass saved, but redone by the time the save was
+        // done: it waits for a save that holds it, as the writing's does,
+        // and is not let go.
+        let redone = WritingReviewSession.keptCopyRecord(
+            of: review, as: "copy", saved: new, current: held, text: new, proseTexts: [new], known: [new],
+            relinked: { $0 }, restores: [owed]
+        )
+        #expect(redone.dormant.isEmpty)
+        #expect(redone.waiting.contains { $0.id == owed.id && $0.pendingMarks.contains(first) })
     }
 
     /// From Codex's review of the kept copy's record: words a restore puts
@@ -278,7 +287,7 @@ struct WritingReviewSessionTests {
         )
         func pass(_ record: LampWritingReview, saved: String) -> LampWritingReview? {
             WritingReviewSession.keptCopyRecord(
-                of: record, as: "copy", saved: saved, text: saved, proseTexts: [third], known: [third],
+                of: record, as: "copy", saved: saved, current: saved, text: saved, proseTexts: [third], known: [third],
                 relinked: { $0 }, restores: [owed]
             ).record
         }
@@ -294,7 +303,7 @@ struct WritingReviewSessionTests {
         var cleared = owed
         cleared.cleared = true
         let afterClear = try #require(WritingReviewSession.keptCopyRecord(
-            of: review, as: "copy", saved: held, text: held, proseTexts: [third], known: [third],
+            of: review, as: "copy", saved: held, current: held, text: held, proseTexts: [third], known: [third],
             relinked: { $0 }, restores: [cleared]
         ).record)
         let filed = Set(once.marks.map(\.id)).subtracting(review.marks.map(\.id))
@@ -308,7 +317,7 @@ struct WritingReviewSessionTests {
         let recordedElsewhere = review.restoringWording(plan, from: third, to: held, carryingFrom: [third])
         #expect(!Set(recordedElsewhere.marks.map(\.id)).isDisjoint(with: filed))
         let overThat = try #require(WritingReviewSession.keptCopyRecord(
-            of: recordedElsewhere, as: "copy", saved: held, text: held, proseTexts: [third], known: [third],
+            of: recordedElsewhere, as: "copy", saved: held, current: held, text: held, proseTexts: [third], known: [third],
             relinked: { $0 }, restores: [cleared]
         ).record)
         #expect(filed.isSubset(of: Set(overThat.retired.map(\.id))))
@@ -318,7 +327,7 @@ struct WritingReviewSessionTests {
         // restore not proved by the copy's text: the retirement is still
         // filed, not dropped with an empty record.
         let onlyTheClear = WritingReviewSession.keptCopyRecord(
-            of: review.clearingAll(), as: "copy", saved: third, text: third, proseTexts: [third], known: [third],
+            of: review.clearingAll(), as: "copy", saved: third, current: third, text: third, proseTexts: [third], known: [third],
             relinked: { $0 }, restores: [cleared]
         ).record
         #expect(filed.isSubset(of: Set(onlyTheClear?.retired.map(\.id) ?? [])))
@@ -328,7 +337,7 @@ struct WritingReviewSessionTests {
         let readAll = review.clearingAll()
         #expect(readAll.marks.isEmpty && readAll.restorations.isEmpty && !readAll.retired.isEmpty)
         let readCopy = WritingReviewSession.keptCopyRecord(
-            of: readAll, as: "copy", saved: third, text: third, proseTexts: [third], known: [third],
+            of: readAll, as: "copy", saved: third, current: third, text: third, proseTexts: [third], known: [third],
             relinked: { $0 }, restores: []
         ).record
         #expect(readCopy != nil)
@@ -348,7 +357,7 @@ struct WritingReviewSessionTests {
             restore: WritingReviewSession.PageRestore(base: "One alpha two.", restored: putBack, plan: deletion), held: putBack
         )
         let copy = WritingReviewSession.keptCopyRecord(
-            of: recorded, as: "copy", saved: putBack, text: putBack, proseTexts: ["One alpha two."],
+            of: recorded, as: "copy", saved: putBack, current: putBack, text: putBack, proseTexts: ["One alpha two."],
             known: ["One alpha two."], relinked: { $0 }, restores: [owedDeletion]
         ).record
         #expect(copy?.restorations.contains { $0.markID == alpha } == true)
