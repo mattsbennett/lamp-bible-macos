@@ -584,6 +584,42 @@ struct AgentACPTests {
         #expect(configuration[1].params["configId"] as? String == "model")
     }
 
+    /// Shaped as `agy acp` 1.5.14 answered `session/new` and
+    /// `session/set_config_option` on 2026-11-22.
+    @Test func theCatalogueNamesModelsAndKnowsEachOnesLevels() throws {
+        let opened = try #require(JSONSerialization.jsonObject(with: Data(#"""
+        {"sessionId":"s","configOptions":[
+          {"id":"model","type":"select","currentValue":"gemini-4-neon","options":[
+            {"value":"gemini-4-neon","name":"Gemini 4 Neon"},
+            {"value":"gemini-4-argon","name":"Gemini 4 Argon"},
+            {"value":"gpt-oss-120b-medium","name":"GPT-OSS 120B (Medium)"},
+            {"value":" ","name":"blank"}]},
+          {"id":"thought_level","type":"select","currentValue":"high","options":[
+            {"value":"low","name":"Low"},{"value":"high","name":"High"},{"value":"xhigh","name":"Extra"}]}]}
+        """#.utf8)) as? [String: Any])
+        let models = try #require(AgentACPCatalogue.option("model", in: opened))
+        #expect(models.current == "gemini-4-neon")
+        #expect(models.choices.map(\.value) == ["gemini-4-neon", "gemini-4-argon", "gpt-oss-120b-medium"])
+        // A model with no thinking level reports no option for it at all.
+        let noLevels: [String: Any] = ["configOptions": [["id": "model", "currentValue": "gpt-oss-120b-medium", "options": []]]]
+        #expect(AgentACPCatalogue.option("thought_level", in: noLevels) == nil)
+
+        let neonLevels = try #require(AgentACPCatalogue.option("thought_level", in: opened)).choices
+        let catalogue = AgentACPCatalogue(
+            models: models.choices,
+            defaultModel: models.current,
+            levels: ["gemini-4-neon": neonLevels, "gpt-oss-120b-medium": []]
+        )
+        #expect(catalogue.modelName("gemini-4-argon") == "Gemini 4 Argon")
+        #expect(catalogue.modelName("typed-by-hand") == "typed-by-hand")
+        // No model chosen means the reader's default, whose levels these are.
+        #expect(catalogue.levels(for: nil)?.map(\.value) == ["low", "high", "xhigh"])
+        #expect(catalogue.levelName("xhigh", model: " ") == "Extra")
+        #expect(catalogue.levels(for: "gpt-oss-120b-medium")?.isEmpty == true)
+        // A model never read is unknown, not one without levels.
+        #expect(catalogue.levels(for: "gemini-4-argon") == nil)
+    }
+
     @Test func aWritingsLampServerComesFromItsWorkspace() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("acp-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

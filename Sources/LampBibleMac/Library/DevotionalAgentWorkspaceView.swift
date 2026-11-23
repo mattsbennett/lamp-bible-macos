@@ -163,18 +163,36 @@ enum AIProviderCommandRunner {
     /// ACP server documents: a session opens (and is closed again at once,
     /// with nothing sent). Signed out, it answers "Authentication required".
     private static func antigravityConnectionState() async -> AIProviderConnectionState {
+        await probeAntigravity(readingCatalogue: false).state
+    }
+
+    /// The models and thinking levels this reader's Antigravity offers, read
+    /// the same way: a session opened, each model selected in turn so the
+    /// session reports its levels, and closed again with nothing sent. Nil
+    /// when it could not be read, signed out included.
+    static func antigravityCatalogue() async -> AgentACPCatalogue? {
+        await probeAntigravity(readingCatalogue: true).catalogue
+    }
+
+    private static func probeAntigravity(
+        readingCatalogue: Bool
+    ) async -> (state: AIProviderConnectionState, catalogue: AgentACPCatalogue?) {
         let located = await runInLoginShell("command -v \(AIProviderCLI.antigravity.executable)")
         let path = located.output.trimmingCharacters(in: .whitespacesAndNewlines)
             .split(whereSeparator: \.isNewline).last.map(String.init) ?? ""
-        guard located.exitCode == 0, FileManager.default.isExecutableFile(atPath: path) else { return .notInstalled }
+        guard located.exitCode == 0, FileManager.default.isExecutableFile(atPath: path) else { return (.notInstalled, nil) }
         return await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
-                continuation.resume(returning: probeAntigravity(at: URL(fileURLWithPath: path)))
+                continuation.resume(returning: probeAntigravity(
+                    at: URL(fileURLWithPath: path), readingCatalogue: readingCatalogue
+                ))
             }
         }
     }
 
-    nonisolated private static func probeAntigravity(at url: URL) -> AIProviderConnectionState {
+    nonisolated private static func probeAntigravity(
+        at url: URL, readingCatalogue: Bool
+    ) -> (state: AIProviderConnectionState, catalogue: AgentACPCatalogue?) {
         let process = AgentSpawnedProcess()
         let input = Pipe()
         let output = Pipe()
@@ -185,7 +203,7 @@ enum AIProviderCommandRunner {
         process.standardOutput = output
         process.environment = AgentProcessEnvironment.cleaned(ProcessInfo.processInfo.environment)
         AgentHelperProcesses.refuseSIGPIPE(input)
-        guard (try? AgentHelperProcesses.launch(process)) != nil else { return .unavailable("Could not check") }
+        guard (try? AgentHelperProcesses.launch(process)) != nil else { return (.unavailable("Could not check"), nil) }
         defer {
             try? input.fileHandleForWriting.close()
             AgentHelperProcesses.end([process])
@@ -216,18 +234,48 @@ enum AIProviderCommandRunner {
             }
         }
         send(["id": 1, "method": "initialize", "params": AgentACPRun.initialize()])
-        guard reply(to: 1)?["result"] != nil else { return .unavailable("Could not check") }
+        guard reply(to: 1)?["result"] != nil else { return (.unavailable("Could not check"), nil) }
         send(["id": 2, "method": "session/new", "params": [
             "cwd": FileManager.default.temporaryDirectory.path, "mcpServers": [[String: Any]](),
         ]])
-        guard let opened = reply(to: 2) else { return .unavailable("Could not check") }
-        if let sessionID = (opened["result"] as? [String: Any])?["sessionId"] as? String {
-            send(["id": 3, "method": "session/close", "params": ["sessionId": sessionID]])
-            _ = reply(to: 3)
-            return .connected
+        guard let opened = reply(to: 2) else { return (.unavailable("Could not check"), nil) }
+        if let result = opened["result"] as? [String: Any], let sessionID = result["sessionId"] as? String {
+            var nextID = 3
+            var catalogue: AgentACPCatalogue?
+            if readingCatalogue, let models = AgentACPCatalogue.option("model", in: result), !models.choices.isEmpty {
+                var levels: [String: [AgentACPCatalogue.Choice]] = [:]
+                var interrupted = false
+                // Selected on this throwaway session only: a new session
+                // still opens on the reader's own default.
+                for model in models.choices {
+                    send(["id": nextID, "method": "session/set_config_option", "params": [
+                        "sessionId": sessionID, "configId": "model", "value": model.value,
+                    ]])
+                    guard let answer = reply(to: nextID) else {
+                        interrupted = true
+                        break
+                    }
+                    nextID += 1
+                    // A model it would not select is left without levels
+                    // rather than given another model's.
+                    guard let selected = answer["result"] as? [String: Any],
+                          AgentACPCatalogue.option("model", in: selected)?.current == model.value
+                    else { continue }
+                    levels[model.value] = AgentACPCatalogue.option("thought_level", in: selected)?.choices ?? []
+                }
+                // Cut off part-way, by agy exiting or the watchdog, it is no
+                // answer at all: kept, the unread models would show levels
+                // they may not have for the rest of the app's run.
+                if !interrupted {
+                    catalogue = AgentACPCatalogue(models: models.choices, defaultModel: models.current, levels: levels)
+                }
+            }
+            send(["id": nextID, "method": "session/close", "params": ["sessionId": sessionID]])
+            _ = reply(to: nextID)
+            return (.connected, catalogue)
         }
         let message = ((opened["error"] as? [String: Any])?["message"] as? String ?? "").lowercased()
-        return message.contains("authentication") ? .notConnected : .unavailable("Could not check")
+        return (message.contains("authentication") ? .notConnected : .unavailable("Could not check"), nil)
     }
 
     private static func runInLoginShell(_ command: String) async -> (

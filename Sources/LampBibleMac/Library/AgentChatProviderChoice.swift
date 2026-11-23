@@ -84,6 +84,15 @@ struct AgentChatProviderChoice: View {
     /// What the installed OpenCode says this model's variants are. Asked of
     /// the CLI, because they differ by model and are not Lamp's to name.
     @State private var variants: [String] = []
+    /// What the installed Antigravity says it offers, with its own names for
+    /// each, so the reader picks "Gemini 4 Neon" rather than typing its ID.
+    @State private var loadedCatalogue: AgentACPCatalogue?
+
+    /// Antigravity's catalogue, for Antigravity only: a chat that has just
+    /// switched provider must never offer another provider its model IDs.
+    private var antigravity: AgentACPCatalogue? {
+        wire == .antigravity ? loadedCatalogue : nil
+    }
     @State private var isEditing = false
     @State private var typed = ""
 
@@ -139,7 +148,32 @@ struct AgentChatProviderChoice: View {
     }
 
     private var offered: [String] {
-        editsTheModelsVariant ? variants : kind.offered(wire)
+        if editsTheModelsVariant { return variants }
+        if let antigravity {
+            switch kind {
+            case .model: return antigravity.models.map(\.value)
+            case .effort:
+                if let levels = antigravity.levels(for: chatModel) { return levels.map(\.value) }
+            }
+        }
+        return kind.offered(wire)
+    }
+
+    /// What a menu calls a value: the provider's own name where it gives one.
+    private func title(_ value: String) -> String {
+        guard let antigravity else { return value }
+        switch kind {
+        case .model: return antigravity.modelName(value)
+        case .effort: return antigravity.levelName(value, model: chatModel)
+        }
+    }
+
+    /// The default, named where the provider says what it is.
+    private var defaultTitle: String {
+        if kind == .model, let antigravity, let model = antigravity.defaultModel {
+            return "\(provider.shortName) default (\(antigravity.modelName(model)))"
+        }
+        return "\(provider.shortName) default"
     }
 
     private var chosen: String? { AgentChatModelChoice.canonical(value) }
@@ -148,7 +182,9 @@ struct AgentChatProviderChoice: View {
     private var isAvailable: Bool {
         switch kind {
         case .model: true
-        case .effort: AgentChatEffortChoice.isAvailable(provider: wire, model: chatModel)
+        case .effort:
+            AgentChatEffortChoice.isAvailable(provider: wire, model: chatModel)
+                && antigravity?.levels(for: chatModel)?.isEmpty != true
         }
     }
 
@@ -158,6 +194,7 @@ struct AgentChatProviderChoice: View {
         // what it would say instead is worth saying.
         picker
             .task(id: variantRequest) { await loadVariants() }
+            .task(id: wire) { await loadAntigravity() }
     }
 
     private var picker: some View {
@@ -166,7 +203,7 @@ struct AgentChatProviderChoice: View {
                 Button {
                     choose("")
                 } label: {
-                    Label("\(provider.shortName) default", systemImage: chosen == nil ? "checkmark" : "")
+                    Label(defaultTitle, systemImage: chosen == nil ? "checkmark" : "")
                 }
                 if !offered.isEmpty {
                     Divider()
@@ -174,7 +211,7 @@ struct AgentChatProviderChoice: View {
                         Button {
                             choose(option)
                         } label: {
-                            Label(option, systemImage: chosen == option ? "checkmark" : "")
+                            Label(title(option), systemImage: chosen == option ? "checkmark" : "")
                         }
                     }
                 }
@@ -190,7 +227,7 @@ struct AgentChatProviderChoice: View {
             }
         } label: {
             ChatControlMenuLabel(
-                title: chosen ?? kind.defaultLabel,
+                title: chosen.map(title) ?? kind.defaultLabel,
                 isPlaceholder: chosen == nil,
                 // Capped rather than sized to its content: a qualified model
                 // name runs to forty characters, and in the reader's sidebar
@@ -208,7 +245,7 @@ struct AgentChatProviderChoice: View {
         .fixedSize()
         .help(helpText)
         .accessibilityLabel(kind.title)
-        .accessibilityValue(chosen ?? "\(provider.shortName) default")
+        .accessibilityValue(chosen.map(title) ?? defaultTitle)
         .popover(isPresented: $isEditing, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 8) {
                 Text(kind.title).font(.headline)
@@ -244,14 +281,18 @@ struct AgentChatProviderChoice: View {
         guard let chosen else {
             return "\(kind.title): whatever \(provider.shortName) uses by default"
         }
-        return "\(kind.title): \(chosen)"
+        let named = title(chosen)
+        return named == chosen ? "\(kind.title): \(chosen)" : "\(kind.title): \(named) (\(chosen))"
     }
 
     /// Why this control cannot be set. OpenCode has no effort setting of its
     /// own — a variant of the model is where it reads one — so until a model
     /// is named there is nothing to name a variant of.
     private var unavailableReason: String {
-        "Name a model first: \(provider.shortName) sets effort as a variant of the model."
+        if antigravity?.levels(for: chatModel)?.isEmpty == true {
+            return "This model has no thinking level to set."
+        }
+        return "Name a model first: \(provider.shortName) sets effort as a variant of the model."
     }
 
     private func commit() {
@@ -283,6 +324,18 @@ struct AgentChatProviderChoice: View {
         // choice rather than on the provider's default. Chats already open keep
         // what was pinned into them.
         writtenAppDefault.wrappedValue = written
+    }
+
+    private func loadAntigravity() async {
+        guard wire == .antigravity else {
+            loadedCatalogue = nil
+            return
+        }
+        let answer = await AntigravityCatalogue.catalogue()
+        // A load the provider changed under has been replaced; its answer is
+        // for a picker no longer showing.
+        guard !Task.isCancelled else { return }
+        loadedCatalogue = answer
     }
 
     private func loadVariants() async {
@@ -356,6 +409,29 @@ enum OpenCodeVariantCatalogue {
         guard !catalogue.isEmpty else { return [] }
         byDirectory[directory.path] = catalogue
         return AgentChatOpenCodeVariants.variants(of: model, in: catalogue)
+    }
+}
+
+/// What the installed Antigravity offers, asked once for the app's run.
+///
+/// Like OpenCode's variants: a CLI does not change under a running app, the
+/// question opens an `agy acp` session, and a failed answer is not kept, so a
+/// reader who signs in while Lamp is open is asked again. Both of a chat's
+/// controls ask at once, so they share the one question in flight.
+@MainActor
+enum AntigravityCatalogue {
+    private static var known: AgentACPCatalogue?
+    private static var asking: Task<AgentACPCatalogue?, Never>?
+
+    static func catalogue() async -> AgentACPCatalogue? {
+        if let known { return known }
+        if let asking { return await asking.value }
+        let task = Task { await AIProviderCommandRunner.antigravityCatalogue() }
+        asking = task
+        let answer = await task.value
+        asking = nil
+        if let answer, !answer.models.isEmpty { known = answer }
+        return answer
     }
 }
 

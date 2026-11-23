@@ -97,7 +97,9 @@ public enum AgentChatModelChoice {
         // one picked for them need not spell it. One written here by hand
         // stands over it.
         case .openCode: "provider/model, or provider/model#variant."
-        case .antigravity: "A model ID from `agy models`, such as gemini-3.8-flash."
+        // Not as `agy models` prints them: those end in a thinking level
+        // (gemini-3.8-flash-high), which ACP's model setting does not take.
+        case .antigravity: "A model ID such as gemini-3.8-flash, with no thinking level on the end."
         }
     }
 }
@@ -177,7 +179,7 @@ public enum AgentChatEffortChoice {
         case .claude: "A level such as high. Claude Code names low to max."
         case .codex: "A value your Codex accepts for model_reasoning_effort."
         case .openCode: "A variant of this model, such as high. It is written onto the model name, which is how OpenCode is told."
-        case .antigravity: "A thinking level such as high. Antigravity names low to max, depending on the model."
+        case .antigravity: "A thinking level such as high. Which ones Antigravity offers depends on the model."
         }
     }
 }
@@ -1583,6 +1585,75 @@ public enum AgentUsageReading {
             return "at " + date.formatted(.dateTime.hour().minute())
         }
         return date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute())
+    }
+}
+
+/// The models and thinking levels the reader's own Antigravity offers, as its
+/// ACP session reports them in `configOptions`: each a value to set and the
+/// name Antigravity shows for it ("Gemini 4 Neon" for `gemini-4-neon`).
+///
+/// Asked of the CLI, never written into Lamp: which models a reader has
+/// depends on their plan and changes with Antigravity's releases. The levels
+/// differ by model — some go to Extra, some stop at High, some have none —
+/// and a session reports only the selected model's, so each model is
+/// selected in turn to read its own.
+public struct AgentACPCatalogue: Equatable, Sendable {
+    public struct Choice: Equatable, Sendable {
+        public let value: String
+        public let name: String
+
+        public init(value: String, name: String) {
+            self.value = value
+            self.name = name
+        }
+    }
+
+    public var models: [Choice]
+    /// The model a new session opens on: the reader's own default.
+    public var defaultModel: String?
+    /// Each model's thinking levels; empty for a model that has none.
+    public var levels: [String: [Choice]]
+
+    public init(models: [Choice], defaultModel: String?, levels: [String: [Choice]]) {
+        self.models = models
+        self.defaultModel = defaultModel
+        self.levels = levels
+    }
+
+    /// One select option from a `session/new` or `session/set_config_option`
+    /// result. Nil when the result does not carry it, which for
+    /// `thought_level` means the selected model has no thinking level.
+    public static func option(
+        _ id: String, in result: [String: Any]
+    ) -> (current: String?, choices: [Choice])? {
+        guard let options = result["configOptions"] as? [[String: Any]],
+              let option = options.first(where: { $0["id"] as? String == id }),
+              let listed = option["options"] as? [[String: Any]]
+        else { return nil }
+        let choices = listed.compactMap { entry -> Choice? in
+            guard let value = AgentChatModelChoice.canonical(entry["value"] as? String) else { return nil }
+            let name = AgentChatModelChoice.canonical(entry["name"] as? String) ?? value
+            return Choice(value: value, name: name)
+        }
+        return (option["currentValue"] as? String, choices)
+    }
+
+    /// What to call a value in a menu: Antigravity's name for it, or the
+    /// value itself for one it does not list, such as a name typed by hand.
+    public func modelName(_ value: String) -> String {
+        models.first { $0.value == value }?.name ?? value
+    }
+
+    /// The thinking levels a model offers, the reader's default model when
+    /// none is chosen. Nil when not known: a model typed by hand that the
+    /// catalogue never read.
+    public func levels(for model: String?) -> [Choice]? {
+        guard let model = AgentChatModelChoice.canonical(model) ?? defaultModel else { return nil }
+        return levels[model]
+    }
+
+    public func levelName(_ value: String, model: String?) -> String {
+        levels(for: model)?.first { $0.value == value }?.name ?? value
     }
 }
 
