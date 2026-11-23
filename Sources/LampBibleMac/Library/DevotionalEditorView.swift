@@ -2458,6 +2458,11 @@ struct DevotionalEditorView: View {
             guard askedIn != nil else { return }
             reviewSession?.marksDrawn(askedIn: askedIn)
         }
+        coordinator.onReviewMarksPartlyDrawn = { [weak reviewSession] in
+            let askedIn = reviewKey
+            guard askedIn != nil else { return }
+            reviewSession?.marksPartlyDrawn(askedIn: askedIn)
+        }
     }
 
     /// Takes the marks off the page, or puts them back, as the writer
@@ -2484,11 +2489,12 @@ struct DevotionalEditorView: View {
                 .disabled(reviewSession.restorable.isEmpty)
             Divider()
             // Both step by the page's own marks while it is showing, so
-            // neither can go anywhere when it has refused them.
+            // neither can go anywhere when it has refused them all; with
+            // some drawn, they step through those.
             Button("Next Change") { stepToMarkedPassage(forward: true) }
-                .disabled(reviewSession.ranges.isEmpty || reviewMarksUnshown)
+                .disabled(reviewSession.ranges.isEmpty || reviewMarksNoneShown)
             Button("Previous Change") { stepToMarkedPassage(forward: false) }
-                .disabled(reviewSession.ranges.isEmpty || reviewMarksUnshown)
+                .disabled(reviewSession.ranges.isEmpty || reviewMarksNoneShown)
         } label: {
             // Named for what it counts, and marked when none of it can
             // be drawn where it belongs: a document that looks unchanged
@@ -2514,7 +2520,21 @@ struct DevotionalEditorView: View {
         reviewSession.isUnshown && isEditingVisually
     }
 
+    /// Unshown, and none of them drawn either.
+    private var reviewMarksNoneShown: Bool {
+        reviewMarksUnshown && !reviewSession.isPartlyShown
+    }
+
     private var reviewHelp: String {
+        if reviewMarksUnshown, reviewSession.isPartlyShown {
+            // Next Change steps through those that are drawn; the rest are
+            // in the Markdown, where the record draws them all.
+            return """
+                Passages the assistant changed. Some of them this editor cannot mark \
+                in place, so what is marked here is not all of it: write in Markdown \
+                to see every one.
+                """
+        }
         if reviewMarksUnshown {
             // Not "use Next Change": that asks the page where its next
             // mark is, and the page has none — it is why this is being

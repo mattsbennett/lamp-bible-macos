@@ -329,6 +329,10 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     var onReviewMarksRejected: (() -> Void)?
     /// The page took the marks and drew them.
     var onReviewMarksDrawn: (() -> Void)?
+    /// The page drew some of the marks and not others: one mark's markers
+    /// made the document another where they fell, so it placed the rest
+    /// without them.
+    var onReviewMarksPartlyDrawn: (() -> Void)?
     /// The review marks shown, as the writing's Markdown with markers, kept
     /// so every load puts them back: a document loaded into the page starts
     /// with none.
@@ -936,6 +940,8 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
                 self?.onReviewMarksRejected?()
             } else if placed as? Bool == true {
                 self?.onReviewMarksDrawn?()
+            } else if let partly = placed as? [String: Any], (partly["unshown"] as? Int ?? 0) > 0 {
+                self?.onReviewMarksPartlyDrawn?()
             }
         }
     }

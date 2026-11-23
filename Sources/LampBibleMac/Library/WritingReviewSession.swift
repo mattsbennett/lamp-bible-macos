@@ -255,6 +255,12 @@ final class WritingReviewSession: ObservableObject {
     /// "the assistant changed this paragraph and nobody can show you".
     /// That is the one thing marks exist to tell them.
     @Published private(set) var isUnshown = false
+    /// With `isUnshown`: the page drew some of the marks, and not others.
+    /// One mark's markers can make the document another where they fall,
+    /// in Markdown nobody foresaw; the page then places the rest without
+    /// it, and the writer is told some are missing rather than that none
+    /// are drawn.
+    @Published private(set) var isPartlyShown = false
     /// What of those can be put back as the assistant found it, in the
     /// order they stand. Worked out with what is drawn, off the main actor,
     /// so the editor can offer a restore without asking for it: short of
@@ -385,7 +391,10 @@ final class WritingReviewSession: ObservableObject {
         // warn about — an undo that puts back text the page was happy
         // with would otherwise keep the warning over marks the writer
         // can see.
-        if isUnshown, text != self.text { isUnshown = false }
+        if isUnshown, text != self.text {
+            isUnshown = false
+            isPartlyShown = false
+        }
         guard text != self.text else { return }
         self.text = text
         guard review != nil else { return }
@@ -415,6 +424,7 @@ final class WritingReviewSession: ObservableObject {
         // Cleared again the moment anything draws, so a resend that
         // does land takes the warning with it.
         if !isUnshown, count > 0 { isUnshown = true }
+        if isPartlyShown { isPartlyShown = false }
         guard resentFor != text else { return }
         resentFor = text
         scheduleDraw()
@@ -429,6 +439,16 @@ final class WritingReviewSession: ObservableObject {
     func marksDrawn(askedIn: WritingReviewKey? = nil) {
         if let askedIn, askedIn != key { return }
         if isUnshown { isUnshown = false }
+        if isPartlyShown { isPartlyShown = false }
+    }
+
+    /// The page drew some of the marks and could not place the rest. Not a
+    /// refusal: nothing is sent again, since the same marks would part the
+    /// same way, but the writer is told what is drawn is not all of it.
+    func marksPartlyDrawn(askedIn: WritingReviewKey? = nil) {
+        if let askedIn, askedIn != key { return }
+        if !isUnshown, count > 0 { isUnshown = true }
+        if !isPartlyShown, count > 0 { isPartlyShown = true }
     }
 
     /// Something else wants the marks sent again — a restore the page
@@ -945,7 +965,10 @@ final class WritingReviewSession: ObservableObject {
         if self.ranges != ranges { self.ranges = ranges }
         // Nothing marked at all: there is nothing that could not be
         // shown. Anything else waits for the page to say it drew them.
-        if isUnshown, count == 0 { isUnshown = false }
+        if isUnshown, count == 0 {
+            isUnshown = false
+            isPartlyShown = false
+        }
         if self.count != count { self.count = count }
         if self.restorable != restorable { self.restorable = restorable }
         if agentNote != note { agentNote = note }
