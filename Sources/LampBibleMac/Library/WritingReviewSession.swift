@@ -887,7 +887,8 @@ final class WritingReviewSession: ObservableObject {
                 let changes = sendsMarks ? live.changes(in: text, ranges: ranges) : []
                 return (
                     ranges,
-                    live.located(in: text).count,
+                    // Passages as drawn, not marks: see `passageCount`.
+                    live.passageCount(in: text),
                     // Not placed, until the page can be told which
                     // passage is which.
                     //
