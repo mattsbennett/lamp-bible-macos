@@ -793,6 +793,20 @@ final class WritingReviewSession: ObservableObject {
                 pending: owed.pendingMarks.subtracting(already), inSaved: answers, inCurrent: answers
             )
             if !unknown.isEmpty { waiting.append(owed.pending(unknown)) }
+            // Cleared while owed: the words it puts back are not marked
+            // again, and the marks it would make are retired, whether or not
+            // it is recorded here. An earlier pass may have filed one before
+            // the clear, or another device's recording of this restore may
+            // have brought one into the writing's record since, and a copy
+            // synced with either keeps it unless this record retires it.
+            if owed.cleared {
+                let now = Date()
+                for mark in owed.restore.plan.marks {
+                    let id = LampWritingReview.remarkID(restoring: mark)
+                    record.marks.removeAll { $0.id == id }
+                    record.retired.append(LampWritingReview.Retirement(id: id, retiredAt: now))
+                }
+            }
             guard !stands.isEmpty else { continue }
             let standing = Set(record.marks.map(\.id))
             record = record.restoringWording(
@@ -810,18 +824,6 @@ final class WritingReviewSession: ObservableObject {
             // nothing stands.
             record.marks.removeAll { mark in
                 !standing.contains(mark.id) && mark.pieces.contains { relinked($0.text) != $0.text }
-            }
-            // Cleared while owed, so not marked again: and said so, in the
-            // marks it would have made. An earlier pass may have filed one
-            // before the clear, and a copy synced with it keeps it unless
-            // this record retires it; left out, a sync brings it back.
-            if owed.cleared {
-                let now = Date()
-                for mark in stands {
-                    record.retired.append(LampWritingReview.Retirement(
-                        id: LampWritingReview.remarkID(restoring: mark), retiredAt: now
-                    ))
-                }
             }
             // Where the restore's fresh marks are anchored.
             sources += [relinked(owed.restore.base), relinked(owed.held)]

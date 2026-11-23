@@ -295,6 +295,18 @@ struct WritingReviewSessionTests {
         #expect(filed.isSubset(of: Set(afterClear.retired.map(\.id))))
         #expect(afterClear.marks.allSatisfy { !filed.contains($0.id) })
 
+        // And where another device's recording of the restore reached the
+        // writing first, its mark standing there: the cleared restore needs
+        // no recording here, and its mark is still retired, not carried.
+        let recordedElsewhere = review.restoringWording(plan, from: third, to: held, carryingFrom: [third])
+        #expect(!Set(recordedElsewhere.marks.map(\.id)).isDisjoint(with: filed))
+        let overThat = try #require(WritingReviewSession.keptCopyRecord(
+            of: recordedElsewhere, as: "copy", saved: held, text: held, proseTexts: [third], known: [third],
+            relinked: { $0 }, restores: [cleared]
+        ).record)
+        #expect(filed.isSubset(of: Set(overThat.retired.map(\.id))))
+        #expect(overThat.marks.allSatisfy { !filed.contains($0.id) })
+
         // Only the restored passage was marked, and the writing recorded
         // the restore itself in between: the copy still gets the record.
         let only = LampWritingReview(writingID: "w").markingAssistantChange(from: "One two.", to: "One alpha two.")
