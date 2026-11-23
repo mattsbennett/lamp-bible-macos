@@ -4,6 +4,7 @@ import AppKit
 #if canImport(LampBibleMacSupport)
 import LampBibleMacSupport
 #endif
+import LampCore
 import SwiftUI
 
 /// What an agent actually said, rendered rather than printed.
@@ -37,7 +38,7 @@ struct AgentMarkdownMessageView: View {
 /// Prose shown in an AppKit text view, which — unlike separate SwiftUI texts —
 /// selects across everything it holds.
 private struct SelectableProseView: NSViewRepresentable {
-    let blocks: [DevotionalProseBlock]
+    let blocks: [LampProseBlock]
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -107,7 +108,7 @@ private struct SelectableProseView: NSViewRepresentable {
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
-        var blocks: [DevotionalProseBlock]?
+        var blocks: [LampProseBlock]?
         var openURL: OpenURLAction?
 
         /// Links open as they did when replies were SwiftUI text, through the

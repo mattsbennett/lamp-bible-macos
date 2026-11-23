@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import LampCore
 import Testing
 @testable import LampBibleMacSupport
 
@@ -72,7 +73,10 @@ struct AgentProseTextTests {
     }
 
     @Test func tablesAreRealTableCells() throws {
-        let text = AgentProseText.attributedString(for: [.table(headers: ["A", "B"], rows: [["1", "2"]])])
+        let cells: (String) -> LampProseText = { LampProseText(AttributedString($0)) }
+        let text = AgentProseText.attributedString(for: [.table(
+            headers: ["A", "B"].map(cells), rows: [["1", "2"].map(cells)]
+        )])
         let style = try #require(text.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)
         let cell = try #require(style.textBlocks.first as? NSTextTableBlock)
         #expect(cell.table.numberOfColumns == 2)

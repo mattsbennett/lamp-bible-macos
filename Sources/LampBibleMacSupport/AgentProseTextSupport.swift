@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import LampCore
 
 /// An agent's reply as one piece of styled text, so a selection can run across
 /// its paragraphs, lists, quotes and tables — separate text views can only be
@@ -11,15 +12,19 @@ import Foundation
 /// blocks.
 public enum AgentProseText {
     public enum Segment: Equatable, Sendable {
-        case prose([DevotionalProseBlock])
+        case prose([LampProseBlock])
         case code(language: String?, code: String)
     }
 
+    /// A reply read by core, as the writer's editor reads prose: a soft wrap
+    /// joins, which is how an agent writes. This app read it with a block
+    /// reader of its own, which disagreed with that editor on 77 of 138 real
+    /// writings; an agent's prose is the same prose.
     public static func segments(of markdown: String) -> [Segment] {
         var segments: [Segment] = []
-        var prose: [DevotionalProseBlock] = []
-        for block in DevotionalProseParser.parse(markdown) {
-            if case .codeBlock(let language, let code) = block {
+        var prose: [LampProseBlock] = []
+        for block in LampProse.blocks(markdown, options: .writing) {
+            if case .code(let language, let code) = block {
                 if !prose.isEmpty { segments.append(.prose(prose)) }
                 prose = []
                 segments.append(.code(language: language, code: code))
@@ -48,11 +53,11 @@ public enum AgentProseText {
     /// Prose blocks as one attributed string. Quotes and tables are TextKit 1
     /// text blocks, so it must be shown by a view using TextKit 1.
     public static func attributedString(
-        for blocks: [DevotionalProseBlock],
+        for blocks: [LampProseBlock],
         style: Style = Style()
     ) -> NSAttributedString {
         let result = NSMutableAttributedString()
-        var previous: DevotionalProseBlock?
+        var previous: LampProseBlock?
         for block in blocks {
             let piece = NSMutableAttributedString()
             append(block, to: piece, style: style)
@@ -121,13 +126,30 @@ public enum AgentProseText {
         return result
     }
 
-    /// Emphasis, inline code, strikethrough and links, read by Foundation's
-    /// Markdown parser. A line that won't parse is kept as written.
+    /// Emphasis, inline code, strikethrough and links, as core read them.
+    ///
+    /// Nothing is parsed here any more: core hands the text over with
+    /// Foundation's inline attributes already on it, where this built them
+    /// from a Markdown string of its own.
+    public static func inline(
+        _ text: LampProseText, font: NSFont, color: NSColor
+    ) -> NSAttributedString {
+        attributed(text.text, font: font, color: color)
+    }
+
+    /// The same, for a line of Markdown that did not come from core — a
+    /// caption or a label the caller has in hand as a string.
     public static func inline(_ markdown: String, font: NSFont, color: NSColor) -> NSAttributedString {
         let parsed = (try? AttributedString(
             markdown: markdown,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         )) ?? AttributedString(markdown)
+        return attributed(parsed, font: font, color: color)
+    }
+
+    private static func attributed(
+        _ parsed: AttributedString, font: NSFont, color: NSColor
+    ) -> NSAttributedString {
         let result = NSMutableAttributedString()
         for run in parsed.runs {
             let text = String(parsed[run.range].characters)
@@ -174,7 +196,7 @@ public enum AgentProseText {
     // MARK: - Blocks
 
     private static func append(
-        _ block: DevotionalProseBlock,
+        _ block: LampProseBlock,
         to result: NSMutableAttributedString,
         style: Style
     ) {
@@ -192,7 +214,7 @@ public enum AgentProseText {
             )
         case .paragraph(let text):
             appendParagraph(inline(text, font: body, color: style.foreground), to: result)
-        case .quote(let paragraphs):
+        case .quote(let blocks):
             // One block for every paragraph, so the bar beside them is unbroken.
             let bar = NSTextBlock()
             // Without a width the block isn't laid out as one, and its bar is lost.
@@ -200,24 +222,25 @@ public enum AgentProseText {
             bar.setWidth(3, type: .absoluteValueType, for: .border, edge: .minX)
             bar.setBorderColor(translucent(style.foreground, 0.3), for: .minX)
             bar.setWidth(10, type: .absoluteValueType, for: .padding, edge: .minX)
-            for (index, paragraph) in paragraphs.enumerated() {
+            // Core gives a quote its own blocks rather than a list of
+            // paragraphs, so a quoted list or heading keeps what it is.
+            let texts = quotedTexts(of: blocks)
+            for (index, text) in texts.enumerated() {
                 let paragraphStyle = NSMutableParagraphStyle()
                 paragraphStyle.textBlocks = [bar]
                 // Between its paragraphs only: below the last, the gap to the
                 // next block is set like any other.
-                paragraphStyle.paragraphSpacing = index < paragraphs.count - 1 ? 6 : 0
+                paragraphStyle.paragraphSpacing = index < texts.count - 1 ? 6 : 0
                 appendParagraph(
-                    inline(paragraph, font: body, color: style.foreground),
+                    inline(text, font: body, color: style.foreground),
                     to: result,
                     paragraphStyle: paragraphStyle
                 )
             }
-        case .bulletList(let items):
-            appendList(items.map { ("•", 0, $0) }, to: result, style: style)
-        case .numberedList(let items):
-            appendList(items.enumerated().map { ("\($0.offset + 1).", 0, $0.element) }, to: result, style: style)
-        case .nestedBulletList(let lines), .nestedNumberedList(let lines):
-            appendList(lines.map { ("•", $0.depth, $0.text) }, to: result, style: style)
+        case .list(let ordered, let start, let items):
+            var lines: [(marker: String, depth: Int, text: LampProseText)] = []
+            flatten(items, ordered: ordered, start: start, depth: 0, into: &lines)
+            appendList(lines, to: result, style: style)
         case .table(let headers, let rows):
             appendTable(headers: headers, rows: rows, to: result, style: style)
         case .rule:
@@ -232,7 +255,7 @@ public enum AgentProseText {
                 to: result,
                 paragraphStyle: paragraphStyle
             )
-        case .codeBlock(_, let code):
+        case .code(_, let code):
             // Code is shown in its own panel; reaching here means a caller
             // passed it in anyway, so it is kept rather than lost.
             appendParagraph(
@@ -242,11 +265,92 @@ public enum AgentProseText {
                 ]),
                 to: result
             )
+        case .html(let raw):
+            // An agent writes HTML now and then. Shown as the characters it
+            // wrote, which is what this app has always done with it.
+            appendParagraph(
+                inline(raw, font: body, color: style.foreground),
+                to: result
+            )
+        case .footnote(let label, let blocks):
+            appendParagraph(
+                inline("[^\(label)]:", font: body, color: style.foreground),
+                to: result
+            )
+            for inner in blocks { append(inner, to: result, style: style) }
+        case .audio(let caption, _), .picture(let caption, _):
+            // A reply's media is not fetched here; its caption says what was
+            // meant rather than leaving a gap.
+            guard !caption.isEmpty else { return }
+            appendParagraph(inline(caption, font: body, color: style.foreground), to: result)
+        }
+    }
+
+    /// A quote's text, a paragraph at a time, with anything that is not a
+    /// paragraph read for its words rather than dropped.
+    private static func quotedTexts(of blocks: [LampProseBlock]) -> [LampProseText] {
+        var out: [LampProseText] = []
+        for block in blocks {
+            switch block {
+            case .paragraph(let text), .heading(_, let text):
+                out.append(text)
+            case .quote(let inner):
+                out.append(contentsOf: quotedTexts(of: inner))
+            case .list(_, _, let items):
+                for item in items { out.append(contentsOf: quotedTexts(of: item.blocks)) }
+            case .footnote(_, let inner):
+                out.append(contentsOf: quotedTexts(of: inner))
+            case .code(_, let code):
+                out.append(LampProseText(AttributedString(code)))
+            case .html(let raw):
+                out.append(LampProseText(AttributedString(raw)))
+            case .table(let headers, let rows):
+                out.append(contentsOf: headers)
+                for row in rows { out.append(contentsOf: row) }
+            case .audio(let caption, _), .picture(let caption, _):
+                if !caption.isEmpty { out.append(LampProseText(AttributedString(caption))) }
+            case .rule:
+                break
+            }
+        }
+        return out
+    }
+
+    /// Core gives a list as a tree; this draws lines carrying a depth, and
+    /// the depth is the tree's own. A numbered list counts from the number
+    /// the writer began at.
+    private static func flatten(
+        _ items: [LampProseItem], ordered: Bool, start: Int, depth: Int,
+        into lines: inout [(marker: String, depth: Int, text: LampProseText)]
+    ) {
+        for (offset, item) in items.enumerated() {
+            var markerUsed = false
+            for block in item.blocks {
+                switch block {
+                case .paragraph(let text), .heading(_, let text):
+                    lines.append((
+                        markerUsed ? "" : (ordered ? "\(start + offset)." : "•"),
+                        depth,
+                        text
+                    ))
+                    markerUsed = true
+                case .list(let innerOrdered, let innerStart, let inner):
+                    flatten(
+                        inner, ordered: innerOrdered, start: innerStart,
+                        depth: depth + 1, into: &lines
+                    )
+                default:
+                    for text in quotedTexts(of: [block]) {
+                        lines.append((markerUsed ? "" : "•", depth, text))
+                        markerUsed = true
+                    }
+                }
+            }
         }
     }
 
     private static func appendList(
-        _ items: [(marker: String, depth: Int, text: String)],
+        _ items: [(marker: String, depth: Int, text: LampProseText)],
         to result: NSMutableAttributedString,
         style: Style
     ) {
@@ -270,8 +374,8 @@ public enum AgentProseText {
     }
 
     private static func appendTable(
-        headers: [String],
-        rows: [[String]],
+        headers: [LampProseText],
+        rows: [[LampProseText]],
         to result: NSMutableAttributedString,
         style: Style
     ) {
@@ -301,7 +405,7 @@ public enum AgentProseText {
                 }
                 let paragraphStyle = NSMutableParagraphStyle()
                 paragraphStyle.textBlocks = [cell]
-                let text = column < row.count ? row[column] : ""
+                let text = column < row.count ? row[column] : LampProseText()
                 appendParagraph(
                     inline(text, font: rowIndex == 0 ? header : body, color: style.foreground),
                     to: result,
@@ -331,7 +435,7 @@ public enum AgentProseText {
         result.append(paragraph)
     }
 
-    private static func isBoxed(_ block: DevotionalProseBlock) -> Bool {
+    private static func isBoxed(_ block: LampProseBlock) -> Bool {
         switch block {
         case .quote, .table, .rule: true
         default: false
