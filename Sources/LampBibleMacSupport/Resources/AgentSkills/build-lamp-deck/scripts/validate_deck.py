@@ -134,6 +134,7 @@ CROWDING_CEILING = 900
 SPEAKER_NOTES_SOURCES = {"authored", "manuscript"}
 TRANSITIONS = {"dissolve", "cut"}
 REVEALS = {"together", "stepwise"}
+TINTS = {"none", "duotone", "muted"}
 MANUSCRIPT_CHECKS = {"skip"}
 # Notes can only follow writing Lamp holds.
 MANUSCRIPT_SOURCE_KINDS = {"devotional", "writing"}
@@ -1076,6 +1077,31 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
                     )
                 if not nonempty(block.get("altText")):
                     warnings.append(f"{block_path}.altText: describe the image for accessibility")
+            # A focus moves the crop of a picture behind the slide; a tint is
+            # drawn on any picture. Lamp reads an unknown tint as none, but a
+            # value of the wrong type stops the deck opening.
+            focus = block.get("focus")
+            if focus is not None:
+                values = [focus.get(axis) for axis in ("x", "y")] if isinstance(focus, dict) else []
+                if len(values) != 2 or not all(
+                    isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= 1 for v in values
+                ):
+                    errors.append(f"{block_path}.focus: expected {{\"x\": 0-1, \"y\": 0-1}}")
+                elif kind != "image":
+                    warnings.append(f"{block_path}.focus: only a picture has a focus")
+                elif block.get("placement") != "background":
+                    warnings.append(
+                        f"{block_path}.focus: a focus moves a picture behind the slide, which is cropped "
+                        "to fill it; a picture beside the words is shown whole"
+                    )
+            tint = block.get("tint")
+            if tint is not None:
+                if not isinstance(tint, str):
+                    errors.append(f"{block_path}.tint: expected 'duotone' or 'muted'")
+                elif tint not in TINTS:
+                    warnings.append(f"{block_path}.tint: {tint!r} is not a tint Lamp draws, so the picture is drawn as it is")
+                elif tint != "none" and kind != "image":
+                    warnings.append(f"{block_path}.tint: only a picture can be tinted")
             placement = block.get("placement")
             if placement is not None:
                 if placement not in PLACEMENTS:

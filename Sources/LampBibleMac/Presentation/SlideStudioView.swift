@@ -1888,6 +1888,28 @@ private struct LampSlideBlockEditor: View {
                     )
                 }
                 .help("Behind the slide, Lamp chooses the colour of the words and covers the picture only as far as they need")
+                // Drawn in the deck's colours, so pictures from different
+                // places look as if they belong to one deck.
+                StudioStackedField("Tint") {
+                    LampSegmentedPicker(
+                        "Tint",
+                        selection: Binding(
+                            get: { block.tint == LampPresentationImageTint.none ? nil : block.tint },
+                            set: { block.tint = $0 }
+                        ),
+                        items: [.init(id: nil, title: "None")]
+                            + [LampPresentationImageTint.duotone, .muted].map { .init(id: Optional($0), title: $0.displayName) }
+                    )
+                    .controlSize(.small)
+                }
+                .help("Duotone draws the picture in the theme’s accent and ground; Muted quiets it toward the ground")
+                // Only a picture behind the slide is cropped, so only it has
+                // a focus to set.
+                if block.placement == .background {
+                    StudioStackedField("Focus") {
+                        StudioFocusPicker(url: imageURL, focus: $block.focus)
+                    }
+                }
             } else {
                 if block.kind == .body {
                     LampSegmentedPicker(
@@ -3041,5 +3063,79 @@ private extension Color {
             String(format: "%02X", Int((min(max(value, 0), 1) * 255).rounded()))
         }
         return "#" + channel(srgb.redComponent) + channel(srgb.greenComponent) + channel(srgb.blueComponent)
+    }
+}
+
+/// Where a picture's subject is, set by clicking it: the slide's crop keeps
+/// that point in view (`LampPresentationFocus`). A ring marks it.
+private struct StudioFocusPicker: View {
+    let url: URL?
+    @Binding var focus: LampPresentationFocus?
+    @State private var image: NSImage?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let image {
+                // The overlay is on the fitted picture itself, before the
+                // frame that caps its height: after it, the margins either
+                // side of a narrow picture counted as picture and every click
+                // was stored a little off.
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                    .overlay {
+                        GeometryReader { proxy in
+                            let shown = focus ?? .centre
+                            Color.clear
+                                .contentShape(Rectangle())
+                                .gesture(DragGesture(minimumDistance: 0).onChanged { drag in
+                                    focus = Self.focus(at: drag.location, in: proxy.size)
+                                })
+                            Circle()
+                                .fill(Color.black.opacity(0.3))
+                                .overlay { Circle().strokeBorder(Color.white, lineWidth: 2) }
+                                .frame(width: 16, height: 16)
+                                .position(x: shown.x * proxy.size.width, y: shown.y * proxy.size.height)
+                                .allowsHitTesting(false)
+                        }
+                    }
+                    .frame(maxHeight: 150)
+                    .accessibilityLabel("Picture focus")
+                    .accessibilityValue(focus.map { "\(Int($0.x * 100))% across, \(Int($0.y * 100))% down" } ?? "Centre")
+            }
+            HStack {
+                Text("Click where the subject is; the crop keeps it in view.")
+                    .font(.caption)
+                    .foregroundStyle(Color.lampSecondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 6)
+                Button("Centre") { focus = nil }
+                    .buttonStyle(.lampSecondary)
+                    .controlSize(.small)
+                    .disabled(focus == nil)
+            }
+        }
+        // Read again when the file changes as well as when the path does: a
+        // reimported deck can replace a picture under the same name, and
+        // focus clicked on the old one would be saved against the new.
+        .task(id: PictureIdentity(url: url, modified: url.flatMap(LampFileModification.date(of:)))) {
+            image = url.flatMap(NSImage.init(contentsOf:))
+        }
+    }
+
+    private struct PictureIdentity: Equatable {
+        let url: URL?
+        let modified: Date?
+    }
+
+    /// The point clicked, as fractions of the picture, held inside it and
+    /// rounded to a hundredth so a drag does not write noise into the deck.
+    private static func focus(at point: CGPoint, in size: CGSize) -> LampPresentationFocus {
+        func fraction(_ value: CGFloat, _ length: CGFloat) -> Double {
+            guard length > 0 else { return 0.5 }
+            return (Double(min(max(value / length, 0), 1)) * 100).rounded() / 100
+        }
+        return LampPresentationFocus(x: fraction(point.x, size.width), y: fraction(point.y, size.height))
     }
 }

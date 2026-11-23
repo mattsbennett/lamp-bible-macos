@@ -383,6 +383,41 @@ whole slide behind everything else, on any layout:
   covered for the words to read is named: a quieter picture, or one with open
   space where the words fall, will show more of it.
 
+### Where the subject is: `focus`
+
+A picture behind the slide fills it, so what overflows is cropped: a portrait
+photograph behind a widescreen slide loses its top and bottom, often the face
+at the top. Give the picture a `focus`, the point to keep in view, as fractions
+of the picture from its top left, each 0 to 1:
+
+```json
+{ "id": "…", "kind": "image", "text": "", "assetPath": "Assets/prophet.jpg",
+  "altText": "Rembrandt's Jeremiah, head bowed", "placement": "background",
+  "focus": { "x": 0.45, "y": 0.22 } }
+```
+
+Lamp slides the crop to keep that point as near the middle as the picture
+allows, and never past the picture's edge. Absent means the centre. A picture
+beside the prose is shown whole, so a focus there does nothing, and Lamp warns.
+The words over the picture are coloured for the part the crop keeps.
+
+### A picture in the deck's colours: `tint`
+
+Pictures from different sources rarely look as if they belong together. Set
+`tint` on an image block, behind the slide or beside the prose:
+
+- **`duotone`** draws the picture in two colours, the theme's accent and its
+  ground: darks in the darker, lights in the lighter. Lamp Dark gives navy to
+  amber, Parchment brown to cream. It is a strong look. Use it for a deck's
+  run of background pictures, so they read as one set.
+- **`muted`** takes most of the colour out and washes the picture toward the
+  theme's ground. Use it for a busy photograph that should sit quietly behind
+  words.
+
+Absent, a picture is drawn as it is. The words over a tinted picture are
+coloured for it as tinted. Prefer one tint across a deck to a different one on
+each slide.
+
 ## Charts
 
 A `chart` block puts a figure from Lamp's Strong's analysis on a slide: where a
