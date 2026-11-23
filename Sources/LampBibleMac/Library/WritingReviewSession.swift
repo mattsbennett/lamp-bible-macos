@@ -91,13 +91,17 @@ final class WritingReviewObligations {
     private var clearCounts: [String: (asked: Int, made: Int)] = [:]
 
     /// `work` for a clear of `writingID`, after any clear asked before it.
+    /// Counted as a pending write until it is made, so quitting waits for
+    /// what a clear read, as it waits for the clear's own write.
     func clearing(_ writingID: String, _ work: @escaping @MainActor () async -> Void) {
         clearCounts[writingID, default: (0, 0)].asked += 1
+        LampPendingWrites.shared.begin()
         let earlier = clearing[writingID]
         clearing[writingID] = Task { @MainActor in
             await earlier?.value
             await work()
             self.clearCounts[writingID, default: (0, 0)].made += 1
+            LampPendingWrites.shared.end()
         }
     }
 
@@ -118,8 +122,12 @@ final class WritingReviewObligations {
     /// are, and in the writing's own text: a copy of the edits kept
     /// meanwhile takes the result (`keptCopyRecord`), and no clear is ever
     /// made again on a record that has gained other marks since.
-    func read(_ range: NSRange, in text: String, for key: WritingReviewKey) async {
-        let owing = owing(for: key)
+    ///
+    /// `among` names the restores owed when the clear was made: one made
+    /// after it is no business of this clear's, though the clear's result
+    /// is worked out later.
+    func read(_ range: NSRange, in text: String, for key: WritingReviewKey, among ids: Set<UUID>) async {
+        let owing = owing(for: key).filter { ids.contains($0.id) }
         guard !owing.isEmpty else { return }
         let found = await Task.detached(priority: .userInitiated) {
             owing.compactMap { owed in
@@ -577,15 +585,22 @@ final class WritingReviewSession: ObservableObject {
         // from that point touches nothing and the writer watches the
         // mark stay (core's `takingInSyntax`).
         let asked = LampWritingReviewMarkdown.takingInSyntax(range, of: text)
+        // The restores owed as the clear is made: the only ones it reads.
+        let owedNow = key.map { Set(WritingReviewObligations.shared.owing(for: $0).map(\.id)) } ?? []
         if let key { WritingReviewObligations.shared.wasCleared(for: key) }
-        let written = change(drawsAnyway: drawsAnyway) { $0.clearing(asked, in: text, carryingFrom: known) }
+        let landed = Landed()
+        let written = change(drawsAnyway: drawsAnyway, { $0.clearing(asked, in: text, carryingFrom: known) }) {
+            landed.value = $0
+        }
         guard let key else { return }
         // After the write to the writing's record, what the clear read of the
         // marks its owed restores make again, which that record does not
-        // hold: one after another, so a keep can wait for them.
+        // hold: one after another, so a keep can wait for them. Not for a
+        // clear whose write did not land: it read nothing in the writing.
         WritingReviewObligations.shared.clearing(writingID) {
             await written?.value
-            await WritingReviewObligations.shared.read(asked, in: text, for: key)
+            guard landed.value else { return }
+            await WritingReviewObligations.shared.read(asked, in: text, for: key, among: owedNow)
         }
     }
 
@@ -926,7 +941,8 @@ final class WritingReviewSession: ObservableObject {
                     && !record.clearances.contains { $0.id == part.id }
             }
             if !parts.isEmpty {
-                record.clearances += parts
+                // In the copy's links, as the copy's marks are.
+                record.clearances += parts.map { Self.relinked($0, from: owed.held, by: relinked) }
                 // Where they are anchored.
                 sources.append(relinked(owed.held))
                 retiring = true
@@ -968,6 +984,34 @@ final class WritingReviewSession: ObservableObject {
         }
         carried.writingID = copyID
         return (carried, waiting, dormant)
+    }
+
+    /// Whether a write landed, said by `change` after it returns its task.
+    private final class Landed { var value = false }
+
+    /// A clearance worked out in the writing's own text (`owed.held`, whose
+    /// picture links name the writing), rewritten for the copy's: its words
+    /// and their context relinked, its place moved by what relinking
+    /// changed before it, anchored in the relinked text. So it is placed in
+    /// the copy as the copy's own marks are, carried from relinked texts.
+    nonisolated static func relinked(
+        _ clearance: LampWritingReview.Clearance, from held: String, by relinked: (String) -> String
+    ) -> LampWritingReview.Clearance {
+        let source = held as NSString
+        let target = relinked(held)
+        let anchor = LampWritingReview.digest(of: target)
+        let pieces = clearance.pieces.map { piece -> LampWritingReview.Piece in
+            let hint = min(max(0, piece.hint), source.length)
+            let moved = (relinked(source.substring(to: hint)) as NSString).length
+            return LampWritingReview.Piece(
+                text: relinked(piece.text), before: relinked(piece.before), after: relinked(piece.after),
+                hint: moved, anchoredIn: piece.anchoredIn == nil ? nil : anchor
+            )
+        }
+        return LampWritingReview.Clearance(
+            id: clearance.id, markID: clearance.markID, pieces: pieces,
+            version: clearance.version, clearedAt: clearance.clearedAt
+        )
     }
 
     /// The marks `owed` makes again over unread words it put back, alone,

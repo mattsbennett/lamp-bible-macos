@@ -480,6 +480,28 @@ struct WritingReviewSessionTests {
         #expect(holds(typed.merged(with: once)) == holds(typed))
     }
 
+    /// From Codex's review: a clear of part of a restore's words, worked out
+    /// in the writing's own text, is rewritten into the copy's picture links
+    /// before it is filed there, words, context and place, so it lands where
+    /// the copy's own marks do.
+    @Test func aPartClearanceIsRelinkedForTheCopy() {
+        let held = "![p](lamp-media://W/p) dog dog"
+        let second = (held as NSString).range(of: "dog", options: .backwards)
+        let piece = LampWritingReview.Piece(
+            text: "dog", before: "![p](lamp-media://W/p) dog ", after: "",
+            hint: second.location, anchoredIn: LampWritingReview.digest(of: held)
+        )
+        let clearance = LampWritingReview.Clearance(markID: UUID(), pieces: [piece], clearedAt: Date())
+        let relink: (String) -> String = { $0.replacingOccurrences(of: "lamp-media://W/", with: "lamp-media://copy-id/") }
+        let moved = WritingReviewSession.relinked(clearance, from: held, by: relink)
+        let target = relink(held)
+        let p = moved.pieces[0]
+        #expect(p.text == "dog" && p.before == "![p](lamp-media://copy-id/p) dog ")
+        #expect(p.hint == (target as NSString).range(of: "dog", options: .backwards).location)
+        #expect(p.anchoredIn == LampWritingReview.digest(of: target))
+        #expect(moved.id == clearance.id && moved.markID == clearance.markID)
+    }
+
     /// The page takes a block's marks off as its ✓ is pressed, so every
     /// clear from it is answered with the marks, drawn again and sent: one
     /// that changes nothing in the record, and one this cannot place,
