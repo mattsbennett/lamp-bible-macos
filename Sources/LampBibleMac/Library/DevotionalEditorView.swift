@@ -825,6 +825,10 @@ struct DevotionalEditorView: View {
     /// The copy this conflict's edits are kept in, once one is stored, so
     /// another pass or a retry writes to it rather than making a second.
     @State private var keptCopyID: String?
+    /// The text the last pass of a keep anchored the copy's marks in, which
+    /// the next pass carries them from: its own anchors may be in no text the
+    /// writing has known.
+    @State private var keptCopyText: String?
     /// When that copy was last written by this editor: later passes write
     /// over it only if it is still that copy, not one edited elsewhere.
     @State private var keptCopyRevision: Date?
@@ -4493,6 +4497,7 @@ struct DevotionalEditorView: View {
         identifier = devotional.id
         keptEdits = nil
         keptCopyID = nil
+        keptCopyText = nil
         show(devotional)
         writingHold?.release()
         writingHold = WritingChatTurns.hold(
@@ -4705,6 +4710,7 @@ struct DevotionalEditorView: View {
                     // wrote it: those edits stay, and a new copy is made.
                     kept = nil
                     keptCopyID = nil
+                    keptCopyText = nil
                     keptCopyRevision = nil
                 }
             } while kept == nil || editedFields != snapshot.fields
@@ -4726,6 +4732,7 @@ struct DevotionalEditorView: View {
             restoresMadeHere = []
             keptEdits = kept
             keptCopyID = nil
+            keptCopyText = nil
             keptCopyRevision = nil
             // The newest stored copy now, which may be later than the one
             // that set this off.
@@ -4745,9 +4752,10 @@ struct DevotionalEditorView: View {
     /// With them, `restores` that the copy's text proves: each written into
     /// the writing's record first, where its marks still stand and the plan
     /// was made, as a save of the writing would have settled it, and the
-    /// whole then carried. One write of the copy's record, worked out from
-    /// the writing's record, the snapshot and the restores alone, so filed
-    /// again by a later pass it comes out the same. Returns the passages the
+    /// whole then carried. One write of the copy's record per pass, which adds
+    /// to what earlier passes filed, as successive saves of the writing add
+    /// to its record: nothing one pass filed is dropped or contradicted by a
+    /// later one. Returns the passages the
     /// copy's text could not answer for, which wait for a save of the copy.
     /// Those it shows undone are let go before anything is written
     /// (`letGo`).
@@ -4766,14 +4774,16 @@ struct DevotionalEditorView: View {
         // The writing's own texts, where a restore's plan was made.
         let saved = snapshot.markdown
         let proseTexts = snapshot.reviewTexts
-        let known = proseTexts.map(relinked)
+        let known = proseTexts.map(relinked) + (keptCopyText.map { [$0] } ?? [])
         let text = relinked(saved)
-        let worked = try await Task.detached(priority: .userInitiated) {
-            WritingReviewSession.keptCopyRecord(
-                of: try store.review(writingID: originalID), as: copyID,
+        let (filed, worked) = try await Task.detached(priority: .userInitiated) {
+            // What an earlier pass of this keep filed, which this one adds to.
+            let filed = try? store.review(writingID: copyID)
+            return (filed, WritingReviewSession.keptCopyRecord(
+                of: try store.review(writingID: originalID), filed: filed, as: copyID,
                 saved: saved, current: current, text: text, proseTexts: proseTexts, known: known,
                 relinked: relinked, restores: restores
-            )
+            ))
         }.value
         // Before the record is written, as a save of the writing lets them go
         // whether or not its marks go down: a write that fails leaves the
@@ -4782,16 +4792,17 @@ struct DevotionalEditorView: View {
         letGo(worked.dormant)
         let carried = worked.record
         try await Task.detached(priority: .userInitiated) {
-            if let carried {
-                try store.update(writingID: copyID) { _ in carried }
-            } else if let filed = try? store.review(writingID: copyID),
-                      !filed.marks.isEmpty || !filed.restorations.isEmpty {
-                // Nothing to file now, but an earlier pass filed something
-                // for text this one no longer holds: the copy's record is
-                // what this pass worked out, which is nothing.
-                try store.update(writingID: copyID) { _ in LampWritingReview(writingID: copyID) }
+            // Nothing a pass filed is ever taken back: an earlier pass's record
+            // may have synced out already, and a sync would only bring back
+            // what a later one dropped.
+            guard let carried else { return }
+            try store.update(writingID: copyID) { now in
+                // A sync that landed since the pass read the record is joined
+                // in, not written over.
+                now == filed ? carried : carried.merged(with: now)
             }
         }.value
+        keptCopyText = text
         return worked.waiting
     }
 

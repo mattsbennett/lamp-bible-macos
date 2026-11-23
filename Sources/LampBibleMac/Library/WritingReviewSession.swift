@@ -774,13 +774,18 @@ final class WritingReviewSession: ObservableObject {
     /// recorded twice. With the passages `saved`, the copy's text before its
     /// picture links were rewritten, could not answer for.
     nonisolated static func keptCopyRecord(
-        of record: LampWritingReview, as copyID: String,
+        of record: LampWritingReview, filed: LampWritingReview? = nil, as copyID: String,
         saved: String, current: String, text: String, proseTexts: [String], known: [String],
         relinked: (String) -> String, restores: [OwedRestore]
     ) -> (record: LampWritingReview?, waiting: [OwedRestore], dormant: [UUID: Set<UUID>]) {
-        var record = record
-        // Written down for the writing itself since they were asked for:
-        // carried with the rest, and not recorded twice.
+        // What the copy's record holds already (`filed`, what earlier passes
+        // filed), joined with what the writing's has come to since, as two
+        // devices' records are joined: so each pass adds to what was filed,
+        // as successive saves of the writing add to its record, and nothing
+        // one pass filed (and may have synced out) is dropped by a later one.
+        var record = filed.map { $0.merged(with: record) } ?? record
+        // Written down for the writing itself since they were asked for, or by
+        // an earlier pass: carried with the rest, and not recorded twice.
         let already = Set(record.restorations.map(\.markID))
         var sources = known
         var waiting: [OwedRestore] = []

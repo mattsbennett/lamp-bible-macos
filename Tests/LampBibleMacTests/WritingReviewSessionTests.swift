@@ -384,6 +384,64 @@ struct WritingReviewSessionTests {
         #expect(copy?.restorations.contains { $0.markID == alpha } == true)
     }
 
+    /// Each pass of a keep adds to the record the last one filed, as each
+    /// save of the writing adds to its record: a restore one pass recorded
+    /// stays recorded, and its mark retired, after the writer undoes it and
+    /// a later pass saves the undone words, as two saves of the writing
+    /// would leave it. And no pass drops what an earlier one filed: the
+    /// earlier record joined into the later changes nothing.
+    @Test func aKeptCopyAddsToWhatEarlierPassesFiled() throws {
+        let first = "The cat sat."
+        let second = "The dog sat."
+        let third = "The bird sat."
+        let review = LampWritingReview(writingID: "w")
+            .markingAssistantChange(from: first, to: second)
+            .markingAssistantChange(from: second, to: third)
+        let latest = try #require(review.located(in: third).first { located in
+            located.ranges.contains { (third as NSString).substring(with: $0).contains("bird") }
+        }?.id)
+        guard case .plan(let plan) = review.restoring(marks: [latest], in: third) else {
+            Issue.record("the second turn's passage can be put back")
+            return
+        }
+        let held = plan.applied(to: third)
+        let owed = WritingReviewSession.OwedRestore(
+            restore: WritingReviewSession.PageRestore(base: third, restored: held, plan: plan), held: held
+        )
+        func pass(filed: LampWritingReview?, saved: String) -> LampWritingReview? {
+            WritingReviewSession.keptCopyRecord(
+                of: review, filed: filed, as: "copy", saved: saved, current: saved, text: saved,
+                proseTexts: [third], known: [third] + (filed == nil ? [] : [held]),
+                relinked: { $0 }, restores: [owed]
+            ).record
+        }
+        let once = try #require(pass(filed: nil, saved: held))
+        #expect(once.restorations.contains { $0.markID == latest })
+
+        // Undone, and the next pass saves the undone words.
+        let undone = try #require(pass(filed: once, saved: third))
+        #expect(undone.restorations.contains { $0.markID == latest })
+        #expect(undone.retired.contains { $0.id == latest })
+        #expect(!undone.marks.contains { $0.id == latest })
+        // Nothing the first pass filed is dropped by the second: joining the
+        // first's record into it adds no mark, retirement, restoration or
+        // clearance it does not hold. (Which of two retirements' times a join
+        // keeps is no part of that.)
+        func holds(_ r: LampWritingReview) -> [String] {
+            [
+                r.marks.map { "\($0.id) v\($0.version)" }.sorted().joined(separator: ","),
+                r.retired.map(\.id.uuidString).sorted().joined(separator: ","),
+                r.restorations.map(\.markID.uuidString).sorted().joined(separator: ","),
+                r.clearances.map(\.id.uuidString).sorted().joined(separator: ","),
+            ]
+        }
+        #expect(holds(undone.merged(with: once)) == holds(undone))
+
+        // And a pass that types on adds to the first likewise.
+        let typed = try #require(pass(filed: once, saved: held + " More."))
+        #expect(holds(typed.merged(with: once)) == holds(typed))
+    }
+
     /// The page takes a block's marks off as its ✓ is pressed, so every
     /// clear from it is answered with the marks, drawn again and sent: one
     /// that changes nothing in the record, and one this cannot place,
