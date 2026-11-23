@@ -205,7 +205,7 @@ struct WritingReviewSessionTests {
             restore: WritingReviewSession.PageRestore(base: new, restored: held, plan: plan), held: held
         )
         func pass(_ record: LampWritingReview, saved: String, as copy: String = "copy")
-            -> (record: LampWritingReview?, waiting: [WritingReviewSession.OwedRestore]) {
+            -> (record: LampWritingReview?, waiting: [WritingReviewSession.OwedRestore], dormant: [UUID: Set<UUID>]) {
             WritingReviewSession.keptCopyRecord(
                 of: record, as: copy, saved: saved, text: saved, proseTexts: [new], known: [new],
                 relinked: { $0 }, restores: [owed]
@@ -240,6 +240,13 @@ struct WritingReviewSessionTests {
         // it, so nothing is recorded and nothing waits.
         let undone = pass(review, saved: new)
         #expect(restored(undone.record) == 0 && undone.waiting.isEmpty)
+        // And it is said to be undone, so the keep lets it go for its
+        // remaining passes: words pasted back later are not a redo.
+        let undoneAsKept = WritingReviewSession.keptCopyRecord(
+            of: review, as: "copy", saved: new, text: new, proseTexts: [new], known: [new],
+            relinked: { $0 }, restores: [owed]
+        )
+        #expect(undoneAsKept.dormant[owed.id] == [first])
     }
 
     /// From Codex's review of the kept copy's record: words a restore puts

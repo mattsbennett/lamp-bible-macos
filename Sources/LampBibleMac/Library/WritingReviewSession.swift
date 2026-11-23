@@ -777,23 +777,27 @@ final class WritingReviewSession: ObservableObject {
         of record: LampWritingReview, as copyID: String,
         saved: String, text: String, proseTexts: [String], known: [String],
         relinked: (String) -> String, restores: [OwedRestore]
-    ) -> (record: LampWritingReview?, waiting: [OwedRestore]) {
+    ) -> (record: LampWritingReview?, waiting: [OwedRestore], dormant: [UUID: Set<UUID>]) {
         var record = record
         // Written down for the writing itself since they were asked for:
         // carried with the rest, and not recorded twice.
         let already = Set(record.restorations.map(\.markID))
         var sources = known
         var waiting: [OwedRestore] = []
+        // The passages each restore's text shows undone: let go, as a save
+        // of the writing lets them go, and not asked about again.
+        var dormant: [UUID: Set<UUID>] = [:]
         var recorded = false
         var retiring = false
         for owed in restores {
             // Proved as a save of the writing proves it, by core's decision
             // (`RestorePlan.settlement`).
             let answers = owed.restore.plan.standingByMark(from: owed.held, in: saved)
-            let (stands, unknown, _) = LampWritingReview.RestorePlan.settlement(
+            let (stands, unknown, undone) = LampWritingReview.RestorePlan.settlement(
                 pending: owed.pendingMarks.subtracting(already), inSaved: answers, inCurrent: answers
             )
             if !unknown.isEmpty { waiting.append(owed.pending(unknown)) }
+            if !undone.isEmpty { dormant[owed.id] = undone }
             // Cleared while owed: the words it puts back are not marked
             // again, and the marks it would make are retired, whether or not
             // it is recorded here. An earlier pass may have filed one before
@@ -842,10 +846,10 @@ final class WritingReviewSession: ObservableObject {
         // the marks it ends, however little else is left.
         guard recorded || retiring || !carried.marks.isEmpty || !carried.restorations.isEmpty
                 || !carried.retired.isEmpty || !carried.clearances.isEmpty else {
-            return (nil, waiting)
+            return (nil, waiting, dormant)
         }
         carried.writingID = copyID
-        return (carried, waiting)
+        return (carried, waiting, dormant)
     }
 
     /// A restore the surface made that no save has carried to storage

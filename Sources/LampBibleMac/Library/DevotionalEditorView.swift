@@ -4677,6 +4677,10 @@ struct DevotionalEditorView: View {
             // passages its text could not answer for.
             var taken: [WritingReviewSession.OwedRestore] = []
             var waiting: [WritingReviewSession.OwedRestore] = []
+            // Passages a pass found undone, by restore: let go for the rest
+            // of the keep, as a save of the writing lets them go, so words
+            // pasted back later are not taken for a restore never redone.
+            var letGo: [UUID: Set<UUID>] = [:]
             repeat {
                 await readPage()
                 snapshot = editsSnapshot()
@@ -4692,7 +4696,14 @@ struct DevotionalEditorView: View {
                     // Recorded before the marks are written, so a failure
                     // there leaves a retry writing to this copy.
                     keptCopyRevision = written.lastModified
-                    waiting = try await carryReviewMarks(of: snapshot, to: id, restores: taken)
+                    let given = taken.compactMap { owed -> WritingReviewSession.OwedRestore? in
+                        guard let gone = letGo[owed.id] else { return owed }
+                        let left = owed.pendingMarks.subtracting(gone)
+                        return left.isEmpty ? nil : owed.pending(left)
+                    }
+                    let carried = try await carryReviewMarks(of: snapshot, to: id, restores: given)
+                    waiting = carried.waiting
+                    for (owed, gone) in carried.dormant { letGo[owed, default: []].formUnion(gone) }
                     // Typed while this pass was saving: another pass.
                     await readPage()
                 } else {
@@ -4743,11 +4754,12 @@ struct DevotionalEditorView: View {
     /// whole then carried. One write of the copy's record, worked out from
     /// the writing's record, the snapshot and the restores alone, so filed
     /// again by a later pass it comes out the same. Returns the passages the
-    /// copy's text could not answer for, which wait for a save of the copy.
+    /// copy's text could not answer for, which wait for a save of the copy,
+    /// and those it shows undone, which the keep lets go.
     private func carryReviewMarks(
         of snapshot: EditsSnapshot, to copyID: String,
         restores: [WritingReviewSession.OwedRestore]
-    ) async throws -> [WritingReviewSession.OwedRestore] {
+    ) async throws -> (waiting: [WritingReviewSession.OwedRestore], dormant: [UUID: Set<UUID>]) {
         let originalID = identifier
         let store = LampWritingReviewStore(rootURL: model.library.rootURL)
         // Relinked alike in the texts the marks are carried from and the one
@@ -4762,7 +4774,7 @@ struct DevotionalEditorView: View {
         let known = proseTexts.map(relinked)
         let text = relinked(saved)
         return try await Task.detached(priority: .userInitiated) {
-            let (carried, waiting) = WritingReviewSession.keptCopyRecord(
+            let (carried, waiting, dormant) = WritingReviewSession.keptCopyRecord(
                 of: try store.review(writingID: originalID), as: copyID,
                 saved: saved, text: text, proseTexts: proseTexts, known: known,
                 relinked: relinked, restores: restores
@@ -4776,7 +4788,7 @@ struct DevotionalEditorView: View {
                 // what this pass worked out, which is nothing.
                 try store.update(writingID: copyID) { _ in LampWritingReview(writingID: copyID) }
             }
-            return waiting
+            return (waiting, dormant)
         }.value
     }
 
