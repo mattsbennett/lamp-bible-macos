@@ -331,9 +331,20 @@ public struct WritingEditorFocus: Equatable, Sendable {
 /// thousand writes in a row read back one date. Every check of whether
 /// something moved reads through here, so a URL kept and asked again, now or
 /// after a later change, still sees the file as it is.
+///
+/// By `stat(2)` through `LampFileIdentity`, rather than
+/// `attributesOfItem`, which builds a dictionary of every attribute to hand
+/// back one of them. The six-second local-work probe asks this of every file
+/// of every workspace — 96 ms at two hundred and fifty of them, measured —
+/// and this is most of that. The freshness is the same: both read the file
+/// each time, which is the whole point of this type.
 public enum LampFileModification {
     public static func date(of url: URL) -> Date? {
-        (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+        guard let identity = try? LampFileIdentity(url: url) else { return nil }
+        return Date(
+            timeIntervalSince1970: Double(identity.modifiedSeconds)
+                + Double(identity.modifiedNanoseconds) / 1_000_000_000
+        )
     }
 }
 
