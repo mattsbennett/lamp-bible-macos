@@ -1232,7 +1232,16 @@ extension LibrarySyncController {
             )
         }.value
         result.gathered.local = described.files
-        result.gaps += described.unreadable
+        // Said to the pass rather than only to the person: a path left out of
+        // the locals reads as one this Mac does not hold, so the plan used to
+        // fetch the server's copy and install it over the file it could not
+        // read (`lamp-bible-core/Documentation/decisions/0013`).
+        //
+        // And *only* to the pass, which reports a line per refused path —
+        // adding them to `gaps` as well put each unreadable file in the
+        // status line twice, and two of them crowded out whatever else had
+        // gone wrong in the pass.
+        for gap in described.unreadable { result.gathered.refused[gap.path] = gap.reason }
         result.gaps += LampSyncLocalFiles.unresolved(
             media.missing, candidates: media.candidates, manifest: manifest
         )
