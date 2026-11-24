@@ -22,9 +22,16 @@ struct WritingSaveKey: FocusedValueKey {
     typealias Value = WritingSave
 }
 
-/// What ⌘S does in the editor, and whether there is anything for it to do.
+/// What ⌘S does in the editor.
+///
+/// Always safe to press. Where something is waiting to be written it is
+/// written now; where nothing is — which is most of the time, the writing
+/// having saved itself a second and a half ago — pressing it does nothing,
+/// and doing nothing is the point. An item disabled for having nothing to
+/// save leaves ⌘S unclaimed, and AppKit answers an unclaimed shortcut with
+/// the system error sound: that is how a writing that was safely saved came
+/// to beep at the writer for asking.
 struct WritingSave {
-    let canSave: Bool
     let save: () -> Void
 }
 
@@ -188,9 +195,14 @@ struct LampBibleCommands: Commands {
             // In this group rather than `CommandGroup(replacing: .saveItem)`:
             // that placement rendered nothing at all in a running copy, since
             // the app is not document-based and has no save item to replace.
+            //
+            // Enabled whenever a writing editor is in front, whether or not
+            // anything is waiting to be written, so that the shortcut is
+            // always claimed and never beeps; greyed out elsewhere in Lamp,
+            // where there is nothing for ⌘S to mean.
             Button("Save") { writingSave?.save() }
                 .keyboardShortcut("s", modifiers: .command)
-                .disabled(writingSave?.canSave != true)
+                .disabled(writingSave == nil)
         }
 
         // Only a writing window has a find bar, so elsewhere these stay off.

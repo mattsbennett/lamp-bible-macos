@@ -1270,10 +1270,7 @@ struct DevotionalEditorView: View {
         // ⌘S lives in the File menu now, not on a toolbar button: see
         // `WritingSaveKey`. What it saves is whatever is open here — the
         // writing, or the workspace file in front of it.
-        .focusedSceneValue(
-            \.writingSave,
-            WritingSave(canSave: activeDocumentCanSave, save: saveActiveDocument)
-        )
+        .focusedSceneValue(\.writingSave, WritingSave(save: saveActiveDocument))
         .onChange(of: activeFindTarget.map(ObjectIdentifier.init), initial: true) {
             find.attach(activeFindTarget)
         }
@@ -3690,7 +3687,17 @@ struct DevotionalEditorView: View {
 
     // MARK: - Persistence
 
+    /// ⌘S: writes whatever is open here, and nothing when there is nothing
+    /// to write.
+    ///
+    /// The guard is why it can be pressed at any time. Without it a reflex
+    /// ⌘S over a saved writing would write the file again, which is a new
+    /// revision for sync to carry and a conflict to settle on another
+    /// device, for no change in the words. A file changed outside Lamp is
+    /// held back the same way: that is a conflict to answer in the status
+    /// bar, not something to overwrite from a shortcut.
     private func saveActiveDocument() {
+        guard activeDocumentCanSave else { return }
         if let selectedWorkspaceDocumentID {
             saveWorkspaceDocument(selectedWorkspaceDocumentID)
         } else {
