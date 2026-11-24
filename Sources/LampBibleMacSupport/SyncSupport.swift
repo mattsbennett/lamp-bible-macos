@@ -67,14 +67,30 @@ public enum LampWorkspaceSync {
     /// On the owner because it reads the live library: a workspace read while
     /// a pane was part-way through rewriting its skills or context would be
     /// published half-written.
+    /// `record`, where one is given, is filled with what the export would
+    /// have placed and the files are left where they are — see
+    /// `WorkspaceExportRecord`. The side effects are unchanged either way:
+    /// each workspace's file ledger is still saved and its document
+    /// deletions still recorded, which is why this runs on every pass rather
+    /// than being replaced by path arithmetic in the caller.
     @WritingWorkspaceFiles
     public static func exportPortableWorkspaces(
         from libraryRoot: URL,
         to backupRoot: URL,
         writingFolder: WritingFolder = .backup,
         installID: String = LampInstallIdentity.current(),
+        recording record: WorkspaceExportRecord? = nil,
         fileManager: FileManager = .default
     ) throws {
+        // A record and a backup are different jobs and cannot be done at
+        // once: a backup must hold every byte in its own layout, while a
+        // record deliberately leaves most files where they are, and the
+        // decks a backup carries are copied without being recorded. Asking
+        // for both would quietly give neither.
+        precondition(
+            record == nil || writingFolder == .perFile,
+            "a workspace export records what it would place only for a per-file pass"
+        )
         let portableRoot = backupRoot
             .appendingPathComponent(portableDirectoryName, isDirectory: true)
         let catalogRoot = WorkspaceSkillStore.catalogDirectory(in: libraryRoot)
@@ -86,6 +102,9 @@ public enum LampWorkspaceSync {
                 to: portableRoot
                     .appendingPathComponent("Skills", isDirectory: true)
                     .appendingPathComponent(skill.lastPathComponent, isDirectory: true),
+                recordingUnder: backupRoot,
+                into: record,
+                staging: true,
                 fileManager: fileManager
             )
         }
@@ -111,11 +130,20 @@ public enum LampWorkspaceSync {
 
             for document in try childFiles(of: workspace, fileManager: fileManager)
             where isPortableDocument(document) {
+                // Copied even when the rest is recorded, and the *copy* is
+                // what goes into the record: see
+                // `snapshotsWhatCanChangeUnderAPass`. A document's digest is
+                // the agreedDigest a later pass judges "edited here since"
+                // by, so what was hashed has to be what was sent, whatever a
+                // pane or an agent writes meanwhile.
                 try copyPreservingModificationDate(
                     from: document,
                     to: portableWorkspace
                         .appendingPathComponent("Documents", isDirectory: true)
                         .appendingPathComponent(document.lastPathComponent),
+                    recordingUnder: backupRoot,
+                    into: record,
+                    staging: true,
                     fileManager: fileManager
                 )
             }
@@ -123,14 +151,26 @@ public enum LampWorkspaceSync {
             try copyTree(
                 from: workspace.appendingPathComponent("context", isDirectory: true),
                 to: portableWorkspace.appendingPathComponent("Context", isDirectory: true),
+                recordingUnder: backupRoot,
+                into: record,
                 fileManager: fileManager
             )
 
+            // Staged, not recorded: a pane rewrites this the moment somebody
+            // ticks a skill. `isPlainFile` rather than `fileExists`, which
+            // follows a link: recording a symlink's own path would have a
+            // pass read, hash and publish whatever it pointed at, where
+            // copying one left the scratch enumeration to skip it.
+            // `childFiles` and `copyTree` exclude links already; this was the
+            // one path reached without them.
             let selection = WorkspaceSkillStore.selectionURL(in: workspace)
-            if fileManager.fileExists(atPath: selection.path) {
+            if isPlainFile(selection) {
                 try copyPreservingModificationDate(
                     from: selection,
                     to: portableWorkspace.appendingPathComponent("EnabledSkills.json"),
+                    recordingUnder: backupRoot,
+                    into: record,
+                    staging: true,
                     fileManager: fileManager
                 )
             }
@@ -141,9 +181,15 @@ public enum LampWorkspaceSync {
                     .appendingPathComponent("revisions", isDirectory: true),
                 to: portableWorkspace.appendingPathComponent("Revisions", isDirectory: true),
                 allowedExtensions: ["json"],
+                recordingUnder: backupRoot,
+                into: record,
                 fileManager: fileManager
             )
 
+            // Written rather than placed: a transcript is re-encoded on the
+            // way out, so there is no live file that holds those bytes. It
+            // goes into the staging directory either way, and is recorded
+            // from there.
             try exportConversations(
                 from: workspace,
                 to: portableWorkspace.appendingPathComponent(
@@ -151,6 +197,8 @@ public enum LampWorkspaceSync {
                     isDirectory: true
                 ),
                 installID: installID,
+                recordingUnder: backupRoot,
+                into: record,
                 fileManager: fileManager
             )
 
@@ -160,11 +208,29 @@ public enum LampWorkspaceSync {
             try recordDocumentDeletions(deleted, inWorkspace: workspace, libraryRoot: libraryRoot, fileManager: fileManager)
             try fileLedger.save(in: workspace)
             if !fileLedger.isEmpty {
-                // Possibly all that's left of the workspace to send.
-                try fileManager.createDirectory(at: portableWorkspace, withIntermediateDirectories: true)
-                try fileLedger.portable.write(
-                    to: portableWorkspace.appendingPathComponent(WorkspaceFileLedger.portableFilename)
+                // Possibly all that's left of the workspace to send. Written,
+                // not placed: these bytes exist nowhere else.
+                let published = Self.path(
+                    of: portableWorkspace
+                        .appendingPathComponent(WorkspaceFileLedger.portableFilename),
+                    under: backupRoot
                 )
+                // Staged by its published path's digest where a record is
+                // being kept, as a transcript is: two workspace folder names
+                // differing only in case are two published paths and one
+                // file on a case-insensitive scratch volume, so the second
+                // workspace's deletions would go up under both names.
+                let ledgerFile = if let record, let published {
+                    Self.stagedURL(for: published, under: backupRoot)
+                } else {
+                    portableWorkspace
+                        .appendingPathComponent(WorkspaceFileLedger.portableFilename)
+                }
+                try fileManager.createDirectory(
+                    at: ledgerFile.deletingLastPathComponent(), withIntermediateDirectories: true
+                )
+                try fileLedger.portable.write(to: ledgerFile)
+                if let record, let published { record.place(ledgerFile, at: published) }
             }
         }
     }
@@ -348,6 +414,8 @@ public enum LampWorkspaceSync {
         from workspace: URL,
         to destination: URL,
         installID: String,
+        recordingUnder root: URL? = nil,
+        into record: WorkspaceExportRecord? = nil,
         fileManager: FileManager
     ) throws {
         let source = AgentChatTranscriptStore.directory(in: workspace)
@@ -357,14 +425,29 @@ public enum LampWorkspaceSync {
             // An unreadable transcript stays where it is rather than spreading.
             guard let transcript = try? AgentChatTranscriptStore.decode(Data(contentsOf: url))
             else { continue }
-            let target = destination.appendingPathComponent(url.lastPathComponent)
+            let published = Self.path(
+                of: destination.appendingPathComponent(url.lastPathComponent), under: root ?? destination
+            )
+            // Written where the record can tell two published paths apart,
+            // for the same reason a document is staged there: two transcript
+            // names differing only in case are two published paths and one
+            // file on a case-insensitive scratch volume, so the second would
+            // go up under both names.
+            let target = if let record, let root, let published {
+                Self.stagedURL(for: published, under: root)
+            } else {
+                destination.appendingPathComponent(url.lastPathComponent)
+            }
             try ensureSafeDestination(target, fileManager: fileManager)
-            try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+            try fileManager.createDirectory(
+                at: target.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
             // Stamped on the way out, so the other Mac can tell the session is
             // this one's even if the transcript predates ownership being recorded.
             try AgentChatTranscriptStore
                 .encode(transcript.attributingSession(toInstall: installID))
                 .write(to: target, options: .atomic)
+            if let record, let published { record.place(target, at: published) }
         }
     }
 
@@ -498,6 +581,9 @@ public enum LampWorkspaceSync {
         from source: URL,
         to destination: URL,
         allowedExtensions: Set<String>? = nil,
+        recordingUnder root: URL? = nil,
+        into record: WorkspaceExportRecord? = nil,
+        staging: Bool = false,
         fileManager: FileManager
     ) throws {
         guard isSafeDirectory(source),
@@ -523,6 +609,9 @@ public enum LampWorkspaceSync {
             try copyPreservingModificationDate(
                 from: url,
                 to: destination.appendingPathComponent(String(path.dropFirst(prefix.count))),
+                recordingUnder: root,
+                into: record,
+                staging: staging,
                 fileManager: fileManager
             )
         }
@@ -563,6 +652,153 @@ public enum LampWorkspaceSync {
                 fileManager: fileManager
             )
         }
+    }
+
+    /// What an export placed, and where it came from, for a caller that
+    /// wants the paths rather than a second copy of the files.
+    ///
+    /// A pass stages a workspace so the exporter — the one place that knows
+    /// what each published path is — decides the paths, and then enumerates
+    /// what it wrote. Copying the files to do that was 2.9 s at two hundred
+    /// and fifty workspaces, which with the per-pass compile cached and the
+    /// hashing identity-keyed made it the largest thing a pass does. The cost
+    /// is **per file, not per byte**: `copyItem` on APFS clones, so hard
+    /// linking instead measured *slower* (4.8 s — tried and reverted), and
+    /// what is left is five or so syscalls a file, fifteen thousand times.
+    ///
+    /// So a pass records instead: the path mapping stays exactly where it
+    /// was, and nothing is copied for the kinds whose live file is what
+    /// would be published anyway. What a writer can rewrite mid-pass is
+    /// still copied — see `snapshotsWhatCanChangeUnderAPass`.
+    public final class WorkspaceExportRecord: @unchecked Sendable {
+        private let lock = NSLock()
+        private var files: [(path: String, url: URL)] = []
+        /// Where each path sits in `files`, so placing a path a second time
+        /// replaces the first without a scan. A linear `removeAll` here cost
+        /// more than the copying this record was written to remove: at two
+        /// hundred and fifty workspaces it is fifteen thousand files, and the
+        /// gather measured 7.1 s of string comparisons against 2.9 s of
+        /// actual copies.
+        private var placements: [String: Int] = [:]
+
+        public init() {}
+
+        func place(_ source: URL, at path: String) {
+            lock.lock()
+            defer { lock.unlock() }
+            if let placement = placements[path] {
+                files[placement] = (path, source)
+                return
+            }
+            placements[path] = files.count
+            files.append((path, source))
+        }
+
+        /// Everything the export placed, by its path within the backup root.
+        public var placed: [(path: String, url: URL)] {
+            lock.lock()
+            defer { lock.unlock() }
+            return files
+        }
+    }
+
+    /// Whether a file is one this may record or one it must snapshot.
+    ///
+    /// A recorded path is read again later, at the gather and at the upload,
+    /// so recording the live file is only sound where nothing rewrites the
+    /// file at that path in between.
+    ///
+    /// The upload no longer trusts the gather's digest — it takes its own
+    /// copy and hashes that (`lamp-bible-core/Documentation/decisions/0009`),
+    /// which is what makes a *recorded* path safe at all. What that does not
+    /// buy is a path whose file is rewritten under the reader between the two:
+    /// the digest the plan was made from would describe bytes nobody holds,
+    /// and the pass would publish a file the plan never saw.
+    ///
+    /// Recorded, because the path's bytes are fixed: a revision (written once
+    /// under a timestamped name) and a context file (content-addressed and
+    /// read-only).
+    ///
+    /// Snapshotted, because a writer can rewrite them mid-pass: a document
+    /// (a pane, an agent or a command-line tool), a custom skill
+    /// (`WorkspaceSkillStore.saveSkill`) and the enabled-skills selection
+    /// (`WorkspaceSkillStore.writeSelection`, on every tick of a checkbox).
+    /// Those are five or six
+    /// files a workspace against fifty-odd revisions, so the copy costs
+    /// almost nothing and buys the whole question away.
+    ///
+    /// Transcripts and the portable ledger are produced into the scratch
+    /// directory in any case: there is no live file holding those bytes.
+    private static let snapshotsWhatCanChangeUnderAPass = true
+
+    /// A real file, not a link to one and not a directory.
+    private static func isPlainFile(_ url: URL) -> Bool {
+        guard let values = try? url.resourceValues(
+            forKeys: [.isRegularFileKey, .isSymbolicLinkKey]
+        ) else { return false }
+        return values.isRegularFile == true && values.isSymbolicLink != true
+    }
+
+    /// Places a file: copied, or recorded where a record is being kept.
+    ///
+    /// `staging` copies it even then, and records the copy — for a file that
+    /// can be rewritten at its path while the pass runs. See
+    /// `snapshotsWhatCanChangeUnderAPass`.
+    private static func copyPreservingModificationDate(
+        from source: URL,
+        to destination: URL,
+        recordingUnder root: URL? = nil,
+        into record: WorkspaceExportRecord? = nil,
+        staging: Bool = false,
+        fileManager: FileManager
+    ) throws {
+        guard let record, let root, let path = Self.path(of: destination, under: root) else {
+            try copyPreservingModificationDate(
+                from: source, to: destination, fileManager: fileManager
+            )
+            return
+        }
+        if !staging {
+            record.place(source, at: path)
+            return
+        }
+        // Staged under the published path's own digest rather than at the
+        // destination, because two published paths can want the same file
+        // there. A library on a case-sensitive volume can hold both
+        // `Outline.md` and `outline.md`; the scratch directory is on the
+        // system volume, which is case-insensitive, so the second copy
+        // replaces the first and both paths would be published with the
+        // second one's bytes. Caught by a Codex review. Nothing reads this
+        // tree by name any more — the record carries the mapping — so the
+        // name only has to be unique per published path.
+        let staged = Self.stagedURL(for: path, under: root)
+        try copyPreservingModificationDate(
+            from: source, to: staged, fileManager: fileManager
+        )
+        record.place(staged, at: path)
+    }
+
+    /// Where a staged copy of `path` goes: one directory per published path,
+    /// named by its digest, so no two published paths share a file.
+    static func stagedURL(for path: String, under root: URL) -> URL {
+        let digest = SHA256.hash(data: Data(path.utf8))
+            .map { String(format: "%02x", $0) }.joined().prefix(20)
+        return root
+            .appendingPathComponent(stagedDirectoryName, isDirectory: true)
+            .appendingPathComponent(String(digest), isDirectory: true)
+            .appendingPathComponent((path as NSString).lastPathComponent)
+    }
+
+    /// Holds the staged copies of files a pass publishes from a snapshot.
+    /// Hidden, so a tree walk that skips hidden files does not meet it.
+    private static let stagedDirectoryName = ".staged"
+
+    /// Where `destination` sits inside `root`, or nil if it does not.
+    private static func path(of destination: URL, under root: URL) -> String? {
+        let prefix = root.standardizedFileURL.path + "/"
+        let path = destination.standardizedFileURL.path
+        guard path.hasPrefix(prefix) else { return nil }
+        return String(path.dropFirst(prefix.count))
     }
 
     private static func copyPreservingModificationDate(

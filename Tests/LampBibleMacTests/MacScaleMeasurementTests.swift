@@ -35,6 +35,18 @@ struct MacScaleMeasurementTests {
         ProcessInfo.processInfo.environment[variable].flatMap(Int.init) ?? fallback
     }
 
+    /// How many regular files sit under `root`.
+    private static func files(under root: URL) -> Int {
+        (try? FileManager.default.subpathsOfDirectory(atPath: root.path)
+            .filter {
+                var isDirectory: ObjCBool = false
+                let path = root.appendingPathComponent($0).path
+                guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
+                else { return false }
+                return !isDirectory.boolValue
+            }.count) ?? 0
+    }
+
     private func timed<T>(_ body: () throws -> T) rethrows -> (value: T, ms: Double) {
         let clock = ContinuousClock()
         var result: T?
@@ -46,7 +58,8 @@ struct MacScaleMeasurementTests {
     /// A workspace as the app keeps one: documents beside a draft, a context
     /// folder, revision history, and a conversation.
     private func makeWorkspace(
-        _ index: Int, in libraryRoot: URL, documents: Int, revisions: Int
+        _ index: Int, in libraryRoot: URL, documents: Int, revisions: Int,
+        mergeable: Bool = false
     ) throws {
         let workspace = LampWritingWorkspace.url(
             libraryRootURL: libraryRoot, writingID: "scale-writing-\(index)"
@@ -66,17 +79,111 @@ struct MacScaleMeasurementTests {
         try Data("Context gathered for this writing.".utf8).write(
             to: context.appendingPathComponent("passage.md")
         )
-        // Each revision keeps the document on either side of the change,
-        // which is what makes a folder megabytes (`AgentRevisionSupport`).
-        for revision in 0..<revisions {
-            let json = """
-                {"id":"\(UUID().uuidString)","createdAt":\(1_700_000_000 + revision),
-                 "kind":"userEdit","documentPath":"draft.md",
-                 "before":"\(body.prefix(400))","after":"\(body.prefix(420))"}
-                """
-            try Data(json.utf8).write(
-                to: history.appendingPathComponent("\(1_700_000_000 + revision)-\(UUID().uuidString).json")
+        try writeRevisions(revisions, into: history, body: body, mergeable: mergeable)
+    }
+
+    /// Each revision keeps the document on either side of the change, which
+    /// is what makes a folder megabytes (`AgentRevisionSupport`).
+    ///
+    /// Encoded through `DevotionalAgentRevision` itself, and named as the
+    /// store names them. Hand-written JSON here called the two sides
+    /// `before` and `after` where the type calls them `beforeMarkdown` and
+    /// `afterMarkdown`, so every revision failed to decode and anything that
+    /// read the history measured a folder of files it was throwing away.
+    /// Caught by a Codex review of the first version of this.
+    ///
+    /// `mergeable` decides whether compaction has work to do. A real
+    /// library's history is mostly already merged, which is what the gather
+    /// should be measured against; `false` spaces the revisions two days
+    /// apart, past the policy's oldest gap of a day, so they stand.
+    private func writeRevisions(
+        _ count: Int, into history: URL, body: String, mergeable: Bool
+    ) throws {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        let step: TimeInterval = mergeable ? 10 * 60 : 2 * 86_400
+        // Aged two days, so the policy's hour-gap tier applies: ten minutes
+        // apart merges, two days apart does not.
+        let start = Date().addingTimeInterval(-2 * 86_400 - Double(count) * step)
+        for index in 0..<count {
+            // Contiguous: a run merges only where each revision's before is
+            // the one before it's after.
+            let revision = DevotionalAgentRevision(
+                createdAt: start.addingTimeInterval(Double(index) * step),
+                kind: .userEdit,
+                documentPath: "draft.md",
+                beforeMarkdown: "\(body.prefix(400)) v\(index)",
+                afterMarkdown: "\(body.prefix(400)) v\(index + 1)"
             )
+            let stamp = Int64(revision.createdAt.timeIntervalSince1970 * 1_000)
+            try encoder.encode(revision).write(
+                to: history.appendingPathComponent("\(stamp)-\(revision.id.uuidString).json")
+            )
+        }
+    }
+
+    /// What migrating and compacting every workspace costs, which is what a
+    /// pass would pay to run its preparation at the front instead of inside
+    /// its import (`lamp-bible-core/Documentation/decisions/0009` rejects
+    /// that, and this is the number).
+    ///
+    /// Its own library, with its own workspaces, because compaction deletes
+    /// the very revision files the gather above measures over. The first
+    /// call has a merge to do; the second is what a pass would pay once the
+    /// history is already merged, which is nearly every pass.
+    @Test(.enabled(if: enabled()))
+    @WritingWorkspaceFiles
+    func measuresWhatPreparingTheLibraryCosts() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-mac-prepare-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let documents = count("LAMP_SCALE_WORKSPACE_DOCUMENTS", 5)
+        let revisions = count("LAMP_SCALE_WORKSPACE_REVISIONS", 50)
+
+        // Two libraries: one with a backlog to merge, and one whose history
+        // is already as compact as the policy allows and still holds every
+        // revision. The second is the steady state — what a pass would pay
+        // every time, for nothing.
+        // A library of each kind per size. Reusing one across sizes let the
+        // smaller run compact the larger run's backlog first, so
+        // `prepareWithAMergeToDo` at 250 depended on whether 50 had run.
+        for target in sizes("LAMP_SCALE_WORKSPACES", [50, 250, 1_000]) {
+            let libraryRoot = root.appendingPathComponent("Backlog-\(target)")
+            let settledRoot = root.appendingPathComponent("Settled-\(target)")
+            for index in 0..<target {
+                try makeWorkspace(
+                    index, in: libraryRoot, documents: documents, revisions: revisions,
+                    mergeable: true
+                )
+                try makeWorkspace(
+                    index, in: settledRoot, documents: documents, revisions: revisions,
+                    mergeable: false
+                )
+            }
+            // The settled library is prepared once untimed first: a
+            // workspace with no skill selection yet has one written for it,
+            // and those one-time writes are not what a recurring pass pays.
+            try LampWorkspaceSync.prepareLibraryForSync(at: settledRoot)
+
+            let first = try timed { try LampWorkspaceSync.prepareLibraryForSync(at: libraryRoot) }
+            let again = try timed { try LampWorkspaceSync.prepareLibraryForSync(at: libraryRoot) }
+            let settled = try timed { try LampWorkspaceSync.prepareLibraryForSync(at: settledRoot) }
+            // Only the history: preparation writes skill selections beside
+            // it, and counting those as revisions overstated what compaction
+            // had kept.
+            func revisionFiles(in root: URL) -> Int {
+                (try? FileManager.default.subpathsOfDirectory(atPath: root.path)
+                    .filter { $0.hasSuffix(".json") && $0.contains(".lamp/revisions/") }.count) ?? 0
+            }
+            print("""
+                SCALE workspaces=\(target) revisions=\(revisions) \
+                prepareWithAMergeToDo=\(String(format: "%.0f", first.ms))ms \
+                prepareAlreadyMerged=\(String(format: "%.0f", again.ms))ms \
+                prepareSettledHistory=\(String(format: "%.0f", settled.ms))ms \
+                filesLeftAfterMerging=\(revisionFiles(in: libraryRoot)) \
+                filesInSettled=\(revisionFiles(in: settledRoot))
+                """)
         }
     }
 
@@ -102,14 +209,55 @@ struct MacScaleMeasurementTests {
             let staged = try timed {
                 try LampSyncLocalFiles.workspaceFiles(inLibraryAt: libraryRoot, stagingIn: scratch)
             }
+            // Every candidate the gather hands on still has to be digested.
+            let hashed = timed {
+                LampSyncLocalFiles.describe(staged.value, digests: nil)
+            }
+            // And what an identity-keyed cache would be worth if these kinds
+            // were ever trusted. `describe` skips the cache for
+            // `.workspaceFile` and `.writingDocument` both
+            // (`LampSyncFolderLayout.keepsDigestAgainstIdentity`), so
+            // running it twice over these candidates measures a warm
+            // re-read and nothing else — which is what the first version of
+            // this reported as the cached case, until a Codex review caught
+            // it. The same files offered under a kind the cache does answer
+            // for give the real figure: the second call is every digest
+            // held and not one file read.
+            let asCached = staged.value.map {
+                LampSyncLocalFiles.Candidate(path: $0.path, kind: .module(.books), url: $0.url)
+            }
+            let cache = LampSyncDigestCache()
+            _ = LampSyncLocalFiles.describe(asCached, digests: cache)
+            let fromCache = timed { LampSyncLocalFiles.describe(asCached, digests: cache) }
             let marks = timed { LampSyncLocalWork.marks(inLibraryAt: libraryRoot) }
-            let bytes = (try? FileManager.default.subpathsOfDirectory(atPath: scratch.path).count) ?? 0
+            let bytes = Self.files(under: scratch)
+            // And the same export the old way — copying everything into
+            // scratch, which is what `0008` removed — so the files are
+            // counted alike on both sides.
+            //
+            // This times the **copy alone**, where `exportAndEnumerate`
+            // times the whole gather; the old gather also walked the copied
+            // tree and built candidates from it, and that code is gone. The
+            // full old gather is the 2 980 ms in `ScalabilityPlan.md`,
+            // measured before the change. Do not read this against
+            // `exportAndEnumerate` as though they were the same work.
+            let copying = root.appendingPathComponent("copying-\(target)")
+            let byCopying = try timed {
+                try LampWorkspaceSync.exportPortableWorkspaces(
+                    from: libraryRoot, to: copying, writingFolder: .perFile
+                )
+            }
 
             #expect(staged.value.count >= target)
             print("""
                 SCALE workspaces=\(target) documents=\(documents) revisions=\(revisions) \
                 exportAndEnumerate=\(String(format: "%.0f", staged.ms))ms \
                 stagedFiles=\(bytes) candidates=\(staged.value.count) \
+                exportByCopying=\(String(format: "%.0f", byCopying.ms))ms \
+                filesByCopying=\(Self.files(under: copying)) \
+                digest=\(String(format: "%.0f", hashed.ms))ms \
+                digestIfCached=\(String(format: "%.0f", fromCache.ms))ms \
+                digested=\(hashed.value.files.count) \
                 localWorkProbe=\(String(format: "%.0f", marks.ms))ms \
                 marks=\(marks.value.count)
                 """)

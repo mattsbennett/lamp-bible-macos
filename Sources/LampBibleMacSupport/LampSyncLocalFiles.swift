@@ -244,10 +244,15 @@ extension LampSyncLocalFiles {
     /// and reimplementing it here as path arithmetic would be a second copy
     /// to drift.
     ///
-    /// So the real exporter runs into a scratch directory and what it wrote
-    /// is enumerated. Its top folder is already `Workspaces`, so each
-    /// relative path *is* the remote path. Workspace documents are small text
-    /// files, so the copy is cheap in a way a module would not be.
+    /// So the real exporter runs and says what it placed and where each file
+    /// came from (`LampWorkspaceSync.WorkspaceExportRecord`). Its top folder
+    /// is already `Workspaces`, so each relative path *is* the remote path.
+    ///
+    /// It used to copy every file into the scratch directory and enumerate
+    /// what it had written — 2.9 s at two hundred and fifty workspaces,
+    /// which made it the largest thing a pass did. Nothing is copied now
+    /// except the documents, whose digest a later pass judges an edit by, and
+    /// the transcripts and ledgers, whose bytes exist nowhere else.
     ///
     /// Decks and their images come out of the same exporter, since it calls
     /// the deck export too, and are skipped here: they are their own kinds,
@@ -264,14 +269,12 @@ extension LampSyncLocalFiles {
         fileManager: FileManager = .default
     ) throws -> [Candidate] {
         try fileManager.createDirectory(at: scratch, withIntermediateDirectories: true)
+        let record = LampWorkspaceSync.WorkspaceExportRecord()
         try LampWorkspaceSync.exportPortableWorkspaces(
-            from: libraryRoot, to: scratch, writingFolder: .perFile, fileManager: fileManager
+            from: libraryRoot, to: scratch, writingFolder: .perFile,
+            recording: record, fileManager: fileManager
         )
-        let root = scratch.appendingPathComponent(
-            LampPortableBackupLayout.workspacesDirectory, isDirectory: true
-        )
-        return tree(under: root, fileManager: fileManager).compactMap { relative, url in
-            let path = "\(LampPortableBackupLayout.workspacesDirectory)/\(relative)"
+        return record.placed.compactMap { path, url in
             switch LampSyncFolderLayout.kind(of: path) {
             case .workspaceFile:
                 return Candidate(path: path, kind: .workspaceFile, url: url)
