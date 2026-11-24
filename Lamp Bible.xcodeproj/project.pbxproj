@@ -9,8 +9,10 @@
 /* Begin PBXBuildFile section */
 		A10000000000000000000250 /* BundledSkillSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000250 /* BundledSkillSupport.swift */; };
 		A10000000000000000000900 /* LampAnimationRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000900 /* LampAnimationRenderer.swift */; };
+		A10000000000000000000902 /* LampVisuallyLosslessVideo.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000901 /* LampVisuallyLosslessVideo.swift */; };
 		A10000000000000000000251 /* BundledSkillSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000250 /* BundledSkillSupport.swift */; };
 		A10000000000000000000901 /* LampAnimationRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000900 /* LampAnimationRenderer.swift */; };
+		A10000000000000000000903 /* LampVisuallyLosslessVideo.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000901 /* LampVisuallyLosslessVideo.swift */; };
 		A10000000000000000000252 /* AgentSkills in Copy Skill Catalog */ = {isa = PBXBuildFile; fileRef = B10000000000000000000031 /* AgentSkills */; };
 		A10000000000000000000051 /* WritingChangesSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000004E /* WritingChangesSupport.swift */; };
 		A1000000000000000000022B /* WritingWriteSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000021D /* WritingWriteSupport.swift */; };
@@ -198,6 +200,7 @@
 /* Begin PBXFileReference section */
 		B10000000000000000000250 /* BundledSkillSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/BundledSkillSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000900 /* LampAnimationRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/LampAnimationRenderer.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000901 /* LampVisuallyLosslessVideo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/LampVisuallyLosslessVideo.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000001 /* LampBibleCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/App/LampBibleCommands.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000002 /* LampBibleMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/App/LampBibleMacApp.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000003 /* LibraryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMac/Library/LibraryModel.swift; sourceTree = SOURCE_ROOT; };
@@ -548,6 +551,7 @@
 				B1000000000000000000003A /* WorkspaceSkillSupport.swift */,
 				B10000000000000000000250 /* BundledSkillSupport.swift */,
 				B10000000000000000000900 /* LampAnimationRenderer.swift */,
+				B10000000000000000000901 /* LampVisuallyLosslessVideo.swift */,
 				B1000000000000000000003B /* BookReadingSupport.swift */,
 				B10000000000000000000025 /* AgentRevisionSupport.swift */,
 				B100000000000000000000F9 /* AgentProseTextSupport.swift */,
@@ -861,6 +865,7 @@
 				A1000000000000000000003F /* WorkspaceSkillSupport.swift in Sources */,
 				A10000000000000000000250 /* BundledSkillSupport.swift in Sources */,
 				A10000000000000000000900 /* LampAnimationRenderer.swift in Sources */,
+				A10000000000000000000902 /* LampVisuallyLosslessVideo.swift in Sources */,
 				A10000000000000000000040 /* BookReadingSupport.swift in Sources */,
 				A10000000000000000000027 /* AgentRevisionSupport.swift in Sources */,
 				A100000000000000000000F9 /* AgentProseTextSupport.swift in Sources */,
@@ -911,6 +916,7 @@
 				A10000000000000000000227 /* LampMCPPromptCatalog.swift in Sources */,
 				A10000000000000000000251 /* BundledSkillSupport.swift in Sources */,
 				A10000000000000000000901 /* LampAnimationRenderer.swift in Sources */,
+				A10000000000000000000903 /* LampVisuallyLosslessVideo.swift in Sources */,
 				A10000000000000000000226 /* DeckToolSupport.swift in Sources */,
 				A10000000000000000000222 /* AgentDescriptorSupport.swift in Sources */,
 				A10000000000000000000210 /* FootnoteFieldSupport.swift in Sources */,

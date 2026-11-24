@@ -17,6 +17,9 @@ struct SlidePresentationView: View {
     /// the one leaving.
     @State private var slideLayer = 0
     @State private var isBlack = false
+    /// Whether the presenter has paused the slide's clip. A new slide, or a
+    /// step back before the clip, starts it unpaused.
+    @State private var isClipPaused = false
     @State private var errorMessage: String?
     @State private var presentationStartedAt = Date()
 
@@ -43,8 +46,9 @@ struct SlidePresentationView: View {
                 )
                     .revealed(atStep: position.step)
                     // In front of the room, so a picture set to drift does,
-                    // from when this slide arrived (each has its own id).
-                    .presenting()
+                    // from when this slide arrived (each has its own id), and
+                    // a clip plays at its step.
+                    .presenting(clipPaused: isClipPaused)
                     .aspectRatio(deck.aspectRatio.ratio, contentMode: .fit)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     // One view per slide, so a change of slide is the old one
@@ -93,6 +97,7 @@ struct SlidePresentationView: View {
         }
         .onChange(of: position) { broadcastRemoteState() }
         .onChange(of: isBlack) { broadcastRemoteState() }
+        .onChange(of: isClipPaused) { broadcastRemoteState() }
         .onDisappear { remoteHost.commandHandler = nil }
         .background(SlidePresentationWindowController(handleCommand: handleKeyboardCommand))
     }
@@ -109,7 +114,17 @@ struct SlidePresentationView: View {
             goToSlide(at: visibleSlides.count - 1)
         case .toggleBlackout:
             withAnimation { isBlack.toggle() }
+        case .toggleClip:
+            toggleClip()
         }
+    }
+
+    /// Pauses or resumes the slide's clip, once it is playing.
+    private func toggleClip() {
+        guard let currentSlide, let clip = currentSlide.playedClip,
+              currentSlide.revealPlan.isPlaying(clip, atStep: position.step)
+        else { return }
+        isClipPaused.toggle()
     }
 
     private func loadDeck() {
@@ -158,6 +173,14 @@ struct SlidePresentationView: View {
             position = next
             isBlack = false
         }
+        // A pause holds while the clip is still the one playing: revealing
+        // more of its slide keeps it, and a new slide, or a step back before
+        // the clip, starts afresh.
+        let clipStillPlaying = !changesSlide && visibleSlides.indices.contains(next.slide)
+            && visibleSlides[next.slide].playedClip.map {
+                visibleSlides[next.slide].revealPlan.isPlaying($0, atStep: next.step)
+            } == true
+        if !clipStillPlaying { isClipPaused = false }
     }
 
     private func handleRemoteCommand(_ command: LampPresentationRemoteCommand) {
@@ -180,6 +203,8 @@ struct SlidePresentationView: View {
             withAnimation { isBlack = false }
         case .toggleNotes:
             break
+        case .toggleClip:
+            toggleClip()
         }
     }
 
@@ -208,7 +233,8 @@ struct SlidePresentationView: View {
                 isBlackout: isBlack,
                 canGoPrevious: position.retreated(in: visibleSlides) != nil,
                 canGoNext: position.advanced(in: visibleSlides) != nil,
-                currentRevealStep: position.step
+                currentRevealStep: position.step,
+                isClipPaused: isClipPaused
             )
         )
     }
@@ -220,6 +246,7 @@ private enum SlidePresentationKeyboardCommand: Equatable {
     case first
     case last
     case toggleBlackout
+    case toggleClip
 }
 
 private struct SlidePresentationWindowController: NSViewRepresentable {
@@ -400,6 +427,9 @@ private final class SlidePresentationWindowView: NSView {
         switch event.charactersIgnoringModifiers?.lowercased() {
         case "b", ".":
             return .presentation(.toggleBlackout)
+        // K pauses and plays, as video players have it.
+        case "k", "p":
+            return .presentation(.toggleClip)
         default:
             return nil
         }

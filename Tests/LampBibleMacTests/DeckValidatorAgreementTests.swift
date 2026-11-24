@@ -509,6 +509,39 @@ struct DeckValidatorAgreementTests {
                 .init(kind: .image, assetPath: "Assets/d.jpg", altText: "D", placement: .background, video: "Assets/d.mp4"),
             ]),
         ]),
+        // Clips: from a file, from YouTube and Vimeo, from a site Lamp does
+        // not play, with a bad start, on words, beside a looping video, and
+        // two on a slide, where the one behind it plays.
+        LampPresentationDeck(title: "Clips", slides: [
+            .init(layout: .image, blocks: [
+                .init(kind: .image, assetPath: "Assets/a.jpg", altText: "A", clip: .init(source: "Assets/a.mp4")),
+            ]),
+            .init(layout: .image, blocks: [
+                .init(kind: .image, assetPath: "Assets/b.jpg", altText: "B",
+                      clip: .init(source: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", start: 10, end: 20)),
+            ]),
+            .init(layout: .image, blocks: [
+                .init(kind: .image, assetPath: "Assets/c.jpg", altText: "C", clip: .init(source: "https://vimeo.com/76979871")),
+            ]),
+            .init(layout: .image, blocks: [
+                .init(kind: .image, assetPath: "Assets/d.jpg", altText: "D", clip: .init(source: "https://example.com/talk")),
+            ]),
+            .init(layout: .image, blocks: [
+                .init(kind: .image, assetPath: "Assets/e.jpg", altText: "E", clip: .init(source: "Assets/e.mp4", start: 30, end: 5)),
+            ]),
+            .init(layout: .titleAndBody, blocks: [
+                .init(kind: .title, text: "Heading"),
+                .init(kind: .body, text: "Words.", clip: .init(source: "Assets/f.mp4")),
+                .init(kind: .image, assetPath: "Assets/g.jpg", altText: "G", video: "Assets/g-loop.mp4",
+                      clip: .init(source: "Assets/g.mp4")),
+            ]),
+            .init(layout: .titleAndBody, blocks: [
+                .init(kind: .title, text: "Heading"),
+                .init(kind: .image, assetPath: "Assets/h.jpg", altText: "H", clip: .init(source: "Assets/h.mp4")),
+                .init(kind: .image, assetPath: "Assets/i.jpg", altText: "I", placement: .background,
+                      clip: .init(source: "https://youtu.be/dQw4w9WgXcQ")),
+            ]),
+        ]),
         // Nothing to say about a well-formed deck.
         LampPresentationDeck(title: "Clean", slides: [
             .init(layout: .titleAndBody, blocks: [

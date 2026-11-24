@@ -613,6 +613,36 @@ same `tint`, drifting if it drifts.
 - **One a slide:** a slide plays one video, the picture behind it's or else the
   first. Any other is shown as its still, and Lamp warns.
 
+### A clip the talk stops to watch: `clip`
+
+A picture can carry a clip: a video played to the room with its sound, once,
+holding on its last frame. Unlike `video`, which loops silently as a moving
+picture, a clip is content the talk pauses for.
+
+```json
+{ "id": "…", "kind": "image", "text": "", "assetPath": "Assets/interview-still.jpg",
+  "altText": "An interview with the translator",
+  "clip": { "source": "Assets/interview.mp4", "start": 12, "end": 95, "starts": "click" } }
+```
+
+- **`source`:** a file in `Assets` (`.mp4`, `.mov` or `.m4v`, up to 250 MB), or
+  a YouTube or Vimeo address. A streamed clip plays in the site's own player and
+  needs an internet connection while presenting; without one the slide shows
+  its still with a note.
+- **`start` and `end`:** seconds into the clip; leave either out for its
+  beginning or its end.
+- **`starts`:** `click` (the default) plays it on the presenter's next click,
+  after everything else on the slide has arrived; `arrival` plays it as the
+  slide appears. Clicking back stops it and returns to the still. The
+  presenter pauses and resumes it with K, or from the remote.
+- **Keep `assetPath`** as the still: shown before it plays, in thumbnails and
+  PDFs, and by older versions of Lamp. For a streamed clip, download the site's
+  thumbnail as the still (Slide Studio does this for you).
+- **One a slide:** the picture behind it's, else the first. A picture with a
+  clip plays the clip, not its `video`.
+- Choose a clip that earns the time it takes, trim it to what the talk needs,
+  and say in the notes what to listen for.
+
 ### An animation: `render_animation`
 
 For something a still cannot show — a model of the tabernacle turning, light

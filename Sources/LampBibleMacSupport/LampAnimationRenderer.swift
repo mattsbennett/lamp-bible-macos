@@ -330,8 +330,9 @@ public enum LampAnimationRenderer {
             AVVideoHeightKey: options.height,
             AVVideoCompressionPropertiesKey: [
                 AVVideoProfileLevelKey: kVTProfileLevel_HEVC_Main10_AutoLevel as String,
-                // About 4 Mbit/s at 1080p: a 20-second loop near 10 MB.
-                AVVideoAverageBitRateKey: Int(Double(options.width * options.height) * 2.0),
+                // By quality, as every video Lamp saves: no one can tell it
+                // from the page as drawn (LampVisuallyLosslessVideo).
+                AVVideoQualityKey: LampVisuallyLosslessVideo.quality,
                 AVVideoMaxKeyFrameIntervalKey: framesPerSecond,
             ],
         ])

@@ -9,6 +9,7 @@ import re
 import sys
 import unicodedata
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 
 LAYOUTS = {
@@ -806,6 +807,87 @@ def undrawn_in_layout(layout: str, blocks: list, variant: object = None) -> list
     return sorted(set(undrawn))
 
 
+def clip_origin(source):
+    """Where a clip plays from, as core's `LampPresentationClip.origin(of:)`
+    reads it: ("file", path), ("youtube", id), ("vimeo", id), or None."""
+    text = source.strip() if isinstance(source, str) else ""
+    if not text:
+        return None
+    try:
+        parts = urlsplit(text)
+    except ValueError:
+        parts = None
+    if not parts or parts.scheme.lower() not in ("http", "https") or not parts.hostname:
+        return ("file", text) if safe_asset_path(text) and video_playable(text) else None
+    host = parts.hostname.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    path = [part for part in parts.path.split("/") if part]
+    query = parse_qs(parts.query)
+
+    def youtube(video):
+        if video and len(video) == 11 and all(c.isalnum() and c.isascii() or c in "-_" for c in video):
+            return ("youtube", video)
+        return None
+
+    if host in ("youtube.com", "m.youtube.com", "music.youtube.com", "youtube-nocookie.com"):
+        if not path or path[0] == "watch":
+            return youtube((query.get("v") or [None])[0])
+        if path[0] in ("embed", "shorts", "live", "v") and len(path) >= 2:
+            return youtube(path[1])
+        return None
+    if host == "youtu.be":
+        return youtube(path[0] if path else None)
+    if host in ("vimeo.com", "player.vimeo.com"):
+        numbers = [part for part in path if part.isdigit() and part.isascii()]
+        return ("vimeo", numbers[-1]) if numbers else None
+    return None
+
+
+def clip_warnings_and_errors(clip, kind, has_video, block_path):
+    """Mirrors core's `clipIssues`."""
+    errors, warnings = [], []
+    if not isinstance(clip, dict):
+        return [f"{block_path}.clip: expected an object with a source"], []
+    source = clip.get("source")
+    text = source.strip() if isinstance(source, str) else ""
+    if not text:
+        errors.append(f"{block_path}.clip: a clip needs a source: a file such as Assets/clip.mp4, or a YouTube or Vimeo address")
+    elif clip_origin(text) is None:
+        if "://" not in text and not safe_asset_path(text):
+            errors.append(f"{block_path}.clip: use a relative path inside the presentation folder, such as Assets/clip.mp4")
+        else:
+            warnings.append(
+                f"{block_path}.clip: Lamp plays clips from .mp4, .mov and .m4v files in the deck, and from YouTube "
+                "and Vimeo; this picture is shown still"
+            )
+
+    def seconds(name):
+        value = clip.get(name)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        # A number too large for a double is one Lamp cannot read either, and
+        # reads as absent.
+        try:
+            number = float(value)
+        except OverflowError:
+            return None
+        return number if math.isfinite(number) else None
+
+    start, end = seconds("start"), seconds("end")
+    if start is not None and not (math.isfinite(start) and start >= 0):
+        errors.append(f"{block_path}.clip: a clip's start is seconds from its beginning, 0 or more")
+    if end is not None and not (math.isfinite(end) and end > 0):
+        errors.append(f"{block_path}.clip: a clip's end is seconds from its beginning, more than 0")
+    if start is not None and end is not None and math.isfinite(start) and math.isfinite(end) and end <= start:
+        errors.append(f"{block_path}.clip: a clip's end comes after its start")
+    if kind != "image":
+        warnings.append(f"{block_path}.clip: only a picture can carry a clip; this one is not played")
+    elif has_video:
+        warnings.append(f"{block_path}.clip: a picture with a clip plays the clip, not its looping video")
+    return errors, warnings
+
+
 def video_playable(path):
     """Whether Lamp plays the video at `path`, by extension, as core's
     `LampPresentationVideo.isPlayable` judges it."""
@@ -1410,6 +1492,18 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
                     f"{path}.blocks[{index}].video: a slide plays one video, the picture behind it's "
                     "or else the first; this picture is shown still"
                 )
+        clips = [
+            index for index, block in enumerate(blocks)
+            if isinstance(block, dict) and block.get("kind") == "image"
+            and isinstance(block.get("clip"), dict) and clip_origin(block["clip"].get("source")) is not None
+        ]
+        played_clip = next((index for index in clips if is_background(blocks[index])), clips[0] if clips else None)
+        for index in clips:
+            if index != played_clip:
+                warnings.append(
+                    f"{path}.blocks[{index}].clip: a slide plays one clip, the picture behind it's "
+                    "or else the first; this picture is shown still"
+                )
         block_ids: set[str] = set()
         for block_index, block in enumerate(blocks):
             block_path = f"{path}.blocks[{block_index}]"
@@ -1514,6 +1608,13 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
                     warnings.append(f"{block_path}.tint: {tint!r} is not a tint Lamp draws, so the picture is drawn as it is")
                 elif tint != "none" and kind != "image":
                     warnings.append(f"{block_path}.tint: only a picture can be tinted")
+            clip = block.get("clip")
+            if clip is not None:
+                clip_errors, clip_warnings = clip_warnings_and_errors(
+                    clip, kind, block.get("video") is not None, block_path
+                )
+                errors.extend(clip_errors)
+                warnings.extend(clip_warnings)
             # Lamp reads an unknown motion as none, so the picture is still.
             motion = block.get("motion")
             if motion is not None:
@@ -1597,6 +1698,13 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
                         f"{path}.blocks[{index}].assetPath: no file at {asset!r}; "
                         "the slide renders a placeholder until the image is delivered "
                         "beside the deck"
+                    )
+                clip = block.get("clip")
+                origin = clip_origin(clip.get("source")) if isinstance(clip, dict) else None
+                if origin and origin[0] == "file" and not (deck_directory / origin[1]).is_file():
+                    warnings.append(
+                        f"{path}.blocks[{index}].clip: no file at {origin[1]!r}; "
+                        "the picture is shown still until the clip is delivered beside the deck"
                     )
                 video = block.get("video")
                 if isinstance(video, str) and safe_asset_path(video) and not (deck_directory / video).is_file():

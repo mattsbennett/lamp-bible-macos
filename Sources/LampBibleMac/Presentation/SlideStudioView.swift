@@ -861,7 +861,9 @@ struct SlideStudioView: View {
                                                 updateScriptureCitation(citation, after: block.id)
                                             },
                                             chooseImage: { chooseImage(for: block.id) },
-                                            chooseVideo: { chooseVideo(for: block.id) },
+                                            chooseVideo: { chooseMovie(for: block.id, as: .loop) },
+                                            chooseClip: { chooseMovie(for: block.id, as: .clip) },
+                                            addClipLink: { addClipLink(for: block.id) },
                                             isPreparingVideo: preparingVideos["\(selectedSlide?.id ?? "")/\(block.id)"] != nil,
                                             remove: { removeBlock(block.id) }
                                         )
@@ -1611,7 +1613,78 @@ struct SlideStudioView: View {
               let blockIndex = deck?.slides[slideIndex].blocks.firstIndex(where: { $0.id == blockID })
         else { return }
 
-        let extensionName = source.pathExtension.isEmpty ? "img" : source.pathExtension.lowercased()
+        // A photo not already HEIC is offered as HEIC, and one larger than any
+        // slide shows at slide size: the same picture on screen, in a
+        // fraction of the space on every device the deck syncs to.
+        let smaller = Self.smallerPicture(of: source)
+        if let smaller {
+            let formatter = ByteCountFormatter()
+            let alert = NSAlert()
+            let oversized = max(smaller.width, smaller.height) > Self.largestPicturePixels
+            alert.messageText = "Save this picture as HEIC?"
+            alert.informativeText = "It is \(formatter.string(fromByteCount: smaller.bytes))"
+                + (oversized
+                    ? ", \(smaller.width) × \(smaller.height) pixels, and a slide shows at most "
+                        + "\(Self.largestPicturePixels) across. "
+                    : ". ")
+                + "Lamp can save a HEIC copy that looks the same on screen in "
+                + "\(formatter.string(fromByteCount: Int64(smaller.data.count))). Your original is left as it is."
+            alert.addButton(withTitle: "Save Smaller Copy")
+            alert.addButton(withTitle: "Use As It Is")
+            alert.addButton(withTitle: "Cancel")
+            switch alert.runModal() {
+            case .alertFirstButtonReturn: break
+            case .alertSecondButtonReturn: return copyPicture(source, data: nil, into: slideIndex, blockIndex, slideID: slideID, blockID: blockID)
+            default: return
+            }
+            return copyPicture(source, data: smaller.data, into: slideIndex, blockIndex, slideID: slideID, blockID: blockID)
+        }
+        copyPicture(source, data: nil, into: slideIndex, blockIndex, slideID: slideID, blockID: blockID)
+    }
+
+    /// The most pixels across a picture needs: a 4K display's width.
+    static let largestPicturePixels = 3_840
+
+    /// HEIC's quality for a copy no one can tell apart: measured on a 4K
+    /// picture of soft gradients, small type and grain, 0.9 kept it 41.7 dB
+    /// from its source (above the usual 40 dB mark) and 0.8 only 39.2.
+    static let pictureQuality = 0.9
+
+    /// A HEIC copy of the picture at `source`, no larger than a slide shows,
+    /// where the photo is not HEIC already or is larger than that, and the
+    /// copy comes out smaller.
+    private static func smallerPicture(of source: URL) -> (data: Data, width: Int, height: Int, bytes: Int64)? {
+        guard let image = CGImageSourceCreateWithURL(source as CFURL, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(image, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int
+        else { return nil }
+        let bytes = (try? source.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
+        let isHEIC = ["heic", "heif"].contains(source.pathExtension.lowercased())
+        guard max(width, height) > largestPicturePixels || !isHEIC else { return nil }
+        guard let scaled = CGImageSourceCreateThumbnailAtIndex(image, 0, [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: min(max(width, height), largestPicturePixels),
+        ] as CFDictionary) else { return nil }
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(data, "public.heic" as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(destination, scaled, [kCGImageDestinationLossyCompressionQuality: Self.pictureQuality] as CFDictionary)
+        guard CGImageDestinationFinalize(destination), Int64(data.length) < bytes else { return nil }
+        return (data as Data, width, height, bytes)
+    }
+
+    /// Writes the picture, as chosen or as `data` (a HEIC copy), into the
+    /// library and points the block at it.
+    private func copyPicture(
+        _ source: URL,
+        data: Data?,
+        into slideIndex: Int,
+        _ blockIndex: Int,
+        slideID: String,
+        blockID: String
+    ) {
+        let extensionName = data != nil ? "heic" : source.pathExtension.isEmpty ? "img" : source.pathExtension.lowercased()
         let name = "\(UUID().uuidString.lowercased()).\(extensionName)"
         let destination = store.assetsDirectoryURL.appendingPathComponent(name)
         do {
@@ -1619,7 +1692,7 @@ struct SlideStudioView: View {
                 at: store.assetsDirectoryURL,
                 withIntermediateDirectories: true
             )
-            try Data(contentsOf: source).write(to: destination, options: .atomic)
+            try (data ?? Data(contentsOf: source)).write(to: destination, options: .atomic)
         } catch {
             errorMessage = error.localizedDescription
             return
@@ -1636,18 +1709,33 @@ struct SlideStudioView: View {
         }
     }
 
-    /// Copies a video into the library to play in a picture's place while
-    /// presenting, and makes its first frame the picture: the still shown
-    /// everywhere else, and what the words over it are coloured for.
+    /// What a chosen video is for: a picture's silent loop, or a clip the
+    /// talk stops to watch, with its sound.
+    enum MoviePurpose {
+        case loop
+        case clip
+
+        var largestFileBytes: Int64 {
+            self == .loop ? LampPresentationVideo.largestFileBytes : LampPresentationClip.largestFileBytes
+        }
+    }
+
+    /// Copies a video into the library, as a picture's looping video or as
+    /// its clip, and makes its first frame the picture: the still shown
+    /// everywhere it is not playing, and what the words over it are
+    /// coloured for.
     ///
-    /// Kept to `LampPresentationVideo.largestFileBytes`, since every file a
-    /// deck names travels with it to each device it syncs to.
-    private func chooseVideo(for blockID: String) {
+    /// Kept to the purpose's largest size, since every file a deck names
+    /// travels with it to each device it syncs to; and offered as HEVC when
+    /// it is not, which is about half the size for the same picture.
+    private func chooseMovie(for blockID: String, as purpose: MoviePurpose) {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = LampPresentationVideo.extensions.sorted().compactMap { UTType(filenameExtension: $0) }
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        panel.message = "Choose a short video to play, silent and looping, while this slide is presented."
+        panel.message = purpose == .loop
+            ? "Choose a short video to play, silent and looping, while this slide is presented."
+            : "Choose a clip to play, with its sound, when the slide reaches it."
         guard panel.runModal() == .OK, let source = panel.url else { return }
         // Block ids are unique within a slide, not across the deck, so the
         // block is found again in the slide it was chosen on.
@@ -1657,21 +1745,39 @@ struct SlideStudioView: View {
             return
         }
         let formatter = ByteCountFormatter()
-        let limit = formatter.string(fromByteCount: LampPresentationVideo.largestFileBytes)
+        let limit = formatter.string(fromByteCount: purpose.largestFileBytes)
         let size = (try? source.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
-        // Too large to copy as it is: offered smaller, in HEVC, silent and
-        // no larger than 1080p, which usually brings a clip to a fraction of
-        // its size at a picture the room cannot tell apart.
-        let reencodes = size > LampPresentationVideo.largestFileBytes
-        if reencodes {
+        let what = purpose == .loop ? "videos" : "clips"
+        let reencodes: Bool
+        if size > purpose.largestFileBytes {
+            // Too large to copy as it is: offered in HEVC at a quality no one
+            // can tell from the original, which usually brings it to a
+            // fraction of its size.
             let alert = NSAlert()
             alert.messageText = "Make this video smaller?"
-            alert.informativeText = "It is \(formatter.string(fromByteCount: size)). A deck's videos travel with it to "
-                + "every device it syncs to, so Lamp keeps each to \(limit). Lamp can save a smaller copy, "
-                + "silent and at most 1080p; your original is left as it is."
+            alert.informativeText = "It is \(formatter.string(fromByteCount: size)). A deck's \(what) travel with it to "
+                + "every device it syncs to, so Lamp keeps each to \(limit). Lamp can save a copy in HEVC that looks "
+                + "the same\(purpose == .loop ? ", without sound" : ""); your original is left as it is."
             alert.addButton(withTitle: "Make Smaller")
             alert.addButton(withTitle: "Cancel")
             guard alert.runModal() == .alertFirstButtonReturn else { return }
+            reencodes = true
+        } else if !Self.isHEVC(source) {
+            let alert = NSAlert()
+            alert.messageText = "Save this video as HEVC?"
+            alert.informativeText = "HEVC keeps a picture no one can tell from this one in about half the space, so the "
+                + "deck syncs faster and takes less room on every device. Lamp saves a copy, up to 4K; your original "
+                + "is left as it is."
+            alert.addButton(withTitle: "Save as HEVC")
+            alert.addButton(withTitle: "Use As It Is")
+            alert.addButton(withTitle: "Cancel")
+            switch alert.runModal() {
+            case .alertFirstButtonReturn: reencodes = true
+            case .alertSecondButtonReturn: reencodes = false
+            default: return
+            }
+        } else {
+            reencodes = false
         }
 
         let assets = store.assetsDirectoryURL
@@ -1689,12 +1795,32 @@ struct SlideStudioView: View {
                 try FileManager.default.createDirectory(at: assets, withIntermediateDirectories: true)
                 let still = try await Self.firstFrameJPEG(of: source)
                 if reencodes {
-                    try await Self.smallerCopy(of: source, to: video)
-                    let made = (try? video.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
-                    guard made <= LampPresentationVideo.largestFileBytes else {
+                    var made = try await LampVisuallyLosslessVideo.encode(
+                        source, to: video, keepingSound: purpose == .clip
+                    )
+                    // Too large at up to 4K: offered at 1080p, which still
+                    // looks the same at the size most rooms see it.
+                    if made.bytes > purpose.largestFileBytes, max(made.width, made.height) > 1_920 {
+                        let alert = NSAlert()
+                        alert.messageText = "Save it at 1080p?"
+                        alert.informativeText = "At full size this video is \(formatter.string(fromByteCount: made.bytes)), "
+                            + "over Lamp's \(limit) for a deck's \(what). At 1080p it keeps every detail a projector "
+                            + "or a 1080p screen shows, in less space."
+                        alert.addButton(withTitle: "Save at 1080p")
+                        alert.addButton(withTitle: "Cancel")
+                        guard alert.runModal() == .alertFirstButtonReturn else {
+                            try? FileManager.default.removeItem(at: video)
+                            return
+                        }
+                        made = try await LampVisuallyLosslessVideo.encode(
+                            source, to: video, keepingSound: purpose == .clip, largestSide: 1_920
+                        )
+                    }
+                    guard made.bytes <= purpose.largestFileBytes else {
                         try? FileManager.default.removeItem(at: video)
-                        errorMessage = "Even smaller, this video is \(formatter.string(fromByteCount: made)), over "
-                            + "Lamp's \(limit) for a deck's video. Choose a shorter clip."
+                        errorMessage = "Even in HEVC, this video is \(formatter.string(fromByteCount: made.bytes)), over "
+                            + "Lamp's \(limit) for a deck's \(what). Choose a shorter one"
+                            + (purpose == .clip ? ", or stream it from YouTube or Vimeo." : ".")
                         return
                     }
                 } else {
@@ -1722,7 +1848,12 @@ struct SlideStudioView: View {
             }
             let directory = LampPresentationDeckStore.assetsDirectoryName
             deck?.slides[slideIndex].blocks[blockIndex].assetPath = "\(directory)/\(stillName)"
-            deck?.slides[slideIndex].blocks[blockIndex].video = "\(directory)/\(videoName)"
+            switch purpose {
+            case .loop:
+                deck?.slides[slideIndex].blocks[blockIndex].video = "\(directory)/\(videoName)"
+            case .clip:
+                deck?.slides[slideIndex].blocks[blockIndex].clip = LampPresentationClip(source: "\(directory)/\(videoName)")
+            }
             if deck?.slides[slideIndex].blocks[blockIndex].altText?
                 .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
                 deck?.slides[slideIndex].blocks[blockIndex].altText = source.deletingPathExtension().lastPathComponent
@@ -1730,23 +1861,92 @@ struct SlideStudioView: View {
         }
     }
 
-    /// `source` re-encoded in HEVC at no more than 1080p, without its sound,
-    /// which a slide never plays, keeping the turn it is shown at.
-    private static func smallerCopy(of source: URL, to destination: URL) async throws {
-        let asset = AVURLAsset(url: source)
-        guard let track = try await asset.loadTracks(withMediaType: .video).first else {
-            throw CocoaError(.fileReadCorruptFile)
+    /// Asks for a YouTube or Vimeo address and makes it the picture's clip,
+    /// with the site's own picture of the video as its still.
+    private func addClipLink(for blockID: String) {
+        let alert = NSAlert()
+        alert.messageText = "Play a video from YouTube or Vimeo"
+        alert.informativeText = "Paste the video's address. It plays in the site's own player while you present, "
+            + "which needs an internet connection; without one the slide shows its still."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 24))
+        field.placeholderString = "https://www.youtube.com/watch?v=…"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Add")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let address = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let origin = LampPresentationClip.origin(of: address)
+        switch origin {
+        case .youtube, .vimeo: break
+        case .file, .unplayable:
+            errorMessage = "That is not a YouTube or Vimeo video's address."
+            return
         }
-        let composition = AVMutableComposition()
-        guard let pictures = composition.addMutableTrack(
-            withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid
-        ) else { throw CocoaError(.fileWriteUnknown) }
-        let range = try await track.load(.timeRange)
-        try pictures.insertTimeRange(range, of: track, at: .zero)
-        pictures.preferredTransform = try await track.load(.preferredTransform)
-        guard let session = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetHEVC1920x1080)
-        else { throw CocoaError(.fileWriteUnknown) }
-        try await session.export(to: destination, as: .mp4)
+        guard let slideID = selectedSlide?.id, let deckID = deck?.id else { return }
+        let assets = store.assetsDirectoryURL
+        let stillName = "\(UUID().uuidString.lowercased()).jpg"
+        let preparing = "\(slideID)/\(blockID)"
+        let token = UUID()
+        preparingVideos[preparing] = token
+        Task { @MainActor in
+            defer { if preparingVideos[preparing] == token { preparingVideos[preparing] = nil } }
+            let stillFile = assets.appendingPathComponent(stillName)
+            let still = await Self.thumbnail(of: origin)
+            if let still {
+                try? FileManager.default.createDirectory(at: assets, withIntermediateDirectories: true)
+                try? still.write(to: stillFile, options: .atomic)
+            }
+            guard preparingVideos[preparing] == token,
+                  deck?.id == deckID,
+                  let slideIndex = deck?.slides.firstIndex(where: { $0.id == slideID }),
+                  let blockIndex = deck?.slides[slideIndex].blocks.firstIndex(where: { $0.id == blockID })
+            else {
+                try? FileManager.default.removeItem(at: stillFile)
+                return
+            }
+            if still != nil {
+                deck?.slides[slideIndex].blocks[blockIndex].assetPath =
+                    "\(LampPresentationDeckStore.assetsDirectoryName)/\(stillName)"
+            }
+            deck?.slides[slideIndex].blocks[blockIndex].clip = LampPresentationClip(source: address)
+        }
+    }
+
+    /// The site's own picture of a streamed video, as JPEG: YouTube's at its
+    /// largest, else its standard size; Vimeo's from its oEmbed answer.
+    private static func thumbnail(of origin: LampPresentationClip.Origin) async -> Data? {
+        func fetch(_ address: String) async -> Data? {
+            guard let url = URL(string: address),
+                  let (data, response) = try? await URLSession.shared.data(from: url),
+                  (response as? HTTPURLResponse)?.statusCode == 200
+            else { return nil }
+            return data
+        }
+        switch origin {
+        case .youtube(let id):
+            if let data = await fetch("https://i.ytimg.com/vi/\(id)/maxresdefault.jpg") { return data }
+            return await fetch("https://i.ytimg.com/vi/\(id)/hqdefault.jpg")
+        case .vimeo(let id, let hash):
+            let page = "https://vimeo.com/\(id)" + (hash.map { "/\($0)" } ?? "")
+            guard let encoded = page.addingPercentEncoding(withAllowedCharacters: .alphanumerics),
+                  let json = await fetch("https://vimeo.com/api/oembed.json?url=\(encoded)&width=1920"),
+                  let object = try? JSONSerialization.jsonObject(with: json) as? [String: Any],
+                  let address = object["thumbnail_url"] as? String
+            else { return nil }
+            return await fetch(address)
+        case .file, .unplayable:
+            return nil
+        }
+    }
+
+    /// Whether `url`'s pictures are already HEVC.
+    private static func isHEVC(_ url: URL) -> Bool {
+        guard let track = AVURLAsset(url: url).tracks(withMediaType: .video).first,
+              let format = track.formatDescriptions.first
+        else { return false }
+        // swiftlint:disable:next force_cast
+        return CMFormatDescriptionGetMediaSubType(format as! CMFormatDescription) == kCMVideoCodecType_HEVC
     }
 
     /// The video's first frame, upright, as a JPEG.
@@ -1942,12 +2142,54 @@ private struct LampSlideBlockEditor: View {
         }
     }
 
+    /// A clip in a word or two: its file's name, or its site.
+    static func clipSummary(_ clip: LampPresentationClip) -> String {
+        switch clip.origin {
+        case .file(let path): (path as NSString).lastPathComponent
+        case .youtube: "YouTube video"
+        case .vimeo: "Vimeo video"
+        case .unplayable: clip.source
+        }
+    }
+
+    /// Seconds as minutes:seconds, or empty for none.
+    static func clipTime(_ seconds: Double?) -> String {
+        // Past a day is no time a clip has; shown as seconds, not converted
+        // to a whole number that cannot hold it.
+        guard let seconds, seconds.isFinite, seconds >= 0 else { return "" }
+        guard seconds < 86_400 else { return String(format: "%.0f", seconds) }
+        // Rounded to hundredths first, so 59.996 carries to 1:00 rather
+        // than showing a hundred hundredths.
+        let hundredthsInAll = Int((seconds * 100).rounded())
+        let whole = hundredthsInAll / 100
+        let hundredths = hundredthsInAll % 100
+        let fraction = hundredths == 0 ? "" : hundredths % 10 == 0
+            ? ".\(hundredths / 10)" : "." + String(format: "%02d", hundredths)
+        return "\(whole / 60):" + String(format: "%02d", whole % 60) + fraction
+    }
+
+    /// Minutes:seconds, or seconds alone, as seconds; nil for empty or
+    /// anything else.
+    static func clipSeconds(_ text: String) -> Double? {
+        let parts = text.trimmingCharacters(in: .whitespaces).split(separator: ":", omittingEmptySubsequences: false)
+        guard (1...3).contains(parts.count) else { return nil }
+        var total = 0.0
+        for part in parts {
+            guard let value = Double(part), value.isFinite, value >= 0 else { return nil }
+            total = total * 60 + value
+        }
+        // Nothing that cannot be saved: a time too large for a number.
+        return total.isFinite ? total : nil
+    }
+
     @Binding var block: LampPresentationBlock
     /// Where an image block's picture is, so the inspector can show it.
     var imageURL: URL? = nil
     let updateCitation: (String) -> Void
     let chooseImage: () -> Void
     let chooseVideo: () -> Void
+    let chooseClip: () -> Void
+    let addClipLink: () -> Void
     var isPreparingVideo = false
     let remove: () -> Void
 
@@ -2018,7 +2260,27 @@ private struct LampSlideBlockEditor: View {
                             .help("Copy an image into this library and use it here")
                         // A video plays only while presenting; the picture
                         // above is its still everywhere else.
-                        if let video = block.video {
+                        if isPreparingVideo {
+                            HStack(spacing: 6) {
+                                ProgressView().controlSize(.small)
+                                Text("Preparing video…").font(.callout).foregroundStyle(.secondary)
+                            }
+                        } else if let clip = block.clip {
+                            HStack(spacing: 6) {
+                                Label(Self.clipSummary(clip), systemImage: clip.isStreamed ? "play.tv" : "play.rectangle")
+                                    .font(.callout)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                    .foregroundStyle(.secondary)
+                                    .help(clip.isStreamed
+                                        ? "Plays in the site's own player while presenting, which needs an internet connection"
+                                        : "Plays with its sound while presenting; the picture is its still")
+                                Button("Remove Clip", systemImage: "xmark.circle") { block.clip = nil }
+                                    .labelStyle(.iconOnly)
+                                    .buttonStyle(.borderless)
+                                    .help("Show the picture alone")
+                            }
+                        } else if let video = block.video {
                             HStack(spacing: 6) {
                                 Label((video as NSString).lastPathComponent, systemImage: "film")
                                     .font(.callout)
@@ -2031,16 +2293,21 @@ private struct LampSlideBlockEditor: View {
                                     .buttonStyle(.borderless)
                                     .help("Show the picture alone")
                             }
-                        } else if isPreparingVideo {
-                            HStack(spacing: 6) {
-                                ProgressView().controlSize(.small)
-                                Text("Preparing video…").font(.callout).foregroundStyle(.secondary)
-                            }
                         } else {
-                            Button("Choose Video…", systemImage: "film", action: chooseVideo)
-                                .buttonStyle(.lampSecondary)
-                                .controlSize(.small)
-                                .help("Copy a short video into this library to play, silent and looping, while presenting; its first frame becomes the picture")
+                            Menu {
+                                Button("Looping Video…", systemImage: "film", action: chooseVideo)
+                                    .help("A short video that plays silently in the picture's place while presenting")
+                                Button("Clip with Sound…", systemImage: "play.rectangle", action: chooseClip)
+                                    .help("A video the talk stops to watch, played once with its sound")
+                                Button("YouTube or Vimeo…", systemImage: "play.tv", action: addClipLink)
+                                    .help("A clip played from the site, which needs an internet connection while presenting")
+                            } label: {
+                                Label("Add Video", systemImage: "film")
+                            }
+                            .lampMenu()
+                            .controlSize(.small)
+                            .fixedSize()
+                            .help("Make the picture move: a looping video, a clip with sound, or one from YouTube or Vimeo")
                         }
                     }
                 }
@@ -2099,6 +2366,37 @@ private struct LampSlideBlockEditor: View {
                     .controlSize(.small)
                 }
                 .help("While presenting, Drift closes in on the picture by 3% over a minute and back, too slowly to see it move")
+                if block.clip != nil {
+                    StudioStackedField("Clip") {
+                        VStack(alignment: .leading, spacing: 6) {
+                            LampSegmentedPicker(
+                                "Starts",
+                                selection: Binding(
+                                    get: { block.clip?.starts ?? .click },
+                                    set: { block.clip?.starts = $0 == .click ? nil : $0 }
+                                ),
+                                items: LampPresentationClip.Starting.allCases.map { .init(id: $0, title: $0.displayName) }
+                            )
+                            .controlSize(.small)
+                            HStack(spacing: 8) {
+                                StudioClipTimeField(title: "Start", seconds: Binding(
+                                    get: { block.clip?.start },
+                                    set: { block.clip?.start = $0 }
+                                ))
+                                .frame(width: 70)
+                                Text("to").foregroundStyle(.secondary)
+                                StudioClipTimeField(title: "End", seconds: Binding(
+                                    get: { block.clip?.end },
+                                    set: { block.clip?.end = $0 }
+                                ))
+                                .frame(width: 70)
+                            }
+                            .font(.callout)
+                            .textFieldStyle(.roundedBorder)
+                            .help("Where the clip starts and stops, as minutes:seconds; empty is its beginning or its end")
+                        }
+                    }
+                }
                 // Only a picture behind the slide is cropped, so only it has
                 // a focus to set.
                 if block.placement == .background {
@@ -3569,5 +3867,44 @@ private struct StudioVariantControl: View {
         case .word: "The heading is the word; a subtitle its transliteration, a body line its gloss."
         default: "A heading with a line beneath it."
         }
+    }
+}
+
+/// A clip's start or end, typed as minutes:seconds. What is typed is kept
+/// as typed, and read only on Return or on leaving the field, so "1:30" is
+/// not turned into "0:01" at its first keystroke; and only when it was
+/// typed, so a time is never changed by being looked at. Something that does
+/// not read as a time puts the last good one back; an empty field is none.
+/// Nothing is written as the field goes away: the block may be gone with it.
+private struct StudioClipTimeField: View {
+    let title: String
+    @Binding var seconds: Double?
+    @State private var text = ""
+    @State private var isEditing = false
+    @State private var typed = false
+
+    var body: some View {
+        TextField(title, text: $text, onEditingChanged: { editing in
+            isEditing = editing
+            if !editing { commit() }
+        })
+        .onSubmit(commit)
+        .onAppear { text = LampSlideBlockEditor.clipTime(seconds) }
+        .onChange(of: text) { _, _ in if isEditing { typed = true } }
+        .onChange(of: seconds) { _, value in
+            if !isEditing { text = LampSlideBlockEditor.clipTime(value) }
+        }
+    }
+
+    private func commit() {
+        guard typed else { return }
+        typed = false
+        let entry = text.trimmingCharacters(in: .whitespaces)
+        if entry.isEmpty {
+            seconds = nil
+        } else if let value = LampSlideBlockEditor.clipSeconds(entry) {
+            seconds = value
+        }
+        text = LampSlideBlockEditor.clipTime(seconds)
     }
 }
