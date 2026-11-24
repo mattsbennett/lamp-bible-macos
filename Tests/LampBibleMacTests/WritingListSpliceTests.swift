@@ -102,6 +102,50 @@ struct WritingListSpliceTests {
         #expect(try await matchesTheLibrary(model))
     }
 
+    /// Writings tied on everything the order looks at — two called
+    /// "Untitled", which auto-titled drafts are — still land where the
+    /// library would put them. The order ends at the id for that reason.
+    @Test func writingsTiedOnEverythingKeepTheLibrarysOrder() async throws {
+        let (model, root) = try model()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        for id in ["b", "a", "c"] {
+            _ = try await model.savePersonalDevotional(writing(id, title: "Untitled"))
+            #expect(try await matchesTheLibrary(model))
+        }
+        #expect(model.devotionals.map(\.id) == ["a", "b", "c"])
+    }
+
+    /// A writing whose stored copy is dated ahead of this Mac — synced from a
+    /// device whose clock runs fast — still has its edit shown. The first
+    /// version of the splice compared the two dates and kept the old body.
+    @Test func anEditOfAFutureDatedWritingIsShown() async throws {
+        let (model, root) = try model()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let ahead = Date().addingTimeInterval(60 * 60 * 24)
+        _ = try await model.library.savePersonalDevotional(
+            LampDevotional(
+                id: "a",
+                moduleID: LampPersonalModule.writing.id,
+                moduleName: LampPersonalModule.writing.name,
+                title: "Altar",
+                content: "The copy from the other device.",
+                lastModified: ahead,
+                isEditable: true
+            ),
+            preserveLastModified: true
+        )
+        await model.refreshNow()
+        #expect(model.devotionals.first?.content == "The copy from the other device.")
+
+        _ = try await model.savePersonalDevotional(
+            writing("a", title: "Altar"), reviewTexts: []
+        )
+
+        #expect(model.devotionals.first?.content == "The body of Altar.")
+        #expect(try await matchesTheLibrary(model))
+    }
+
     /// A save of the same writing twice in the same second: the stored copy
     /// keeps whole seconds while the copy just saved still has its fractions,
     /// so a comparison that was not to the second dropped the newer body.

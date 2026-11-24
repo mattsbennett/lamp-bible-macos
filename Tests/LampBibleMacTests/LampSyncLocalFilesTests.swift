@@ -347,6 +347,35 @@ struct LampSyncLocalFilesTests {
         #expect(LampSyncFolderLayout.kind(of: "Workspaces/Presentations/deleted-decks.json") == nil)
     }
 
+    /// The per-file pass gathers decks from the library itself, so the
+    /// staging the workspace exporter does must not carry them: it used to
+    /// copy every deck and every deck image into a scratch directory on
+    /// every pass, for `workspaceFiles` to skip.
+    @WritingWorkspaceFiles
+    @Test func theWorkspaceStagingDoesNotCarryDecks() async throws {
+        let library = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: library) }
+        let scratch = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let store = LampPresentationDeckStore(rootURL: library)
+        try FileManager.default.createDirectory(
+            at: store.assetsDirectoryURL, withIntermediateDirectories: true
+        )
+        try Data("a deck".utf8).write(
+            to: store.decksDirectoryURL.appendingPathComponent("sunday.lampdeck")
+        )
+        try Data("an image".utf8).write(
+            to: store.assetsDirectoryURL.appendingPathComponent("a1b2c3.jpg")
+        )
+
+        _ = try LampSyncLocalFiles.workspaceFiles(inLibraryAt: library, stagingIn: scratch)
+
+        let staged = FileManager.default.enumerator(at: scratch, includingPropertiesForKeys: nil)
+        let paths = (staged?.compactMap { ($0 as? URL)?.lastPathComponent } ?? [])
+        #expect(!paths.contains("sunday.lampdeck"))
+        #expect(!paths.contains("a1b2c3.jpg"))
+    }
+
     @Test func aLibraryWithNoDecksYieldsNothingRatherThanFailing() throws {
         let library = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: library) }

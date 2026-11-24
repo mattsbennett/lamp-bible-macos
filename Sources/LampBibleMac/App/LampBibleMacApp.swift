@@ -122,6 +122,30 @@ final class LampAppDelegate: NSObject, NSApplicationDelegate {
 
 @main
 struct LampBibleMacApp: App {
+    /// An app launched from the Finder inherits launchd's soft limit of 256
+    /// open files — measured on this Mac, and it is the default. A library
+    /// keeps one open database per module it has read, so a few hundred
+    /// modules could spend the lot, and then nothing opens: not a module, not
+    /// a file, not a socket. Core bounds its own cache
+    /// (`lamp-bible-core/Documentation/decisions/0006`), which is the half
+    /// that does not depend on this; this is the other half, since a reader
+    /// also opens pictures, workspace files and network connections.
+    ///
+    /// The hard limit is unlimited for this process, so raising the soft one
+    /// asks nobody's permission. Failure is ignored: the bound cache is what
+    /// keeps the app working either way.
+    private static func raiseTheOpenFileLimit() {
+        var limit = rlimit()
+        guard getrlimit(RLIMIT_NOFILE, &limit) == 0 else { return }
+        let wanted = rlim_t(8_192)
+        guard limit.rlim_cur < wanted else { return }
+        // `RLIM_INFINITY` is a macro Swift does not import; it is the
+        // largest `rlim_t`, and a hard limit of that means "ask for what you
+        // like".
+        limit.rlim_cur = limit.rlim_max == rlim_t.max ? wanted : min(wanted, limit.rlim_max)
+        _ = setrlimit(RLIMIT_NOFILE, &limit)
+    }
+
     @NSApplicationDelegateAdaptor(LampAppDelegate.self) private var appDelegate
     @StateObject private var libraryModel = LibraryModel()
     @StateObject private var syncController = LibrarySyncController()
@@ -131,6 +155,7 @@ struct LampBibleMacApp: App {
     @StateObject private var softwareUpdater = SoftwareUpdater()
 
     init() {
+        Self.raiseTheOpenFileLimit()
         // `@AppStorage`'s default is that property wrapper's own fallback and is
         // never written to UserDefaults, so code reading the raw value gets
         // `false` until the switch is touched. Sync at launch reads it that way,

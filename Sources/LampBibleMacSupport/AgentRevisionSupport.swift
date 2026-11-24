@@ -732,20 +732,66 @@ public enum DevotionalAgentRevisionStore {
         )
     }
 
+    /// Every revision in a workspace's folder, decoded.
+    ///
+    /// Kept against `historyToken`, which is a listing rather than a read. A
+    /// workspace holding a few days of writing holds megabytes of JSON, and
+    /// every record — so every autosave of that writing — decoded all of it
+    /// to find whether this change was already the latest and then to
+    /// compact. A revision file is written once and never edited, so a new
+    /// count or a newer file is the only way the folder can have moved,
+    /// including when sync merges another Mac's in or a compaction rewrites
+    /// this one.
+    ///
+    /// A few workspaces' worth at a time: a writer has one open, and the
+    /// decoded history of every writing they have visited is not worth
+    /// holding.
     private static func storedRevisions(in workspace: URL) throws -> [StoredRevision] {
         let directory = revisionsDirectory(in: workspace)
         guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
-        return try FileManager.default.contentsOfDirectory(
+        let token = historyToken(in: workspace)
+        if let held = held(for: workspace, token: token) { return held }
+        let decoded = try FileManager.default.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: nil,
             options: [.skipsHiddenFiles]
         )
         .filter { $0.pathExtension == "json" }
-        .compactMap { url in
+        .compactMap { url -> StoredRevision? in
             guard let data = try? Data(contentsOf: url),
                   let revision = try? decoder.decode(DevotionalAgentRevision.self, from: data)
             else { return nil }
             return StoredRevision(url: url, revision: revision)
+        }
+        remember(decoded, for: workspace, token: token)
+        return decoded
+    }
+
+    private static let historyLock = NSLock()
+    private nonisolated(unsafe) static var decodedHistories:
+        [String: (token: HistoryToken, revisions: [StoredRevision])] = [:]
+    private nonisolated(unsafe) static var decodedHistoryOrder: [String] = []
+
+    private static func held(for workspace: URL, token: HistoryToken) -> [StoredRevision]? {
+        let key = workspace.standardizedFileURL.path
+        historyLock.lock()
+        defer { historyLock.unlock() }
+        guard let entry = decodedHistories[key], entry.token == token else { return nil }
+        return entry.revisions
+    }
+
+    private static func remember(
+        _ revisions: [StoredRevision], for workspace: URL, token: HistoryToken
+    ) {
+        let key = workspace.standardizedFileURL.path
+        historyLock.lock()
+        defer { historyLock.unlock() }
+        decodedHistories[key] = (token, revisions)
+        decodedHistoryOrder.removeAll { $0 == key }
+        decodedHistoryOrder.append(key)
+        while decodedHistoryOrder.count > 4, let oldest = decodedHistoryOrder.first {
+            decodedHistoryOrder.removeFirst()
+            decodedHistories[oldest] = nil
         }
     }
 

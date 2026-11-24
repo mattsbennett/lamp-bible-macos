@@ -90,7 +90,16 @@ public enum LampWorkspaceSync {
             )
         }
 
-        try LampPresentationDeckSync.exportDecks(from: libraryRoot, to: backupRoot, fileManager: fileManager)
+        // Only for a backup, which carries the decks inside it. The per-file
+        // pass gathers decks and their images from the library itself and
+        // `LampSyncLocalFiles.workspaceFiles` skips whatever this staged, so
+        // exporting them here copied every deck and every deck image into a
+        // scratch directory, on every pass, to be ignored.
+        if writingFolder == .backup {
+            try LampPresentationDeckSync.exportDecks(
+                from: libraryRoot, to: backupRoot, fileManager: fileManager
+            )
+        }
 
         let sourceRoot = LampWritingWorkspace.root(libraryRootURL: libraryRoot, fileManager: fileManager)
         guard fileManager.fileExists(atPath: sourceRoot.path) else { return }

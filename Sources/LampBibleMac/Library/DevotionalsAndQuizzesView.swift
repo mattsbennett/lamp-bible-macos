@@ -403,6 +403,11 @@ struct DevotionalsView: View {
         .onChange(of: requestedNewWriting) { _, _ in takeRequestedNewWriting() }
         .onChange(of: model.devotionals) { _, _ in selectFirstIfNeeded() }
         .onChange(of: query) { _, _ in selectFirstIfNeeded() }
+        // And again when the bodies have been read: a query that matches no
+        // title finds nothing at first, so the selection was cleared and the
+        // rows then arrived with the preview still saying nothing was chosen.
+        // Found by a Codex review.
+        .onChange(of: bodyMatches) { _, _ in selectFirstIfNeeded() }
         // Written only as editing starts and stops: a change of the window's
         // sections rebuilds all of LibraryRootView.
         .onChange(of: editing == nil) { _, reading in

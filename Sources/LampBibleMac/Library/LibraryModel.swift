@@ -392,8 +392,15 @@ final class LibraryModel: ObservableObject {
 
     /// `refresh`, for a caller that goes on only once the library is read
     /// again: a paired phone's turn on a writing sync has just brought in.
+    ///
+    /// Including the part a launch does not wait for — the writings, the
+    /// quizzes, the other translations' book names — because "read again" has
+    /// to mean read. A test caught this the day the deferral landed: the
+    /// caller here is a writing arriving from the phone, and it is the
+    /// writings it is waiting for.
     func refreshNow() async {
         await refreshLibrary()
+        await restOfTheLibrary?.value
     }
 
     /// Whether the AI features are shown, working it out where nothing is
@@ -1508,7 +1515,7 @@ final class LibraryModel: ObservableObject {
         }
         // Saved, and put in its place in the list: a new writing is one row,
         // not a reason to read every writing there is.
-        absorbSavedDevotional(saved)
+        await absorbDevotional(id: saved.id, orElse: saved)
         await refreshManuscriptNotes(for: saved)
         if let chatID {
             // What the chat shows of it. A failure costs the chat its line
@@ -1717,37 +1724,54 @@ final class LibraryModel: ObservableObject {
         // while the editor was open is caught by the save itself refusing
         // (`ifNotNewerThan`), which reads the list again below, and a pass
         // that brings writings in calls `refresh()` when it finishes.
-        absorbSavedDevotional(saved)
+        await absorbDevotional(id: saved.id, orElse: saved)
         await refreshManuscriptNotes(for: saved)
         return saved
     }
 
-    /// Puts one saved writing in its place in the list.
+    /// Puts one writing in its place in the list, as the library now holds
+    /// it — or takes it out, if the library no longer holds it at all.
+    ///
+    /// The row is read back rather than taken from the caller. A save hands
+    /// back the copy it wrote, and two saves of one writing can finish in
+    /// either order, so the question "which of these is the current body?"
+    /// has one honest answer and it is the database's. The first version
+    /// compared the two `lastModified` dates to the second, which a writing
+    /// synced from a device whose clock runs ahead defeats: the save
+    /// succeeds, its stamp is *behind* the copy already in the list, and the
+    /// list would have kept the old body while the file held the new one —
+    /// and the editor's own check for a newer copy would then have restored
+    /// that stale body over what was typed. Found by a Codex review. A read
+    /// is 0.2 ms against 125 ms for the list, so there is nothing to defend.
     ///
     /// In the order the library gives writings out in
-    /// (`LampDevotional.libraryOrder`), not an order of this app's own: the
-    /// list would otherwise re-order itself the first time anything read it
-    /// again.
+    /// (`LampDevotional.libraryOrder`), not an order of this app's own, or
+    /// the list would re-order itself the first time anything read it again.
     ///
-    /// Compared to the second, and a tie left alone: the stored copy keeps
-    /// whole seconds while the one just saved still has its fractions, so an
-    /// older save looked newer than a copy written later in the same second.
-    private func absorbSavedDevotional(_ saved: LampDevotional) {
-        func second(_ date: Date?) -> TimeInterval {
-            (date ?? .distantPast).timeIntervalSince1970.rounded(.down)
+    /// `orElse` is used only where the library cannot be read at all: a list
+    /// that will not read is not a writing that was not saved.
+    private func absorbDevotional(id: String, orElse fallback: LampDevotional?) async {
+        let current: LampDevotional?
+        do {
+            current = try await library.personalDevotional(id: id)
+        } catch {
+            current = fallback
         }
         var updated = devotionals
-        if let at = updated.firstIndex(where: { $0.id == saved.id }) {
-            guard second(updated[at].lastModified) <= second(saved.lastModified) else { return }
-            updated[at] = saved
+        guard let current else {
+            publishDevotionals(updated.filter { $0.id != id })
+            return
+        }
+        if let at = updated.firstIndex(where: { $0.id == id }) {
+            updated[at] = current
             // Its place can move: a title, a date or a series changes where
             // the library would have put it.
             if !updated.isSorted(by: LampDevotional.libraryOrder) {
                 updated.sort(by: LampDevotional.libraryOrder)
             }
         } else {
-            let at = updated.firstIndex { LampDevotional.libraryOrder(saved, $0) }
-            updated.insert(saved, at: at ?? updated.endIndex)
+            let at = updated.firstIndex { LampDevotional.libraryOrder(current, $0) }
+            updated.insert(current, at: at ?? updated.endIndex)
         }
         publishDevotionals(updated)
     }
@@ -1877,8 +1901,12 @@ final class LibraryModel: ObservableObject {
             in: library.rootURL
         )
         // Gone from the library, so gone from the list: one row again rather
-        // than a read of all of them.
-        publishDevotionals(devotionals.filter { $0.id != id })
+        // than a read of all of them. Asked of the library rather than
+        // assumed, because an autosave or an agent can commit a save of this
+        // writing while the deck sweep above is awaited, and a row put back
+        // after the deletion is a row the list has to show. Found by a Codex
+        // review.
+        await absorbDevotional(id: id, orElse: nil)
     }
 
     func loadPlanProgress(year: Int) async {
@@ -1958,17 +1986,27 @@ final class LibraryModel: ObservableObject {
         do {
             modules = try await library.installedModules()
             resolveHiddenModules()
+            // The reader's own translation first, and the rest after the
+            // reader is up (`loadTheRestOfTheLibrary`). Book names for every
+            // installed translation means opening every translation's
+            // database, and the reader's first chapter waited behind all of
+            // them: a library of a few hundred modules spends that on every
+            // launch. The reader needs the one it is opening.
+            let reading = rememberedTranslationID(among: modules)
             var bookNames: [String: [Int: String]] = [:]
-            for translation in modules where translation.kind == .translation {
-                guard let books = try? await library.translationBooks(moduleID: translation.id) else { continue }
-                bookNames[translation.id] = Dictionary(
+            if let reading, let books = try? await library.translationBooks(moduleID: reading) {
+                bookNames[reading] = Dictionary(
                     books.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
             }
-            if translationBookNames != bookNames { translationBookNames = bookNames }
+            if translationBookNames != bookNames.merging(
+                translationBookNames, uniquingKeysWith: { first, _ in first }
+            ) {
+                translationBookNames = bookNames.merging(
+                    translationBookNames, uniquingKeysWith: { first, _ in first }
+                )
+            }
             highlightSets = (try? await library.highlightSets()) ?? []
             plans = try await library.readingPlans()
-            publishDevotionals(try await library.devotionals())
-            quizModules = try await library.quizModules()
             selectedPlanIDs = try await library.selectedPlanIDs()
             let completed = try await library.completedReadings(year: planProgressYear)
             completedReadingIDs = Set(completed.map(\.id))
@@ -2009,10 +2047,62 @@ final class LibraryModel: ObservableObject {
         }
         hasReadLibrary = true
         isRefreshing = false
+        // What nothing on screen is waiting for: the writings, the quizzes,
+        // and the other translations' book names. Each is published as it
+        // arrives, so a section that opens before they land fills in rather
+        // than staying empty.
+        restOfTheLibrary?.cancel()
+        restOfTheLibrary = Task { [weak self] in await self?.loadTheRestOfTheLibrary() }
         // Only once the reader is already up. On the launch pass this would
         // start in the same turn that sets `hasReadLibrary`, which is what
         // triggers the reader's restore — see `buildStrongsIndexes`.
         if hasLoadedInitialContent { buildStrongsIndexes() }
+    }
+
+    private var restOfTheLibrary: Task<Void, Never>?
+
+    /// The translation the reader will open, as `refreshLibrary` resolves it
+    /// a few lines later — asked early so its book names can be read before
+    /// anything else's.
+    private func rememberedTranslationID(among modules: [LampInstalledModule]) -> String? {
+        let installed = modules.filter { $0.kind == .translation }.map(\.id)
+        if let remembered = selectedTranslationID,
+           let held = LampTranslationID.held(remembered, among: installed) {
+            return held
+        }
+        if let preferred = defaults.string(forKey: "reader.defaultTranslationID"),
+           let held = LampTranslationID.held(preferred, among: installed) {
+            return held
+        }
+        return installed.first
+    }
+
+    /// Everything the first chapter does not wait for.
+    ///
+    /// Writings and quizzes are read here rather than in `refreshLibrary`
+    /// because both open their own database — every devotional collection,
+    /// every quiz module — and nothing the reader draws needs either. The
+    /// book names of the translations not being read follow for the same
+    /// reason: a Spanish translation's Génesis matters when something shows
+    /// that translation.
+    private func loadTheRestOfTheLibrary() async {
+        if let listed = try? await library.devotionals() { publishDevotionals(listed) }
+        if Task.isCancelled { return }
+        quizModules = (try? await library.quizModules()) ?? quizModules
+        if Task.isCancelled { return }
+        var names = translationBookNames
+        for translation in modules
+        where translation.kind == .translation && names[translation.id] == nil {
+            if Task.isCancelled { return }
+            guard let books = try? await library.translationBooks(moduleID: translation.id)
+            else { continue }
+            names[translation.id] = Dictionary(
+                books.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first }
+            )
+            // Published per translation: a picker opened while these arrive
+            // fills in rather than waiting for the last of them.
+            translationBookNames = names
+        }
     }
 
     /// Builds the Strong's index for the installed translations, in the
@@ -2098,22 +2188,14 @@ final class LibraryModel: ObservableObject {
             highlightsRequest,
             notesRequest
         )
-        var installedNotes: [LampVerseNote] = []
-        for notesModule in noteModules {
-            installedNotes += (try? await library.moduleVerseNotes(
-                moduleID: notesModule.id,
-                bookNumber: book,
-                chapterNumber: chapter
-            )) ?? []
-        }
-        var installedHighlights: [LampVerseHighlight] = []
-        for highlightsModule in highlightModules {
-            installedHighlights += (try? await library.moduleVerseHighlights(
-                moduleID: highlightsModule.id,
-                bookNumber: book,
-                chapterNumber: chapter
-            )) ?? []
-        }
+        // One crossing onto the library's actor for all of them, rather than
+        // one per installed module per page turn.
+        let installedNotes = await library.moduleVerseNotes(
+            moduleIDs: noteModules.map(\.id), bookNumber: book, chapterNumber: chapter
+        )
+        let installedHighlights = await library.moduleVerseHighlights(
+            moduleIDs: highlightModules.map(\.id), bookNumber: book, chapterNumber: chapter
+        )
         return ReaderChapterContents(
             chapter: loadedChapter,
             translationID: translationID,

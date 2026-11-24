@@ -333,6 +333,28 @@ final class LibrarySyncController: ObservableObject {
     /// than printed: a pass that never finishes left no trace otherwise.
     private static let log = Logger(subsystem: "com.neus.Lamp-Bible.macOS", category: "sync")
 
+    /// The digests this session has taken, for the library it is open on.
+    ///
+    /// One cache per library root, made the first time a pass asks and kept
+    /// for as long as the app runs — and **nil** where the filesystem under
+    /// the library does not maintain an identity a digest can be kept
+    /// against, which is every pass on a NAS, an SMB share or a memory card.
+    /// There the pass reads every file, as it always did. See
+    /// `lamp-bible-core/Documentation/decisions/0007` for why the answer
+    /// depends on the filesystem at all.
+    private var heldDigestCache: (root: URL, cache: LampSyncDigestCache?)?
+
+    private func digestCache(forLibraryAt root: URL) -> LampSyncDigestCache? {
+        if let held = heldDigestCache, held.root == root { return held.cache }
+        let trusted = LampSyncIdentityTrust.trustsIdentity(ofVolumeAt: root)
+        if !trusted {
+            Self.log.notice("Library filesystem keeps no identity to trust; hashing every pass")
+        }
+        let cache = trusted ? LampSyncDigestCache() : nil
+        heldDigestCache = (root, cache)
+        return cache
+    }
+
     /// Opens the configured remote, for something smaller than a pass.
     private func withRemoteStore<T>(
         _ body: (any LampSyncRemoteStore) async throws -> T
@@ -1176,16 +1198,24 @@ extension LibrarySyncController {
         // every file is most of a pass's own work, a second and a half on a
         // full library, and a launch sync doing it here froze the splash half
         // faded over the reader until it was done.
+        //
+        // The first pass of a session reads every file. After that the bytes
+        // — modules and media — are answered from what this session already
+        // read, where the library's filesystem keeps an identity worth
+        // trusting (`lamp-bible-core/Documentation/decisions/0007`).
         let gatheredSoFar = candidates
         let libraryRoot = library.rootURL
         let fileManager = self.fileManager
+        let digests = digestCache(forLibraryAt: libraryRoot)
         let described = try await Task.detached {
             let workspaces = try await LampSyncLocalFiles.workspaceFiles(
                 inLibraryAt: libraryRoot,
                 stagingIn: exports,
                 fileManager: fileManager
             )
-            return LampSyncLocalFiles.describe(gatheredSoFar + workspaces, fileManager: fileManager)
+            return LampSyncLocalFiles.describe(
+                gatheredSoFar + workspaces, fileManager: fileManager, digests: digests
+            )
         }.value
         result.gathered.local = described.files
         result.gaps += described.unreadable
