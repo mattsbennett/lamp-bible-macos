@@ -725,6 +725,7 @@ struct SlideStudioView: View {
                             }
                             Divider()
                             Button("Delete Slide", role: .destructive) { deleteSlide(slide.id) }
+                                .keyboardShortcut(.delete, modifiers: [])
                                 .disabled(deckBinding.slides.wrappedValue.count == 1)
                         }
                     }
@@ -740,6 +741,12 @@ struct SlideStudioView: View {
                 case .down, .right: selectSlide(by: 1)
                 @unknown default: break
                 }
+            }
+            // Delete or Backspace with the rail in focus deletes the slide
+            // chosen, as the context menu does and as Keynote's rail does:
+            // undoable, so not asked about first. Never the deck's last.
+            .onDeleteCommand {
+                if let selectedSlideID { deleteSlide(selectedSlideID) }
             }
             .onChange(of: selectedSlideID) { _, id in
                 guard let id else { return }
@@ -876,11 +883,26 @@ struct SlideStudioView: View {
                                         ForEach(LampPresentationBlockKind.authorableHere) { kind in
                                             Button(kind.displayName) { addBlock(kind) }
                                         }
+                                        // A video is a picture that moves, so
+                                        // each of these adds a picture block
+                                        // and asks for the video at once.
+                                        Divider()
+                                        Button("Looping Video…", systemImage: "film") { addMovie(.loop) }
+                                        Button("Clip with Sound…", systemImage: "play.rectangle") { addMovie(.clip) }
+                                        Button("YouTube or Vimeo…", systemImage: "play.tv") { addMovie(nil) }
                                     }
                                     .lampMenu()
                                     .controlSize(.small)
                                     .fixedSize()
                                     .frame(maxWidth: .infinity, alignment: .leading)
+                                    if preparingVideos.keys.contains(where: {
+                                        $0.hasPrefix("\(slideBinding.wrappedValue.id)/\(Self.newVideoBlock)-")
+                                    }) {
+                                        HStack(spacing: 6) {
+                                            ProgressView().controlSize(.small)
+                                            Text("Preparing video…").font(.callout).foregroundStyle(.secondary)
+                                        }
+                                    }
                                 }
                             }
                         } else {
@@ -1728,7 +1750,8 @@ struct SlideStudioView: View {
     /// Kept to the purpose's largest size, since every file a deck names
     /// travels with it to each device it syncs to; and offered as HEVC when
     /// it is not, which is about half the size for the same picture.
-    private func chooseMovie(for blockID: String, as purpose: MoviePurpose) {
+    @discardableResult
+    private func chooseMovie(for blockID: String?, as purpose: MoviePurpose) -> Bool {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = LampPresentationVideo.extensions.sorted().compactMap { UTType(filenameExtension: $0) }
         panel.allowsMultipleSelection = false
@@ -1736,13 +1759,13 @@ struct SlideStudioView: View {
         panel.message = purpose == .loop
             ? "Choose a short video to play, silent and looping, while this slide is presented."
             : "Choose a clip to play, with its sound, when the slide reaches it."
-        guard panel.runModal() == .OK, let source = panel.url else { return }
+        guard panel.runModal() == .OK, let source = panel.url else { return false }
         // Block ids are unique within a slide, not across the deck, so the
         // block is found again in the slide it was chosen on.
-        guard let slideID = selectedSlide?.id, let deckID = deck?.id else { return }
+        guard let slideID = selectedSlide?.id, let deckID = deck?.id else { return false }
         guard LampPresentationVideo.isPlayable(source.lastPathComponent) else {
             errorMessage = "Lamp plays .mp4, .mov and .m4v video."
-            return
+            return false
         }
         let formatter = ByteCountFormatter()
         let limit = formatter.string(fromByteCount: purpose.largestFileBytes)
@@ -1760,7 +1783,7 @@ struct SlideStudioView: View {
                 + "the same\(purpose == .loop ? ", without sound" : ""); your original is left as it is."
             alert.addButton(withTitle: "Make Smaller")
             alert.addButton(withTitle: "Cancel")
-            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            guard alert.runModal() == .alertFirstButtonReturn else { return false }
             reencodes = true
         } else if !Self.isHEVC(source) {
             let alert = NSAlert()
@@ -1774,7 +1797,7 @@ struct SlideStudioView: View {
             switch alert.runModal() {
             case .alertFirstButtonReturn: reencodes = true
             case .alertSecondButtonReturn: reencodes = false
-            default: return
+            default: return false
             }
         } else {
             reencodes = false
@@ -1784,7 +1807,7 @@ struct SlideStudioView: View {
         let stem = UUID().uuidString.lowercased()
         let videoName = "\(stem).\(reencodes ? "mp4" : source.pathExtension.lowercased())"
         let stillName = "\(stem).jpg"
-        let preparing = "\(slideID)/\(blockID)"
+        let preparing = "\(slideID)/\(blockID ?? "\(Self.newVideoBlock)-\(UUID().uuidString)")"
         let token = UUID()
         preparingVideos[preparing] = token
         Task { @MainActor in
@@ -1840,30 +1863,30 @@ struct SlideStudioView: View {
             guard preparingVideos[preparing] == token,
                   deck?.id == deckID,
                   let slideIndex = deck?.slides.firstIndex(where: { $0.id == slideID }),
-                  let blockIndex = deck?.slides[slideIndex].blocks.firstIndex(where: { $0.id == blockID })
+                  var block = Self.target(blockID, in: deck?.slides[slideIndex])
             else {
                 try? FileManager.default.removeItem(at: video)
                 try? FileManager.default.removeItem(at: stillFile)
                 return
             }
             let directory = LampPresentationDeckStore.assetsDirectoryName
-            deck?.slides[slideIndex].blocks[blockIndex].assetPath = "\(directory)/\(stillName)"
+            block.assetPath = "\(directory)/\(stillName)"
             switch purpose {
-            case .loop:
-                deck?.slides[slideIndex].blocks[blockIndex].video = "\(directory)/\(videoName)"
-            case .clip:
-                deck?.slides[slideIndex].blocks[blockIndex].clip = LampPresentationClip(source: "\(directory)/\(videoName)")
+            case .loop: block.video = "\(directory)/\(videoName)"
+            case .clip: block.clip = LampPresentationClip(source: "\(directory)/\(videoName)")
             }
-            if deck?.slides[slideIndex].blocks[blockIndex].altText?
-                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
-                deck?.slides[slideIndex].blocks[blockIndex].altText = source.deletingPathExtension().lastPathComponent
+            if block.altText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                block.altText = source.deletingPathExtension().lastPathComponent
             }
+            place(block, in: slideIndex)
         }
+        return true
     }
 
     /// Asks for a YouTube or Vimeo address and makes it the picture's clip,
     /// with the site's own picture of the video as its still.
-    private func addClipLink(for blockID: String) {
+    @discardableResult
+    private func addClipLink(for blockID: String?) -> Bool {
         let alert = NSAlert()
         alert.messageText = "Play a video from YouTube or Vimeo"
         alert.informativeText = "Paste the video's address. It plays in the site's own player while you present, "
@@ -1874,43 +1897,56 @@ struct SlideStudioView: View {
         alert.addButton(withTitle: "Add")
         alert.addButton(withTitle: "Cancel")
         alert.window.initialFirstResponder = field
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard alert.runModal() == .alertFirstButtonReturn else { return false }
         let address = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let origin = LampPresentationClip.origin(of: address)
         switch origin {
         case .youtube, .vimeo: break
         case .file, .unplayable:
             errorMessage = "That is not a YouTube or Vimeo video's address."
-            return
+            return false
         }
-        guard let slideID = selectedSlide?.id, let deckID = deck?.id else { return }
+        guard let slideID = selectedSlide?.id, let deckID = deck?.id else { return false }
         let assets = store.assetsDirectoryURL
         let stillName = "\(UUID().uuidString.lowercased()).jpg"
-        let preparing = "\(slideID)/\(blockID)"
+        let preparing = "\(slideID)/\(blockID ?? "\(Self.newVideoBlock)-\(UUID().uuidString)")"
         let token = UUID()
         preparingVideos[preparing] = token
         Task { @MainActor in
             defer { if preparingVideos[preparing] == token { preparingVideos[preparing] = nil } }
             let stillFile = assets.appendingPathComponent(stillName)
-            let still = await Self.thumbnail(of: origin)
-            if let still {
-                try? FileManager.default.createDirectory(at: assets, withIntermediateDirectories: true)
-                try? still.write(to: stillFile, options: .atomic)
+            // The site's own picture, or where it cannot be had, a plain one
+            // of Lamp's: a picture needs a still, or its deck will not open.
+            var still = await Self.thumbnail(of: origin) ?? Self.plainStill()
+            if let data = still {
+                do {
+                    try FileManager.default.createDirectory(at: assets, withIntermediateDirectories: true)
+                    try data.write(to: stillFile, options: .atomic)
+                } catch {
+                    // Not written, so not named: the block keeps what it had.
+                    still = nil
+                }
             }
             guard preparingVideos[preparing] == token,
                   deck?.id == deckID,
                   let slideIndex = deck?.slides.firstIndex(where: { $0.id == slideID }),
-                  let blockIndex = deck?.slides[slideIndex].blocks.firstIndex(where: { $0.id == blockID })
+                  var block = Self.target(blockID, in: deck?.slides[slideIndex])
             else {
                 try? FileManager.default.removeItem(at: stillFile)
                 return
             }
             if still != nil {
-                deck?.slides[slideIndex].blocks[blockIndex].assetPath =
-                    "\(LampPresentationDeckStore.assetsDirectoryName)/\(stillName)"
+                block.assetPath = "\(LampPresentationDeckStore.assetsDirectoryName)/\(stillName)"
             }
-            deck?.slides[slideIndex].blocks[blockIndex].clip = LampPresentationClip(source: address)
+            // A picture with no still is a deck that will not open.
+            guard block.assetPath != nil else {
+                errorMessage = "Lamp could not make a still for that video."
+                return
+            }
+            block.clip = LampPresentationClip(source: address)
+            place(block, in: slideIndex)
         }
+        return true
     }
 
     /// The site's own picture of a streamed video, as JPEG: YouTube's at its
@@ -1938,6 +1974,27 @@ struct SlideStudioView: View {
         case .file, .unplayable:
             return nil
         }
+    }
+
+    /// A dark 16:9 still with a play mark, for a streamed clip whose site
+    /// gave no picture of its own.
+    private static func plainStill() -> Data? {
+        let width = 1_280, height = 720
+        guard let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        ) else { return nil }
+        context.setFillColor(CGColor(red: 0.07, green: 0.09, blue: 0.15, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.85))
+        let middle = CGPoint(x: CGFloat(width) / 2, y: CGFloat(height) / 2)
+        context.move(to: CGPoint(x: middle.x - 40, y: middle.y - 50))
+        context.addLine(to: CGPoint(x: middle.x - 40, y: middle.y + 50))
+        context.addLine(to: CGPoint(x: middle.x + 50, y: middle.y))
+        context.closePath()
+        context.fillPath()
+        guard let image = context.makeImage() else { return nil }
+        return NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.9])
     }
 
     /// Whether `url`'s pictures are already HEVC.
@@ -1992,6 +2049,35 @@ struct SlideStudioView: View {
             block = .init(kind: kind, text: kind == .title ? "New Title" : "New content")
         }
         deck?.slides[index].blocks.append(block)
+    }
+
+    /// Asks for a video and, once it is ready, adds a picture block that
+    /// plays it: a looping video or a clip from a file, or (nil) a YouTube or
+    /// Vimeo address. Nothing is added until then, so a cancelled or failed
+    /// video leaves nothing behind, and the new block is one edit to undo.
+    private func addMovie(_ purpose: MoviePurpose?) {
+        if let purpose { chooseMovie(for: nil, as: purpose) } else { addClipLink(for: nil) }
+    }
+
+    /// What `preparingVideos` calls a video on its way to a new block.
+    static let newVideoBlock = "new"
+
+    /// The block a prepared video goes to: the one named, as it is now, or a
+    /// new picture block. Nil where the named block has gone.
+    private static func target(_ blockID: String?, in slide: LampPresentationSlide?) -> LampPresentationBlock? {
+        guard let slide else { return nil }
+        guard let blockID else { return LampPresentationBlock(kind: .image) }
+        return slide.blocks.first { $0.id == blockID }
+    }
+
+    /// Puts `block` on the slide at `slideIndex`: in its own place where it
+    /// is there, else at the end. One change, so one undo.
+    private func place(_ block: LampPresentationBlock, in slideIndex: Int) {
+        if let index = deck?.slides[slideIndex].blocks.firstIndex(where: { $0.id == block.id }) {
+            deck?.slides[slideIndex].blocks[index] = block
+        } else {
+            deck?.slides[slideIndex].blocks.append(block)
+        }
     }
 
     private func removeBlock(_ blockID: String) {
