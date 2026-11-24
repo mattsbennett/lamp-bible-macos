@@ -105,3 +105,63 @@ extension LampPresentationDeck {
         return copy
     }
 }
+
+extension LampPresentationBlock {
+    /// What Slide Studio calls this block: its role, except that a picture
+    /// block is named for what it shows. A video is kept as a picture block
+    /// with its still, but an author who added a clip looks for a clip, not
+    /// an image.
+    public var studioName: String {
+        guard kind == .image else { return kind.displayName }
+        if clip != nil { return "Clip" }
+        if video != nil { return "Looping Video" }
+        return kind.displayName
+    }
+}
+
+/// Names for files Slide Studio copies into a deck's assets.
+public enum SlideStudioAssetName {
+    /// A copy of `source` named after it, so an author can tell which file
+    /// a picture came from, with eight random hex digits so two files of
+    /// one name never meet: `sunset-3f2a1b9c.heic`. Lower case, letters,
+    /// digits and dashes only, which every file system and sync keeps.
+    public static func copy(of source: URL, extension pathExtension: String, fallback: String) -> String {
+        stem(source.deletingPathExtension().lastPathComponent, fallback: fallback)
+            + "-" + UUID().uuidString.lowercased().prefix(8)
+            + "." + pathExtension.lowercased()
+    }
+
+    static func stem(_ name: String, fallback: String) -> String {
+        var result = ""
+        var lastWasDash = true
+        for character in name.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: nil).lowercased() {
+            if character.isASCII, character.isLetter || character.isNumber {
+                result.append(character)
+                lastWasDash = false
+            } else if !lastWasDash {
+                result.append("-")
+                lastWasDash = true
+            }
+            if result.count >= 40 { break }
+        }
+        while result.hasSuffix("-") { result.removeLast() }
+        return result.isEmpty ? fallback : result
+    }
+}
+
+/// How Slide Studio names where an issue is, for a person rather than a
+/// parser: "Slide 3, Clip" for `slides[2].blocks[1].altText`.
+public enum SlideStudioIssuePlace {
+    public static func name(of path: String, in deck: LampPresentationDeck) -> String {
+        guard let slideMatch = path.firstMatch(of: #/^slides\[(\d+)\]/#),
+              let slideIndex = Int(slideMatch.1)
+        else { return "Deck" }
+        let slide = "Slide \(slideIndex + 1)"
+        guard let blockMatch = path.firstMatch(of: #/\.blocks\[(\d+)\]/#),
+              let blockIndex = Int(blockMatch.1),
+              deck.slides.indices.contains(slideIndex),
+              deck.slides[slideIndex].blocks.indices.contains(blockIndex)
+        else { return slide }
+        return "\(slide), \(deck.slides[slideIndex].blocks[blockIndex].studioName)"
+    }
+}

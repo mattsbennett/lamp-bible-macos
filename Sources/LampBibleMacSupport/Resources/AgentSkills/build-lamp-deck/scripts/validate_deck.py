@@ -1554,7 +1554,7 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
                         "presentation folder, such as Assets/photo.jpg"
                     )
                 if not nonempty(block.get("altText")):
-                    warnings.append(f"{block_path}.altText: describe the image for accessibility")
+                    warnings.append(f"{block_path}.altText: describe the picture; VoiceOver reads the description while presenting, an untitled slide is listed by it, and an agent working on the deck learns from it what the picture shows")
             # A focus moves the crop of a picture behind the slide; a tint is
             # drawn on any picture. Lamp reads an unknown tint as none, but a
             # value of the wrong type stops the deck opening.

@@ -1262,7 +1262,8 @@ struct SlideStudioView: View {
                 Image(systemName: firstIssue.severity == .error
                     ? "exclamationmark.triangle.fill" : "exclamationmark.circle")
                     .foregroundStyle(firstIssue.severity == .error ? .red : .orange)
-                Text("\(firstIssue.path): \(firstIssue.message)")
+                Text("\(deck.map { SlideStudioIssuePlace.name(of: firstIssue.path, in: $0) } ?? "Deck"): \(firstIssue.message)")
+                    .help(firstIssue.path)
                     .lineLimit(1)
                 if issues.count > 1 {
                     Text("+\(issues.count - 1) more")
@@ -1739,7 +1740,7 @@ struct SlideStudioView: View {
         blockID: String
     ) {
         let extensionName = data != nil ? "heic" : source.pathExtension.isEmpty ? "img" : source.pathExtension.lowercased()
-        let name = "\(UUID().uuidString.lowercased()).\(extensionName)"
+        let name = SlideStudioAssetName.copy(of: source, extension: extensionName, fallback: "picture")
         let destination = store.assetsDirectoryURL.appendingPathComponent(name)
         do {
             try FileManager.default.createDirectory(
@@ -1836,9 +1837,10 @@ struct SlideStudioView: View {
         }
 
         let assets = store.assetsDirectoryURL
-        let stem = UUID().uuidString.lowercased()
-        let videoName = "\(stem).\(reencodes ? "mp4" : source.pathExtension.lowercased())"
-        let stillName = "\(stem).jpg"
+        let videoName = SlideStudioAssetName.copy(
+            of: source, extension: reencodes ? "mp4" : source.pathExtension, fallback: "video"
+        )
+        let stillName = (videoName as NSString).deletingPathExtension + ".jpg"
         let preparing = "\(slideID)/\(blockID ?? "\(Self.newVideoBlock)-\(UUID().uuidString)")"
         let token = UUID()
         preparingVideos[preparing] = token
@@ -1903,9 +1905,15 @@ struct SlideStudioView: View {
             }
             let directory = LampPresentationDeckStore.assetsDirectoryName
             block.assetPath = "\(directory)/\(stillName)"
+            // A picture plays a loop or a clip, never both: with both, the
+            // clip plays and the loop is never seen.
             switch purpose {
-            case .loop: block.video = "\(directory)/\(videoName)"
-            case .clip: block.clip = LampPresentationClip(source: "\(directory)/\(videoName)")
+            case .loop:
+                block.video = "\(directory)/\(videoName)"
+                block.clip = nil
+            case .clip:
+                block.clip = LampPresentationClip(source: "\(directory)/\(videoName)")
+                block.video = nil
             }
             if block.altText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
                 block.altText = source.deletingPathExtension().lastPathComponent
@@ -1949,7 +1957,9 @@ struct SlideStudioView: View {
             let stillFile = assets.appendingPathComponent(stillName)
             // The site's own picture, or where it cannot be had, a plain one
             // of Lamp's: a picture needs a still, or its deck will not open.
+            async let title = Self.title(of: origin)
             var still = await Self.thumbnail(of: origin) ?? Self.plainStill()
+            let videoTitle = await title
             if let data = still {
                 do {
                     try FileManager.default.createDirectory(at: assets, withIntermediateDirectories: true)
@@ -1976,9 +1986,39 @@ struct SlideStudioView: View {
                 return
             }
             block.clip = LampPresentationClip(source: address)
+            block.video = nil
+            // Described by its title, as a file is by its name.
+            if block.altText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                block.altText = videoTitle ?? LampSlideBlockEditor.clipSummary(block.clip!)
+            }
             place(block, in: slideIndex)
         }
         return true
+    }
+
+    /// A streamed video's title, from its site's oEmbed answer.
+    private static func title(of origin: LampPresentationClip.Origin) async -> String? {
+        let page: String
+        let endpoint: String
+        switch origin {
+        case .youtube(let id):
+            page = "https://www.youtube.com/watch?v=\(id)"
+            endpoint = "https://www.youtube.com/oembed?format=json&url="
+        case .vimeo(let id, let hash):
+            page = "https://vimeo.com/\(id)" + (hash.map { "/\($0)" } ?? "")
+            endpoint = "https://vimeo.com/api/oembed.json?url="
+        case .file, .unplayable:
+            return nil
+        }
+        guard let encoded = page.addingPercentEncoding(withAllowedCharacters: .alphanumerics),
+              let url = URL(string: endpoint + encoded),
+              let (data, response) = try? await URLSession.shared.data(from: url),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let title = (object["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !title.isEmpty
+        else { return nil }
+        return title
     }
 
     /// The site's own picture of a streamed video, as JPEG: YouTube's at its
@@ -2055,11 +2095,22 @@ struct SlideStudioView: View {
               let index = deck?.slides.firstIndex(where: { $0.id == slideID }) else { return }
         let block: LampPresentationBlock
         if kind == .image {
-            block = .init(
-                kind: .image,
-                assetPath: "\(LampPresentationDeckStore.assetsDirectoryName)/image.jpg",
-                altText: "Describe the image"
-            )
+            // The picture is asked for at once, as a video is, and the block
+            // is taken away again if none is chosen: a picture of no file is
+            // a deck that will not save. Behind the slide where its layout
+            // frames none beside the words.
+            var picture = LampPresentationBlock(kind: .image)
+            if let slide = deck?.slides[index],
+               !Self.drawsBeside(picture.id, on: LampPresentationSlide(layout: slide.layout, blocks: [picture])) {
+                picture.placement = .background
+            }
+            deck?.slides[index].blocks.append(picture)
+            chooseImage(for: picture.id)
+            if let slideIndex = deck?.slides.firstIndex(where: { $0.id == slideID }),
+               deck?.slides[slideIndex].blocks.first(where: { $0.id == picture.id })?.assetPath == nil {
+                deck?.slides[slideIndex].blocks.removeAll { $0.id == picture.id }
+            }
+            return
         } else if kind == .chart {
             // With a translation already chosen, so the block is one field
             // short of valid rather than two. The key has no sensible default
@@ -2132,11 +2183,15 @@ struct SlideStudioView: View {
             if !Self.drawsBeside(placed.id, on: LampPresentationSlide(layout: slide.layout, blocks: [placed])) {
                 placed.placement = .background
             }
-            // Behind a slide that already has a picture there, the video
-            // becomes that picture's, keeping how it is cropped, tinted and
-            // moved: a second picture behind is never drawn.
-            if placed.placement == .background, !Self.drawn(placed, on: slide),
-               let index = slide.blocks.firstIndex(where: { $0.isBackground }) {
+            // Where the slide already draws a picture in that place, beside
+            // the words or behind them, the video becomes that picture's,
+            // keeping how it is cropped, tinted and moved: a second picture
+            // there is never drawn.
+            let plan = slide.plan
+            if !Self.drawn(placed, on: slide),
+               let shown = placed.placement == .background ? plan.background : plan.image,
+               shown.kind == .image,
+               let index = slide.blocks.firstIndex(where: { $0.id == shown.id }) {
                 var existing = slide.blocks[index]
                 existing.assetPath = placed.assetPath
                 existing.video = placed.video
@@ -2355,6 +2410,8 @@ private struct LampSlideBlockEditor: View {
     var isShown = true
     var layoutName = ""
     let remove: () -> Void
+    /// Whether the picture's file could not be read.
+    @State private var isPictureMissing = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -2368,14 +2425,16 @@ private struct LampSlideBlockEditor: View {
                 Menu {
                     Picker("Role", selection: $block.kind) {
                         ForEach(LampPresentationBlockKind.authorableHere(including: block.kind)) { kind in
-                            Text(kind.displayName).tag(kind)
+                            // The picture's row named as the heading is, so
+                            // the checked role is the one shown.
+                            Text(kind == block.kind ? block.studioName : kind.displayName).tag(kind)
                         }
                     }
                     .pickerStyle(.inline)
                     .labelsHidden()
                 } label: {
                     HStack(spacing: 4) {
-                        Text(block.kind.displayName)
+                        Text(block.studioName)
                             .font(.callout.weight(.semibold))
                             .foregroundStyle(.primary)
                         Image(systemName: "chevron.down")
@@ -2388,7 +2447,7 @@ private struct LampSlideBlockEditor: View {
                 .menuIndicator(.hidden)
                 .fixedSize()
                 .accessibilityLabel("Role")
-                .accessibilityValue(block.kind.displayName)
+                .accessibilityValue(block.studioName)
                 .help("What this block is on the slide")
                 Spacer()
                 Button("Remove Content", systemImage: "minus.circle", role: .destructive, action: remove)
@@ -2397,30 +2456,40 @@ private struct LampSlideBlockEditor: View {
             }
 
             if block.kind == .image {
-                // The picture itself, with its file beside it: a design tool
-                // shows what is placed, and a path in a form field said only
-                // where it was kept.
+                // The picture itself, as a design tool shows what is placed.
+                // Its file's path is shown only where the file is missing,
+                // the one time it tells the author anything.
                 HStack(alignment: .top, spacing: 12) {
-                    StudioImageThumbnail(url: imageURL)
+                    StudioImageThumbnail(url: imageURL, isMissing: $isPictureMissing)
                     VStack(alignment: .leading, spacing: 6) {
-                        TextField("Asset path", text: Binding(
-                            get: { block.assetPath ?? "" },
-                            set: { block.assetPath = $0 }
-                        ))
-                        // The video being prepared sets the picture when done.
-                        .disabled(isPreparingVideo)
-                        .textFieldStyle(.plain)
-                        .font(.callout)
-                        .lineLimit(1)
-                        .truncationMode(.head)
-                        .labelsHidden()
-                        .help(block.assetPath ?? "")
-                        Button("Choose Image…", systemImage: "photo", action: chooseImage)
-                        .disabled(isPreparingVideo)
-                        .buttonStyle(.lampSecondary)
-                        .controlSize(.small)
+                        // The picture's file, read only: which one it is. A
+                        // video's still is named in its row below instead.
+                        // A path that names nothing inside the deck is missing too.
+                        let missing = isPictureMissing || (block.assetPath != nil && imageURL == nil)
+                        if let path = block.assetPath, missing || (block.video == nil && block.clip == nil) {
+                            Label(
+                                missing ? "Missing: \((path as NSString).lastPathComponent)" : (path as NSString).lastPathComponent,
+                                systemImage: missing ? "exclamationmark.triangle" : "photo"
+                            )
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .help(path)
+                        }
+                        // A video keeps a picture: its still, shown before it
+                        // plays, in thumbnails and PDFs, and wherever it
+                        // cannot play. Adding the video made one from its
+                        // frames; this replaces it.
+                        let isStill = block.video != nil || block.clip != nil
+                        Button(isStill ? "Choose Still…" : "Choose Image…", systemImage: "photo", action: chooseImage)
+                            // The video being prepared sets the picture when done.
+                            .disabled(isPreparingVideo)
+                            .buttonStyle(.lampSecondary)
                             .controlSize(.small)
-                            .help("Copy an image into this library and use it here")
+                            .help(isStill
+                                ? "The picture shown before the video plays, in thumbnails and PDFs, and wherever it cannot play"
+                                : "Copy an image into this library and use it here")
                         // A video plays only while presenting; the picture
                         // above is its still everywhere else.
                         if isPreparingVideo {
@@ -2475,12 +2544,13 @@ private struct LampSlideBlockEditor: View {
                     }
                 }
                 StudioStackedField("Description") {
-                    TextField("Accessibility description", text: Binding(
+                    TextField("What it shows", text: Binding(
                         get: { block.altText ?? "" },
                         set: { block.altText = $0 }
                     ), axis: .vertical)
                     .lineLimit(2...3)
                     .labelsHidden()
+                    .help("Read by VoiceOver while presenting, names an untitled slide in the list, and tells the deck agent what is pictured")
                 }
                 // Two pictures of where it goes, in the text's own colour:
                 // the choice is read more than it is changed, and a filled
@@ -3412,6 +3482,8 @@ private struct StudioStackedField<Content: View>: View {
 /// every redraw of the inspector would stall typing beside it.
 private struct StudioImageThumbnail: View {
     let url: URL?
+    /// Set when there is a file named that cannot be read.
+    @Binding var isMissing: Bool
     @State private var image: CGImage?
 
     var body: some View {
@@ -3437,17 +3509,29 @@ private struct StudioImageThumbnail: View {
             .task(id: url) {
                 guard let url else {
                     image = nil
+                    isMissing = false
                     return
                 }
-                image = await Task.detached(priority: .utility) {
-                    guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil as CGImage? }
+                // Missing means no file there; one ImageIO cannot read (an
+                // SVG, which the slide draws through NSImage) is drawn that
+                // way here too.
+                let (thumbnail, exists) = await Task.detached(priority: .utility) { () -> (CGImage?, Bool) in
+                    guard FileManager.default.fileExists(atPath: url.path) else { return (nil, false) }
                     let options: [CFString: Any] = [
                         kCGImageSourceCreateThumbnailFromImageAlways: true,
                         kCGImageSourceCreateThumbnailWithTransform: true,
                         kCGImageSourceThumbnailMaxPixelSize: 240,
                     ]
-                    return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+                    if let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                       let made = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) {
+                        return (made, true)
+                    }
+                    var rect = CGRect(x: 0, y: 0, width: 240, height: 160)
+                    return (NSImage(contentsOf: url)?.cgImage(forProposedRect: &rect, context: nil, hints: nil), true)
                 }.value
+                guard !Task.isCancelled else { return }
+                image = thumbnail
+                isMissing = !exists
             }
     }
 }
