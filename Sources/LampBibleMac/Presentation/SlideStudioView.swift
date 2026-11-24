@@ -351,8 +351,31 @@ struct SlideStudioView: View {
         .controlSize(.small)
     }
 
+    /// What the deck would be saved as, so a heading cleared to leave it off
+    /// is not an error (`withoutEmptyTextBlocks`).
+    ///
+    /// Checked as the editor holds it, so a path names the block the author
+    /// sees, less the errors of text blocks cleared to leave them off.
     private var issues: [LampPresentationDeckIssue] {
-        deck.map(LampPresentationDeckValidator.validate) ?? []
+        guard let deck else { return [] }
+        let cleared = Set(deck.slides.enumerated().flatMap { slideIndex, slide in
+            slide.blocks.enumerated().compactMap { blockIndex, block in
+                block.kind != .image && block.kind != .chart
+                    && block.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? "slides[\(slideIndex)].blocks[\(blockIndex)]" : nil
+            }
+        })
+        let asEdited = LampPresentationDeckValidator.validate(deck).filter { issue in
+            !cleared.contains { issue.path == $0 || issue.path.hasPrefix($0 + ".") }
+        }
+        // What only the saved form has wrong: a slide left with no blocks
+        // once its cleared heading is left off. Slide and deck paths only,
+        // which mean the same in both.
+        let known = Set(asEdited.map(\.id))
+        let asSaved = LampPresentationDeckValidator.validate(deck.withoutEmptyTextBlocks).filter { issue in
+            !issue.path.contains(".blocks[") && !known.contains(issue.id)
+        }
+        return asEdited + asSaved
     }
 
     private var hasErrors: Bool {
@@ -872,6 +895,9 @@ struct SlideStudioView: View {
                                             chooseClip: { chooseMovie(for: block.id, as: .clip) },
                                             addClipLink: { addClipLink(for: block.id) },
                                             isPreparingVideo: preparingVideos["\(selectedSlide?.id ?? "")/\(block.id)"] != nil,
+                                            besideWords: Self.drawsBeside(block.id, on: slideBinding.wrappedValue),
+                                            isShown: !slideBinding.wrappedValue.plan.ignored.contains { $0.id == block.id },
+                                            layoutName: slideBinding.wrappedValue.layout.displayName,
                                             remove: { removeBlock(block.id) }
                                         )
                                         if block.id != slideBinding.blocks.wrappedValue.last?.id {
@@ -1339,7 +1365,8 @@ struct SlideStudioView: View {
             if let selectedDeckID,
                let diskDeck = refreshed.first(where: { $0.id == selectedDeckID }),
                deck == savedDeck,
-               diskDeck != savedDeck {
+               // Against what was saved, which leaves cleared blocks out.
+               diskDeck != savedDeck?.withoutEmptyTextBlocks {
                 let priorSlideID = selectedSlideID
                 deck = diskDeck
                 savedDeck = diskDeck
@@ -1467,13 +1494,17 @@ struct SlideStudioView: View {
         saveTask?.cancel()
         guard let deck, deck != savedDeck else { return }
         do {
-            try store.save(deck)
+            let stored = deck.withoutEmptyTextBlocks
+            try store.save(stored)
             inbox.deckFilesChanged()
+            // The editor's own copy, empty blocks and all; but the list holds
+            // what is on disk, so a refresh does not take the save for a
+            // change from elsewhere.
             savedDeck = deck
             if let index = decks.firstIndex(where: { $0.id == deck.id }) {
-                decks[index] = deck
+                decks[index] = stored
             } else {
-                decks.append(deck)
+                decks.append(stored)
             }
             decks.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
             statusMessage = "Saved"
@@ -1490,6 +1521,7 @@ struct SlideStudioView: View {
             }
             do {
                 try LampSlideStudioDrafts.write(deck, inApplicationSupport: applicationSupportURL)
+                // The draft keeps everything as typed, empty blocks and all.
                 statusMessage = "Unfinished — fix the errors to save"
             } catch {
                 errorMessage = error.localizedDescription
@@ -2059,6 +2091,23 @@ struct SlideStudioView: View {
         if let purpose { chooseMovie(for: nil, as: purpose) } else { addClipLink(for: nil) }
     }
 
+    /// Whether a slide of this layout draws a picture beside its words at
+    /// all, whatever else is on it: a title or closing slide frames none,
+    /// only one behind it.
+    static func drawsBeside(_ blockID: String, on slide: LampPresentationSlide) -> Bool {
+        guard var picture = slide.blocks.first(where: { $0.id == blockID }) else { return true }
+        picture.placement = nil
+        let probe = LampPresentationSlide(layout: slide.layout, blocks: [picture])
+        return !probe.plan.ignored.contains { $0.id == blockID }
+    }
+
+    /// Whether `slide` would draw `block` if it were added to it.
+    static func drawn(_ block: LampPresentationBlock, on slide: LampPresentationSlide) -> Bool {
+        var probe = slide
+        probe.blocks.append(block)
+        return !probe.plan.ignored.contains { $0.id == block.id }
+    }
+
     /// What `preparingVideos` calls a video on its way to a new block.
     static let newVideoBlock = "new"
 
@@ -2075,8 +2124,30 @@ struct SlideStudioView: View {
     private func place(_ block: LampPresentationBlock, in slideIndex: Int) {
         if let index = deck?.slides[slideIndex].blocks.firstIndex(where: { $0.id == block.id }) {
             deck?.slides[slideIndex].blocks[index] = block
-        } else {
-            deck?.slides[slideIndex].blocks.append(block)
+        } else if let slide = deck?.slides[slideIndex] {
+            // A new picture goes beside the words where the slide draws one
+            // there, and behind the slide where it would not: a title slide
+            // frames no picture, and one added to it would never be seen.
+            var placed = block
+            if !Self.drawsBeside(placed.id, on: LampPresentationSlide(layout: slide.layout, blocks: [placed])) {
+                placed.placement = .background
+            }
+            // Behind a slide that already has a picture there, the video
+            // becomes that picture's, keeping how it is cropped, tinted and
+            // moved: a second picture behind is never drawn.
+            if placed.placement == .background, !Self.drawn(placed, on: slide),
+               let index = slide.blocks.firstIndex(where: { $0.isBackground }) {
+                var existing = slide.blocks[index]
+                existing.assetPath = placed.assetPath
+                existing.video = placed.video
+                existing.clip = placed.clip
+                if existing.altText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                    existing.altText = placed.altText
+                }
+                deck?.slides[slideIndex].blocks[index] = existing
+                return
+            }
+            deck?.slides[slideIndex].blocks.append(placed)
         }
     }
 
@@ -2117,7 +2188,7 @@ struct SlideStudioView: View {
 
     private func presentDeck() {
         saveNow()
-        guard let deck, LampPresentationDeckValidator.errors(in: deck).isEmpty else { return }
+        guard let deck, LampPresentationDeckValidator.errors(in: deck.withoutEmptyTextBlocks).isEmpty else { return }
         remoteHost.start()
         openWindow(id: "slide-presenter", value: SlidePresentationRequest(deckID: deck.id))
     }
@@ -2130,7 +2201,7 @@ struct SlideStudioView: View {
         panel.allowedContentTypes = [.lampPresentationDeck]
         guard panel.runModal() == .OK, let destination = panel.url else { return }
         do {
-            try store.encoded(deck).write(to: destination, options: [.atomic])
+            try store.encoded(deck.withoutEmptyTextBlocks).write(to: destination, options: [.atomic])
             statusMessage = "Exported \(destination.lastPathComponent)"
         } catch {
             errorMessage = error.localizedDescription
@@ -2277,6 +2348,12 @@ private struct LampSlideBlockEditor: View {
     let chooseClip: () -> Void
     let addClipLink: () -> Void
     var isPreparingVideo = false
+    /// Whether this slide draws a picture beside its words; where it does
+    /// not, the picture can only go behind the slide.
+    var besideWords = true
+    /// Whether the slide draws this block at all.
+    var isShown = true
+    var layoutName = ""
     let remove: () -> Void
 
     var body: some View {
@@ -2409,17 +2486,29 @@ private struct LampSlideBlockEditor: View {
                 // the choice is read more than it is changed, and a filled
                 // red segment was one more red mark in the window.
                 StudioStackedField("Placement") {
-                    StudioChoiceTiles(
-                        selection: $block.placement,
-                        choices: [
-                            .init(value: nil, title: "Beside the text", systemImage: "rectangle.split.2x1"),
-                            .init(
-                                value: .background,
-                                title: "Behind the slide",
-                                systemImage: "rectangle.inset.filled"
-                            ),
-                        ]
-                    )
+                    VStack(alignment: .leading, spacing: 4) {
+                        // Only the places this slide draws a picture: a title
+                        // slide frames none beside its words.
+                        StudioChoiceTiles(
+                            selection: $block.placement,
+                            choices: (besideWords
+                                ? [.init(value: nil, title: "Beside the text", systemImage: "rectangle.split.2x1")]
+                                : [])
+                                + [.init(
+                                    value: .background,
+                                    title: "Behind the slide",
+                                    systemImage: "rectangle.inset.filled"
+                                )]
+                        )
+                        if !isShown {
+                            Text(!besideWords && block.placement != .background
+                                ? "A \(layoutName) slide shows a picture only behind it, so this one is not shown yet."
+                                : "This slide already shows another picture there, so this one is not shown.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
                 }
                 .help("Behind the slide, Lamp chooses the colour of the words and covers the picture only as far as they need")
                 // Drawn in the deck's colours, so pictures from different

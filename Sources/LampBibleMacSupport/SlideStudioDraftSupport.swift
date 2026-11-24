@@ -83,3 +83,25 @@ public enum LampSlideStudioDrafts {
         return result.isEmpty ? "deck" : result
     }
 }
+
+extension LampPresentationDeck {
+    /// This deck as Slide Studio stores, presents and exports it: without
+    /// text blocks whose words have all been cleared.
+    ///
+    /// Clearing a heading's words is how an author takes the heading off a
+    /// slide, so a video or a picture can stand alone. An empty text block
+    /// is an error to the validator, and to every older Lamp that reads the
+    /// deck, so it is left out of what is saved rather than kept as a deck
+    /// that cannot be presented. The editor keeps the block, so the author
+    /// can type into it again.
+    public var withoutEmptyTextBlocks: LampPresentationDeck {
+        var copy = self
+        for index in copy.slides.indices {
+            copy.slides[index].blocks.removeAll { block in
+                block.kind != .image && block.kind != .chart
+                    && block.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+        }
+        return copy
+    }
+}
