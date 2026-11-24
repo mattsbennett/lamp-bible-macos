@@ -433,6 +433,60 @@ extension LampSyncLocalFiles {
         }
     }
 
+    /// The server's revision for each file the manifest names but no folder
+    /// listing reaches — media, workspace files, writing documents — by
+    /// listing their folders rather than asking after each file.
+    ///
+    /// These used to be asked for one at a time, which is one request per
+    /// revision file, context file, transcript and picture, sequentially, on
+    /// every pass: some fourteen thousand of them at two hundred and fifty
+    /// workspaces. A folder's listing answers for everything in it at once,
+    /// and on WebDAV it carries the same ETag a request for the file would
+    /// have returned, so what the plan is given does not change.
+    ///
+    /// Where a listing carries no revision — the folder provider's does not
+    /// — the file is asked after as before, but only when the listing shows
+    /// it is there at all. A member that is absent used to cost a request
+    /// that came back with nothing; now it costs none.
+    ///
+    /// A folder that cannot be listed falls back to asking after each of its
+    /// members, so a server that refuses a listing behaves as it did.
+    public static func revisionsOfUnlistedMembers(
+        _ paths: [String], from store: any LampSyncRemoteStore
+    ) async -> [String: String] {
+        var byDirectory: [String: [String]] = [:]
+        for path in paths {
+            let directory = path.contains("/")
+                ? String(path[path.startIndex..<path.lastIndex(of: "/")!])
+                : ""
+            byDirectory[directory, default: []].append(path)
+        }
+        var revisions: [String: String] = [:]
+        for (directory, members) in byDirectory.sorted(by: { $0.key < $1.key }) {
+            let listing = try? await store.list(directory: directory)
+            guard let listing else {
+                for path in members {
+                    if let revision = try? await store.revision(path: path) {
+                        revisions[path] = revision
+                    }
+                }
+                continue
+            }
+            let entries = Dictionary(
+                listing.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first }
+            )
+            for path in members {
+                guard let entry = entries[path], !entry.isDirectory else { continue }
+                if let revision = entry.revision {
+                    revisions[path] = revision
+                } else if let revision = try? await store.revision(path: path) {
+                    revisions[path] = revision
+                }
+            }
+        }
+        return revisions
+    }
+
     /// Regular files directly inside a directory, links and subdirectories
     /// left out. A missing directory is simply empty.
     private static func plainFiles(in directory: URL, fileManager: FileManager) -> [URL] {

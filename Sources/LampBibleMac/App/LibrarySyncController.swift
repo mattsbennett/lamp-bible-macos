@@ -1391,13 +1391,15 @@ extension LibrarySyncController {
             }
         )
 
-        // The paths no folder listing reaches: the manifest names them, so
-        // their revisions are asked for one at a time.
-        for member in manifest.members where !(member.kind?.isListed ?? true) {
-            if let revision = try await store.revision(path: member.path) {
-                result.gathered.extraListing[member.path] = revision
-            }
-        }
+        // The paths no folder listing reaches: the manifest names them, and
+        // their folders are listed for them — one request a folder rather
+        // than one a file. See `revisionsOfUnlistedMembers`.
+        result.gathered.extraListing.merge(
+            await LampSyncLocalFiles.revisionsOfUnlistedMembers(
+                manifest.members.filter { !($0.kind?.isListed ?? true) }.map(\.path),
+                from: store
+            )
+        ) { _, listed in listed }
         return result
     }
 
