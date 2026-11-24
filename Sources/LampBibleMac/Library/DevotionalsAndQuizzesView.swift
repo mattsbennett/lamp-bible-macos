@@ -89,6 +89,22 @@ final class WritingRowSummaries {
     }
 }
 
+/// A body search's answer: which writings held the query, and what it was
+/// asked of.
+private struct BodyMatches: Equatable {
+    let query: String
+    /// The list this was found in, so a stale answer can be told apart from a
+    /// current one even when the query is unchanged.
+    let revision: Int
+    let ids: Set<String>
+}
+
+/// What a body search is for. A change to either starts it again.
+private struct BodySearchKey: Equatable {
+    let query: String
+    let revision: Int
+}
+
 private struct WritingListSection: Identifiable {
     let id: String
     let title: String?
@@ -161,6 +177,8 @@ struct DevotionalsView: View {
     /// they were read for, so another writing's are never shown under it.
     @State private var otherFiles: (writingID: String, files: [WorkspaceTextFileSnapshot])?
     @State private var presentationDecksByDevotionalID: [String: [LampPresentationDeck]] = [:]
+    /// Which writings hold the query in their body, found off the main actor.
+    @State private var bodyMatches: BodyMatches?
     private let rowSummaries = WritingRowSummaries.shared
 
     /// A writing a search result asked for. Cleared once taken, so coming
@@ -193,27 +211,69 @@ struct DevotionalsView: View {
         initialDevotionalID = nil
     }
 
+    private var trimmedQuery: String {
+        query.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// What the search matches without reading a body: everything a row
+    /// shows, which is short.
+    private func matchesWhatTheRowShows(_ devotional: LampDevotional, _ needle: String) -> Bool {
+        [
+            devotional.title,
+            devotional.subtitle,
+            devotional.author,
+            devotional.seriesName,
+            devotional.summary,
+        ]
+        .compactMap { $0 }
+        .contains { $0.localizedCaseInsensitiveContains(needle) }
+            || devotional.tags.contains { $0.localizedCaseInsensitiveContains(needle) }
+    }
+
+    /// The list as it is shown.
+    ///
+    /// Bodies are searched off the main actor and the answer kept in
+    /// `bodyMatches`; this runs in `body`, on the thread taking keystrokes,
+    /// so what it reads is the metadata a row draws. Searching every body
+    /// here cost 37 ms at a thousand writings and 155 ms at four thousand,
+    /// per keystroke and again on every autosave
+    /// (`lamp-bible-core/Documentation/decisions/0004`).
+    ///
+    /// Matches found in a body are kept while a newer scan runs, so the list
+    /// catches up rather than emptying and filling again. They are discarded
+    /// as soon as the query changes, since they answer the old one.
     private var filteredDevotionals: [LampDevotional] {
-        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let needle = trimmedQuery
+        let bodies = bodyMatches.flatMap { $0.query == needle ? $0.ids : nil }
         return model.devotionals.filter { devotional in
             guard categoryFilter == nil
                     || LampWritingCategory.foldedKey(devotional.category)
                         == LampWritingCategory.foldedKey(categoryFilter),
                   moduleFilter == nil || devotional.moduleID == moduleFilter else { return false }
-            guard !trimmedQuery.isEmpty else { return true }
-            return [
-                devotional.title,
-                devotional.subtitle,
-                devotional.author,
-                devotional.seriesName,
-                devotional.summary,
-                devotional.content,
-            ]
-            .compactMap { $0 }
-            .contains { $0.localizedCaseInsensitiveContains(trimmedQuery) }
-            || devotional.tags.contains { $0.localizedCaseInsensitiveContains(trimmedQuery) }
+            guard !needle.isEmpty else { return true }
+            return matchesWhatTheRowShows(devotional, needle)
+                || bodies?.contains(devotional.id) == true
         }
         .sorted(by: devotionalPrecedes)
+    }
+
+    /// Reads every body for the query, away from the keystrokes, after the
+    /// typing settles.
+    private func findTheQueryInBodies() async {
+        let needle = trimmedQuery
+        guard !needle.isEmpty else {
+            bodyMatches = nil
+            return
+        }
+        try? await Task.sleep(for: .milliseconds(150))
+        guard !Task.isCancelled else { return }
+        let writings = model.devotionals
+        let revision = model.devotionalsRevision
+        let found = await Task.detached(priority: .userInitiated) {
+            Set(writings.lazy.filter { $0.content.localizedCaseInsensitiveContains(needle) }.map(\.id))
+        }.value
+        guard !Task.isCancelled else { return }
+        bodyMatches = BodyMatches(query: needle, revision: revision, ids: found)
     }
 
     var body: some View {
@@ -237,7 +297,7 @@ struct DevotionalsView: View {
                     // the page beside them moves rather than jumping: see
                     // `LampPaneWidth`. The divider is the one point.
                     HStack(spacing: 0) {
-                        writingList(listSections)
+                        writingList(listSections, shown: visibleDevotionals.count)
                             .frame(width: writingListWidth)
                             // A side pane, so it recedes one step from the
                             // writing beside it, as the details pane on the
@@ -493,7 +553,9 @@ struct DevotionalsView: View {
     /// the list's own section headers, and the selection the system draws.
     /// Before, this list drew its rules and headings itself, and so looked
     /// unlike every other list in the app.
-    private func writingList(_ listSections: [WritingListSection]) -> some View {
+    private func writingList(
+        _ listSections: [WritingListSection], shown: Int
+    ) -> some View {
         VStack(spacing: 0) {
             // The search on a row of its own, at the height of the editor's
             // format bar and the assistant's header: while a writing is
@@ -503,18 +565,30 @@ struct DevotionalsView: View {
                 .padding(.horizontal, 14)
                 .frame(height: LampMetrics.paneHeaderHeight)
             Divider()
-            writingListHeader
+            writingListHeader(shown: shown)
             Divider()
             writingListRows(listSections)
+        }
+        // The query, and the writings it is asked of: a new letter or a save
+        // starts the scan again, and `task(id:)` cancels the one in flight.
+        .task(id: BodySearchKey(query: trimmedQuery, revision: model.devotionalsRevision)) {
+            await findTheQueryInBodies()
         }
     }
 
     /// Over the list, what acts on it: the categories to show, as chips with
     /// their counts, then how many are shown, how they are arranged, and a
     /// new one. In the window's toolbar they sat over the page, not the list.
-    private var writingListHeader: some View {
+    private func writingListHeader(shown: Int) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            let categories = devotionalCategories
+            // Counted in one pass over the writings, and the number shown
+            // handed in from the body, which has the filtered list in hand.
+            // Each chip used to filter the whole list for its own count, and
+            // the line under them filtered it again — so a header over four
+            // thousand writings ran the filter once per category and twice
+            // more, on the thread taking keystrokes.
+            let counts = devotionalCategoryCounts
+            let categories = counts.order
             if categories.count > 1 {
                 // One line that scrolls, not a row that wraps: wrapped, the
                 // last chip sat alone on a line of its own.
@@ -524,9 +598,7 @@ struct DevotionalsView: View {
                         ForEach(categories, id: \.self) { category in
                             categoryChip(
                                 title: LampWritingCategory.displayName(category) ?? category,
-                                count: model.devotionals.filter {
-                                    LampWritingCategory.foldedKey($0.category) == LampWritingCategory.foldedKey(category)
-                                }.count,
+                                count: counts.byCategory[LampWritingCategory.foldedKey(category)] ?? 0,
                                 category: category
                             )
                         }
@@ -543,7 +615,7 @@ struct DevotionalsView: View {
                 )
             }
             HStack(spacing: 10) {
-                Text(filteredDevotionals.count == 1 ? "1 writing" : "\(filteredDevotionals.count) writings")
+                Text(shown == 1 ? "1 writing" : "\(shown) writings")
                     .font(.system(size: LampMetrics.listCaptionSize))
                     .foregroundStyle(Color.lampSecondaryText)
                 Spacer()
@@ -1393,6 +1465,19 @@ struct DevotionalsView: View {
 
     private var devotionalCategories: [String] {
         LampWritingCategory.kindsHeld(model.devotionals.map(\.category))
+    }
+
+    /// The categories held, and how many writings are in each, from one walk
+    /// of the list.
+    /// Keyed by the folded key, which is nil for a writing in no category —
+    /// an `Optional` key rather than a sentinel, so a chip and a row agree by
+    /// construction.
+    private var devotionalCategoryCounts: (order: [String], byCategory: [String?: Int]) {
+        var byCategory: [String?: Int] = [:]
+        for devotional in model.devotionals {
+            byCategory[LampWritingCategory.foldedKey(devotional.category), default: 0] += 1
+        }
+        return (LampWritingCategory.kindsHeld(model.devotionals.map(\.category)), byCategory)
     }
 
     private var devotionalCollections: [(id: String, name: String)] {

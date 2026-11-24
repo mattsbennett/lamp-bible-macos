@@ -162,6 +162,11 @@ final class LibraryModel: ObservableObject {
     @Published private(set) var installedNotesByReference: [Int: [LampVerseNote]] = [:]
     @Published private(set) var plans: [LampReadingPlan] = []
     @Published private(set) var devotionals: [LampDevotional] = []
+    /// Bumped whenever `devotionals` changes, so a view that works something
+    /// out from the list off the main actor can tell whether its answer is
+    /// still about the list in hand. A count and a newest date would nearly
+    /// do; nearly is how a stale list gets shown.
+    @Published private(set) var devotionalsRevision = 0
     @Published private(set) var quizModules: [LampQuizModule] = []
     @Published private(set) var selectedPlanIDs: Set<String> = []
     @Published private(set) var completedReadingIDs: Set<String> = []
@@ -1501,13 +1506,9 @@ final class LibraryModel: ObservableObject {
             takeBackCopy()
             throw error
         }
-        // Saved. A list that will not read again is not a writing that was
-        // not made, so it is added to what is shown rather than undone.
-        if let listed = try? await library.devotionals() {
-            devotionals = listed
-        } else if !devotionals.contains(where: { $0.id == saved.id }) {
-            devotionals.append(saved)
-        }
+        // Saved, and put in its place in the list: a new writing is one row,
+        // not a reason to read every writing there is.
+        absorbSavedDevotional(saved)
         await refreshManuscriptNotes(for: saved)
         if let chatID {
             // What the chat shows of it. A failure costs the chat its line
@@ -1700,41 +1701,62 @@ final class LibraryModel: ObservableObject {
             // Refused: nothing was written, so nothing is carried, and the
             // place in line is given up rather than left to time out.
             slot?.reservation.giveUp()
-            devotionals = try await library.devotionals()
+            publishDevotionals(try await library.devotionals())
             return nil
         }
         if let carry, let slot { carryReviewMarks(carry, to: saved, from: reviewTexts, in: slot) }
-        // The writing is written. Reading the list again is how the rest
-        // of the app hears about it, and a failure there — some other
-        // writing that will not decode — is not this save failing: thrown
-        // from here it would tell the writer their work was not saved
-        // when it was, and a restore waiting on the answer would put the
-        // passage back as it was over a writing that had taken it.
-        do {
-            devotionals = try await library.devotionals()
-        } catch {
-            // The list is what the editor opens writings from, so leaving
-            // it as it was would show this one's old body, and a writing
-            // saved for the first time would open blank. The one that was
-            // just written is put in by hand, and the rest wait for a
-            // reload that works.
-            // To the second, and a tie left alone: what is cached came
-            // from the database, which keeps whole seconds, while this
-            // one still has its fractions — so an older save looked newer
-            // than a cached copy written later in the same second. A tie
-            // waits for a reload that works rather than guessing.
-            func second(_ date: Date?) -> TimeInterval { (date ?? .distantPast).timeIntervalSince1970.rounded(.down) }
-            if let at = devotionals.firstIndex(where: { $0.id == saved.id }) {
-                if second(devotionals[at].lastModified) < second(saved.lastModified) {
-                    devotionals[at] = saved
-                }
-            } else {
-                devotionals.append(saved)
-            }
-            errorMessage = "Saved, but the list of writings could not be read again: \(error.localizedDescription)"
-        }
+        // The writing is written, and the copy read back is what the list
+        // should show, so it is put in its place rather than the whole list
+        // being read again. Autosave fires a second and a half after a
+        // keystroke, and reading every writing then — 125 ms at four
+        // thousand of them, measured, and the list's own filter run again
+        // after it — was work the typist paid for a row they could already
+        // see (`Documentation/decisions/0004`).
+        //
+        // What is *not* skipped: a copy that arrived from another device
+        // while the editor was open is caught by the save itself refusing
+        // (`ifNotNewerThan`), which reads the list again below, and a pass
+        // that brings writings in calls `refresh()` when it finishes.
+        absorbSavedDevotional(saved)
         await refreshManuscriptNotes(for: saved)
         return saved
+    }
+
+    /// Puts one saved writing in its place in the list.
+    ///
+    /// In the order the library gives writings out in
+    /// (`LampDevotional.libraryOrder`), not an order of this app's own: the
+    /// list would otherwise re-order itself the first time anything read it
+    /// again.
+    ///
+    /// Compared to the second, and a tie left alone: the stored copy keeps
+    /// whole seconds while the one just saved still has its fractions, so an
+    /// older save looked newer than a copy written later in the same second.
+    private func absorbSavedDevotional(_ saved: LampDevotional) {
+        func second(_ date: Date?) -> TimeInterval {
+            (date ?? .distantPast).timeIntervalSince1970.rounded(.down)
+        }
+        var updated = devotionals
+        if let at = updated.firstIndex(where: { $0.id == saved.id }) {
+            guard second(updated[at].lastModified) <= second(saved.lastModified) else { return }
+            updated[at] = saved
+            // Its place can move: a title, a date or a series changes where
+            // the library would have put it.
+            if !updated.isSorted(by: LampDevotional.libraryOrder) {
+                updated.sort(by: LampDevotional.libraryOrder)
+            }
+        } else {
+            let at = updated.firstIndex { LampDevotional.libraryOrder(saved, $0) }
+            updated.insert(saved, at: at ?? updated.endIndex)
+        }
+        publishDevotionals(updated)
+    }
+
+    /// The one place the list of writings is set, so the revision beside it
+    /// cannot be forgotten.
+    private func publishDevotionals(_ updated: [LampDevotional]) {
+        devotionals = updated
+        devotionalsRevision += 1
     }
 
     /// What a save needs to carry the writing's review marks across its
@@ -1854,7 +1876,9 @@ final class LibraryModel: ObservableObject {
             deletedWritings: try await library.personalDeletionLedger(),
             in: library.rootURL
         )
-        devotionals = try await library.devotionals()
+        // Gone from the library, so gone from the list: one row again rather
+        // than a read of all of them.
+        publishDevotionals(devotionals.filter { $0.id != id })
     }
 
     func loadPlanProgress(year: Int) async {
@@ -1943,7 +1967,7 @@ final class LibraryModel: ObservableObject {
             if translationBookNames != bookNames { translationBookNames = bookNames }
             highlightSets = (try? await library.highlightSets()) ?? []
             plans = try await library.readingPlans()
-            devotionals = try await library.devotionals()
+            publishDevotionals(try await library.devotionals())
             quizModules = try await library.quizModules()
             selectedPlanIDs = try await library.selectedPlanIDs()
             let completed = try await library.completedReadings(year: planProgressYear)
@@ -2275,4 +2299,15 @@ struct ModuleSearchAnswer: Equatable {
     let kindsWithMore: Set<LampModuleKind>
     let cutKinds: Set<LampModuleKind>
     let scripture: ModuleSearchScripture?
+}
+
+private extension Array {
+    /// Whether this is already in the order `precedes` describes, so a list
+    /// that a change did not move is not sorted again. One pass, no
+    /// allocation; `sort` on an almost-sorted array is cheap, but a sort of
+    /// four thousand writings on every autosave is not nothing.
+    func isSorted(by precedes: (Element, Element) -> Bool) -> Bool {
+        guard count > 1 else { return true }
+        return !(1..<count).contains { precedes(self[$0], self[$0 - 1]) }
+    }
 }
