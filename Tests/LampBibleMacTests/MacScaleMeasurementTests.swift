@@ -8,9 +8,14 @@ import Testing
 /// half: what a sync pass spends on this app's own files, and what the
 /// six-second probe costs, at a size nobody has yet.
 ///
-/// Skipped unless `LAMP_SCALE=1`. Run in Release — the point is the numbers:
+/// Skipped unless `LAMP_SCALE=1`:
 ///
-///     LAMP_SCALE=1 swift test -c release --filter MacScaleMeasurementTests
+///     LAMP_SCALE=1 swift test --filter MacScaleMeasurementTests
+///
+/// Debug, unlike core's, for two reasons. This target cannot build in Release
+/// at all — `AgentChatModelTests` uses a hook declared under `#if DEBUG` — and
+/// what is measured here is file copies, directory walks and stats, which a
+/// Release build does not make faster.
 ///
 /// Sizes are environment variables: `LAMP_SCALE_WORKSPACES=50,250,1000`,
 /// `LAMP_SCALE_WORKSPACE_DOCUMENTS=5`, `LAMP_SCALE_WORKSPACE_REVISIONS=50`.

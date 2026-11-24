@@ -1599,7 +1599,15 @@ final class LibraryModel: ObservableObject {
                 upTo = asking.turn
             }
             // Made already, by a take-in that stopped before forgetting it.
-            guard !devotionals.contains(where: { $0.id == request.id }) else {
+            //
+            // Asked of the library, not of the list in memory. The list is
+            // filled after launch rather than during it, so at the moment
+            // this runs it can be empty — and a request naming a writing that
+            // already exists would then be started again, overwriting the
+            // title and body with the ones the request was made with. Found
+            // by a Codex review of the launch change, with a reproduction.
+            let held = (try? await library.personalDevotional(id: request.id)) ?? nil
+            guard held == nil else {
                 LampWritingStarts.forget(id: request.id, inApplicationSupport: applicationSupportURL)
                 continue
             }
@@ -2090,9 +2098,13 @@ final class LibraryModel: ObservableObject {
         if Task.isCancelled { return }
         quizModules = (try? await library.quizModules()) ?? quizModules
         if Task.isCancelled { return }
+        // Every translation, not only the ones with no names yet: sync
+        // replaces a translation under the same ID, and skipping those would
+        // keep its old book names for as long as the app ran — found by a
+        // Codex review. The reader's own was read on the critical path and is
+        // read again here, which is one open.
         var names = translationBookNames
-        for translation in modules
-        where translation.kind == .translation && names[translation.id] == nil {
+        for translation in modules where translation.kind == .translation {
             if Task.isCancelled { return }
             guard let books = try? await library.translationBooks(moduleID: translation.id)
             else { continue }
@@ -2101,7 +2113,7 @@ final class LibraryModel: ObservableObject {
             )
             // Published per translation: a picker opened while these arrive
             // fills in rather than waiting for the last of them.
-            translationBookNames = names
+            if translationBookNames != names { translationBookNames = names }
         }
     }
 

@@ -705,6 +705,7 @@ public enum DevotionalAgentRevisionStore {
         }
         var removed = Set<URL>()
         for entry in stored where !keptIDs.contains(entry.revision.id) {
+            forgetDecodedHistory(in: workspace)
             try FileManager.default.removeItem(at: entry.url)
             removed.insert(entry.url)
         }
@@ -712,6 +713,7 @@ public enum DevotionalAgentRevisionStore {
         var seen = Set<UUID>()
         for entry in stored.sorted(by: { $0.url.lastPathComponent < $1.url.lastPathComponent })
         where !removed.contains(entry.url) && !seen.insert(entry.revision.id).inserted {
+            forgetDecodedHistory(in: workspace)
             try FileManager.default.removeItem(at: entry.url)
         }
     }
@@ -780,6 +782,25 @@ public enum DevotionalAgentRevisionStore {
         return entry.revisions
     }
 
+    /// Drops what was decoded for a workspace, for a path that has just
+    /// written or rewritten its folder.
+    ///
+    /// The token cannot be relied on alone. It is a count and the newest
+    /// modification date, and a revision arriving from another Mac keeps its
+    /// own date (`LampWorkspaceSync.mergeFile`) — so where one of those is
+    /// dated in the future, a compaction that replaces a file leaves both the
+    /// count and the newest date where they were, and what was decoded before
+    /// it would be served again. Found by a Codex review. Every path here
+    /// that writes the folder says so, which is cheaper and surer than
+    /// trying to make the token see everything.
+    private static func forgetDecodedHistory(in workspace: URL) {
+        let key = workspace.standardizedFileURL.path
+        historyLock.lock()
+        defer { historyLock.unlock() }
+        decodedHistories[key] = nil
+        decodedHistoryOrder.removeAll { $0 == key }
+    }
+
     private static func remember(
         _ revisions: [StoredRevision], for workspace: URL, token: HistoryToken
     ) {
@@ -797,6 +818,7 @@ public enum DevotionalAgentRevisionStore {
 
     @discardableResult
     private static func write(_ revision: DevotionalAgentRevision, in workspace: URL) throws -> URL {
+        forgetDecodedHistory(in: workspace)
         let directory = revisionsDirectory(in: workspace)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let timestamp = Int64(revision.createdAt.timeIntervalSince1970 * 1_000)

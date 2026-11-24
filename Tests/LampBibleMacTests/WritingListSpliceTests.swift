@@ -1,7 +1,9 @@
 import Foundation
 import LampCore
+import LampModuleKit
 import Testing
 @testable import LampBibleMac
+@testable import LampBibleMacSupport
 
 /// `Documentation/decisions/0004` in lamp-bible-core: a save puts one writing
 /// in its place in the list rather than reading every writing again.
@@ -12,12 +14,16 @@ import Testing
 /// and in order.
 @MainActor
 struct WritingListSpliceTests {
-    private func model() throws -> (model: LibraryModel, root: URL) {
+    /// `ai` turns the AI features on, which the take-in of a requested
+    /// writing is gated behind: without it that path returns before it does
+    /// anything, and a test of it would pass for the wrong reason.
+    private func model(ai: Bool = false) throws -> (model: LibraryModel, root: URL) {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("lamp-splice-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
         let defaults = UserDefaults(suiteName: "lamp.splice.\(UUID().uuidString)")!
+        if ai { defaults.set(true, forKey: LampPreferenceDefaults.aiFeaturesKey) }
         return (LibraryModel(library: library, defaults: defaults), root)
     }
 
@@ -87,6 +93,47 @@ struct WritingListSpliceTests {
 
         #expect(try await matchesTheLibrary(model))
         #expect(model.devotionals.map(\.id) == ["early", "plain", "s1", "s2"])
+    }
+
+    /// A writing that already exists is not started again — and the check
+    /// cannot be made against the list in memory, because the list is filled
+    /// after launch rather than during it. Before this was asked of the
+    /// library, a pending request naming an existing writing overwrote its
+    /// title and body with the ones the request carried.
+    @Test func aPendingStartDoesNotOverwriteAWritingThatExists() async throws {
+        let (model, root) = try model(ai: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let support = root.appendingPathComponent("ApplicationSupport", isDirectory: true)
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+
+        // Written straight to the library, so the model's list is empty —
+        // which is what a launch looks like now.
+        _ = try await model.library.savePersonalDevotional(LampDevotional(
+            id: "already-here",
+            moduleID: LampPersonalModule.writing.id,
+            moduleName: LampPersonalModule.writing.name,
+            title: "What the writer called it",
+            content: "The body the writer wrote.",
+            isEditable: true
+        ))
+        #expect(model.devotionals.isEmpty)
+
+        try LampWritingStarts.write(
+            LampWritingStarts.Start(
+                id: "already-here",
+                title: "What the request called it",
+                draft: "The draft the request carried."
+            ),
+            inApplicationSupport: support
+        )
+
+        await model.takeInRequestedWritings(applicationSupportURL: support)
+
+        let held = try await model.library.personalDevotional(id: "already-here")
+        #expect(held?.title == "What the writer called it")
+        #expect(held?.content == "The body the writer wrote.")
+        // And the request is forgotten rather than tried again next launch.
+        #expect(LampWritingStarts.pending(inApplicationSupport: support).isEmpty)
     }
 
     @Test func aDeletedWritingLeavesTheList() async throws {
