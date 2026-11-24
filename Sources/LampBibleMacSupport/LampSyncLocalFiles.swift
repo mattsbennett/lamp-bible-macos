@@ -274,10 +274,13 @@ extension LampSyncLocalFiles {
             from: libraryRoot, to: scratch, writingFolder: .perFile,
             recording: record, fileManager: fileManager
         )
-        return record.placed.compactMap { path, url in
+        return record.placed.compactMap { path, url, isFixedAtItsPath in
             switch LampSyncFolderLayout.kind(of: path) {
             case .workspaceFile:
-                return Candidate(path: path, kind: .workspaceFile, url: url)
+                return Candidate(
+                    path: path, kind: .workspaceFile, url: url,
+                    isFixedAtItsPath: isFixedAtItsPath
+                )
             case .writingDocument:
                 // Published under its name in NFC, as the phone names it: a
                 // name macOS hands back decomposed is the same document.
@@ -285,7 +288,10 @@ extension LampSyncLocalFiles {
                       let published = try? LampWritingWorkspaceLayout.documentPath(
                           folder: document.folder, name: document.name
                       ) else { return nil }
-                return Candidate(path: published, kind: .writingDocument, url: url)
+                return Candidate(
+                    path: published, kind: .writingDocument, url: url,
+                    isFixedAtItsPath: isFixedAtItsPath
+                )
             default:
                 return nil
             }

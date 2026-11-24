@@ -47,7 +47,7 @@ struct WorkspaceExportRecordTests {
                 from: libraryRoot, to: scratch, writingFolder: .perFile, recording: record
             )
             return Dictionary(
-                record.placed.compactMap { path, url in
+                record.placed.compactMap { path, url, _ in
                     (try? Data(contentsOf: url)).map { (path, $0) }
                 },
                 uniquingKeysWith: { first, _ in first }
@@ -165,6 +165,89 @@ struct WorkspaceExportRecordTests {
         }
     }
 
+    /// The export says, per file, whether nothing rewrites it where it sits.
+    ///
+    /// That claim is what lets a pass keep a digest against the file's
+    /// identity for a kind whose other half is staged afresh every pass, and
+    /// what lets it refuse to publish a file that has moved under it
+    /// (`lamp-bible-core/Documentation/decisions/0011`). It is true of
+    /// exactly the files recorded where they live, and false of everything
+    /// this export put in the scratch directory — including the two it wrote
+    /// there itself, a transcript and the portable ledger, whose paths are
+    /// new every pass.
+    @Test func theExportSaysWhichFilesAreFixedWhereTheySit() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-export-fixed-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = root.appendingPathComponent("library")
+        try makeWorkspace(in: library)
+        let scratch = root.appendingPathComponent("scratch")
+
+        // A transcript and a non-empty deletion ledger, which are the two
+        // files the export *writes* into the scratch directory rather than
+        // copying — and so the two whose claim must be false although their
+        // source is nowhere near the scratch directory. Without them in the
+        // fixture this test passed whatever they claimed.
+        let workspace = LampWritingWorkspace.url(libraryRootURL: library, writingID: "w1")
+        try Data(#"{"messages":[]}"#.utf8).write(
+            to: AgentChatTranscriptStore.directory(in: workspace)
+                .appendingPathComponent("\(AgentChatTranscriptStore.filenamePrefix)test.json")
+        )
+        // The ledger lists what a workspace held; it names a deletion only
+        // once a file it had noted has gone. So: export, remove a document,
+        // export again.
+        try LampWorkspaceSync.exportPortableWorkspaces(
+            from: library, to: root.appendingPathComponent("first"), writingFolder: .perFile,
+            recording: LampWorkspaceSync.WorkspaceExportRecord()
+        )
+        try FileManager.default.removeItem(at: workspace.appendingPathComponent("outline.md"))
+
+        let record = LampWorkspaceSync.WorkspaceExportRecord()
+        try LampWorkspaceSync.exportPortableWorkspaces(
+            from: library, to: scratch, writingFolder: .perFile, recording: record
+        )
+
+        func sits(_ url: URL, under directory: URL) -> Bool {
+            url.resolvingSymlinksInPath().path
+                .hasPrefix(directory.resolvingSymlinksInPath().path + "/")
+        }
+        #expect(!record.placed.isEmpty)
+        for placed in record.placed {
+            // The claim and where the file is are the same question asked
+            // twice: a file left where it lives is fixed there, and a copy in
+            // the scratch directory never is.
+            #expect(
+                placed.isFixedAtItsPath == sits(placed.url, under: library),
+                "\(placed.path) says \(placed.isFixedAtItsPath)"
+            )
+            #expect(placed.isFixedAtItsPath != sits(placed.url, under: scratch))
+        }
+        // Both written files are there to have been asked about, and both
+        // say false.
+        for written in ["native-chat-test.json", WorkspaceFileLedger.portableFilename] {
+            let placed = try #require(
+                record.placed.first { $0.path.hasSuffix(written) },
+                "nothing was published for \(written)"
+            )
+            #expect(!placed.isFixedAtItsPath, "\(written) claims to be fixed where it sits")
+        }
+
+        // And the candidates carry it through.
+        let candidates = try LampSyncLocalFiles.workspaceFiles(
+            inLibraryAt: library, stagingIn: root.appendingPathComponent("scratch-2")
+        )
+        let revision = try #require(
+            candidates.first { $0.path.hasSuffix("Revisions/1700000000-abc.json") }
+        )
+        let context = try #require(
+            candidates.first { $0.path.hasSuffix("Context/passage.md") }
+        )
+        #expect(revision.isFixedAtItsPath)
+        #expect(context.isFixedAtItsPath)
+        #expect(candidates.contains { !$0.isFixedAtItsPath }, "and not everything claims it")
+    }
+
     /// No two published paths are ever staged to the same file.
     ///
     /// This is the invariant, not a reproduction of the fault: a library on
@@ -197,7 +280,7 @@ struct WorkspaceExportRecordTests {
         )
 
         var paths: [URL: [String]] = [:]
-        for (path, url) in record.placed { paths[url, default: []].append(path) }
+        for placed in record.placed { paths[placed.url, default: []].append(placed.path) }
         #expect(!record.placed.isEmpty)
         for (url, sharing) in paths {
             #expect(sharing.count == 1, "\(url.lastPathComponent) is published as \(sharing)")
@@ -205,8 +288,8 @@ struct WorkspaceExportRecordTests {
         // And each document is published with its own bytes.
         let outlines = record.placed.filter { $0.path.hasSuffix("Documents/outline.md") }
         #expect(outlines.count == 2)
-        for (_, url) in outlines {
-            #expect(try Data(contentsOf: url) == Data("The outline.".utf8))
+        for outline in outlines {
+            #expect(try Data(contentsOf: outline.url) == Data("The outline.".utf8))
         }
 
         // The case the volume will not let the export produce, asked of the
@@ -256,8 +339,11 @@ struct WorkspaceExportRecordTests {
 
         let secretBytes = try Data(contentsOf: secret)
         #expect(!record.placed.contains { $0.path.hasSuffix("EnabledSkills.json") })
-        for (path, url) in record.placed {
-            #expect((try? Data(contentsOf: url)) != secretBytes, "the bytes published at \(path)")
+        for placed in record.placed {
+            #expect(
+                (try? Data(contentsOf: placed.url)) != secretBytes,
+                "the bytes published at \(placed.path)"
+            )
         }
     }
 }

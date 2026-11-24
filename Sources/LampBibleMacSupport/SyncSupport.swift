@@ -672,7 +672,7 @@ public enum LampWorkspaceSync {
     /// still copied — see `snapshotsWhatCanChangeUnderAPass`.
     public final class WorkspaceExportRecord: @unchecked Sendable {
         private let lock = NSLock()
-        private var files: [(path: String, url: URL)] = []
+        private var files: [(path: String, url: URL, isFixedAtItsPath: Bool)] = []
         /// Where each path sits in `files`, so placing a path a second time
         /// replaces the first without a scan. A linear `removeAll` here cost
         /// more than the copying this record was written to remove: at two
@@ -683,19 +683,28 @@ public enum LampWorkspaceSync {
 
         public init() {}
 
-        func place(_ source: URL, at path: String) {
+        /// - Parameter isFixedAtItsPath: whether nothing rewrites this file
+        ///   where it sits. True for a file recorded in place whose bytes
+        ///   only ever change by the file being replaced — a revision, a
+        ///   context object. False for anything staged into the scratch
+        ///   directory, which has a new path every pass, and false for a
+        ///   file this export wrote there itself. Carried to
+        ///   `LampSyncLocalFiles.Candidate`, where it decides whether a
+        ///   digest may be kept against the file's identity
+        ///   (`lamp-bible-core/Documentation/decisions/0011`).
+        func place(_ source: URL, at path: String, isFixedAtItsPath: Bool = false) {
             lock.lock()
             defer { lock.unlock() }
             if let placement = placements[path] {
-                files[placement] = (path, source)
+                files[placement] = (path, source, isFixedAtItsPath)
                 return
             }
             placements[path] = files.count
-            files.append((path, source))
+            files.append((path, source, isFixedAtItsPath))
         }
 
         /// Everything the export placed, by its path within the backup root.
-        public var placed: [(path: String, url: URL)] {
+        public var placed: [(path: String, url: URL, isFixedAtItsPath: Bool)] {
             lock.lock()
             defer { lock.unlock() }
             return files
@@ -759,7 +768,7 @@ public enum LampWorkspaceSync {
             return
         }
         if !staging {
-            record.place(source, at: path)
+            record.place(source, at: path, isFixedAtItsPath: true)
             return
         }
         // Staged under the published path's own digest rather than at the

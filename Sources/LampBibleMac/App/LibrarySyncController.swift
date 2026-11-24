@@ -342,16 +342,30 @@ final class LibrarySyncController: ObservableObject {
     /// There the pass reads every file, as it always did. See
     /// `lamp-bible-core/Documentation/decisions/0007` for why the answer
     /// depends on the filesystem at all.
-    private var heldDigestCache: (root: URL, cache: LampSyncDigestCache?)?
+    private var heldDigestCache: (root: URL, device: Int64?, cache: LampSyncDigestCache?)?
 
     private func digestCache(forLibraryAt root: URL) -> LampSyncDigestCache? {
-        if let held = heldDigestCache, held.root == root { return held.cache }
-        let trusted = LampSyncIdentityTrust.trustsIdentity(ofVolumeAt: root)
-        if !trusted {
-            Self.log.notice("Library filesystem keeps no identity to trust; hashing every pass")
+        // Scoped to the volume that was actually asked about, and asked
+        // about once: the trust is a filesystem's, and a library can have
+        // another volume mounted inside it — an external disk holding a
+        // workspace's context, say — whose files nothing has vouched for.
+        //
+        // No device, no cache. A library on a filesystem whose identities
+        // mean nothing, or one that cannot be read at this moment, is hashed
+        // every pass, which is what `0001` required.
+        let device = LampSyncIdentityTrust.trustedDevice(ofVolumeAt: root)
+        // Kept only while it still describes the volume in front of us. An
+        // external library can come back at the same path on a different
+        // device, and a cache made for the old one can answer for nothing —
+        // so it would rehash everything, every pass, until the app restarted.
+        if let held = heldDigestCache, held.root == root, held.device == device {
+            return held.cache
         }
-        let cache = trusted ? LampSyncDigestCache() : nil
-        heldDigestCache = (root, cache)
+        if device == nil {
+            Self.log.notice("Library volume keeps no identity to trust; hashing every pass")
+        }
+        let cache = device.map { LampSyncDigestCache(trustedDevice: $0) }
+        heldDigestCache = (root, device, cache)
         return cache
     }
 

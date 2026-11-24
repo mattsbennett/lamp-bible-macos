@@ -210,25 +210,42 @@ struct MacScaleMeasurementTests {
                 try LampSyncLocalFiles.workspaceFiles(inLibraryAt: libraryRoot, stagingIn: scratch)
             }
             // Every candidate the gather hands on still has to be digested.
+            // Timed on a *repeat* gather, so that this and the cached figure
+            // below have had the same warm-up: the first describe of a
+            // freshly written library reads colder files than any later one,
+            // and crediting that difference to the cache is how the saving
+            // was overstated twice over.
+            _ = LampSyncLocalFiles.describe(staged.value, digests: nil)
+            let uncachedAgain = try LampSyncLocalFiles.workspaceFiles(
+                inLibraryAt: libraryRoot,
+                stagingIn: root.appendingPathComponent("uncached-\(target)")
+            )
             let hashed = timed {
-                LampSyncLocalFiles.describe(staged.value, digests: nil)
+                LampSyncLocalFiles.describe(uncachedAgain, digests: nil)
             }
-            // And what an identity-keyed cache would be worth if these kinds
-            // were ever trusted. `describe` skips the cache for
-            // `.workspaceFile` and `.writingDocument` both
-            // (`LampSyncFolderLayout.keepsDigestAgainstIdentity`), so
-            // running it twice over these candidates measures a warm
-            // re-read and nothing else — which is what the first version of
-            // this reported as the cached case, until a Codex review caught
-            // it. The same files offered under a kind the cache does answer
-            // for give the real figure: the second call is every digest
-            // held and not one file read.
-            let asCached = staged.value.map {
-                LampSyncLocalFiles.Candidate(path: $0.path, kind: .module(.books), url: $0.url)
-            }
+            // And again with a cache, through the real code path: the
+            // candidates the exporter marked as fixed at their path are
+            // answered from it, and the staged ones are read as before. This
+            // is what a second pass of a session actually pays.
+            //
+            // An earlier version relabelled every candidate `.module(.books)`
+            // to force a hit, and reported the result as the cached case.
+            // That overstated it: a staged file is written into a scratch
+            // directory named per pass, so it has a new path every time and
+            // can never be answered. The figure below is the reachable one.
+            //
+            // Gathered again into a fresh scratch directory for the timed
+            // run, as a real second pass does: the staged files are new
+            // files at new paths, so they are read cold there as they would
+            // be in life. Reusing the first gather's scratch files credited
+            // their warm pages to the cache.
             let cache = LampSyncDigestCache()
-            _ = LampSyncLocalFiles.describe(asCached, digests: cache)
-            let fromCache = timed { LampSyncLocalFiles.describe(asCached, digests: cache) }
+            _ = LampSyncLocalFiles.describe(staged.value, digests: cache)
+            let again = try LampSyncLocalFiles.workspaceFiles(
+                inLibraryAt: libraryRoot, stagingIn: root.appendingPathComponent("second-\(target)")
+            )
+            let fromCache = timed { LampSyncLocalFiles.describe(again, digests: cache) }
+            let fixed = again.filter(\.isFixedAtItsPath).count
             let marks = timed { LampSyncLocalWork.marks(inLibraryAt: libraryRoot) }
             let bytes = Self.files(under: scratch)
             // And the same export the old way — copying everything into
@@ -256,7 +273,8 @@ struct MacScaleMeasurementTests {
                 exportByCopying=\(String(format: "%.0f", byCopying.ms))ms \
                 filesByCopying=\(Self.files(under: copying)) \
                 digest=\(String(format: "%.0f", hashed.ms))ms \
-                digestIfCached=\(String(format: "%.0f", fromCache.ms))ms \
+                digestWithACache=\(String(format: "%.0f", fromCache.ms))ms \
+                fixedAtTheirPath=\(fixed) \
                 digested=\(hashed.value.files.count) \
                 localWorkProbe=\(String(format: "%.0f", marks.ms))ms \
                 marks=\(marks.value.count)
