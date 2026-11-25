@@ -422,14 +422,9 @@ public enum WorkspaceContextFileStore {
         var ledger = WorkspaceFileLedger.load(in: workspaceURL)
         let relative = item.standardizedFileURL.path
             .dropFirst(contextDirectory.standardizedFileURL.path.count + 1)
-        let offloadedDescendants = ledger.offloadedMembers(under: "")
-            .compactMap { member -> String? in
-                let key = WorkspaceFileLedger.contextKey("")
-                guard member.hasPrefix(key) else { return nil }
-                let path = String(member.dropFirst(key.count))
-                guard path == relative || path.hasPrefix(relative + "/") else { return nil }
-                return WorkspaceFileLedger.contextKey(path)
-            }
+        let offloadedDescendants = ledger.offloadedContextPaths()
+            .filter { $0 == relative || $0.hasPrefix(relative + "/") }
+            .map(WorkspaceFileLedger.contextKey)
         let allKeys = Set(keys).union(offloadedDescendants)
         guard !allKeys.isEmpty else { return }
         for key in allKeys { ledger.recordDeletion(of: key) }
@@ -604,6 +599,9 @@ public enum WorkspaceContextFileStore {
         in workspaceURL: URL
     ) throws {
         var ledger = WorkspaceFileLedger.load(in: workspaceURL)
+        // The ask is recorded, and outlives the attempt: a pass that cannot
+        // reach the server leaves the row saying "Coming back" with something
+        // to press again, rather than no row at all.
         ledger.clearOffload(of: WorkspaceFileLedger.contextKey(relativePath))
         try ledger.save(in: workspaceURL)
     }
@@ -697,16 +695,22 @@ public enum WorkspaceContextFileStore {
             ]), values.isRegularFile == true, values.isSymbolicLink != true,
                   file.resolvingSymlinksInPath().path.hasPrefix(root)
             else { skipped[relativePath] = .notAsource; continue }
-            guard let digest = try? LampSyncContentRevision.digest(forFileAt: file) else {
-                skipped[relativePath] = .notAsource
+            // Taken either side of the read, so the identity carried forward
+            // is the identity of the bytes that were hashed. Stat, hash,
+            // stat: anything that replaced the file during the read changes
+            // the second one, and the pair would otherwise bind this file's
+            // verified digest to a replacement's identity — which the check
+            // before the unlink would then wave through.
+            guard let before = try? LampFileIdentity(url: file),
+                  let digest = try? LampSyncContentRevision.digest(forFileAt: file),
+                  let identity = try? LampFileIdentity(url: file),
+                  Self.namesSameBytes(before, identity)
+            else {
+                skipped[relativePath] = .changedSinceUpload
                 continue
             }
             guard !records.changedSinceUpload(path, in: source, digest: digest) else {
                 skipped[relativePath] = .changedSinceUpload
-                continue
-            }
-            guard let identity = try? LampFileIdentity(url: file) else {
-                skipped[relativePath] = .notAsource
                 continue
             }
             ready.append((relativePath, file, identity))
@@ -738,7 +742,7 @@ public enum WorkspaceContextFileStore {
             // already-checked path — and those bytes were never on the
             // server.
             guard let now = try? LampFileIdentity(url: candidate.file),
-                  now == candidate.identity
+                  Self.namesSameBytes(now, candidate.identity)
             else {
                 skipped[candidate.relativePath] = .changedSinceUpload
                 stubborn.append(candidate.relativePath)
@@ -776,11 +780,25 @@ public enum WorkspaceContextFileStore {
         if !stubborn.isEmpty {
             var corrected = WorkspaceFileLedger.load(in: workspaceURL)
             for relativePath in stubborn {
-                corrected.clearOffload(of: WorkspaceFileLedger.contextKey(relativePath))
+                corrected.forgetOffload(of: WorkspaceFileLedger.contextKey(relativePath))
             }
             try? corrected.save(in: workspaceURL)
         }
         return (offloaded, skipped)
+    }
+
+    /// Whether two `stat`s of a path name the same bytes.
+    ///
+    /// Everything but the **change** time. A source is a hard link into the
+    /// library's object store, so a workspace holding the same file twice
+    /// holds two links to one inode — and unlinking either moves that inode's
+    /// `ctime`, which would make the sibling look replaced and leave the
+    /// shared bytes on disk for ever. Replacement still shows: a new file has
+    /// a new inode, and a write in place moves the modification time.
+    static func namesSameBytes(_ lhs: LampFileIdentity, _ rhs: LampFileIdentity) -> Bool {
+        lhs.device == rhs.device && lhs.inode == rhs.inode && lhs.size == rhs.size
+            && lhs.modifiedSeconds == rhs.modifiedSeconds
+            && lhs.modifiedNanoseconds == rhs.modifiedNanoseconds
     }
 
     public enum OffloadError: LocalizedError, Equatable {
@@ -817,7 +835,10 @@ public enum WorkspaceContextFileStore {
     ) throws {
         var ledger = WorkspaceFileLedger.load(in: workspaceURL)
         let key = WorkspaceFileLedger.contextKey(relativePath)
-        ledger.clearOffload(of: key)
+        // Forgotten, not asked for. Another device deleting a source is not
+        // this reader wanting it back, and an ask would leave the pane
+        // showing "Coming back" for something that is never coming.
+        ledger.forgetOffload(of: key)
         try ledger.save(in: workspaceURL)
 
         let contextDirectory = try validatedContextDirectory(

@@ -706,10 +706,11 @@ enum DevotionalAgentWorkspaceStore {
         from workspace: URL,
         libraryRootURL: URL
     ) throws {
-        if file.isOffloaded {
+        if file.isOffloaded || file.isAwaited {
             // No bytes here to remove, and possibly a nested path — neither
-            // of which `removeContextItem` takes. The deletion still has to
-            // be written down and queued for the server.
+            // of which `removeContextItem` takes. A row waiting for a
+            // download has no file either, and the reader confirming Remove
+            // on it means the same thing: stop, and take it off the server.
             try WorkspaceContextFileStore.removeOffloadedSource(
                 relativePath: file.relativePath,
                 in: workspace,
@@ -839,8 +840,16 @@ enum DevotionalAgentWorkspaceStore {
     @WritingWorkspaceFiles
     private static func updateInstructions(in workspace: URL) throws {
         let files = (try? contextFiles(in: workspace)) ?? []
-        let offloaded = LampWorkspaceSync.offloadedSourceNames(in: workspace)
-            .filter { name in !files.contains { $0.name == name } }
+        // Awaited sources count as not downloaded too. Asking for one clears
+        // its offload note, so without this a slow or failed download takes
+        // the source out of the agent's inventory altogether while the pane
+        // still shows it — and the agent is told nothing rather than that it
+        // is on its way.
+        let notHere = LampWorkspaceSync.offloadedSourceNames(in: workspace)
+            + LampWorkspaceSync.awaitedSourceNames(in: workspace)
+        let offloaded = notHere
+            .filter { name in !files.contains { $0.relativePath == name } }
+            .sorted()
         let instructions = instructions(
             contextFiles: files.map(\.name),
             offloadedSources: offloaded,
@@ -1285,6 +1294,15 @@ struct DevotionalAgentWorkspaceView: View {
     /// before anyone could read it.
     @State private var refreshErrorMessage: String?
     @State private var contextNote: String?
+    /// Asked for a pass when a download is wanted.
+    ///
+    /// Both windows this pane can appear in put it in the environment. The
+    /// note alone was not enough: its only consumer is a poll that runs in
+    /// the reader window, so with a Writing window open and no reader, a
+    /// source stayed "Coming back" until the reader was opened again.
+    @EnvironmentObject private var syncController: LibrarySyncController
+    @EnvironmentObject private var libraryModel: LibraryModel
+
     /// The offloaded source a Remove is waiting to be confirmed for. Its
     /// bytes are not on this Mac, so the click would destroy the only copy.
     @State private var sourceToRemove: DevotionalAgentContextFile?
@@ -2775,9 +2793,9 @@ struct DevotionalAgentWorkspaceView: View {
         errorMessage = nil
         contextNote = nil
         do {
-            guard let observed = LampSyncRequest.lastSeen else {
+            guard let observed = LampSyncRequest.freshObservation() else {
                 errorMessage = """
-                    Lamp has not synced yet, so it cannot tell whether the \
+                    Lamp has not synced recently enough to tell whether the \
                     server still holds this source. Sync, then try again.
                     """
                 return
@@ -2810,6 +2828,7 @@ struct DevotionalAgentWorkspaceView: View {
             // starts for a change to a file it carries — so without this the
             // source waited on an idle library for some unrelated edit.
             LampSyncRequest.wantAPass()
+            Task { await syncController.syncLocalWorkIfAppeared(library: libraryModel.library) }
             try await DevotionalAgentWorkspaceStore.refreshSourceInventory(in: workspaceURL)
             contextNote = "“\(file.name)” will come back on the next sync."
             schedulePoll()

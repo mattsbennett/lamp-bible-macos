@@ -1469,6 +1469,9 @@ struct WorkspaceFileLedger: Codable, Equatable {
         synced?[key] = nil
         presentSince[key] = nil
         offloaded.remove(key)
+        // Nor is it on its way: a source being deleted everywhere is not one
+        // the pane should go on showing as "Coming back".
+        fetchedAt[key] = nil
     }
 
     /// Notes that a source was offloaded here: the file goes, the member
@@ -1519,6 +1522,24 @@ struct WorkspaceFileLedger: Codable, Equatable {
     }
 
     static func isContextKey(_ key: String) -> Bool { key.hasPrefix("Context/") }
+
+    /// The offloaded sources as paths under the context directory.
+    ///
+    /// `offloadedMembers(under:)` answers in *published* paths and checks
+    /// them against the published shape, so it needs the workspace's whole
+    /// prefix; handed anything less it filters everything out and returns
+    /// nothing at all. A caller that already knows which workspace it is in
+    /// wants the relative paths, and asking the other way round is how a
+    /// folder removal came to look as though it took its offloaded children
+    /// while taking none.
+    func offloadedContextPaths() -> [String] {
+        let prefix = Self.contextKey("")
+        return offloaded
+            .filter { $0.hasPrefix(prefix) }
+            .map { String($0.dropFirst(prefix.count)) }
+            .filter { !$0.isEmpty }
+            .sorted()
+    }
 
     static func milliseconds(_ date: Date) -> Int64 {
         Int64((date.timeIntervalSince1970 * 1_000).rounded(.down))
@@ -1591,6 +1612,11 @@ struct WorkspaceFileLedger: Codable, Equatable {
         }
         for key in present.keys where synced[key] == nil && Self.isContextKey(key) {
             presentSince[key] = max(presentSince[key] ?? .min, time)
+            // The grace a download earns starts when the bytes land, not when
+            // they were asked for. A fetch that took longer than the grace
+            // itself would otherwise arrive already expired, and the sweep
+            // that ran next could offload the file the same pass installed.
+            if fetchedAt[key] != nil { fetchedAt[key] = time }
         }
         // A file at an offloaded path means this Mac has one again, however
         // it got there: a fetch that landed, or the reader attaching
@@ -1919,10 +1945,30 @@ public final class WorkspaceDocumentsTakenIn: @unchecked Sendable {
         /// look at the server, a press would be trusting a record that
         /// nothing ever refreshes, and could delete the last copy of a source
         /// somebody removed from the sync folder by hand (`decisions/0021`).
-        public private(set) static var lastSeen: (source: String, revisions: [String: String])?
+        public private(set) static var lastSeen:
+            (source: String, revisions: [String: String], at: Date)?
+
+        /// How old an observation may be and still answer for a press.
+        ///
+        /// A pass runs every few minutes while sync is on, so this is
+        /// ordinarily never reached. It bites where it should: sync turned
+        /// off, or a Mac that synced once days ago and has not since. The
+        /// listing is the only thing that has seen the server, and a listing
+        /// from last Tuesday has not seen it today.
+        public static let observationLifetime: TimeInterval = 15 * 60
 
         public static func noteObservation(source: String, revisions: [String: String]) {
-            lastSeen = (source, revisions)
+            lastSeen = (source, revisions, Date())
+        }
+
+        /// The last observation, if it is recent enough to act on.
+        public static func freshObservation(
+            now: Date = Date()
+        ) -> (source: String, revisions: [String: String])? {
+            guard let lastSeen,
+                  now.timeIntervalSince(lastSeen.at) < observationLifetime
+            else { return nil }
+            return (lastSeen.source, lastSeen.revisions)
         }
 
         /// Forgotten when a pass does not finish, or the server changes.
@@ -1930,8 +1976,8 @@ public final class WorkspaceDocumentsTakenIn: @unchecked Sendable {
 
         /// What the last pass saw, if it was looking at `source`.
         public static func observation(of source: String) -> [String: String]? {
-            guard let lastSeen, lastSeen.source == source else { return nil }
-            return lastSeen.revisions
+            guard let fresh = freshObservation(), fresh.source == source else { return nil }
+            return fresh.revisions
         }
 
         /// Ask for a pass. Costs nothing if one is already wanted.

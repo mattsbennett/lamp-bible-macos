@@ -180,6 +180,31 @@ struct WorkspaceSourceOffloadTests {
     /// Changing the stored spelling orphans every Mac's saved choice, and
     /// adding this key to the synced settings would push one Mac's disk
     /// policy onto another.
+    /// A look at the server goes stale.
+    ///
+    /// The pane's Offload button has no pass behind it, so it acts on the
+    /// last one's listing. While sync is on a pass runs every few minutes and
+    /// this is never reached; it bites where it should — sync turned off, or
+    /// a Mac that synced once days ago. A listing from last Tuesday has not
+    /// seen the server today, and offloading on it would delete the last copy
+    /// of anything removed since.
+    @MainActor
+    @Test func alookAtTheServerIsOnlyGoodForSoLong() {
+        LampSyncRequest.forgetObservation()
+        #expect(LampSyncRequest.freshObservation() == nil, "and nothing at all before a pass")
+
+        LampSyncRequest.noteObservation(source: "webdav:example", revisions: ["a": "\"r1\""])
+        #expect(LampSyncRequest.freshObservation()?.source == "webdav:example")
+
+        let stale = Date().addingTimeInterval(LampSyncRequest.observationLifetime + 1)
+        #expect(
+            LampSyncRequest.freshObservation(now: stale) == nil,
+            "a quarter of an hour on, it is a memory again rather than a look"
+        )
+        #expect(LampSyncRequest.observation(of: "webdav:example") != nil)
+        LampSyncRequest.forgetObservation()
+    }
+
     @Test func theSettingIsThisMacsOwn() {
         #expect(WorkspaceSourceOffload.After.settingKey == "writing.sources.offloadAfter")
         #expect(

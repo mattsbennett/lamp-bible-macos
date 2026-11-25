@@ -768,6 +768,197 @@ struct WorkspaceFileDeletionSyncTests {
         )
     }
 
+    /// Removing a folder takes the sources under it that are not here.
+    ///
+    /// The walk that lists what is going enumerates files on disk, and an
+    /// offloaded one has none — so without this they stay on the server for
+    /// ever with nothing here left to name them. The first attempt at this
+    /// asked `offloadedMembers(under:)` for relative paths; it answers in
+    /// published ones and filters anything that is not shaped like one, so it
+    /// returned nothing and the fix did nothing. There was no test.
+    @Test func removingAfolderTakesItsOffloadedChildrenToo() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let context = workspaceURL.appendingPathComponent("context")
+        let notes = context.appendingPathComponent("notes", isDirectory: true)
+        try FileManager.default.createDirectory(at: notes, withIntermediateDirectories: true)
+        try write("kept", to: notes.appendingPathComponent("stays.pdf"), at: 0)
+        try write("gone", to: notes.appendingPathComponent("offloaded.pdf"), at: 0)
+
+        let source = LampSyncFileRecords.webDAVSource(URL(string: "https://dav.example.com/s/")!)
+        let offloadedPath = try LampWritingWorkspaceLayout.contextPath(
+            folder: workspaceURL.lastPathComponent, relativePath: "notes/offloaded.pdf"
+        )
+        var records = LampSyncFileRecords()
+        records.recordUpload(
+            offloadedPath, in: source,
+            digest: try LampSyncContentRevision.digest(
+                forFileAt: notes.appendingPathComponent("offloaded.pdf")
+            ),
+            revision: "\"r1\""
+        )
+        records.confirmRecorded([offloadedPath: "\"r1\""], in: source)
+        try records.save(toLibraryAt: macs.a)
+        _ = try await WorkspaceContextFileStore.offloadSources(
+            ["notes/offloaded.pdf"], in: workspaceURL, libraryRootURL: macs.a,
+            source: source, seen: nil
+        )
+
+        try await WorkspaceContextFileStore.removeContextItem(
+            at: notes, from: workspaceURL, libraryRootURL: macs.a
+        )
+
+        let removed = await LampSyncRemovedModules.load(fromLibraryAt: macs.a)
+        #expect(
+            removed.removedAt[offloadedPath] != nil,
+            "the child that was only on the server is queued for the server too"
+        )
+        let staysPath = try LampWritingWorkspaceLayout.contextPath(
+            folder: workspaceURL.lastPathComponent, relativePath: "notes/stays.pdf"
+        )
+        #expect(removed.removedAt[staysPath] != nil, "and so is the one that was here")
+        #expect(
+            await LampWorkspaceSync.offloadedSourceNames(in: workspaceURL).isEmpty,
+            "and nothing is left withheld for a member being deleted"
+        )
+    }
+
+    /// Remove works on a row that is waiting for a download.
+    ///
+    /// It has no local file either, so the ordinary removal returns without
+    /// queuing anything — the reader confirms “remove from every device” and
+    /// the source downloads a minute later.
+    @Test func removingAsourceThatIsOnItsWayStillDeletesItEverywhere() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let context = workspaceURL.appendingPathComponent("context")
+        try write("Daniell", to: context.appendingPathComponent("history.pdf"), at: 0)
+        let path = try LampWritingWorkspaceLayout.contextPath(
+            folder: workspaceURL.lastPathComponent, relativePath: "history.pdf"
+        )
+        let source = LampSyncFileRecords.webDAVSource(URL(string: "https://dav.example.com/s/")!)
+        var records = LampSyncFileRecords()
+        records.recordUpload(
+            path, in: source,
+            digest: try LampSyncContentRevision.digest(
+                forFileAt: context.appendingPathComponent("history.pdf")
+            ),
+            revision: "\"r1\""
+        )
+        records.confirmRecorded([path: "\"r1\""], in: source)
+        try records.save(toLibraryAt: macs.a)
+        try await WorkspaceContextFileStore.offloadSource(
+            relativePath: "history.pdf", in: workspaceURL, libraryRootURL: macs.a,
+            source: source, seen: [path: "\"r1\""]
+        )
+        try await WorkspaceContextFileStore.fetchSource(
+            relativePath: "history.pdf", in: workspaceURL
+        )
+        #expect(await LampWorkspaceSync.awaitedSourceNames(in: workspaceURL) == ["history.pdf"])
+
+        try await WorkspaceContextFileStore.removeOffloadedSource(
+            relativePath: "history.pdf", in: workspaceURL, libraryRootURL: macs.a
+        )
+
+        let removed = await LampSyncRemovedModules.load(fromLibraryAt: macs.a)
+        #expect(removed.removedAt[path] != nil)
+        #expect(
+            await LampWorkspaceSync.awaitedSourceNames(in: workspaceURL).isEmpty,
+            "and it is no longer on its way"
+        )
+    }
+
+    /// Another device's deletion leaves no row waiting for it.
+    ///
+    /// Asking for a source back records the ask, so that a failed download
+    /// still has a row and something to press. Carrying out somebody else's
+    /// deletion goes through the same note — and recording an ask there would
+    /// leave the pane saying "Coming back" for something that is never
+    /// coming.
+    @Test func adeletionFromElsewhereLeavesNothingComingBack() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let context = workspaceURL.appendingPathComponent("context")
+        try write("Daniell", to: context.appendingPathComponent("history.pdf"), at: 0)
+        let path = try LampWritingWorkspaceLayout.contextPath(
+            folder: workspaceURL.lastPathComponent, relativePath: "history.pdf"
+        )
+        let source = LampSyncFileRecords.webDAVSource(URL(string: "https://dav.example.com/s/")!)
+        var records = LampSyncFileRecords()
+        records.recordUpload(
+            path, in: source,
+            digest: try LampSyncContentRevision.digest(
+                forFileAt: context.appendingPathComponent("history.pdf")
+            ),
+            revision: "\"r1\""
+        )
+        records.confirmRecorded([path: "\"r1\""], in: source)
+        try records.save(toLibraryAt: macs.a)
+        try await WorkspaceContextFileStore.offloadSource(
+            relativePath: "history.pdf", in: workspaceURL, libraryRootURL: macs.a,
+            source: source, seen: [path: "\"r1\""]
+        )
+
+        try await WorkspaceContextFileStore.removeDeletedSource(
+            relativePath: "history.pdf", in: workspaceURL, libraryRootURL: macs.a
+        )
+
+        #expect(await LampWorkspaceSync.offloadedSourceNames(in: workspaceURL).isEmpty)
+        #expect(
+            await LampWorkspaceSync.awaitedSourceNames(in: workspaceURL).isEmpty,
+            "and nothing is drawn as on its way"
+        )
+    }
+
+    /// Two sources that are the same file are both offloaded.
+    ///
+    /// A source is a hard link into the library's object store, so a
+    /// workspace holding the same file twice holds two links to one inode.
+    /// Unlinking either moves that inode's change time, which made the
+    /// sibling look replaced — and the shared bytes then stayed on disk for
+    /// ever while the pane said they had gone.
+    @Test func twoCopiesOfOneFileBothGo() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let context = workspaceURL.appendingPathComponent("context")
+        try write("identical", to: context.appendingPathComponent("one.pdf"), at: 0)
+        try FileManager.default.linkItem(
+            at: context.appendingPathComponent("one.pdf"),
+            to: context.appendingPathComponent("two.pdf")
+        )
+
+        let source = LampSyncFileRecords.webDAVSource(URL(string: "https://dav.example.com/s/")!)
+        var records = LampSyncFileRecords()
+        for name in ["one.pdf", "two.pdf"] {
+            let path = try LampWritingWorkspaceLayout.contextPath(
+                folder: workspaceURL.lastPathComponent, relativePath: name
+            )
+            records.recordUpload(
+                path, in: source,
+                digest: try LampSyncContentRevision.digest(
+                    forFileAt: context.appendingPathComponent(name)
+                ),
+                revision: "\"r1\""
+            )
+            records.confirmRecorded([path: "\"r1\""], in: source)
+        }
+        try records.save(toLibraryAt: macs.a)
+
+        let result = try await WorkspaceContextFileStore.offloadSources(
+            ["one.pdf", "two.pdf"], in: workspaceURL, libraryRootURL: macs.a,
+            source: source, seen: nil
+        )
+        #expect(
+            result.offloaded.sorted() == ["one.pdf", "two.pdf"],
+            "the second is not a replacement just because the first was unlinked"
+        )
+        #expect(await contextFiles(macs.a).isEmpty)
+    }
+
     /// Asked for nothing, it reads nothing and writes nothing.
     @Test func anEmptyBatchTouchesNeitherRecordsNorLedger() async throws {
         let macs = try Macs(devotional: devotional)

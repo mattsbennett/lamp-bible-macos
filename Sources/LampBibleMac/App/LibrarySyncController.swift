@@ -229,7 +229,7 @@ final class LibrarySyncController: ObservableObject {
             await offloadInactiveSources(library: library)
         } else {
             lastSeenUnlisted = [:]
-            lastSeenMembers = []
+            lastSeenMembers = nil
             LampSyncRequest.forgetObservation()
         }
         return finished
@@ -238,7 +238,11 @@ final class LibrarySyncController: ObservableObject {
     /// Every path the last gather's manifest counted as a member. Empty until
     /// a pass has read one. Membership is what the server says it holds; a
     /// folder listing that failed is not a deletion.
-    private var lastSeenMembers: Set<String> = []
+    /// nil where no manifest has been read — which is not the same as a
+    /// manifest that holds nothing, and must not be taken for one: a pass
+    /// that never got a manifest would otherwise look like a server that has
+    /// dropped every source.
+    private var lastSeenMembers: Set<String>?
 
     /// What the last gather's listing of the unlisted-kind folders said, by
     /// member path and revision. Empty until a pass has taken one, and
@@ -276,9 +280,9 @@ final class LibrarySyncController: ObservableObject {
     /// would survive and the pane would keep offering Download for something
     /// that is gone.
     private func reconcileOffloadsWithTheServer(library: LampLibrary) async {
-        guard !lastSeenMembers.isEmpty else { return }
+        guard let members = lastSeenMembers else { return }
         let forgotten = await LampWorkspaceSync.forgetOffloadsNoLongerOnTheServer(
-            inLibraryAt: library.rootURL, members: lastSeenMembers
+            inLibraryAt: library.rootURL, members: members
         )
         if !forgotten.isEmpty {
             Self.log.info("Forgot \(forgotten.count, privacy: .public) offload(s) the server no longer holds")
