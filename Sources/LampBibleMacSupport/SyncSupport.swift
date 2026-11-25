@@ -177,6 +177,76 @@ public enum LampWorkspaceSync {
         return names
     }
 
+    /// The sources asked back that have not arrived: a note cleared, a pass
+    /// asked for, and still no file.
+    ///
+    /// Clearing the note is what lets the next pass fetch them, but it also
+    /// took them off the list — so a download that failed, or one whose
+    /// server was briefly unreachable, left no row, no explanation and
+    /// nothing to press again. They are the ask, which outlives the attempt.
+    @WritingWorkspaceFiles
+    public static func awaitedSourceNames(
+        in workspace: URL, fileManager: FileManager = .default
+    ) -> [String] {
+        let ledger = WorkspaceFileLedger.load(in: workspace)
+        let prefix = WorkspaceFileLedger.contextKey("")
+        let context = workspace.appendingPathComponent("context", isDirectory: true)
+        var names: [String] = []
+        for key in ledger.fetchedAt.keys where key.hasPrefix(prefix) {
+            guard !ledger.offloaded.contains(key) else { continue }
+            let name = String(key.dropFirst(prefix.count))
+            guard !name.isEmpty,
+                  !fileManager.fileExists(
+                      atPath: context.appendingPathComponent(name).path
+                  )
+            else { continue }
+            names.append(name)
+        }
+        return names.sorted()
+    }
+
+    /// Forgets that this Mac offloaded any source the server no longer counts
+    /// as a member.
+    ///
+    /// When both Macs have offloaded a source and one removes it, the other
+    /// has no local file for the plan to delete, so nothing carries the
+    /// deletion out here: the note survives, the row keeps saying "On the
+    /// server", and a later attachment at that path could be withheld against
+    /// a member that no longer exists.
+    ///
+    /// Judged on the **manifest**, which is what membership means, and never
+    /// on a folder listing — a listing that failed is not a deletion
+    /// (`decisions/0018`).
+    @discardableResult
+    @WritingWorkspaceFiles
+    public static func forgetOffloadsNoLongerOnTheServer(
+        inLibraryAt libraryRoot: URL,
+        members: Set<String>,
+        fileManager: FileManager = .default
+    ) -> [String] {
+        var forgotten: [String] = []
+        for workspace in (try? workspaces(in: libraryRoot, fileManager: fileManager)) ?? [] {
+            var ledger = WorkspaceFileLedger.load(in: workspace)
+            guard !ledger.offloaded.isEmpty else { continue }
+            let prefix = [
+                portableDirectoryName,
+                WritingFolder.perFile.rawValue,
+                workspace.lastPathComponent,
+            ].joined(separator: "/")
+            var changed = false
+            for member in ledger.offloadedMembers(under: prefix) where !members.contains(member) {
+                guard let relativePath = LampWritingWorkspaceLayout.contextFile(
+                    ofPath: member
+                )?.relativePath else { continue }
+                ledger.forgetOffload(of: WorkspaceFileLedger.contextKey(relativePath))
+                forgotten.append(member)
+                changed = true
+            }
+            if changed { try? ledger.save(in: workspace) }
+        }
+        return forgotten
+    }
+
     @WritingWorkspaceFiles
     public static func offloadedSourceNames(in workspace: URL) -> [String] {
         let ledger = WorkspaceFileLedger.load(in: workspace)
@@ -1407,6 +1477,9 @@ struct WorkspaceFileLedger: Codable, Equatable {
         let key = Self.normalized(key)
         offloaded.insert(key)
         synced?[key] = nil
+        // No longer waiting for anything: the ask is answered by the file
+        // being here, and it has just gone again.
+        fetchedAt[Self.normalized(key)] = nil
     }
 
     /// Takes a source off the offloaded list, so the next pass fetches it.
@@ -1416,6 +1489,14 @@ struct WorkspaceFileLedger: Codable, Equatable {
     /// is old by definition, so without this Download and the next pass's
     /// sweep would undo each other.
     var fetchedAt: [String: Int64] = [:]
+
+    /// Drops the note without recording an ask: the source is gone from the
+    /// server, so there is nothing to come back and nothing to wait for.
+    mutating func forgetOffload(of key: String) {
+        let key = Self.normalized(key)
+        offloaded.remove(key)
+        fetchedAt[key] = nil
+    }
 
     mutating func clearOffload(of key: String) {
         offloaded.remove(Self.normalized(key))

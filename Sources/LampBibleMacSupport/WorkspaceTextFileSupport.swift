@@ -518,12 +518,11 @@ public enum WorkspaceContextFileStore {
         source: String,
         seen: [String: String],
         fileManager: FileManager = .default
-    ) throws {
-        guard let path = try? LampWritingWorkspaceLayout.contextPath(
+    ) async throws {
+        guard (try? LampWritingWorkspaceLayout.contextPath(
             folder: workspaceURL.lastPathComponent, relativePath: relativePath
-        ) else { throw OffloadError.notAsource(relativePath) }
-        _ = path
-        let result = try offloadSources(
+        )) != nil else { throw OffloadError.notAsource(relativePath) }
+        let result = try await offloadSources(
             [relativePath], in: workspaceURL, libraryRootURL: libraryRootURL,
             source: source, seen: seen, fileManager: fileManager
         )
@@ -624,6 +623,8 @@ public enum WorkspaceContextFileStore {
         case notAsource
         /// The file would not go. Nothing is recorded, so it is offered again.
         case couldNotRemove
+        /// Somebody opened the writing while the batch was working.
+        case nowHeld
     }
 
     /// Puts a batch of sources back on the server in one go.
@@ -655,8 +656,9 @@ public enum WorkspaceContextFileStore {
         libraryRootURL: URL,
         source: String,
         seen: [String: String]?,
-        fileManager: FileManager = .default
-    ) throws -> (offloaded: [String], skipped: [String: Skipped]) {
+        fileManager: FileManager = .default,
+        while shouldContinue: (@Sendable () async -> Bool)? = nil
+    ) async throws -> (offloaded: [String], skipped: [String: Skipped]) {
         guard !relativePaths.isEmpty else { return ([], [:]) }
         let contextDirectory = try validatedContextDirectory(
             in: workspaceURL, libraryRootURL: libraryRootURL, fileManager: fileManager
@@ -720,6 +722,15 @@ public enum WorkspaceContextFileStore {
         var offloaded: [String] = []
         var stubborn: [String] = []
         for candidate in ready {
+            // Asked before each file, not once before the batch: hashing a
+            // workspace's sources takes long enough for a reader to open the
+            // writing in the middle of it, and the sources would then go from
+            // under an open editor.
+            if let shouldContinue, await !shouldContinue() {
+                skipped[candidate.relativePath] = .nowHeld
+                stubborn.append(candidate.relativePath)
+                continue
+            }
             // The file this batch verified, not merely the path it was at.
             // Every candidate is hashed before any is deleted, so a large
             // batch leaves a window in which Finder, a restore, or an agent

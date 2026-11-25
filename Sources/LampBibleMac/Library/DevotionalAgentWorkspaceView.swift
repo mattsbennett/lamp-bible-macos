@@ -480,6 +480,10 @@ private struct DevotionalAgentContextFile: Identifiable, Equatable {
     /// existed the list was whatever was on disk, and a source that was not
     /// here had no row at all.
     var isOffloaded = false
+    /// Asked back and not yet here. Clearing the offload note is what lets a
+    /// pass fetch it, and that also took it off this list — so a download
+    /// that failed left no row, no reason and nothing to press again.
+    var isAwaited = false
     /// Where this source sits under the context directory, which is what a
     /// ledger key and a member path are built from — and **not** the file's
     /// name. The sweep offloads nested sources, so a row may stand for
@@ -651,19 +655,23 @@ enum DevotionalAgentWorkspaceStore {
         // would otherwise match nothing here and be drawn twice — once as
         // itself and once as "On the server".
         let here = Set(present.map { $0.relativePath.precomposedStringWithCanonicalMapping })
+        func row(_ relativePath: String, offloaded: Bool) -> DevotionalAgentContextFile {
+            DevotionalAgentContextFile(
+                url: contextDirectory(in: workspace).appendingPathComponent(relativePath),
+                isDirectory: false,
+                byteCount: nil,
+                isOffloaded: offloaded,
+                isAwaited: !offloaded,
+                relativePath: relativePath
+            )
+        }
         let offloaded = LampWorkspaceSync.offloadedSourceNames(in: workspace)
             .filter { !here.contains($0.precomposedStringWithCanonicalMapping) }
-            .map { relativePath in
-                DevotionalAgentContextFile(
-                    url: contextDirectory(in: workspace)
-                        .appendingPathComponent(relativePath),
-                    isDirectory: false,
-                    byteCount: nil,
-                    isOffloaded: true,
-                    relativePath: relativePath
-                )
-            }
-        return (present + offloaded)
+            .map { row($0, offloaded: true) }
+        let awaited = LampWorkspaceSync.awaitedSourceNames(in: workspace)
+            .filter { !here.contains($0.precomposedStringWithCanonicalMapping) }
+            .map { row($0, offloaded: false) }
+        return (present + offloaded + awaited)
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
@@ -2046,15 +2054,21 @@ struct DevotionalAgentWorkspaceView: View {
     /// would make them look like a choice of wording.
     private func contextFileRow(_ file: DevotionalAgentContextFile) -> some View {
         HStack {
-            Image(systemName: file.isOffloaded
+            Image(systemName: file.isAwaited
+                ? "arrow.down.circle.dotted"
+                : file.isOffloaded
                 ? "icloud.and.arrow.down"
                 : (file.isDirectory ? "folder" : "doc"))
                 .foregroundStyle(.secondary)
             Text(file.name).lineLimit(1)
-                .foregroundStyle(file.isOffloaded ? .secondary : .primary)
+                .foregroundStyle(file.isOffloaded || file.isAwaited ? .secondary : .primary)
             Spacer()
             if file.isOffloaded {
                 Text("On the server")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            } else if file.isAwaited {
+                Text("Coming back")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             } else if let byteCount = file.byteCount, !file.isDirectory {
@@ -2062,13 +2076,20 @@ struct DevotionalAgentWorkspaceView: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
-            if file.isOffloaded {
-                Button("Download", systemImage: "arrow.down.circle") {
+            if file.isOffloaded || file.isAwaited {
+                Button(
+                    file.isAwaited ? "Try Again" : "Download",
+                    systemImage: file.isAwaited ? "arrow.clockwise" : "arrow.down.circle"
+                ) {
                     Task { await fetchContextFile(file) }
                 }
                 .labelStyle(.iconOnly)
                 .buttonStyle(.borderless)
-                .help("Bring this source back to this Mac")
+                .help(
+                    file.isAwaited
+                        ? "Ask for this source again"
+                        : "Bring this source back to this Mac"
+                )
             } else {
                 Button("Reveal", systemImage: "magnifyingglass") {
                     NSWorkspace.shared.activateFileViewerSelecting([file.url])
@@ -2089,7 +2110,7 @@ struct DevotionalAgentWorkspaceView: View {
                 // disk this is a removal the reader can see the subject of;
                 // for an offloaded one the click destroys the only copy there
                 // is, with nothing left on this Mac to go back to.
-                if file.isOffloaded {
+                if file.isOffloaded || file.isAwaited {
                     sourceToRemove = file
                 } else {
                     Task { await removeContextFile(file) }
@@ -2467,7 +2488,15 @@ struct DevotionalAgentWorkspaceView: View {
                in: workspace, libraryRootURL: libraryRootURL
            ),
            files != contextFiles {
+            let wasEmpty = contextFiles.isEmpty
             contextFiles = files
+            // A download that landed, or an offload another pass carried out,
+            // changes what the agent should be told — and the pane is where
+            // that is noticed. Not on the first fill, which `prepare` has
+            // already written.
+            if !wasEmpty {
+                try? await DevotionalAgentWorkspaceStore.refreshSourceInventory(in: workspace)
+            }
         }
         if let workspaceSkills = try? await DevotionalAgentWorkspaceStore.skills(in: workspace),
            workspaceSkills != skills {

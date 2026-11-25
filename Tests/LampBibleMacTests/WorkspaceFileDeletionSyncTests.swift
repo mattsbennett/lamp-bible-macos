@@ -619,6 +619,155 @@ struct WorkspaceFileDeletionSyncTests {
         )
     }
 
+    /// A source asked back stays on the list until it arrives.
+    ///
+    /// Clearing the note is what lets a pass fetch it, and that also took it
+    /// off the list — so a download that failed, or whose server was briefly
+    /// unreachable, left no row, no reason and nothing to press again.
+    @Test func asourceAskedBackIsStillListedUntilItArrives() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let context = workspaceURL.appendingPathComponent("context")
+        try write("Daniell", to: context.appendingPathComponent("history.pdf"), at: 0)
+        let path = try LampWritingWorkspaceLayout.contextPath(
+            folder: workspaceURL.lastPathComponent, relativePath: "history.pdf"
+        )
+        let source = LampSyncFileRecords.webDAVSource(URL(string: "https://dav.example.com/s/")!)
+        var records = LampSyncFileRecords()
+        records.recordUpload(
+            path, in: source,
+            digest: try LampSyncContentRevision.digest(
+                forFileAt: context.appendingPathComponent("history.pdf")
+            ),
+            revision: "\"r1\""
+        )
+        records.confirmRecorded([path: "\"r1\""], in: source)
+        try records.save(toLibraryAt: macs.a)
+        try await WorkspaceContextFileStore.offloadSource(
+            relativePath: "history.pdf", in: workspaceURL, libraryRootURL: macs.a,
+            source: source, seen: [path: "\"r1\""]
+        )
+
+        try await WorkspaceContextFileStore.fetchSource(
+            relativePath: "history.pdf", in: workspaceURL
+        )
+        #expect(await LampWorkspaceSync.offloadedSourceNames(in: workspaceURL).isEmpty)
+        #expect(
+            await LampWorkspaceSync.awaitedSourceNames(in: workspaceURL) == ["history.pdf"],
+            "still something to show, and something to press again"
+        )
+
+        // The pass brings it home.
+        try write("Daniell", to: context.appendingPathComponent("history.pdf"), at: 1)
+        #expect(
+            await LampWorkspaceSync.awaitedSourceNames(in: workspaceURL).isEmpty,
+            "and once it is here it is simply a source again"
+        )
+
+        // Offloaded a second time: one row, not two.
+        try await WorkspaceContextFileStore.offloadSource(
+            relativePath: "history.pdf", in: workspaceURL, libraryRootURL: macs.a,
+            source: source, seen: [path: "\"r1\""]
+        )
+        #expect(await LampWorkspaceSync.offloadedSourceNames(in: workspaceURL) == ["history.pdf"])
+        #expect(
+            await LampWorkspaceSync.awaitedSourceNames(in: workspaceURL).isEmpty,
+            """
+            A source that has been asked back once and let go of again is on \
+            the server, not on its way here — otherwise the pane draws it \
+            twice, once as each.
+            """
+        )
+    }
+
+    /// Another device's removal of a source neither Mac holds is noticed.
+    ///
+    /// There is no local file for the plan to delete, so nothing carries the
+    /// deletion out here: without this the note survives, the row keeps
+    /// saying “On the server”, and a later attachment at that path is
+    /// withheld against a member that no longer exists.
+    @Test func anOffloadIsForgottenWhenTheServerNoLongerCountsItAmember() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let context = workspaceURL.appendingPathComponent("context")
+        try write("Daniell", to: context.appendingPathComponent("history.pdf"), at: 0)
+        let path = try LampWritingWorkspaceLayout.contextPath(
+            folder: workspaceURL.lastPathComponent, relativePath: "history.pdf"
+        )
+        let source = LampSyncFileRecords.webDAVSource(URL(string: "https://dav.example.com/s/")!)
+        var records = LampSyncFileRecords()
+        records.recordUpload(
+            path, in: source,
+            digest: try LampSyncContentRevision.digest(
+                forFileAt: context.appendingPathComponent("history.pdf")
+            ),
+            revision: "\"r1\""
+        )
+        records.confirmRecorded([path: "\"r1\""], in: source)
+        try records.save(toLibraryAt: macs.a)
+        try await WorkspaceContextFileStore.offloadSource(
+            relativePath: "history.pdf", in: workspaceURL, libraryRootURL: macs.a,
+            source: source, seen: [path: "\"r1\""]
+        )
+
+        // A manifest that still counts it changes nothing.
+        await LampWorkspaceSync.forgetOffloadsNoLongerOnTheServer(
+            inLibraryAt: macs.a, members: [path]
+        )
+        #expect(await LampWorkspaceSync.offloadedSourceNames(in: workspaceURL) == ["history.pdf"])
+
+        // One that does not is the other Mac's removal arriving.
+        let forgotten = await LampWorkspaceSync.forgetOffloadsNoLongerOnTheServer(
+            inLibraryAt: macs.a, members: ["something/else"]
+        )
+        #expect(forgotten == [path])
+        #expect(await LampWorkspaceSync.offloadedSourceNames(in: workspaceURL).isEmpty)
+        #expect(
+            await LampWorkspaceSync.awaitedSourceNames(in: workspaceURL).isEmpty,
+            "and it is not left waiting for something that is never coming"
+        )
+    }
+
+    /// Opening the writing part way through a batch stops the rest of it.
+    @Test func abatchStopsWhenTheWritingIsOpened() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let context = workspaceURL.appendingPathComponent("context")
+        let source = LampSyncFileRecords.webDAVSource(URL(string: "https://dav.example.com/s/")!)
+        var records = LampSyncFileRecords()
+        for name in ["a.pdf", "b.pdf"] {
+            try write(name, to: context.appendingPathComponent(name), at: 0)
+            let path = try LampWritingWorkspaceLayout.contextPath(
+                folder: workspaceURL.lastPathComponent, relativePath: name
+            )
+            records.recordUpload(
+                path, in: source,
+                digest: try LampSyncContentRevision.digest(
+                    forFileAt: context.appendingPathComponent(name)
+                ),
+                revision: "\"r1\""
+            )
+            records.confirmRecorded([path: "\"r1\""], in: source)
+        }
+        try records.save(toLibraryAt: macs.a)
+
+        let opened = OpenedPartWay()
+        let result = try await WorkspaceContextFileStore.offloadSources(
+            ["a.pdf", "b.pdf"], in: workspaceURL, libraryRootURL: macs.a,
+            source: source, seen: nil,
+            while: { await opened.stillClosed() }
+        )
+        #expect(result.offloaded == ["a.pdf"])
+        #expect(result.skipped["b.pdf"] == .nowHeld)
+        #expect(
+            FileManager.default.fileExists(atPath: context.appendingPathComponent("b.pdf").path),
+            "the rest of the workspace's sources stay where the reader can see them"
+        )
+    }
+
     /// Asked for nothing, it reads nothing and writes nothing.
     @Test func anEmptyBatchTouchesNeitherRecordsNorLedger() async throws {
         let macs = try Macs(devotional: devotional)
@@ -865,5 +1014,16 @@ private final class ReplacingFileManager: FileManager, @unchecked Sendable {
             try? contents.write(to: target, atomically: false, encoding: .utf8)
         }
         try super.removeItem(at: url)
+    }
+}
+
+/// Says the writing is closed once, then open: the reader arriving while the
+/// batch is working.
+private actor OpenedPartWay {
+    private var asked = 0
+
+    func stillClosed() -> Bool {
+        asked += 1
+        return asked <= 1
     }
 }

@@ -225,13 +225,20 @@ final class LibrarySyncController: ObservableObject {
         lastSeenBundleRevision = nil
         lastPassFinishedAt = Date()
         if finished {
+            await reconcileOffloadsWithTheServer(library: library)
             await offloadInactiveSources(library: library)
         } else {
             lastSeenUnlisted = [:]
+            lastSeenMembers = []
             LampSyncRequest.forgetObservation()
         }
         return finished
     }
+
+    /// Every path the last gather's manifest counted as a member. Empty until
+    /// a pass has read one. Membership is what the server says it holds; a
+    /// folder listing that failed is not a deletion.
+    private var lastSeenMembers: Set<String> = []
 
     /// What the last gather's listing of the unlisted-kind folders said, by
     /// member path and revision. Empty until a pass has taken one, and
@@ -258,6 +265,23 @@ final class LibrarySyncController: ObservableObject {
             return LampSyncFileRecords.folderSource(folder)
         case .off:
             return nil
+        }
+    }
+
+    /// Forgets this Mac's offloads of sources the server no longer holds.
+    ///
+    /// Another device's removal of a source neither Mac is holding reaches
+    /// here as a manifest that no longer counts it a member. Nothing else
+    /// notices: there is no local file for the plan to delete, so the note
+    /// would survive and the pane would keep offering Download for something
+    /// that is gone.
+    private func reconcileOffloadsWithTheServer(library: LampLibrary) async {
+        guard !lastSeenMembers.isEmpty else { return }
+        let forgotten = await LampWorkspaceSync.forgetOffloadsNoLongerOnTheServer(
+            inLibraryAt: library.rootURL, members: lastSeenMembers
+        )
+        if !forgotten.isEmpty {
+            Self.log.info("Forgot \(forgotten.count, privacy: .public) offload(s) the server no longer holds")
         }
     }
 
@@ -319,7 +343,13 @@ final class LibrarySyncController: ObservableObject {
             do {
                 let result = try await WorkspaceContextFileStore.offloadSources(
                     relativePaths, in: workspaceURL,
-                    libraryRootURL: libraryRoot, source: source, seen: seen
+                    libraryRootURL: libraryRoot, source: source, seen: seen,
+                    // Asked again before each file goes, not once before the
+                    // batch: hashing a workspace's sources takes long enough
+                    // for a reader to open the writing in the middle of it.
+                    while: { @Sendable in
+                        await !MainActor.run { OpenWritingEditors.writingIDs.contains(writingID) }
+                    }
                 )
                 offloaded += result.offloaded.count
                 for reason in Set(result.skipped.values) {
@@ -1621,6 +1651,7 @@ extension LibrarySyncController {
         // `installedRevision` is a memory of one upload and is never
         // refreshed (`decisions/0021`).
         lastSeenUnlisted = unlisted
+        lastSeenMembers = Set(manifest.members.map(\.path))
         // Tied to the server it came from. A folder provider's revisions are
         // content digests, so an old folder's listing could otherwise match a
         // record kept for a different folder and authorise an offload the new
