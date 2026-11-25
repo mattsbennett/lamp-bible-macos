@@ -507,6 +507,12 @@ extension LampSyncLocalFiles {
     ///
     /// A folder that cannot be listed falls back to asking after each of its
     /// members, so a server that refuses a listing behaves as it did.
+    /// The last path component, which is how a listing's entries are
+    /// matched to the members of the folder that was listed.
+    static func lastComponent(of path: String) -> String {
+        String(path.split(separator: "/").last ?? "")
+    }
+
     public static func revisionsOfUnlistedMembers(
         _ paths: [String], from store: any LampSyncRemoteStore
     ) async -> [String: String] {
@@ -528,11 +534,22 @@ extension LampSyncLocalFiles {
                 }
                 continue
             }
+            // Keyed by **name**, not by the entry's path. A WebDAV listing's
+            // path is the href the server returned, which carries the share
+            // prefix (`/home/LampBible/Workspaces/…`) while a member path is
+            // store-relative — so keying on it matched nothing, for every
+            // member of every folder, and every unlisted kind went silently
+            // unsynced: no revision, so `change` saw `listed == nil` and
+            // answered `.none` for files that were plainly there. The folder
+            // is fixed for this group, so the last component is identity
+            // enough, and it cannot be wrong about a prefix or an escape.
             let entries = Dictionary(
-                listing.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first }
+                listing.map { ($0.name.isEmpty ? lastComponent(of: $0.path) : $0.name, $0) },
+                uniquingKeysWith: { first, _ in first }
             )
             for path in members {
-                guard let entry = entries[path], !entry.isDirectory else { continue }
+                guard let entry = entries[lastComponent(of: path)], !entry.isDirectory
+                else { continue }
                 if let revision = entry.revision {
                     revisions[path] = revision
                 } else if let revision = try? await store.revision(path: path) {

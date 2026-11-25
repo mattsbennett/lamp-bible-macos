@@ -156,4 +156,63 @@ struct UnlistedMemberRevisionsTests {
         #expect(store.listed.count == 20)
         #expect(store.asked.isEmpty)
     }
+    /// A real WebDAV listing's paths are the hrefs the server returned, which
+    /// carry the share prefix — and the members are store-relative.
+    ///
+    /// This is the one that was missed. Every fixture above builds entries
+    /// whose `path` is already store-relative, so keying the listing on it
+    /// looked right; against Synology, where an href is
+    /// `/home/LampBible/Workspaces/…`, it matched **nothing**, for every
+    /// member of every folder. Measured on the owner's library: all 169
+    /// revision members came back `listed=false` while 124 of them were
+    /// plainly on disk and had been uploaded from that very Mac, so `change`
+    /// answered `.none` and every unlisted kind — revisions, context files,
+    /// workspace files, writing documents — went silently unsynced from the
+    /// moment the folder listing replaced asking after each file.
+    @Test func matchesAlistingWhosePathsCarryTheSharePrefix() async throws {
+        let prefix = "/home/LampBible/"
+        let store = CountingStore(listings: [
+            "Workspaces/Writing/w1/Revisions": [
+                file(prefix + "Workspaces/Writing/w1/Revisions/a.json", revision: "etag-a"),
+                file(prefix + "Workspaces/Writing/w1/Revisions/b.json", revision: "etag-b"),
+            ],
+        ])
+
+        let revisions = await LampSyncLocalFiles.revisionsOfUnlistedMembers(
+            [
+                "Workspaces/Writing/w1/Revisions/a.json",
+                "Workspaces/Writing/w1/Revisions/b.json",
+            ],
+            from: store
+        )
+
+        #expect(revisions == [
+            "Workspaces/Writing/w1/Revisions/a.json": "etag-a",
+            "Workspaces/Writing/w1/Revisions/b.json": "etag-b",
+        ])
+        #expect(store.asked.isEmpty, "the listing answered, so no file was asked after")
+    }
+
+    /// And a listing that genuinely does not hold a member still falls
+    /// through to asking after it, rather than a name from another folder
+    /// answering for it.
+    @Test func doesNotLetAnameFromElsewhereAnswer() async throws {
+        let store = CountingStore(
+            listings: [
+                "Workspaces/Writing/w1/Revisions": [
+                    file("/home/LampBible/Workspaces/Writing/w1/Revisions/a.json",
+                         revision: "etag-a"),
+                ],
+            ],
+            perFile: ["Workspaces/Writing/w1/Revisions/missing.json": "etag-asked"]
+        )
+
+        let revisions = await LampSyncLocalFiles.revisionsOfUnlistedMembers(
+            ["Workspaces/Writing/w1/Revisions/missing.json"], from: store
+        )
+
+        #expect(revisions == [:], "absent from the listing is absent")
+        #expect(store.asked.isEmpty, "and costs no request, which is the point of listing")
+    }
+
 }
