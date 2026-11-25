@@ -489,16 +489,7 @@ private struct DevotionalAgentContextFile: Identifiable, Equatable {
     var isOffloaded: Bool { row.state == .onTheServer }
     var isAwaited: Bool { row.state == .comingBack }
     var isLeaving: Bool { row.state == .leaving }
-    /// What a Remove on this row is confirming, for a source not here: the
-    /// removal refuses if that has changed by the time it is confirmed.
-    var actBeingRemoved: WorkspaceSourceAct? {
-        switch row.state {
-        case .onTheServer: .offloaded
-        case .comingBack: .wanted
-        case .here, .leaving, .folder: nil
-        }
-    }
-    var removesWhatIsNotHere: Bool { row.removesWhatIsNotHere }
+    var removalWaitsForDownload: Bool { row.removalWaitsForDownload }
 }
 
 private struct DevotionalAgentSkill: Identifiable, Equatable {
@@ -663,38 +654,15 @@ enum DevotionalAgentWorkspaceStore {
         _ file: DevotionalAgentContextFile,
         from workspace: URL,
         libraryRootURL: URL,
-        heldBy holdingServer: String?,
-        confirmedFolder: FolderIdentity?
     ) throws {
-        // A folder whose removal the reader confirmed is checked here, on the
-        // owner, immediately before it goes — not on the main actor before
-        // the hop, after which this may wait behind a pass and the folder be
-        // replaced meanwhile. A confirmed folder with no identity taken is
-        // refused rather than waved through.
-        if file.removesWhatIsNotHere, file.isDirectory {
-            guard let confirmedFolder, FolderIdentity(of: file.url) == confirmedFolder else {
-                throw WorkspaceContextFileStore.OffloadError.replacedSinceConfirmed(file.relativePath)
-            }
-        }
-        if let confirmed = file.actBeingRemoved {
-            // No bytes here to remove, and possibly a nested path — neither
-            // of which `removeContextItem` takes. A row waiting for a
-            // download has no file either, and the reader confirming Remove
-            // on it means the same thing: stop, and take it off the server.
-            try WorkspaceContextFileStore.removeOffloadedSource(
-                relativePath: file.relativePath,
-                in: workspace,
-                libraryRootURL: libraryRootURL,
-                confirming: confirmed,
-                heldBy: holdingServer
-            )
-        } else {
-            try WorkspaceContextFileStore.removeContextItem(
-                at: file.url,
-                from: workspace,
-                libraryRootURL: libraryRootURL
-            )
-        }
+        // Only what is here: a source with no copy on this Mac is downloaded
+        // before it can be removed (`decisions/0022`), and the store refuses
+        // a folder holding one whatever the row said.
+        try WorkspaceContextFileStore.removeContextItem(
+            at: file.url,
+            from: workspace,
+            libraryRootURL: libraryRootURL
+        )
         try updateInstructions(in: workspace)
     }
 
@@ -1277,12 +1245,6 @@ struct DevotionalAgentWorkspaceView: View {
 
     /// The offloaded source a Remove is waiting to be confirmed for. Its
     /// bytes are not on this Mac, so the click would destroy the only copy.
-    @State private var sourceToRemove: DevotionalAgentContextFile?
-    /// The folder a confirmation is for, as it was when the dialog opened —
-    /// device and inode, which a folder keeps however its contents change. A
-    /// different folder put at the path while the dialog was open is not the
-    /// one the reader agreed to remove everywhere.
-    @State private var folderToRemoveIdentity: FolderIdentity?
     @State private var isDropTargeted = false
     @State private var skillEditorRequest: DevotionalAgentSkillEditorRequest?
     @State private var skillPendingDeletion: DevotionalAgentSkill?
@@ -1723,47 +1685,15 @@ struct DevotionalAgentWorkspaceView: View {
                     ForEach(contextFiles) { file in contextFileRow(file) }
                 }
                 // A refusal is said here, where Offload was pressed, as well as
-                // in Sync settings — and the promise above it taken back.
-                .onChange(of: syncController.offloadRefusal) { _, refusal in
+                // in Sync settings — and the promise above it taken back. Only
+                // this writing's: another pane's refusal is not about these.
+                .onChange(of: workspaceURL.flatMap { syncController.offloadRefusals[$0.standardizedFileURL.path] }) { _, refusal in
                     guard let refusal else { return }
                     errorMessage = refusal
                     if contextNoteIsOffloadPromise {
                         contextNote = nil
                         contextNoteIsOffloadPromise = false
                     }
-                }
-                .confirmationDialog(
-                    "Remove “\(sourceToRemove?.name ?? "")” from every device?",
-                    isPresented: Binding(
-                        get: { sourceToRemove != nil },
-                        set: { if !$0 { sourceToRemove = nil } }
-                    ),
-                    titleVisibility: .visible
-                ) {
-                    Button("Remove Everywhere", role: .destructive) {
-                        if let file = sourceToRemove {
-                            let confirmed = folderToRemoveIdentity
-                            sourceToRemove = nil
-                            folderToRemoveIdentity = nil
-                            Task { await removeContextFile(file, confirmedFolder: confirmed) }
-                        }
-                    }
-                    Button("Cancel", role: .cancel) { sourceToRemove = nil }
-                } message: {
-                    Text(
-                        sourceToRemove?.isDirectory == true
-                            ? """
-                              This folder holds sources that are on the \
-                              server and not on this Mac, so removing it \
-                              deletes the only copy of them. Download them \
-                              first if you want to keep one.
-                              """
-                            : """
-                              This source is on the server, not on this Mac, \
-                              so removing it deletes the only copy. Download \
-                              it first if you want to keep one.
-                              """
-                    )
                 }
             }
             if let contextNote {
@@ -2143,20 +2073,21 @@ struct DevotionalAgentWorkspaceView: View {
                 }
             }
             Button("Remove", systemImage: "xmark.circle", role: .destructive) {
-                // Asked about only when the bytes are not here. For a file on
-                // disk this is a removal the reader can see the subject of;
-                // for an offloaded one the click destroys the only copy there
-                // is, with nothing left on this Mac to go back to.
-                if file.removesWhatIsNotHere {
-                    folderToRemoveIdentity = file.isDirectory ? FolderIdentity(of: file.url) : nil
-                    sourceToRemove = file
-                } else {
-                    Task { await removeContextFile(file) }
-                }
+                Task { await removeContextFile(file) }
             }
             .labelStyle(.iconOnly)
             .buttonStyle(.borderless)
-            .help("Remove this source from every device")
+            // Removing a source that is not here would delete the only copy,
+            // on the server. Download it first; then it is an ordinary removal
+            // of a file the reader can see (`decisions/0022`).
+            .disabled(file.removalWaitsForDownload)
+            .help(
+                file.removalWaitsForDownload
+                    ? (file.isDirectory
+                        ? "Download the sources in this folder before removing it"
+                        : "Download this source before removing it")
+                    : "Remove this source from every device"
+            )
         }
         .font(.callout)
     }
@@ -2809,9 +2740,8 @@ struct DevotionalAgentWorkspaceView: View {
 
     /// Frees the space this source takes here, keeping the server's copy.
     ///
-    /// Refused where the records do not show a completed upload, because then
-    /// this is the only copy. The refusal is shown rather than the button
-    /// hidden: "it has not finished syncing" is a thing worth knowing.
+    /// Queued: it goes after the next sync, and only once the server's copy,
+    /// read back then, is this file's bytes. A refusal then is said here.
     private func offloadContextFile(_ file: DevotionalAgentContextFile) async {
         guard let workspaceURL else { return }
         errorMessage = nil
@@ -2823,7 +2753,11 @@ struct DevotionalAgentWorkspaceView: View {
             try await WorkspaceContextFileStore.queueOffload(
                 relativePath: file.relativePath, in: workspaceURL
             )
-            Task { await syncController.syncForOffload(library: libraryModel.library) }
+            Task {
+                await syncController.syncForOffload(
+                    library: libraryModel.library, workspace: workspaceURL
+                )
+            }
             contextNote = "“\(file.name)” goes back to the server after the next sync."
             contextNoteIsOffloadPromise = true
             schedulePoll()
@@ -2869,31 +2803,16 @@ struct DevotionalAgentWorkspaceView: View {
         }
     }
 
-    private func removeContextFile(
-        _ file: DevotionalAgentContextFile, confirmedFolder: FolderIdentity? = nil
-    ) async {
+    private func removeContextFile(_ file: DevotionalAgentContextFile) async {
         guard let workspaceURL else { return }
         errorMessage = nil
         contextNote = nil
-        // An early answer; the store decides, immediately before removing.
-        if let confirmedFolder, FolderIdentity(of: file.url) != confirmedFolder {
-            errorMessage = """
-                “\(file.name)” has changed since you chose to remove it, so \
-                nothing was removed. Check it and try again.
-                """
-            return
-        }
         do {
             try await DevotionalAgentWorkspaceStore.removeContextFile(
                 file,
                 from: workspaceURL,
-                libraryRootURL: libraryRootURL,
-                heldBy: syncController.serverHoldingOffloads,
-                confirmedFolder: confirmedFolder
+                libraryRootURL: libraryRootURL
             )
-            // Removing a source that was only on the server can lift the
-            // lock on where sync points.
-            await syncController.refreshSourcesOnlyOnTheServer(library: libraryModel.library)
             schedulePoll()
         } catch {
             errorMessage = error.localizedDescription

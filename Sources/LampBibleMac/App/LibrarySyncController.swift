@@ -113,21 +113,41 @@ final class LibrarySyncController: ObservableObject {
     /// It is released when nothing is only on the server and no removal of a
     /// source is still queued for it — a removal sent after a switch would go
     /// to the wrong server.
-    private var offloadsHeldBy: String? {
-        get { defaults.string(forKey: "sync.offloadsHeldBy") }
-        set { defaults.set(newValue, forKey: "sync.offloadsHeldBy"); objectWillChange.send() }
+    ///
+    /// And it names the account as well as the server (`OffloadLock`): a pass
+    /// at the same address as anyone else is refused before it starts.
+    private var offloadLock: OffloadLock? {
+        get {
+            if let data = defaults.data(forKey: Self.offloadLockKey),
+               let lock = try? JSONDecoder().decode(OffloadLock.self, from: data) {
+                return lock
+            }
+            // Written by a build that kept the address alone.
+            return defaults.string(forKey: "sync.offloadsHeldBy")
+                .map { OffloadLock(source: $0, account: nil) }
+        }
+        set {
+            defaults.removeObject(forKey: "sync.offloadsHeldBy")
+            if let newValue, let data = try? JSONEncoder().encode(newValue) {
+                defaults.set(data, forKey: Self.offloadLockKey)
+            } else {
+                defaults.removeObject(forKey: Self.offloadLockKey)
+            }
+            objectWillChange.send()
+        }
     }
 
+    private static let offloadLockKey = "sync.offloadLock"
+
+    /// The server sync is locked to, by its address.
+    private var offloadsHeldBy: String? { offloadLock?.source }
+
     /// Whether where sync points is locked to one server.
-    var destinationIsLocked: Bool { offloadsHeldBy != nil }
+    var destinationIsLocked: Bool { offloadLock != nil }
 
-    /// The server the outstanding offloads went to, for checking a removal
-    /// against it and no other.
-    var serverHoldingOffloads: String? { offloadsHeldBy }
-
-    /// Engages the lock on `source` before an offload deletes anything.
-    func willOffload(to source: String) {
-        if offloadsHeldBy == nil { offloadsHeldBy = source }
+    /// Engages the lock before an offload deletes anything.
+    private func willOffload(to source: String, as account: String) {
+        if offloadLock == nil { offloadLock = OffloadLock(source: source, account: account) }
     }
 
     func refreshSourcesOnlyOnTheServer(library: LampLibrary) async {
@@ -141,11 +161,12 @@ final class LibrarySyncController: ObservableObject {
         let removalsQueued = LampSyncRemovedModules.load(fromLibraryAt: root, fileManager: fileManager)
             .removedAt.keys.contains(where: LampWorkspaceSync.namesAsource)
         if sourcesOnlyOnTheServer.isEmpty, !removalsQueued, !isOffloading {
-            if offloadsHeldBy != nil { offloadsHeldBy = nil }
-        } else if offloadsHeldBy == nil, !sourcesOnlyOnTheServer.isEmpty, let current = currentSource {
+            if offloadLock != nil { offloadLock = nil }
+        } else if offloadLock == nil, !sourcesOnlyOnTheServer.isEmpty, let current = currentSource {
             // Held but never written down — from a build before this. The
-            // server sync talks to now is the one they can only have gone to.
-            offloadsHeldBy = current
+            // server sync talks to now is the one they can only have gone to;
+            // the account is filled in by the next pass there.
+            offloadLock = OffloadLock(source: current, account: nil)
         }
     }
 
@@ -157,25 +178,17 @@ final class LibrarySyncController: ObservableObject {
         _ = await syncAsked(library: library)
     }
 
-    /// Asks for the sync after which a requested offload is carried out.
-    ///
-    /// A source not yet on the server is uploaded by that sync — but its look
-    /// at the server is taken at the gather, before the upload, so the
-    /// request finds it not yet there and waits. Nothing local changes after
-    /// that, so nothing would start another pass: up to two follow-ups are
-    /// allowed, which is one more than an upload needs, and not a loop
-    /// against a server that never confirms.
-    func syncForOffload(library: LampLibrary) async {
-        offloadFollowUps = 2
-        offloadRefusal = nil
+    /// Asks for the sync after which a requested offload is carried out. A
+    /// source not yet on the server goes up in that sync, and the offload
+    /// after it reads it back.
+    func syncForOffload(library: LampLibrary, workspace: URL) async {
+        offloadRefusals[workspace.standardizedFileURL.path] = nil
         _ = await syncAsked(library: library)
     }
 
-    private var offloadFollowUps = 0
-
-    /// Why the last requested offload could not happen, for the pane that
-    /// asked; nil while there is nothing to say.
-    @Published private(set) var offloadRefusal: String?
+    /// Why a requested offload could not happen, by the workspace that asked
+    /// (its standardized path), for that writing's pane alone.
+    @Published private(set) var offloadRefusals: [String: String] = [:]
 
     /// A pass the reader asked for by pressing something — Download, Try
     /// Again, Download All. Not subject to the automatic-sync setting, which
@@ -295,8 +308,8 @@ final class LibrarySyncController: ObservableObject {
         // account, as far as the offloads are concerned. A new password for
         // the same account is not.
         let current = SyncSecretStore.password ?? ""
-        guard SyncAccountHistory.identity(username: username, password: password)
-                == SyncAccountHistory.identity(username: username, password: current)
+        guard SyncAccount.identity(username: username, password: password)
+                == SyncAccount.identity(username: username, password: current)
                 || !destinationIsLocked
         else {
             sayWhyTheDestinationIsLocked()
@@ -411,24 +424,6 @@ final class LibrarySyncController: ObservableObject {
     private var passGate = false
     /// The account the running pass's store was built with.
     private var accountOfThisPass = ""
-    /// What the records at this pass's address hold from another account.
-    private var recordedAsAnotherAccountThisPass: [String: String] = [:]
-
-    private static let accountHistoryKey = "sync.accountHistory"
-
-    private func noteAccount(_ account: String, at source: String, libraryRoot: URL) -> [String: String] {
-        var history = defaults.data(forKey: Self.accountHistoryKey)
-            .flatMap { try? JSONDecoder().decode(SyncAccountHistory.self, from: $0) }
-            ?? SyncAccountHistory()
-        let inherited = history.passStarts(
-            at: source, as: account,
-            records: LampSyncFileRecords.load(fromLibraryAt: libraryRoot, fileManager: fileManager)
-        )
-        if let data = try? JSONEncoder().encode(history) {
-            defaults.set(data, forKey: Self.accountHistoryKey)
-        }
-        return inherited
-    }
 
     private func passAndItsAftermath(library: LampLibrary) async -> Bool {
         let finished = await runSyncPass(library: library)
@@ -441,6 +436,7 @@ final class LibrarySyncController: ObservableObject {
         if finished {
             await reconcileOffloadsWithTheServer(library: library)
             await carryOutOffloads(library: library)
+            await sayWhatCameBack(library: library)
         }
         await refreshSourcesOnlyOnTheServer(library: library)
         return finished
@@ -467,12 +463,47 @@ final class LibrarySyncController: ObservableObject {
     /// time. Here there is one moment: the look at the server is the one this
     /// pass has just taken, no other pass is running, and the lock is
     /// written down before anything goes and not released until after.
+    ///
+    /// Each offload reads the server's copy back through a store made the
+    /// way the pass's was — same address, same credentials, same folder
+    /// access — and goes only where it is the local bytes (`decisions/0022`).
     private func carryOutOffloads(library: LampLibrary) async {
         guard let observation = offloadObservation() else { return }
         isOffloading = true
         defer { isOffloading = false }
-        await offloadRequestedSources(library: library, observation: observation)
-        await offloadInactiveSources(library: library, observation: observation)
+        do {
+            try await withConnection { connection in
+                // The connection is made again from the settings; it must be
+                // the one the look was at.
+                guard connection.source == observation.source,
+                      connection.account == observation.account else { return }
+                let store = UncheckedStore(store: connection.store)
+                let server = OffloadServer(
+                    source: connection.source, account: connection.account,
+                    fetch: { path, destination in
+                        try await store.store.read(path: path, into: destination) != nil
+                    }
+                )
+                await offloadRequestedSources(library: library, observation: observation, server: server)
+                await offloadInactiveSources(library: library, observation: observation, server: server)
+            }
+        } catch {
+            Self.log.error("Offloads skipped: the server could not be reached as the pass reached it: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// What came back from the server not as it left, said once.
+    private func sayWhatCameBack(library: LampLibrary) async {
+        let notices = await LampWorkspaceSync.takeReturnNotices(inLibraryAt: library.rootURL)
+        if let first = notices.changed.first {
+            errorMessage = notices.changed.count == 1
+                ? "“\(first)” came back from the server changed: it isn't the copy that left this Mac."
+                : "\(notices.changed.count) sources came back from the server changed: they aren't the copies that left this Mac."
+        } else if let first = notices.unmarked.first {
+            errorMessage = notices.unmarked.count == 1
+                ? "“\(first)” came back without its “downloaded from the internet” mark, which macOS wouldn't let Lamp put back."
+                : "\(notices.unmarked.count) sources came back without their “downloaded from the internet” mark, which macOS wouldn't let Lamp put back."
+        }
     }
 
     /// The sources the reader asked to go back to the server.
@@ -483,30 +514,24 @@ final class LibrarySyncController: ObservableObject {
     /// safety check does. A request that could succeed later stays; one that
     /// never can is dropped and said.
     private func offloadRequestedSources(
-        library: LampLibrary, observation: ServerObservation
+        library: LampLibrary, observation: ServerObservation, server: OffloadServer
     ) async {
         let root = library.rootURL
         var offloaded = 0
-        var refused: [String] = []
-        var waiting: [String] = []
-        var awaitingTheServer = false
-        defer {
-            // Once per pass, however many sources are waiting: the passes
-            // asked for coalesce into one, so spending the budget per source
-            // used both follow-ups on a single pass.
-            if awaitingTheServer, offloadFollowUps > 0 {
-                offloadFollowUps -= 1
-                LampSyncRequest.wantAPass()
-            }
-        }
         for (workspace, requested) in await LampWorkspaceSync.requestedOffloads(inLibraryAt: root) {
-            willOffload(to: observation.source)
+            willOffload(to: server.source, as: server.account)
+            var refused: [String] = []
+            var differs: [String] = []
             do {
                 let result = try await WorkspaceContextFileStore.offloadSources(
                     requested, in: workspace, libraryRootURL: root, observation: observation,
-                    onlyWhileRequested: true,
+                    server: server, onlyWhileRequested: true,
                     while: { @Sendable [weak self] in
-                        await MainActor.run { self?.offloadObservation() == observation }
+                        await MainActor.run {
+                            guard let self else { return false }
+                            return self.offloadObservation() == observation
+                                && !KeptAgentChats.isBusy(in: workspace)
+                        }
                     }
                 )
                 offloaded += result.offloaded.count
@@ -515,9 +540,8 @@ final class LibrarySyncController: ObservableObject {
                         // Keep Here won; there is nothing to put back.
                         continue
                     }
-                    if reason == .notSeenOnTheServer || reason == .notOnTheServer {
-                        awaitingTheServer = true
-                        waiting.append(path)
+                    if reason == .serverCopyDiffers || reason == .couldNotReadTheServer {
+                        differs.append(path)
                     }
                     if reason.isLasting {
                         try? await WorkspaceContextFileStore.cancelOffload(
@@ -533,24 +557,26 @@ final class LibrarySyncController: ObservableObject {
             } catch {
                 Self.log.error("A requested offload failed: \(error.localizedDescription, privacy: .public)")
             }
+            // Said in the pane that asked — this workspace's — and in Sync
+            // settings.
+            let key = workspace.standardizedFileURL.path
+            if !refused.isEmpty {
+                let message = refused.count == 1
+                    ? "“\(refused[0])” can't go back to the server, so it stays on this Mac."
+                    : "\(refused.count) sources can't go back to the server, so they stay on this Mac."
+                errorMessage = message
+                offloadRefusals[key] = message
+            } else if !differs.isEmpty {
+                // The request stays, for a pass whose read of the server
+                // matches; the pane says why nothing has happened yet.
+                offloadRefusals[key] = differs.count == 1
+                    ? "“\(differs[0])” is waiting: the server's copy didn't match this Mac's when Lamp checked, so it stays here for now."
+                    : "\(differs.count) sources are waiting: the server's copies didn't match this Mac's when Lamp checked, so they stay here for now."
+            } else {
+                offloadRefusals[key] = nil
+            }
         }
-        if !refused.isEmpty {
-            let message = refused.count == 1
-                ? "“\(refused[0])” can't go back to the server, so it stays on this Mac."
-                : "\(refused.count) sources can't go back to the server, so they stay on this Mac."
-            errorMessage = message
-            // And where Offload was pressed, not only in Sync settings.
-            offloadRefusal = message
-        } else if !waiting.isEmpty, offloadFollowUps == 0 {
-            // The follow-ups are spent and the server still has not shown
-            // the copy this Mac uploaded — a server that never answers with a
-            // strong tag, say. The request stays, for a later pass that can
-            // confirm it; the pane that asked says why nothing has happened.
-            offloadRefusal = waiting.count == 1
-                ? "“\(waiting[0])” is waiting: Lamp hasn't yet seen this copy on the server, so it stays on this Mac until a sync does."
-                : "\(waiting.count) sources are waiting: Lamp hasn't yet seen these copies on the server, so they stay on this Mac until a sync does."
-        } else if offloaded > 0 {
-            offloadRefusal = nil
+        if offloaded > 0 {
             statusMessage = offloaded == 1
                 ? "1 source put back on the server."
                 : "\(offloaded) sources put back on the server."
@@ -600,9 +626,8 @@ final class LibrarySyncController: ObservableObject {
               observation.answers(
                   for: source,
                   account: provider == .webDAV
-                      ? SyncAccountHistory.identity(
-                          username: username, password: SyncSecretStore.password ?? ""
-                      )
+                      ? (try? SyncSecretStore.readPassword())
+                          .map { SyncAccount.identity(username: username, password: $0) } ?? "\u{0}unreadable"
                       : "",
                   now: now
               )
@@ -644,7 +669,7 @@ final class LibrarySyncController: ObservableObject {
     /// so no sweep, which is right: there is nowhere for the sources to go.
     @discardableResult
     private func offloadInactiveSources(
-        library: LampLibrary, observation: ServerObservation
+        library: LampLibrary, observation: ServerObservation, server: OffloadServer
     ) async -> Int {
         let after = WorkspaceSourceOffload.After.chosen()
         guard after.days != nil else { return 0 }
@@ -690,12 +715,14 @@ final class LibrarySyncController: ObservableObject {
             // scan. The scan and the batches before this one are awaits, and
             // a reader who opened this writing during them would lose its
             // sources from under an open editor.
-            guard !OpenWritingEditors.writingIDs.contains(writingID) else { continue }
-            willOffload(to: observation.source)
+            guard !OpenWritingEditors.writingIDs.contains(writingID),
+                  !KeptAgentChats.isBusy(in: workspaceURL)
+            else { continue }
+            willOffload(to: server.source, as: server.account)
             do {
                 let result = try await WorkspaceContextFileStore.offloadSources(
                     relativePaths, in: workspaceURL,
-                    libraryRootURL: libraryRoot, observation: observation,
+                    libraryRootURL: libraryRoot, observation: observation, server: server,
                     // Asked again before each file goes, not once before the
                     // batch: hashing a workspace's sources takes long enough
                     // for a reader to open the writing in the middle of it.
@@ -706,7 +733,11 @@ final class LibrarySyncController: ObservableObject {
                     while: { @Sendable [weak self] in
                         await MainActor.run {
                             guard let self else { return false }
+                            // An agent turn on this writing — started from
+                            // the phone, say, with no editor open — is using
+                            // its sources too.
                             return !OpenWritingEditors.writingIDs.contains(writingID)
+                                && !KeptAgentChats.isBusy(in: workspaceURL)
                                 && self.offloadObservation() == observation
                         }
                     }
@@ -891,6 +922,25 @@ final class LibrarySyncController: ObservableObject {
     private func withRemoteStore<T>(
         _ body: (any LampSyncRemoteStore, String) async throws -> T
     ) async throws -> T {
+        try await withConnection { try await body($0.store, $0.source) }
+    }
+
+    /// A way to the configured server: the store, the source its records are
+    /// kept under, and who it is reached as (`SyncAccount.identity`).
+    private struct Connection {
+        let store: any LampSyncRemoteStore
+        let source: String
+        let account: String
+    }
+
+    /// Makes the one connection everything uses — a pass, a probe, an
+    /// offload's read-back — so they cannot reach the server in different
+    /// ways. A folder's access is held for the body.
+    ///
+    /// A password that is stored and cannot be read is an error, never no
+    /// password: going anonymous instead reached a different library on a
+    /// server that serves one to anonymous requests.
+    private func withConnection<T>(_ body: (Connection) async throws -> T) async throws -> T {
         switch provider {
         case .off:
             throw LibrarySyncError.providerNotConfigured
@@ -898,19 +948,31 @@ final class LibrarySyncController: ObservableObject {
             let folder = try resolveFolderURL()
             let hasScope = folder.startAccessingSecurityScopedResource()
             defer { if hasScope { folder.stopAccessingSecurityScopedResource() } }
-            return try await body(LampSyncDirectoryStore(root: folder), LampSyncFileRecords.folderSource(folder))
+            return try await body(Connection(
+                store: LampSyncDirectoryStore(root: folder),
+                source: LampSyncFileRecords.folderSource(folder),
+                account: ""
+            ))
         case .webDAV:
             guard let url = URL(string: endpoint), url.scheme?.hasPrefix("http") == true else {
                 throw LibrarySyncError.invalidWebDAVURL
             }
-            let storedPassword = SyncSecretStore.password ?? ""
-            let credentials = username.isEmpty && storedPassword.isEmpty
+            let storedPassword = try SyncSecretStore.readPassword()
+            let account = SyncAccount.identity(username: username, password: storedPassword)
+            let credentials = account.isEmpty
                 ? nil : LampWebDAVCredentials(username: username, password: storedPassword)
-            return try await body(
-                LampWebDAVClient(baseURL: url, credentials: credentials),
-                LampSyncFileRecords.webDAVSource(url)
-            )
+            return try await body(Connection(
+                store: LampWebDAVClient(baseURL: url, credentials: credentials),
+                source: LampSyncFileRecords.webDAVSource(url),
+                account: account
+            ))
         }
+    }
+
+    /// The store, carried into the offload's read-back closure. Used from one
+    /// task at a time, as every store here is.
+    private struct UncheckedStore: @unchecked Sendable {
+        let store: any LampSyncRemoteStore
     }
 
     /// Whether the module and deck folders hold anything this Mac has not
@@ -1002,12 +1064,26 @@ final class LibrarySyncController: ObservableObject {
         return await sync(library: library)
     }
 
+    /// Refuses a pass that would reach the server holding the offloads any
+    /// other way than they were put there: before it reads a manifest, which
+    /// from another library would settle them as gone and lift the lock. A
+    /// lock from before the account was kept takes this pass's.
+    private func admitPass(at source: String, as account: String) throws {
+        guard var lock = offloadLock else { return }
+        guard lock.admits(source: source, account: account) else {
+            throw LibrarySyncError.offloadsHeldElsewhere
+        }
+        if lock.account == nil {
+            lock.account = account
+            offloadLock = lock
+        }
+    }
+
     private func runSyncPass(library: LampLibrary) async -> Bool {
         guard !isSyncing else { return false }
         isSyncing = true
         // A folder has no account; a WebDAV pass sets its own below.
         accountOfThisPass = ""
-        recordedAsAnotherAccountThisPass = [:]
         Self.log.notice("Sync pass started (\(self.provider.rawValue, privacy: .public))")
         errorMessage = nil
         statusMessage = "Preparing sync…"
@@ -1025,6 +1101,7 @@ final class LibrarySyncController: ObservableObject {
 
             case .folder:
                 let folder = try resolveFolderURL()
+                try admitPass(at: LampSyncFileRecords.folderSource(folder), as: "")
                 // Held for the store's whole lifetime, which is this pass.
                 let hasScope = folder.startAccessingSecurityScopedResource()
                 defer { if hasScope { folder.stopAccessingSecurityScopedResource() } }
@@ -1040,20 +1117,13 @@ final class LibrarySyncController: ObservableObject {
                 guard let url = URL(string: endpoint), url.scheme?.hasPrefix("http") == true else {
                     throw LibrarySyncError.invalidWebDAVURL
                 }
-                let storedPassword = SyncSecretStore.password ?? ""
+                // Unreadable is not none: see `withConnection`.
+                let storedPassword = try SyncSecretStore.readPassword()
                 // The account this store is built with, read once, here — and
-                // what the pass's look at the server is labelled with. Read
-                // from Settings at the gather instead, a username changed
-                // mid-pass labelled the old account's listing with the new
-                // one, and an offload took that as proof the new account held
-                // a file it never had.
-                let account = SyncAccountHistory.identity(
-                    username: username, password: storedPassword
-                )
+                // what the pass's look at the server is labelled with.
+                let account = SyncAccount.identity(username: username, password: storedPassword)
+                try admitPass(at: LampSyncFileRecords.webDAVSource(url), as: account)
                 accountOfThisPass = account
-                recordedAsAnotherAccountThisPass = noteAccount(
-                    account, at: LampSyncFileRecords.webDAVSource(url), libraryRoot: library.rootURL
-                )
                 let credentials = account.isEmpty
                     ? nil : LampWebDAVCredentials(username: username, password: storedPassword)
                 try await sync(
@@ -1565,10 +1635,8 @@ extension LibrarySyncController {
         // with that deletion in, and reconciling against the opening manifest
         // would leave its source drawn as "On the server". The listing stays
         // the gather's: revisions are what was seen, not what was written.
-        // A listed revision survives only where the entry did not change
-        // while the pass ran (`ServerObservation.closed(by:)`).
         if let written = outcome.written?.bundle, let opened = pendingObservation {
-            pendingObservation = opened.closed(by: written.manifest)
+            pendingObservation = opened.with(members: Set(written.manifest.members.map(\.path)))
         }
         if let written = outcome.written?.bundle,
            let incoming = LampSyncBundleLedgers.bookReading(in: written),
@@ -2044,23 +2112,15 @@ extension LibrarySyncController {
                 .map(\.path),
             from: store
         )
-        // The one look any pass takes at those folders, kept for what runs
-        // after it: a record's `installedRevision` is a memory of one upload
-        // and is never refreshed (`decisions/0021`). Labelled with the
-        // source this gather's store was built from, not whatever the
-        // settings say by the time anyone reads it — two folders that once
-        // held the same bytes have matching digests, so a mislabelled
-        // listing is enough to authorise deleting a copy the new server
-        // never had.
+        // Which server this pass looked at, as whom, and what its manifest
+        // counts — for what runs after it. Labelled with the source and the
+        // account this gather's store was built with, not whatever the
+        // settings say by the time anyone reads it. Not proof of any file:
+        // an offload reads the server's copy back (`decisions/0022`).
         pendingObservation = ServerObservation(
             source: source,
             account: accountOfThisPass,
-            members: Set(manifest.members.map(\.path)),
-            revisions: unlisted,
-            recordedAsAnotherAccount: recordedAsAnotherAccountThisPass,
-            openingEntries: Dictionary(
-                manifest.members.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first }
-            )
+            members: Set(manifest.members.map(\.path))
         )
         result.gathered.extraListing.merge(unlisted) { _, listed in listed }
         return result
@@ -2254,6 +2314,10 @@ private enum LibrarySyncError: LocalizedError {
     case incompleteRemoteImport([String])
     /// The keychain refused to hold the WebDAV password.
     case passwordNotStored(OSStatus)
+    /// A password may be stored and could not be read.
+    case passwordNotRead(OSStatus)
+    /// Sources are only on the server, reached another way than this.
+    case offloadsHeldElsewhere
     case missingRemoteRevision(String)
     case archiveUnreadable
     case libraryMovedOn
@@ -2271,6 +2335,18 @@ private enum LibrarySyncError: LocalizedError {
             Your password could not be saved to the keychain\
             \(SecCopyErrorMessageString(status, nil).map { " (\($0))" } ?? " (error \(status))").
             Sync is otherwise set up; unlock your login keychain and enter it again.
+            """
+        case .passwordNotRead(let status):
+            """
+            Your WebDAV password couldn't be read from the keychain\
+            \(SecCopyErrorMessageString(status, nil).map { " (\($0))" } ?? " (error \(status))").
+            Lamp didn't sync rather than connect without it. Unlock your login keychain and try again.
+            """
+        case .offloadsHeldElsewhere:
+            """
+            Some sources are only on the server, and Lamp is now set to reach it as \
+            a different account from the one they were put there as, so it didn't \
+            sync. Sign in as that account again, or download them first.
             """
         case .folderNotConfigured: "Choose an iCloud Drive or local folder for sync."
         case .invalidWebDAVURL: "Enter a valid HTTP or HTTPS WebDAV folder URL."
@@ -2306,6 +2382,26 @@ private enum SyncSecretStore {
         guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
               let data = result as? Data else { return nil }
         return String(data: data, encoding: .utf8)
+    }
+
+    /// The stored password, "" where none is stored, and an error where one
+    /// may be stored but could not be read — a locked keychain, a denied
+    /// prompt. `password` answers nil for both.
+    static func readPassword() throws -> String {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return "" }
+        guard status == errSecSuccess, let data = result as? Data,
+              let password = String(data: data, encoding: .utf8)
+        else { throw LibrarySyncError.passwordNotRead(status) }
+        return password
     }
 
     static func setPassword(_ password: String) throws {

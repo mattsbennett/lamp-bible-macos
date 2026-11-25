@@ -243,6 +243,31 @@ public enum LampWorkspaceSync {
         sourcesNotHere(in: workspace).filter { $0.value == .offloaded }.keys.sorted()
     }
 
+    /// What came back that was not as it left — another copy, or one whose
+    /// quarantine would not take — read and cleared, for the app to say once.
+    @WritingWorkspaceFiles
+    public static func takeReturnNotices(
+        inLibraryAt libraryRoot: URL, fileManager: FileManager = .default
+    ) -> (changed: [String], unmarked: [String]) {
+        var changed: [String] = []
+        var unmarked: [String] = []
+        for workspace in (try? workspaces(in: libraryRoot, fileManager: fileManager)) ?? [] {
+            guard var ledger = WorkspaceFileLedger.loadIfReadable(in: workspace),
+                  !ledger.returnNotices.isEmpty else { continue }
+            let prefix = WorkspaceFileLedger.contextKey("")
+            for (key, notice) in ledger.returnNotices where key.hasPrefix(prefix) {
+                let path = String(key.dropFirst(prefix.count))
+                switch notice {
+                case .changed: changed.append(path)
+                case .unmarked: unmarked.append(path)
+                }
+            }
+            ledger.returnNotices = [:]
+            try? ledger.save(in: workspace)
+        }
+        return (changed.sorted(), unmarked.sorted())
+    }
+
     /// The sources asked back that have not arrived.
     ///
     /// The ask outlives the attempt: a download that failed, or whose server
@@ -859,23 +884,8 @@ public enum LampWorkspaceSync {
             }
             fileLedger.recordSynced(try workspaceFiles(in: workspace, fileManager: fileManager)
                 .mapValues(\.modified))
-            // An offloaded source that has just been downloaded gets back the
-            // quarantine it went away with. One whose mark will not take —
-            // an ACL that denies attribute writes, say — does not stay here
-            // without it: the download goes again, and the source is back on
-            // the server, offloaded, with its mark still kept for the next
-            // Download. Left in place, it would sit unmarked, and nothing
-            // makes a later pass import this workspace again to retry.
-            for path in fileLedger.restoreQuarantine(inContextOf: workspace) {
-                try? WorkspaceContextFileStore.removeSyncedContextFile(
-                    at: workspace.appendingPathComponent("context", isDirectory: true)
-                        .appendingPathComponent(path),
-                    libraryRootURL: libraryRoot, fileManager: fileManager
-                )
-                if !LampWorkspaceSync.isHere(path, inContextOf: workspace, fileManager: fileManager) {
-                    _ = fileLedger.noteOffloaded(WorkspaceFileLedger.contextKey(path))
-                }
-            }
+            // A source that has come back is checked against what left.
+            fileLedger.checkReturns(inContextOf: workspace)
             if readableLedger != nil { try fileLedger.save(in: workspace) }
 
             let portableSelection = portableWorkspace.appendingPathComponent("EnabledSkills.json")
@@ -1567,6 +1577,19 @@ struct WorkspaceFileLedger: Codable, Equatable {
     /// is cheaper than keeping every downloaded PDF on disk.
     var quarantine: [String: String] = [:]
 
+    /// The digest of each source as it left, so the copy that comes back can
+    /// be told from another: the quarantine mark goes only onto the same
+    /// bytes, and a copy that differs is said (`decisions/0022`).
+    var offloadedDigest: [String: String] = [:]
+
+    /// What a pass found about sources that came back, for the next look at
+    /// the ledgers to say and clear: `changed` where the copy that came back
+    /// is not the one that left, `unmarked` where its quarantine would not
+    /// take. Nothing is deleted for either.
+    var returnNotices: [String: ReturnNotice] = [:]
+
+    enum ReturnNotice: String, Codable, Sendable { case changed, unmarked }
+
     /// Which file a request to offload was made about, as its place on disk
     /// (`device:inode`). A file attached later at the same path — the first
     /// one deleted in Finder and another dropped in under its name, between
@@ -1625,6 +1648,12 @@ struct WorkspaceFileLedger: Codable, Equatable {
         ) ?? [:]
         leavingFile = try container.decodeIfPresent(
             [String: String].self, forKey: .leavingFile
+        ) ?? [:]
+        offloadedDigest = try container.decodeIfPresent(
+            [String: String].self, forKey: .offloadedDigest
+        ) ?? [:]
+        returnNotices = try container.decodeIfPresent(
+            [String: ReturnNotice].self, forKey: .returnNotices
         ) ?? [:]
     }
 
@@ -1804,9 +1833,13 @@ struct WorkspaceFileLedger: Codable, Equatable {
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        // A binding outlives nothing but its request.
+        // A binding outlives nothing but its request; what is kept about a
+        // source that left, nothing but its absence.
         var saved = self
         saved.leavingFile = leavingFile.filter { acts[$0.key] == .leaving }
+        let away = { (key: String) in acts[key] == .offloaded || acts[key] == .wanted }
+        saved.offloadedDigest = offloadedDigest.filter { away($0.key) }
+        saved.quarantine = quarantine.filter { away($0.key) }
         try encoder.encode(saved).write(to: destination, options: .atomic)
     }
 
@@ -1898,15 +1931,32 @@ struct WorkspaceFileLedger: Codable, Equatable {
     /// Puts back the quarantine of every source here that left with one, and
     /// forgets those that went back. One that will not take stays, to be
     /// tried after the next pass.
-    /// Returns the sources here whose mark would not take.
-    mutating func restoreQuarantine(inContextOf workspace: URL) -> [String] {
+    /// Checks each source that has come back against what left: the same
+    /// bytes get their quarantine mark back; a different copy is said, and
+    /// marked with nothing — the mark was about the file that left, not
+    /// about whatever now has its name. Neither case deletes anything: a
+    /// missing mark is a thing to say, not a reason to throw away a file the
+    /// reader may have put there (`decisions/0022`).
+    ///
+    /// Runs on the import, before the save that would drop the entries once
+    /// the act is gone.
+    mutating func checkReturns(inContextOf workspace: URL) {
         let context = workspace.appendingPathComponent("context", isDirectory: true)
         let prefix = Self.contextKey("")
-        var refused: [String] = []
-        for (key, value) in quarantine where key.hasPrefix(prefix) {
+        for (key, left) in offloadedDigest where key.hasPrefix(prefix) {
             let path = String(key.dropFirst(prefix.count))
             guard LampWorkspaceSync.isHere(path, inContextOf: workspace) else { continue }
             let file = context.appendingPathComponent(path)
+            guard let digest = try? LampSyncContentRevision.digest(forFileAt: file) else { continue }
+            defer {
+                offloadedDigest[key] = nil
+                quarantine[key] = nil
+            }
+            guard digest == left else {
+                returnNotices[key] = .changed
+                continue
+            }
+            guard let mark = quarantine[key] else { continue }
             // After consolidation, which may have swapped the download for a
             // link to an object already in the store: a mark set before it
             // would be on a copy that no longer exists. The object is
@@ -1918,13 +1968,12 @@ struct WorkspaceFileLedger: Codable, Equatable {
             let mode = info.st_mode & 0o7777
             let lifted = mode & S_IWUSR == 0
             if lifted { chmod(file.path, mode | S_IWUSR) }
-            let set = Data(value.utf8).withUnsafeBytes {
+            let set = Data(mark.utf8).withUnsafeBytes {
                 setxattr(file.path, "com.apple.quarantine", $0.baseAddress, $0.count, 0, XATTR_NOFOLLOW)
             }
             if lifted { chmod(file.path, mode) }
-            if set == 0 { quarantine[key] = nil } else { refused.append(path) }
+            if set != 0 { returnNotices[key] = .unmarked }
         }
-        return refused
     }
 
     mutating func recordSynced(_ present: [String: Int64], now: Date = Date()) {

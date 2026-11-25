@@ -83,15 +83,10 @@ public enum WorkspaceSourceOffload {
         /// The sources on disk now, by their path under the context folder.
         /// Ones already offloaded are not here; there is no file to take.
         public let sources: [String]
-        /// Those of `sources` the **last pass's own listing** showed on the
-        /// server, at the revision this Mac has recorded for them.
-        ///
-        /// The subset matters: offloading deletes the only local copy, so one
-        /// the server never took would simply be gone (`0020`). And a record
-        /// alone does not say the server still has it — `installedRevision`
-        /// is a memory of one upload that nothing refreshes, so a source
-        /// deleted from the folder by hand would keep its confirmation for
-        /// ever (`0021`).
+        /// Those of `sources` worth reading back from the server: members of
+        /// its manifest as the last pass left it, that this Mac uploaded or
+        /// downloaded. A short list, not proof — the offload reads each one
+        /// back and goes only where the server's copy is these bytes (`0022`).
         public let onTheServer: Set<String>
 
         public init(
@@ -188,10 +183,10 @@ extension WorkspaceSourceOffload {
     /// rather than read here because the library is the caller's, and because
     /// a date that travels in the personal file reads the same on both Macs.
     ///
-    /// `observation` is what the pass that just finished saw. A source first
-    /// confirmed during *that* pass is not in it — the listing is taken at
-    /// the gather, before the uploads — so it waits one more pass, which is
-    /// the safe direction.
+    /// `observation` is what the pass that just finished saw: its members,
+    /// as that pass left the manifest. `onTheServer` is only a short list of
+    /// what is worth reading back; the offload's read of the server is what
+    /// decides.
     @WritingWorkspaceFiles
     public static func workspaces(
         inLibraryAt libraryRootURL: URL,
@@ -227,10 +222,13 @@ extension WorkspaceSourceOffload {
                 }
             var onTheServer: Set<String> = []
             for relativePath in sources {
+                // Worth reading from the server, no more: a member there that
+                // this Mac uploaded or downloaded. The read decides.
                 guard let path = try? LampWritingWorkspaceLayout.contextPath(
                     folder: name, relativePath: relativePath
                 ),
-                observation.shows(path, atRevisionOf: records)
+                observation.members.contains(path),
+                records.record(path, in: observation.source)?.uploadedDigest != nil
                 else { continue }
                 onTheServer.insert(relativePath)
             }
@@ -324,131 +322,107 @@ extension WorkspaceSourceOffload {
     }
 }
 
-/// What a finished sync pass saw of the server: which store it was, what the
-/// manifest counted as members, and what the listing of the workspaces'
-/// context folders said each source's revision was.
+/// What a finished sync pass saw of the server: which store it was, as which
+/// account, and which paths its manifest counts as members.
 ///
-/// **One value, from one place.** It used to be three — a listing on the
-/// controller, a member set on the controller, and a copy for the pane —
-/// and a review found them disagreeing about which server they described.
-/// The gather writes it, labelled with the source its own store was built
-/// from; nothing else does.
-///
-/// It is the only thing that has looked at the server. A record's
-/// `installedRevision` is a memory of one upload that nothing refreshes, so
-/// a source deleted from the sync folder by hand keeps it for ever; an
-/// offload on that alone would delete the last copy (`decisions/0021`).
+/// **Not proof that the server holds anything.** It used to carry the
+/// listing's revisions too, and an offload was allowed where the listing, the
+/// records and the local digest agreed. Fourteen review rounds found a new way
+/// for those memories — taken at different times, by different code, under
+/// different labels — to agree when the server did not hold the bytes
+/// (`decisions/0022`). The proof is now a read of the server's copy at the
+/// moment of the offload (`OffloadServer`); this only says which server the
+/// last pass talked to, and which paths are worth reading.
 public struct ServerObservation: Equatable, Sendable {
     /// The store this came from, as the records name it.
     public let source: String
-    /// The account that looked, where a store has accounts. The records
-    /// name a WebDAV store by its address alone, and another account at the
-    /// same address can be another set of files: a look taken as one account
-    /// says nothing about what the next one can reach.
+    /// Who it was reached as (`SyncAccount.identity`); empty for a folder.
     public let account: String
-    /// Every path the manifest counted as a member.
+    /// Every path the manifest counted as a member, as the pass left it.
     public let members: Set<String>
-    /// What the listing of each source's folder said its revision was.
-    public let revisions: [String: String]
-    /// Revisions this Mac recorded at this address while signed in as a
-    /// different account, and has not recorded again since. A listing that
-    /// matches one of these proves nothing: the other account's file and
-    /// this one's can share a path and a tag (`SyncAccountHistory`).
-    public let recordedAsAnotherAccount: [String: String]
-    /// Each member's entry in the manifest the pass opened with, so the
-    /// closing manifest can say which of them changed while it ran.
-    public let openingEntries: [String: LampSyncLibraryManifest.Entry]
     public let at: Date
 
     /// How long a look at the server answers for anything. A pass runs every
     /// few minutes while sync is on, so the sweep never reaches this; it
-    /// bites where it should — a button pressed with sync off, or on a Mac
-    /// that synced once days ago. A listing from last Tuesday has not seen
-    /// the server today.
+    /// bites where it should — on a Mac that synced once days ago.
     public static let lifetime: TimeInterval = 15 * 60
 
-    public init(
-        source: String, account: String = "",
-        members: Set<String>, revisions: [String: String],
-        recordedAsAnotherAccount: [String: String] = [:],
-        openingEntries: [String: LampSyncLibraryManifest.Entry] = [:],
-        at: Date = Date()
-    ) {
-        self.openingEntries = openingEntries
+    public init(source: String, account: String = "", members: Set<String>, at: Date = Date()) {
         self.source = source
         self.account = account
         self.members = members
-        self.revisions = revisions
-        self.recordedAsAnotherAccount = recordedAsAnotherAccount
         self.at = at
     }
 
-    /// The look as the pass leaves the server: membership from the manifest
-    /// it wrote, and the listing only where that manifest's entry is the
-    /// one the pass opened with.
-    ///
-    /// The listing is taken at the gather. Another device can replace a
-    /// source after that and before the update, and the closing manifest
-    /// then records the new write at the same path; the opening listing
-    /// would still show the old revision, match this Mac's record of the old
-    /// bytes, and vouch for deleting the last copy of them — while Download
-    /// fetched the new ones. An entry that changed at all, by anyone, drops
-    /// its listing: the pass cannot tell which of its writes it saw.
-    public func closed(by written: LampSyncLibraryManifest) -> ServerObservation {
-        ServerObservation(
-            source: source,
-            account: account,
-            members: Set(written.members.map(\.path)),
-            revisions: revisions.filter { path, _ in
-                openingEntries[path] != nil && openingEntries[path] == written.entry(at: path)
-            },
-            recordedAsAnotherAccount: recordedAsAnotherAccount,
-            openingEntries: openingEntries,
-            at: at
-        )
+    /// The same look, with membership as the manifest the pass wrote has it.
+    public func with(members: Set<String>) -> ServerObservation {
+        ServerObservation(source: source, account: account, members: members, at: at)
     }
 
-    /// Whether this can answer for `source` now: the same server, and
-    /// recently enough. Changing folders or turning sync off makes the last
-    /// look worthless however recent it is, because Offload would delete
-    /// against one server while Download fetched from another.
+    /// Whether this can answer for `source` as `account` now: the same
+    /// server, reached the same way, and recently enough.
     public func answers(for source: String, account: String = "", now: Date = Date()) -> Bool {
         self.source == source && self.account == account
             && now.timeIntervalSince(at) < Self.lifetime
     }
+}
 
-    /// Whether the listing showed `path` at the revision this Mac recorded
-    /// for it on this server.
-    ///
-    /// Never for a record with an upload still pending. `recordUpload` moves
-    /// the uploaded digest and the pending revision together and leaves the
-    /// installed revision where it was until the bundle update confirms — so
-    /// a pass whose update failed leaves a record whose digest names the new
-    /// bytes and whose installed revision names the old ones. A listing that
-    /// still shows the old revision would then vouch for bytes the server
-    /// never confirmed. The digest and the revision have to be a confirmed
-    /// pair.
-    ///
-    /// And only for a path the manifest still counts as a member, as the
-    /// pass left it. The listing is taken at the gather; another device can
-    /// remove and reap the source before the update finishes, and the
-    /// listing would then still vouch for a copy that is gone.
-    func shows(_ path: String, atRevisionOf records: LampSyncFileRecords) -> Bool {
-        guard members.contains(path),
-              let record = records.record(path, in: source),
-              record.pendingRevision == nil,
-              let installed = record.installedRevision,
-              let listed = revisions[path],
-              // Strong validators only. A weak one (`W/`) promises the same
-              // meaning, not the same bytes, and the comparison below would
-              // strip its prefix and match — so an unchanged weak tag could
-              // vouch for a copy that Download would not give back byte for
-              // byte. Every revision on the owner's server is strong.
-              !listed.hasPrefix("W/"), !installed.hasPrefix("W/"),
-              // Not a record made as another account at this address.
-              recordedAsAnotherAccount[path] != installed
-        else { return false }
-        return LampSyncConditionalWrite.namesSameRevision(listed, installed)
+/// The server an offload checks against, and how to read from it.
+///
+/// `fetch` reads a published path into a file, through the store the sync
+/// is using now — the same address, the same credentials, the same folder
+/// access — so what it returns is what Download would return. An offload
+/// goes only where those bytes hash to the local copy's digest: no record,
+/// listing, tag or account history stands in for that.
+public struct OffloadServer: Sendable {
+    public let source: String
+    public let account: String
+    /// Reads `path` into `destination`; false where the server has no file.
+    public let fetch: @Sendable (_ path: String, _ destination: URL) async throws -> Bool
+
+    public init(
+        source: String, account: String,
+        fetch: @escaping @Sendable (_ path: String, _ destination: URL) async throws -> Bool
+    ) {
+        self.source = source
+        self.account = account
+        self.fetch = fetch
+    }
+}
+
+/// Where the offloaded sources are, and so the one place sync may point
+/// while any are only there: a server, and who it is reached as.
+///
+/// An account belongs in it because a second account at the same address can
+/// be a second library — a home folder, or the anonymous one a server serves
+/// to requests without credentials. A pass reaching the address as anyone
+/// else is refused outright, before it reads a manifest: one from another
+/// library would otherwise settle the offloads as gone and release this.
+public struct OffloadLock: Codable, Equatable, Sendable {
+    public let source: String
+    /// Nil for a lock written before the account was kept; the next pass at
+    /// its address fills it in.
+    public var account: String?
+
+    public init(source: String, account: String?) {
+        self.source = source
+        self.account = account
+    }
+
+    /// Whether a pass at `source` as `account` may run while this holds.
+    public func admits(source: String, account: String) -> Bool {
+        self.source == source && (self.account == nil || self.account == account)
+    }
+}
+
+/// Who a WebDAV store is reached as.
+public enum SyncAccount {
+    /// No username and no password is no account at all — the client sends
+    /// no credentials — and a server can answer anonymous requests with a
+    /// different library from signed-in ones, even one signed in with an
+    /// empty username. So the two never share a name.
+    public static func identity(username: String, password: String) -> String {
+        username.isEmpty && password.isEmpty ? "" : "user:" + username
     }
 }
 
@@ -523,8 +497,8 @@ public struct SourceRow: Equatable, Sendable, Identifiable {
         /// goes after the next sync.
         case leaving
         /// A folder on disk. `holdsSourcesNotHere` when something under it
-        /// is only on the server, or on its way: removing the folder deletes
-        /// those everywhere too, and the row shows nothing of them.
+        /// is only on the server, or on its way: the folder cannot be removed
+        /// until those are downloaded.
         case folder(holdsSourcesNotHere: Bool)
         /// Let go to the server; not here.
         case onTheServer
@@ -547,9 +521,11 @@ public struct SourceRow: Equatable, Sendable, Identifiable {
         case .onTheServer, .comingBack: false
         }
     }
-    /// Whether Remove deletes something with no copy on this Mac, which it
-    /// asks about first.
-    public var removesWhatIsNotHere: Bool {
+    /// Whether Remove waits for a Download first: the row, or something
+    /// under it, has no copy on this Mac. Removing it would delete the only
+    /// copy, on the server — the one irreversible thing in this feature — so
+    /// it is not offered (`decisions/0022`).
+    public var removalWaitsForDownload: Bool {
         switch state {
         case .onTheServer, .comingBack, .folder(holdsSourcesNotHere: true): true
         case .here, .leaving, .folder(holdsSourcesNotHere: false): false
@@ -605,10 +581,8 @@ extension WorkspaceSourceOffload {
             shown.insert(path)
             if entry.isDirectory {
                 // Under it, or **at** it: a folder that has taken an
-                // offloaded file's own path hides that source, and removing
-                // the folder deletes it everywhere too — `removeContextItem`
-                // counts the path itself. The confirmation has to count what
-                // the deletion counts.
+                // offloaded file's own path hides that source, and
+                // `removeContextItem` refuses over the path itself too.
                 let holds = notHere.keys.contains { $0 == path || $0.hasPrefix(path + "/") }
                 rows.append(SourceRow(relativePath: path, state: .folder(holdsSourcesNotHere: holds)))
             } else {
@@ -658,79 +632,3 @@ extension WorkspaceSourceOffload {
     }
 }
 
-/// Which folder is at a path: device and inode, read without following a
-/// link. A folder keeps both however its contents change; a different folder
-/// put at the same path, or a link put there, does not.
-///
-/// For a confirmation that outlives a moment: a Remove dialog left open while
-/// the folder it names is moved away and another put in its place must not
-/// remove the replacement everywhere.
-public struct FolderIdentity: Equatable, Sendable {
-    let device: Int64
-    let inode: UInt64
-
-    public init?(of url: URL) {
-        var info = stat()
-        guard lstat(url.path, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else { return nil }
-        device = Int64(info.st_dev)
-        inode = UInt64(info.st_ino)
-    }
-}
-
-/// Which account this Mac's records at each address were made as.
-///
-/// The records name a WebDAV store by its address alone, and a different
-/// account at the same address can be a different set of files — a home
-/// folder, say. Change the username, and a record made as the old account
-/// can meet a listing from the new one at the same path and the same tag:
-/// a server that numbers each file's versions from one does exactly that.
-/// The digest would then vouch for bytes Download would not give back. So
-/// on a change of account, what was recorded until then stops counting as
-/// proof for an offload, path by path, until the new account's own upload
-/// or download records it again.
-///
-/// An address seen for the first time takes the account it is seen with:
-/// records made before this was kept are taken as that account's.
-public struct SyncAccountHistory: Codable, Equatable, Sendable {
-    /// The account each source's records were last made as.
-    public var accounts: [String: String] = [:]
-    /// Per source, the revisions recorded as another account.
-    public var recordedAsAnotherAccount: [String: [String: String]] = [:]
-
-    public init() {}
-
-    /// Who a WebDAV store is reached as. No username and no password is no
-    /// account at all — the client sends no credentials — and a server can
-    /// answer anonymous requests with a different library from signed-in
-    /// ones, even one signed in with an empty username. So the two never
-    /// share a name.
-    public static func identity(username: String, password: String) -> String {
-        username.isEmpty && password.isEmpty ? "" : "user:" + username
-    }
-
-    /// A pass is starting at `source` as `account`. Returns the revisions
-    /// recorded there as another account that the records still hold.
-    public mutating func passStarts(
-        at source: String, as account: String, records: LampSyncFileRecords
-    ) -> [String: String] {
-        if let previous = accounts[source], previous != account {
-            // Every record, not only the layout's listed kinds: a source
-            // is a context file, which `listedRevisions` leaves out.
-            let held = (records.sources[source]?.files ?? [:])
-                .compactMapValues(\.effectiveRevision)
-            // What the record holds now is what the last account recorded,
-            // so it replaces any older mark at that path: keeping the older
-            // one would let the prune below drop it, and with it the only
-            // mark on the newer revision.
-            recordedAsAnotherAccount[source, default: [:]].merge(held) { _, current in current }
-        }
-        accounts[source] = account
-        // A record made again since — by an upload or a download as this
-        // account — carries a revision of its own and is proof again.
-        let kept = (recordedAsAnotherAccount[source] ?? [:]).filter { path, revision in
-            records.record(path, in: source)?.installedRevision == revision
-        }
-        recordedAsAnotherAccount[source] = kept.isEmpty ? nil : kept
-        return kept
-    }
-}

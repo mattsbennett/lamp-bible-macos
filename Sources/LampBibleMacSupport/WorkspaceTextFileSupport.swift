@@ -426,6 +426,22 @@ public enum WorkspaceContextFileStore {
         guard var ledger = WorkspaceFileLedger.loadIfReadable(in: workspaceURL) else {
             throw WorkspaceFileLedger.UnreadableLedger()
         }
+        let relative = String(
+            item.standardizedFileURL.path.dropFirst(contextDirectory.standardizedFileURL.path.count + 1)
+        )
+        // A folder holding a source with no copy here is not removed: that
+        // would delete the only copy, on the server, which is the one thing
+        // this feature never does on a click (`decisions/0022`). Download it
+        // first. At the folder's own path too — a folder that has taken an
+        // offloaded file's place hides it.
+        if isFolder {
+            let notHere = ledger.contextActs()
+                .filter { $0.value != .leaving }
+                .keys
+                .filter { $0 == relative || $0.hasPrefix(relative + "/") }
+                .filter { !LampWorkspaceSync.isHere($0, inContextOf: workspaceURL, fileManager: fileManager) }
+            guard notHere.isEmpty else { throw OffloadError.waitsForDownload(relative) }
+        }
 
         let digests = try regularFileDigests(including: item, fileManager: fileManager)
         try fileManager.removeItem(at: item)
@@ -444,23 +460,9 @@ public enum WorkspaceContextFileStore {
         //
         // One entry per *file*, not one for the folder: the import checks
         // each source against its own key, so a folder's key alone would
-        // leave every file inside it on the other Mac.
-        // Including the sources under here that are *not* on disk: the walk
-        // above enumerates files, and an offloaded one has none. Removing a
-        // folder has to take its offloaded descendants too, or they stay on
-        // the server for ever with nothing left here to name them
-        // (`decisions/0019`).
-        let relative = item.standardizedFileURL.path
-            .dropFirst(contextDirectory.standardizedFileURL.path.count + 1)
-        // Offloaded and wanted alike: neither has a file to be enumerated,
-        // and both are the reader's sources.
-        // Only when what is removed is a folder. A file put where a folder of
-        // offloaded sources used to be shares their path prefix and nothing
-        // else, and its row confirms nothing about them.
-        let offloadedDescendants = ledger.contextActs().keys
-            .filter { $0 == relative || (isFolder && $0.hasPrefix(relative + "/")) }
-            .map(WorkspaceFileLedger.contextKey)
-        let allKeys = Set(keys).union(offloadedDescendants)
+        // leave every file inside it on the other Mac. Every one of them was
+        // here — a folder holding anything that was not is refused above.
+        let allKeys = Set(keys)
         guard !allKeys.isEmpty else { return }
 
         // Queued for the *server* first: until a source became a deletable
@@ -535,23 +537,21 @@ public enum WorkspaceContextFileStore {
     /// compression reclaims about 7% where this reclaims all of it
     /// (`lamp-bible-core/Documentation/decisions/0018`).
     ///
-    /// The pane's own control, through the same function as the unattended
-    /// sweep, so the two cannot drift apart again. It needs the last pass's
-    /// look at the server like the sweep does: a press has no pass behind it,
-    /// and the record alone is a memory that outlives a source somebody
-    /// removed from the sync folder by hand (`decisions/0021`).
+    /// One source through `offloadSources`, its refusal as an error.
     @WritingWorkspaceFiles
     public static func offloadSource(
         relativePath: String,
         in workspaceURL: URL,
         libraryRootURL: URL,
         observation: ServerObservation,
+        server: OffloadServer,
         fileManager: FileManager = .default,
         while shouldContinue: (@Sendable () async -> Bool)? = nil
     ) async throws {
         let result = try await offloadSources(
             [relativePath], in: workspaceURL, libraryRootURL: libraryRootURL,
-            observation: observation, fileManager: fileManager, while: shouldContinue
+            observation: observation, server: server, fileManager: fileManager,
+            while: shouldContinue
         )
         guard result.offloaded.isEmpty else { return }
         switch result.skipped[relativePath] {
@@ -559,93 +559,11 @@ public enum WorkspaceContextFileStore {
         case .untrustedVolume: throw OffloadError.untrustedVolume(relativePath)
         case .wouldLoseWhatNoStoreKeeps: throw OffloadError.wouldLoseWhatNoStoreKeeps(relativePath)
         case .nowHeld: throw OffloadError.notOnTheServer(relativePath)
-        case .notOnTheServer, .notSeenOnTheServer:
-            throw OffloadError.notOnTheServer(relativePath)
+        case .notOnTheServer, .later: throw OffloadError.notOnTheServer(relativePath)
+        case .serverCopyDiffers: throw OffloadError.serverCopyDiffers(relativePath)
+        case .couldNotReadTheServer: throw OffloadError.couldNotReadTheServer(relativePath)
         default: throw OffloadError.notAsource(relativePath)
         }
-    }
-
-    /// Removes a source this Mac may not be holding: offloaded, or asked for
-    /// and not yet here.
-    ///
-    /// `removeContextItem` is the act for a file on disk, and it requires
-    /// one: it returns early when nothing is there, and it takes only an
-    /// entry directly under the context directory. A row for a source that is
-    /// not here is neither, so Remove on one did nothing at all, silently.
-    ///
-    /// The deletion still has to be written down and queued for the server,
-    /// because that is what makes it a deletion rather than an absence
-    /// (`decisions/0018`, `0019`). Writing it down also ends whatever this
-    /// Mac had done to the source: it is neither on the server for this Mac
-    /// nor on its way here any more.
-    @WritingWorkspaceFiles
-    public static func removeOffloadedSource(
-        relativePath: String,
-        in workspaceURL: URL,
-        libraryRootURL: URL,
-        confirming confirmed: WorkspaceSourceAct,
-        heldBy holdingServer: String?,
-        fileManager: FileManager = .default
-    ) throws {
-        let folder = workspaceURL.lastPathComponent
-        guard let member = try? LampWritingWorkspaceLayout.contextPath(
-            folder: folder, relativePath: relativePath
-        ) else { throw OffloadError.notAsource(relativePath) }
-
-        // Still the thing the reader confirmed. The dialog was opened on a row
-        // for a source not here; if its act has changed since — a file turned
-        // up and the gather answered it, or it was asked back — the row the
-        // reader saw is not the row there is now, and nothing is removed.
-        let key = WorkspaceFileLedger.contextKey(relativePath)
-        let current = WorkspaceFileLedger.load(in: workspaceURL).acts[key]
-            .map(WorkspaceSourceAct.init)
-        guard current == confirmed else { throw OffloadError.replacedSinceConfirmed(relativePath) }
-
-        // What is at the path now, before anything is written down. The
-        // reader confirmed removing a source that was not here; if a file is
-        // here now it must be *that* source, fetched back, and not something
-        // attached under the same name while the confirmation was open —
-        // deleting that everywhere would be deleting a file nobody asked
-        // about. Its bytes have to be the bytes this Mac uploaded.
-        let contextDirectory = try? validatedContextDirectory(
-            in: workspaceURL, libraryRootURL: libraryRootURL, fileManager: fileManager
-        )
-        let landed = contextDirectory.flatMap {
-            VerifiedSource.verify(relativePath: relativePath, inContext: $0)
-        }
-        if let landed {
-            let records = LampSyncFileRecords.load(
-                fromLibraryAt: libraryRootURL, fileManager: fileManager
-            )
-            // Against the server the offload went to, and no other: a match
-            // against an old server's record says nothing about this one.
-            let isTheSource = holdingServer.map {
-                !records.changedSinceUpload(member, in: $0, digest: landed.digest)
-            } ?? false
-            guard isTheSource else { throw OffloadError.replacedSinceConfirmed(relativePath) }
-        }
-
-        // The server's removal is queued first, and only then is the act
-        // cleared. The other way round, a crash or a failed save between the
-        // two leaves the source gone from the list with nothing telling the
-        // server, and the lock on where sync points free to lift while the
-        // only copy is still there. This way round the worst is a removal
-        // queued and an act still showing, which the next look settles.
-        var removed = LampSyncRemovedModules.load(
-            fromLibraryAt: libraryRootURL, fileManager: fileManager
-        )
-        removed.record(member, at: WorkspaceFileLedger.milliseconds(Date()))
-        try removed.save(toLibraryAt: libraryRootURL, fileManager: fileManager)
-
-        var ledger = WorkspaceFileLedger.load(in: workspaceURL)
-        ledger.recordDeletion(of: WorkspaceFileLedger.contextKey(relativePath))
-        try ledger.save(in: workspaceURL)
-
-        // The copy that came back, checked above to be this source, goes
-        // too. Through the verified unlink, so it cannot remove a tree and
-        // refuses anything that is no longer the file that was checked.
-        guard let landed else { return }
-        try? unlink(landed, libraryRootURL: libraryRootURL, fileManager: fileManager)
     }
 
     /// Asks for a source to go back to the server after the next sync.
@@ -661,9 +579,14 @@ public enum WorkspaceContextFileStore {
         var ledger = WorkspaceFileLedger.load(in: workspaceURL)
         let file = workspaceURL.appendingPathComponent("context", isDirectory: true)
             .appendingPathComponent(relativePath)
+        // Bound to the file it is about, or not made: a request with no file
+        // to bind would go to whatever is put at the path next.
+        guard LampWorkspaceSync.isHere(relativePath, inContextOf: workspaceURL),
+              let identity = try? LampFileIdentity(regularFileAt: file)
+        else { throw OffloadError.notAsource(relativePath) }
         ledger.noteLeaving(
             WorkspaceFileLedger.contextKey(relativePath),
-            file: (try? LampFileIdentity(regularFileAt: file)).map(WorkspaceFileLedger.place(of:))
+            file: WorkspaceFileLedger.place(of: identity)
         )
         try ledger.save(in: workspaceURL)
     }
@@ -696,12 +619,18 @@ public enum WorkspaceContextFileStore {
 
     /// Why one source was left where it was.
     public enum Skipped: String, Sendable {
-        /// No confirmed revision for this source — the server has not taken it.
+        /// Not a member on the server, or never uploaded or downloaded by
+        /// this Mac: nothing worth reading back yet.
         case notOnTheServer
-        /// The pass's own listing of the folder did not show this source at
-        /// the revision recorded for it. A record is a memory of an upload;
-        /// the listing is what the server says now.
-        case notSeenOnTheServer
+        /// The server's copy, read just now, is not these bytes — or there is
+        /// none. Download would not give these back.
+        case serverCopyDiffers
+        /// The server's copy could not be read. Nothing is known, so nothing
+        /// goes.
+        case couldNotReadTheServer
+        /// This run has read as much from the server as it may; the rest
+        /// wait for the next.
+        case later
         /// The bytes here are not the bytes that were uploaded, or they
         /// changed between being checked and being deleted. The next pass
         /// takes the new ones up, and the sweep after that may offload them.
@@ -728,8 +657,8 @@ public enum WorkspaceContextFileStore {
         public var isLasting: Bool {
             switch self {
             case .notAsource, .untrustedVolume, .wouldLoseWhatNoStoreKeeps: true
-            case .notOnTheServer, .notSeenOnTheServer, .changedSinceUpload,
-                 .couldNotRemove, .nowHeld, .withdrawn: false
+            case .notOnTheServer, .serverCopyDiffers, .couldNotReadTheServer, .later,
+                 .changedSinceUpload, .couldNotRemove, .nowHeld, .withdrawn: false
             }
         }
     }
@@ -740,17 +669,19 @@ public enum WorkspaceContextFileStore {
     /// the unattended sweep alike — so neither can be laxer than the other.
     ///
     /// **Checked, then acted on, one file at a time.** Every source is
-    /// verified first, and nothing is deleted until all of them have been:
+    /// verified first:
     ///
-    /// - confirmed on the server the observation came from, at the revision
-    ///   its listing showed — not on any server this Mac has ever used, and
-    ///   not on the record alone;
+    /// - a member of the server's manifest as the last pass left it, and
+    ///   uploaded or downloaded by this Mac with these bytes — cheap, and only
+    ///   to avoid reading back what cannot qualify;
     /// - read through one open, which gives the identity and the digest of
-    ///   the same bytes (`VerifiedSource`), and the digest is the one that
-    ///   went up.
+    ///   the same bytes (`VerifiedSource`).
     ///
-    /// Then, per file: the only suspension is asking whether the writing has
-    /// been opened, and it comes **before** anything is noted. From noting
+    /// Then, per file, **the server's copy is read and hashed**, through the
+    /// store the sync uses now, and the file goes only if it is these bytes
+    /// (`decisions/0022`). That read is the proof; nothing remembered stands
+    /// in for it. After it, the only suspension is asking whether the writing
+    /// has been opened, and it comes **before** anything is noted. From noting
     /// the offload to unlinking the file nothing suspends, so no other work
     /// on this actor — a pass gathering this workspace — can see between
     /// them. The unlink takes only a `VerifiedSource`, and checks the path
@@ -761,10 +692,18 @@ public enum WorkspaceContextFileStore {
         in workspaceURL: URL,
         libraryRootURL: URL,
         observation: ServerObservation,
+        server: OffloadServer,
         onlyWhileRequested: Bool = false,
+        readBudget: Int64 = 1 << 30,
         fileManager: FileManager = .default,
         while shouldContinue: (@Sendable () async -> Bool)? = nil
     ) async throws -> (offloaded: [String], skipped: [String: Skipped]) {
+        // The server read from is the one the look was at, reached the same
+        // way: otherwise the members say nothing about it.
+        guard server.source == observation.source, server.account == observation.account else {
+            return ([], Dictionary(relativePaths.map { ($0, Skipped.couldNotReadTheServer) },
+                                   uniquingKeysWith: { first, _ in first }))
+        }
         guard !relativePaths.isEmpty else { return ([], [:]) }
         let contextDirectory = try validatedContextDirectory(
             in: workspaceURL, libraryRootURL: libraryRootURL, fileManager: fileManager
@@ -789,12 +728,10 @@ public enum WorkspaceContextFileStore {
             guard let path = try? LampWritingWorkspaceLayout.contextPath(
                 folder: folder, relativePath: relativePath
             ) else { skipped[relativePath] = .notAsource; continue }
-            guard records.record(path, in: observation.source)?.installedRevision != nil else {
+            guard observation.members.contains(path),
+                  records.record(path, in: observation.source)?.uploadedDigest != nil
+            else {
                 skipped[relativePath] = .notOnTheServer
-                continue
-            }
-            guard observation.shows(path, atRevisionOf: records) else {
-                skipped[relativePath] = .notSeenOnTheServer
                 continue
             }
             guard let verified = VerifiedSource.verify(
@@ -823,7 +760,31 @@ public enum WorkspaceContextFileStore {
         }
 
         var offloaded: [String] = []
+        var read: Int64 = 0
         for verified in ready {
+            if let shouldContinue, await !shouldContinue() {
+                skipped[verified.relativePath] = .nowHeld
+                continue
+            }
+            // The proof: the server's copy, read now, through the store the
+            // sync uses, is these bytes. Bounded per run — the first sweep
+            // on a library could otherwise read back all of it at once.
+            guard read < readBudget else { skipped[verified.relativePath] = .later; continue }
+            read += verified.read.identity.size
+            guard let path = try? LampWritingWorkspaceLayout.contextPath(
+                folder: folder, relativePath: verified.relativePath
+            ) else { skipped[verified.relativePath] = .notAsource; continue }
+            switch await serverCopy(of: path, from: server, matches: verified.digest, fileManager: fileManager) {
+            case .matches: break
+            case .differs:
+                skipped[verified.relativePath] = .serverCopyDiffers
+                continue
+            case .unreadable:
+                skipped[verified.relativePath] = .couldNotReadTheServer
+                continue
+            }
+            // The read suspended: whether the writing was opened, or sync
+            // moved, meanwhile is asked again before anything is noted.
             if let shouldContinue, await !shouldContinue() {
                 skipped[verified.relativePath] = .nowHeld
                 continue
@@ -848,6 +809,8 @@ public enum WorkspaceContextFileStore {
                 continue
             }
             let baseline = ledger.noteOffloaded(key)
+            // What left, so a copy coming back can be told from another one.
+            ledger.offloadedDigest[key] = verified.digest
             // Its quarantine goes into the same save as the note, before the
             // file does: the mark is the one thing a download cannot bring
             // back by itself.
@@ -882,6 +845,27 @@ public enum WorkspaceContextFileStore {
             }
         }
         return (offloaded, skipped)
+    }
+
+    private enum ServerCopy { case matches, differs, unreadable }
+
+    /// Reads the server's copy of `path` into a scratch file and compares its
+    /// digest. Not on this actor's time: nothing here touches a workspace.
+    private nonisolated static func serverCopy(
+        of path: String, from server: OffloadServer, matches digest: String,
+        fileManager: FileManager
+    ) async -> ServerCopy {
+        let scratch = fileManager.temporaryDirectory
+            .appendingPathComponent("lamp-offload-check-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fileManager.removeItem(at: scratch) }
+        do {
+            try fileManager.createDirectory(at: scratch, withIntermediateDirectories: true)
+            let copy = scratch.appendingPathComponent("copy")
+            guard try await server.fetch(path, copy) else { return .differs }
+            return try LampSyncContentRevision.digest(forFileAt: copy) == digest ? .matches : .differs
+        } catch {
+            return .unreadable
+        }
     }
 
     /// A file's quarantine marker, or nil where it has none.
@@ -946,7 +930,9 @@ public enum WorkspaceContextFileStore {
         case notAsource(String)
         case changedSinceUpload(String)
         case untrustedVolume(String)
-        case replacedSinceConfirmed(String)
+        case waitsForDownload(String)
+        case serverCopyDiffers(String)
+        case couldNotReadTheServer(String)
         case wouldLoseWhatNoStoreKeeps(String)
 
         public var errorDescription: String? {
@@ -959,8 +945,12 @@ public enum WorkspaceContextFileStore {
                 "“\(name)” has changed since it was synced, so it goes up on the next sync first."
             case .wouldLoseWhatNoStoreKeeps(let name):
                 "“\(name)” has Finder tags or a resource fork, which the server can't keep, so Lamp keeps it here."
-            case .replacedSinceConfirmed(let name):
-                "“\(name)” has changed since you chose to remove it, so nothing was removed. Check its row and try again."
+            case .waitsForDownload(let name):
+                "“\(name)” holds sources that are only on the server. Download them first, then remove it."
+            case .serverCopyDiffers(let name):
+                "The server's copy of “\(name)” is not the one on this Mac, so Lamp keeps it here."
+            case .couldNotReadTheServer(let name):
+                "Lamp couldn't read the server's copy of “\(name)” to check it, so it stays on this Mac."
             case .untrustedVolume(let name):
                 "“\(name)” is on a disk that can't reliably tell whether a file has changed, so Lamp keeps it here rather than risk deleting edits the server doesn't have."
             }

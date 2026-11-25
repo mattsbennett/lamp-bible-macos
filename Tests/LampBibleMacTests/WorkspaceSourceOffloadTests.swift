@@ -191,7 +191,7 @@ struct WorkspaceSourceOffloadTests {
     @Test func alookAtTheServerIsOnlyGoodForSoLongAndForOneServer() {
         let at = Date(timeIntervalSince1970: 1_800_000_000)
         let observation = ServerObservation(
-            source: "webdav:example", members: ["a"], revisions: ["a": "\"r1\""], at: at
+            source: "webdav:example", members: ["a"], at: at
         )
         #expect(observation.answers(for: "webdav:example", now: at))
         #expect(
@@ -234,7 +234,7 @@ struct WorkspaceSourceOffloadTests {
             SourceRow(relativePath: "notes/inside.pdf", state: .onTheServer),
         ])
         #expect(
-            rows.filter(\.removesWhatIsNotHere).map(\.relativePath)
+            rows.filter(\.removalWaitsForDownload).map(\.relativePath)
                 == ["away.pdf", "coming.pdf", "notes", "notes/inside.pdf"],
             """
             Remove asks first exactly where it would delete something with no \
@@ -292,13 +292,13 @@ struct WorkspaceSourceOffloadTests {
     /// Removing the folder deletes that source everywhere, because the
     /// removal counts the path itself; the confirmation has to count it too,
     /// or a click deletes the only copy of a different source unasked.
-    @Test func afolderAtAnOffloadedPathAsksBeforeItIsRemoved() {
+    @Test func afolderAtAnOffloadedPathWaitsForADownload() {
         let rows = WorkspaceSourceOffload.rows(
             onDisk: [.init(name: "history.pdf", isDirectory: true, byteCount: nil)],
             notHere: ["history.pdf": .offloaded]
         )
         #expect(rows == [SourceRow(relativePath: "history.pdf", state: .folder(holdsSourcesNotHere: true))])
-        #expect(rows.first?.removesWhatIsNotHere == true)
+        #expect(rows.first?.removalWaitsForDownload == true)
     }
 
     /// What a pass installs arrives here, though the gather never sees it.
@@ -365,7 +365,7 @@ struct WorkspaceSourceOffloadTests {
     @Test func alookAnswersOnlyForTheAccountThatTookIt() {
         let at = Date(timeIntervalSince1970: 1_800_000_000)
         let observation = ServerObservation(
-            source: "webdav:example", account: "alice", members: [], revisions: [:], at: at
+            source: "webdav:example", account: "alice", members: [], at: at
         )
         #expect(observation.answers(for: "webdav:example", account: "alice", now: at))
         #expect(!observation.answers(for: "webdav:example", account: "bob", now: at))
@@ -381,7 +381,7 @@ struct WorkspaceSourceOffloadTests {
         )
         #expect(rows == [SourceRow(relativePath: "history.pdf", state: .leaving, byteCount: 3)])
         #expect(rows.first?.isHere == true)
-        #expect(rows.first?.removesWhatIsNotHere == false)
+        #expect(rows.first?.removalWaitsForDownload == false)
     }
 
     @Test func theSettingIsThisMacsOwn() {
@@ -480,8 +480,7 @@ struct WorkspaceSourceOffloadGatheringTests {
             writings: [(writingID, Date())],
             observation: ServerObservation(
                 source: source,
-                members: [path],
-                revisions: seen.map { [path: $0] } ?? [:]
+                members: [path]
             )
         )
         return workspaces[0]
@@ -617,80 +616,9 @@ struct WorkspaceSourceOffloadGatheringTests {
         )
     }
 
-    /// A record is a memory of one upload; the listing is what the server
-    /// says now.
-    ///
-    /// Nothing ever refreshes `installedRevision`. A source deleted from the
-    /// sync folder by hand is not noticed by a pass — `LampSyncFilePlan`
-    /// answers `.none` for an unchanged local copy with no listing, and the
-    /// absence report covers listed kinds only — so the confirmation stands
-    /// for ever while the server has nothing. Offloading on it would delete
-    /// the last copy in existence.
-    @Test func asourceTheServerNoLongerListsIsNotOffloaded() async throws {
-        let fixture = try await Self.gathered(recorded: "\"r1\"", seen: nil)
-        #expect(
-            fixture.onTheServer.isEmpty,
-            "The pass listed the folder and this source was not in it."
-        )
-    }
-
-    @Test func asourceTheServerHoldsAtAnotherRevisionIsNotOffloaded() async throws {
-        let fixture = try await Self.gathered(recorded: "\"r1\"", seen: "\"r2\"")
-        #expect(
-            fixture.onTheServer.isEmpty,
-            """
-            Another device wrote over it. The next pass installs that copy, \
-            and it may go after; deleting now would lose what has not arrived.
-            """
-        )
-    }
-
-    /// An upload whose bundle update has not confirmed it vouches for
-    /// nothing.
-    ///
-    /// The uploaded digest and the pending revision move together, and the
-    /// installed revision stays where it was until the update confirms — so
-    /// after a failed update the record's digest names new bytes and its
-    /// installed revision names old ones. A listing showing the old revision
-    /// would otherwise vouch for bytes the server never confirmed.
-    @Test func apendingUploadVouchesForNothing() async throws {
-        let fixture = try Self.makeWorkspace()
-        defer { try? FileManager.default.removeItem(at: fixture.library) }
-        try Self.write("%PDF", to: fixture.context.appendingPathComponent("big.pdf"), modified: Date())
-        let path = try LampWritingWorkspaceLayout.contextPath(
-            folder: fixture.workspace.lastPathComponent, relativePath: "big.pdf"
-        )
-        var records = LampSyncFileRecords()
-        records.recordUpload(path, in: "webdav:example", digest: "old", revision: "\"r1\"")
-        records.confirmRecorded([path: "\"r1\""], in: "webdav:example")
-        // The next upload, whose update failed.
-        records.recordUpload(path, in: "webdav:example", digest: "new", revision: "\"r2\"")
-        try records.save(toLibraryAt: fixture.library)
-        try await Self.settle(["big.pdf"], in: fixture.workspace)
-
-        let workspaces = await WorkspaceSourceOffload.workspaces(
-            inLibraryAt: fixture.library,
-            writings: [(Self.writingID, Date())],
-            observation: ServerObservation(
-                source: "webdav:example", members: [path], revisions: [path: "\"r1\""]
-            )
-        )
-        #expect(workspaces.first?.onTheServer.isEmpty == true)
-    }
-
     @Test func asourceTheListingAgreesWithMayGo() async throws {
         let fixture = try await Self.gathered(recorded: "\"r1\"", seen: "\"r1\"")
         #expect(fixture.onTheServer == ["big.pdf"])
-    }
-
-    /// The listing is taken at the gather, before the uploads, so a source
-    /// first confirmed during that same pass is not in it and waits one more.
-    @Test func asourceConfirmedDuringThatPassWaitsForTheNext() async throws {
-        let fixture = try await Self.gathered(recorded: "\"r1\"", seen: nil)
-        #expect(
-            fixture.sources == ["big.pdf"] && fixture.onTheServer.isEmpty,
-            "Still a source, just not yet one this Mac may let go of."
-        )
     }
 
     /// A source that has just arrived is left alone, however it came.
@@ -723,7 +651,7 @@ struct WorkspaceSourceOffloadGatheringTests {
         let workspaces = await WorkspaceSourceOffload.workspaces(
             inLibraryAt: fixture.library,
             writings: [(Self.writingID, Date(timeIntervalSince1970: 0))],
-            observation: ServerObservation(source: "webdav:example", members: [], revisions: [:]),
+            observation: ServerObservation(source: "webdav:example", members: []),
             now: now
         )
         #expect(
@@ -768,7 +696,7 @@ struct WorkspaceSourceOffloadGatheringTests {
             inLibraryAt: fixture.library,
             writings: [(Self.writingID, Date())],
             observation: ServerObservation(
-                source: "webdav:example", members: [], revisions: [path: "\"r1\""]
+                source: "webdav:example", members: []
             )
         )
         #expect(workspaces.first?.onTheServer.isEmpty == true)
@@ -803,7 +731,7 @@ struct WorkspaceSourceOffloadGatheringTests {
         let workspaces = await WorkspaceSourceOffload.workspaces(
             inLibraryAt: library,
             writings: [(composed, old), (decomposed, recent)],
-            observation: ServerObservation(source: "webdav:example", members: [], revisions: [:])
+            observation: ServerObservation(source: "webdav:example", members: [])
         )
         #expect(workspaces.count == 2)
         for workspace in workspaces {
@@ -816,32 +744,6 @@ struct WorkspaceSourceOffloadGatheringTests {
                 "each folder carries its own writing's date"
             )
         }
-    }
-
-    /// A weak validator vouches for nothing: it promises the same meaning,
-    /// not the same bytes, so Download might not give back the copy that was
-    /// deleted.
-    @Test func aweakValidatorVouchesForNothing() async throws {
-        let fixture = try Self.makeWorkspace()
-        defer { try? FileManager.default.removeItem(at: fixture.library) }
-        try Self.write("%PDF", to: fixture.context.appendingPathComponent("big.pdf"), modified: Date())
-        let path = try LampWritingWorkspaceLayout.contextPath(
-            folder: fixture.workspace.lastPathComponent, relativePath: "big.pdf"
-        )
-        var records = LampSyncFileRecords()
-        records.recordUpload(path, in: "webdav:example", digest: "d", revision: "W/\"r1\"")
-        records.confirmRecorded([path: "W/\"r1\""], in: "webdav:example")
-        try records.save(toLibraryAt: fixture.library)
-        try await Self.settle(["big.pdf"], in: fixture.workspace)
-
-        let workspaces = await WorkspaceSourceOffload.workspaces(
-            inLibraryAt: fixture.library,
-            writings: [(Self.writingID, Date())],
-            observation: ServerObservation(
-                source: "webdav:example", members: [path], revisions: [path: "W/\"r1\""]
-            )
-        )
-        #expect(workspaces.first?.onTheServer.isEmpty == true)
     }
 
     /// After a change of account at the same address, a record made as the
@@ -870,80 +772,28 @@ struct WorkspaceSourceOffloadGatheringTests {
         #expect(ledger.contextPaths(withAct: .leaving).isEmpty)
     }
 
-    /// Each switch marks what the record holds then — not an older mark at
-    /// the path, which the prune would drop along with the newer revision.
-    @Test func eachSwitchMarksWhatTheRecordHoldsThen() {
-        let source = "webdav:example"
-        var records = LampSyncFileRecords()
-        records.recordUpload("a.pdf", in: source, digest: "d", revision: "\"1\"")
-        records.confirmRecorded(["a.pdf": "\"1\""], in: source)
-        var history = SyncAccountHistory()
-        _ = history.passStarts(at: source, as: "anna", records: records)
-        _ = history.passStarts(at: source, as: "ben", records: records)
-        // Ben's pass records its own revision; the next switch comes before
-        // another pass as ben.
-        records.recordUpload("a.pdf", in: source, digest: "d2", revision: "\"2\"")
-        records.confirmRecorded(["a.pdf": "\"2\""], in: source)
-        #expect(history.passStarts(at: source, as: "carl", records: records) == ["a.pdf": "\"2\""])
-    }
-
     /// Anonymous requests and signed-in ones are different accounts, even
     /// signed in with no username.
+    /// The lock admits a pass only at its server and as its account; a lock
+    /// from before the account was kept admits any account there, once.
+    @Test func theLockAdmitsOnlyItsServerAndAccount() {
+        let lock = OffloadLock(source: "webdav:a", account: "user:anna")
+        #expect(lock.admits(source: "webdav:a", account: "user:anna"))
+        #expect(!lock.admits(source: "webdav:a", account: "user:ben"))
+        #expect(!lock.admits(source: "webdav:a", account: ""), "anonymous is another account")
+        #expect(!lock.admits(source: "webdav:b", account: "user:anna"))
+        let old = OffloadLock(source: "webdav:a", account: nil)
+        #expect(old.admits(source: "webdav:a", account: "user:ben"))
+        #expect(!old.admits(source: "webdav:b", account: "user:ben"))
+    }
+
     @Test func anonymousIsNotAnEmptyUsername() {
-        #expect(SyncAccountHistory.identity(username: "", password: "") == "")
-        #expect(SyncAccountHistory.identity(username: "", password: "secret") != "")
-        #expect(SyncAccountHistory.identity(username: "anna", password: "a")
-            == SyncAccountHistory.identity(username: "anna", password: "b"))
-        #expect(SyncAccountHistory.identity(username: "anna", password: "")
-            != SyncAccountHistory.identity(username: "ben", password: ""))
-    }
-
-    /// The look as a pass leaves the server keeps a listed revision only
-    /// where nobody changed the path's entry while the pass ran.
-    @Test func achangedEntryDropsItsListing() throws {
-        let kept = try LampWritingWorkspaceLayout.contextPath(folder: "w", relativePath: "kept.pdf")
-        let replaced = try LampWritingWorkspaceLayout.contextPath(folder: "w", relativePath: "replaced.pdf")
-        let opening = try LampSyncLibraryManifest()
-            .recordingWrite(kept, revision: "\"k1\"", replacing: nil, at: 1)
-            .recordingWrite(replaced, revision: "\"r1\"", replacing: nil, at: 1)
-        // Another device replaced one after this pass listed it.
-        let closing = try opening.recordingWrite(replaced, revision: "\"r2\"", replacing: "\"r1\"", at: 2)
-        let observation = ServerObservation(
-            source: "webdav:example", members: [kept, replaced],
-            revisions: [kept: "\"k1\"", replaced: "\"r1\""],
-            openingEntries: Dictionary(uniqueKeysWithValues: opening.members.map { ($0.path, $0) })
-        )
-        let closed = observation.closed(by: closing)
-        #expect(closed.revisions == [kept: "\"k1\""])
-        #expect(closed.members == [kept, replaced])
-    }
-
-    @Test func arecordMadeAsAnotherAccountIsNoProof() async throws {
-        let source = "webdav:example"
-        var records = LampSyncFileRecords()
-        records.recordUpload("a.pdf", in: source, digest: "d", revision: "\"1\"")
-        records.confirmRecorded(["a.pdf": "\"1\""], in: source)
-        var history = SyncAccountHistory()
-
-        #expect(history.passStarts(at: source, as: "anna", records: records).isEmpty)
-        #expect(history.passStarts(at: source, as: "anna", records: records).isEmpty)
-        let inherited = history.passStarts(at: source, as: "ben", records: records)
-        #expect(inherited == ["a.pdf": "\"1\""])
-        let observation = ServerObservation(
-            source: source, account: "ben", members: ["a.pdf"],
-            revisions: ["a.pdf": "\"1\""], recordedAsAnotherAccount: inherited
-        )
-        #expect(!observation.shows("a.pdf", atRevisionOf: records))
-        #expect(ServerObservation(
-            source: source, account: "ben", members: ["a.pdf"], revisions: ["a.pdf": "\"1\""]
-        ).shows("a.pdf", atRevisionOf: records))
-
-        // Uploaded again as ben: a revision of its own, and proof again.
-        records.recordUpload("a.pdf", in: source, digest: "d2", revision: "\"2\"")
-        records.confirmRecorded(["a.pdf": "\"2\""], in: source)
-        #expect(history.passStarts(at: source, as: "ben", records: records).isEmpty)
-        // Back to anna: ben's records are now the other account's.
-        #expect(history.passStarts(at: source, as: "anna", records: records) == ["a.pdf": "\"2\""])
+        #expect(SyncAccount.identity(username: "", password: "") == "")
+        #expect(SyncAccount.identity(username: "", password: "secret") != "")
+        #expect(SyncAccount.identity(username: "anna", password: "a")
+            == SyncAccount.identity(username: "anna", password: "b"))
+        #expect(SyncAccount.identity(username: "anna", password: "")
+            != SyncAccount.identity(username: "ben", password: ""))
     }
 
     @Test func aWorkspaceWhoseWritingIsGoneIsSkipped() async throws {
@@ -957,7 +807,7 @@ struct WorkspaceSourceOffloadGatheringTests {
         let known = await WorkspaceSourceOffload.workspaces(
             inLibraryAt: fixture.library,
             writings: [(Self.writingID, Date())],
-            observation: ServerObservation(source: "webdav:example", members: [], revisions: [:])
+            observation: ServerObservation(source: "webdav:example", members: [])
         )
         #expect(known.count == 1)
         #expect(known.first?.sources == ["big.pdf"])
@@ -969,7 +819,7 @@ struct WorkspaceSourceOffloadGatheringTests {
         let orphaned = await WorkspaceSourceOffload.workspaces(
             inLibraryAt: fixture.library,
             writings: [("personal-devotionals:SOMETHING-ELSE", Date())],
-            observation: ServerObservation(source: "webdav:example", members: [], revisions: [:])
+            observation: ServerObservation(source: "webdav:example", members: [])
         )
         #expect(
             orphaned.isEmpty,
