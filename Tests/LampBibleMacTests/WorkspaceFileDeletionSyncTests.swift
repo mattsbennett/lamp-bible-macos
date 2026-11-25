@@ -180,6 +180,58 @@ struct WorkspaceFileDeletionSyncTests {
         #expect(await contextFiles(macs.b) == ["map.txt"])
     }
 
+    /// Removing a source queues it for the **server**, so the store stops
+    /// holding the bytes.
+    ///
+    /// Until a source became a deletable kind its removal travelled only
+    /// inside the workspace tree: every device dropped its copy and the store
+    /// kept the file for ever. On the measured library that was 355 MB of
+    /// PDFs nothing could reclaim (`decisions/0019`).
+    @Test func removingAsourceQueuesItForTheServer() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let context = workspace(macs.a).appendingPathComponent("context")
+        try write("Daniell", to: context.appendingPathComponent("sources/history.pdf"), at: 0)
+        try await macs.sync(from: macs.a, to: macs.b)
+
+        try await WorkspaceContextFileStore.removeContextItem(
+            at: context.appendingPathComponent("sources"),
+            from: workspace(macs.a),
+            libraryRootURL: macs.a
+        )
+
+        let queued = LampSyncRemovedModules.load(fromLibraryAt: macs.a).removedAt.keys
+        let expected = try LampWritingWorkspaceLayout.contextPath(
+            folder: workspace(macs.a).lastPathComponent,
+            relativePath: "sources/history.pdf"
+        )
+        #expect(
+            queued.contains(expected),
+            "the file, by its published path, so the pass tombstones and reaps it"
+        )
+        #expect(
+            !queued.contains { $0.hasSuffix("/Context/sources") },
+            "the folder is not a member and nothing on the server is named that"
+        )
+    }
+
+    /// A deletion arriving from another device removes the local copy and
+    /// prunes the shared object, and is content with the file being absent —
+    /// this Mac may have offloaded it.
+    @Test func adeletionFromElsewhereToleratesAnOffloadedSource() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let relative = "sources/history.pdf"
+
+        try await WorkspaceContextFileStore.removeDeletedSource(
+            relativePath: relative,
+            in: workspace(macs.b),
+            libraryRootURL: macs.b
+        )
+
+        #expect(await contextFiles(macs.b).isEmpty, "nothing to remove, and no complaint")
+    }
+
     /// A source that merely goes missing is **not** deleted everywhere.
     ///
     /// Absence says nothing about intent: a file may be gone because the

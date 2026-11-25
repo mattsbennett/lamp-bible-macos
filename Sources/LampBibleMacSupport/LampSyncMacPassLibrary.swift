@@ -603,6 +603,25 @@ public struct LampSyncMacPassLibrary: LampSyncPassLibrary {
             // Asked without knowing what was last agreed: kept as a copy if
             // it is there at all, which loses nothing.
             try await deleteLocally(path, agreedDigest: nil)
+        case .contextFile(let folder, let relativePath):
+            // Through the store, so the shared object goes when nothing
+            // links to it any more: a source removed without pruning leaves
+            // its bytes in the content-addressed store for ever, which is
+            // most of what this deletion exists to reclaim.
+            //
+            // A source this Mac does not have is nothing to do: it may have
+            // been offloaded, or never fetched here. The offload note goes
+            // either way, or the gather would go on withholding a member
+            // that no longer exists.
+            let workspace = LampWritingWorkspace.root(
+                libraryRootURL: library.rootURL, fileManager: fileManager
+            ).appendingPathComponent(folder, isDirectory: true)
+            try await WorkspaceContextFileStore.removeDeletedSource(
+                relativePath: relativePath,
+                in: workspace,
+                libraryRootURL: library.rootURL,
+                fileManager: fileManager
+            )
         case .module(let moduleID):
             // A highlight module is an installed module on the phone and a
             // *set* here, so the one allowed deletion that needs translating

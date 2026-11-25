@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import LampModuleKit
 
 /// The one owner of a writing workspace's files.
 ///
@@ -417,6 +418,26 @@ public enum WorkspaceContextFileStore {
         var ledger = WorkspaceFileLedger.load(in: workspaceURL)
         for key in keys { ledger.recordDeletion(of: key) }
         try ledger.save(in: workspaceURL)
+
+        // And queued for the *server*, which is new: until a source became a
+        // deletable kind its removal travelled only inside the workspace
+        // tree, so every device dropped its copy and the store kept the bytes
+        // for ever. This is what lets the store shrink
+        // (`lamp-bible-core/Documentation/decisions/0019`).
+        let folder = workspaceURL.lastPathComponent
+        let members = keys.compactMap { key -> String? in
+            let relative = String(key.dropFirst(WorkspaceFileLedger.contextKey("").count))
+            return try? LampWritingWorkspaceLayout.contextPath(
+                folder: folder, relativePath: relative
+            )
+        }
+        guard !members.isEmpty else { return }
+        var removed = LampSyncRemovedModules.load(
+            fromLibraryAt: libraryRootURL, fileManager: fileManager
+        )
+        let now = WorkspaceFileLedger.milliseconds(Date())
+        for member in members { removed.record(member, at: now) }
+        try removed.save(toLibraryAt: libraryRootURL, fileManager: fileManager)
     }
 
     /// The published keys of every regular file at or under `item`.
@@ -458,6 +479,39 @@ public enum WorkspaceContextFileStore {
 
     /// Removes one context file that sync found deleted elsewhere, pruning its
     /// shared object once nothing links to it.
+    /// Carries out a source deletion another device made: removes the file,
+    /// prunes its shared object, and clears any note that this Mac had
+    /// offloaded it.
+    ///
+    /// Tolerant of the file being absent. This Mac may have offloaded the
+    /// source, or never fetched it — there is then nothing to remove, and
+    /// the only thing that matters is that the offload note goes, or the
+    /// gather would withhold a member that no longer exists.
+    @WritingWorkspaceFiles
+    public static func removeDeletedSource(
+        relativePath: String,
+        in workspaceURL: URL,
+        libraryRootURL: URL,
+        fileManager: FileManager = .default
+    ) throws {
+        var ledger = WorkspaceFileLedger.load(in: workspaceURL)
+        let key = WorkspaceFileLedger.contextKey(relativePath)
+        ledger.clearOffload(of: key)
+        try ledger.save(in: workspaceURL)
+
+        let contextDirectory = try validatedContextDirectory(
+            in: workspaceURL, libraryRootURL: libraryRootURL, fileManager: fileManager
+        )
+        let file = contextDirectory.appendingPathComponent(relativePath)
+        guard fileManager.fileExists(atPath: file.path),
+              file.resolvingSymlinksInPath().path
+                .hasPrefix(contextDirectory.resolvingSymlinksInPath().path + "/")
+        else { return }
+        try removeSyncedContextFile(
+            at: file, libraryRootURL: libraryRootURL, fileManager: fileManager
+        )
+    }
+
     static func removeSyncedContextFile(
         at fileURL: URL,
         libraryRootURL: URL,
