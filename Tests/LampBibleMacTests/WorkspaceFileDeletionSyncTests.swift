@@ -819,6 +819,48 @@ struct WorkspaceFileDeletionSyncTests {
         #expect(gone == [path], "the server that held it is the one whose word counts")
     }
 
+    /// A confirmed Remove does not delete a different file that has since
+    /// been attached under the same name.
+    ///
+    /// The reader confirmed removing a source that was on the server. A file
+    /// here now is that source only if its bytes are the ones this Mac
+    /// uploaded; otherwise deleting it everywhere would be deleting
+    /// something nobody asked about.
+    @Test func aconfirmedRemoveSparesAfileAttachedSince() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let context = workspaceURL.appendingPathComponent("context")
+        let path = try LampWritingWorkspaceLayout.contextPath(
+            folder: workspaceURL.lastPathComponent, relativePath: "history.pdf"
+        )
+        let source = LampSyncFileRecords.webDAVSource(URL(string: "https://dav.example.com/s/")!)
+        var records = LampSyncFileRecords()
+        records.recordUpload(path, in: source, digest: "the original's", revision: "\"r1\"")
+        records.confirmRecorded([path: "\"r1\""], in: source)
+        try records.save(toLibraryAt: macs.a)
+        var ledger = await WorkspaceFileLedger.load(in: workspaceURL)
+        ledger.noteOffloaded(WorkspaceFileLedger.contextKey("history.pdf"))
+        try await ledger.save(in: workspaceURL)
+
+        // Attached while the confirmation was open.
+        try write("something else", to: context.appendingPathComponent("history.pdf"), at: 0)
+
+        await #expect(throws: WorkspaceContextFileStore.OffloadError.replacedSinceConfirmed("history.pdf")) {
+            try await WorkspaceContextFileStore.removeOffloadedSource(
+                relativePath: "history.pdf", in: workspaceURL, libraryRootURL: macs.a
+            )
+        }
+        #expect(
+            try String(contentsOf: context.appendingPathComponent("history.pdf"), encoding: .utf8)
+                == "something else"
+        )
+        #expect(
+            await LampSyncRemovedModules.load(fromLibraryAt: macs.a).removedAt[path] == nil,
+            "and nothing is queued for the server either"
+        )
+    }
+
     /// Opening the writing part way through a batch stops the rest of it.
     @Test func abatchStopsWhenTheWritingIsOpened() async throws {
         let macs = try Macs(devotional: devotional)

@@ -364,8 +364,14 @@ public struct ServerObservation: Equatable, Sendable {
     /// still shows the old revision would then vouch for bytes the server
     /// never confirmed. The digest and the revision have to be a confirmed
     /// pair.
+    ///
+    /// And only for a path the manifest still counts as a member, as the
+    /// pass left it. The listing is taken at the gather; another device can
+    /// remove and reap the source before the update finishes, and the
+    /// listing would then still vouch for a copy that is gone.
     func shows(_ path: String, atRevisionOf records: LampSyncFileRecords) -> Bool {
-        guard let record = records.record(path, in: source),
+        guard members.contains(path),
+              let record = records.record(path, in: source),
               record.pendingRevision == nil,
               let installed = record.installedRevision,
               let listed = revisions[path]
@@ -386,13 +392,28 @@ public struct VerifiedSource: Equatable, Sendable {
     public let relativePath: String
     let file: URL
     let read: LampVerifiedFileRead
+    /// Where the context directory really was when this was read, links
+    /// resolved. The unlink requires the file to resolve under it still: `O_NOFOLLOW`
+    /// and `AT_SYMLINK_NOFOLLOW` guard only the last component, so a folder
+    /// on the way moved out and replaced by a link would otherwise lead the
+    /// unlink to the same file in its new place (`decisions/0012`).
+    let resolvedContext: String
 
     public var digest: String { read.digest }
 
-    fileprivate init(relativePath: String, file: URL, read: LampVerifiedFileRead) {
+    fileprivate init(
+        relativePath: String, file: URL, read: LampVerifiedFileRead, resolvedContext: String
+    ) {
         self.relativePath = relativePath
         self.file = file
         self.read = read
+        self.resolvedContext = resolvedContext
+    }
+
+    /// Whether the file still resolves inside the context directory it was
+    /// read in.
+    var isStillInside: Bool {
+        file.resolvingSymlinksInPath().path.hasPrefix(resolvedContext + "/")
     }
 
     /// Opens the source once and reads its identity and digest from that
@@ -404,11 +425,13 @@ public struct VerifiedSource: Equatable, Sendable {
     @WritingWorkspaceFiles
     static func verify(relativePath: String, inContext context: URL) -> VerifiedSource? {
         let file = context.appendingPathComponent(relativePath)
-        guard file.resolvingSymlinksInPath().path
-                .hasPrefix(context.resolvingSymlinksInPath().path + "/"),
+        let resolvedContext = context.resolvingSymlinksInPath().path
+        guard file.resolvingSymlinksInPath().path.hasPrefix(resolvedContext + "/"),
               let read = try? LampVerifiedFileRead.read(file)
         else { return nil }
-        return VerifiedSource(relativePath: relativePath, file: file, read: read)
+        return VerifiedSource(
+            relativePath: relativePath, file: file, read: read, resolvedContext: resolvedContext
+        )
     }
 }
 
@@ -469,11 +492,17 @@ extension WorkspaceSourceOffload {
         public let name: String
         public let isDirectory: Bool
         public let byteCount: Int?
+        /// A regular file — not a link, a socket or anything else. Only one
+        /// of these is a source being here, as the withholding judges it; a
+        /// link at an offloaded path must not hide the row that offers it
+        /// back, or tell the agent it is local.
+        public let isRegularFile: Bool
 
-        public init(name: String, isDirectory: Bool, byteCount: Int?) {
+        public init(name: String, isDirectory: Bool, byteCount: Int?, isRegularFile: Bool = true) {
             self.name = name
             self.isDirectory = isDirectory
             self.byteCount = byteCount
+            self.isRegularFile = isRegularFile
         }
     }
 
@@ -491,7 +520,7 @@ extension WorkspaceSourceOffload {
         )
         var rows: [SourceRow] = []
         var shown: Set<String> = []
-        for entry in onDisk {
+        for entry in onDisk where entry.isDirectory || entry.isRegularFile {
             let path = entry.name.precomposedStringWithCanonicalMapping
             shown.insert(path)
             if entry.isDirectory {
@@ -522,15 +551,19 @@ extension WorkspaceSourceOffload {
         inWorkspaceAt workspace: URL, fileManager: FileManager = .default
     ) -> [SourceRow] {
         let context = workspace.appendingPathComponent("context", isDirectory: true)
-        let keys: Set<URLResourceKey> = [.isDirectoryKey, .fileSizeKey]
+        let keys: Set<URLResourceKey> = [
+            .isDirectoryKey, .fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey,
+        ]
         let entries = ((try? fileManager.contentsOfDirectory(
             at: context, includingPropertiesForKeys: Array(keys), options: [.skipsHiddenFiles]
         )) ?? []).map { url -> DiskEntry in
             let values = try? url.resourceValues(forKeys: keys)
+            let isLink = values?.isSymbolicLink == true
             return DiskEntry(
                 name: url.lastPathComponent,
-                isDirectory: values?.isDirectory == true,
-                byteCount: values?.fileSize
+                isDirectory: !isLink && values?.isDirectory == true,
+                byteCount: values?.fileSize,
+                isRegularFile: !isLink && values?.isRegularFile == true
             )
         }
         return rows(

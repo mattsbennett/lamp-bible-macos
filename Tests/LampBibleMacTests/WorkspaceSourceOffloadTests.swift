@@ -336,6 +336,30 @@ struct WorkspaceSourceOffloadTests {
         #expect(ledger.presentSince[key] == 5)
     }
 
+    /// A link at an offloaded path is not the source being here.
+    ///
+    /// The withholding already said so; the row did not, and hid Download
+    /// while telling the agent the source was local.
+    @Test func alinkAtAnOffloadedPathLeavesItOnTheServer() {
+        let rows = WorkspaceSourceOffload.rows(
+            onDisk: [.init(name: "history.pdf", isDirectory: false, byteCount: 0, isRegularFile: false)],
+            notHere: ["history.pdf": .offloaded]
+        )
+        #expect(rows == [SourceRow(relativePath: "history.pdf", state: .onTheServer)])
+    }
+
+    /// A source attached to a workspace that had never synced still gets the
+    /// grace. The first pass records what is there and returns, and used to
+    /// return before stamping anything.
+    @Test func thefirstPassStillStampsArrival() {
+        let key = WorkspaceFileLedger.contextKey("attached.pdf")
+        var ledger = WorkspaceFileLedger()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        ledger.noteChanges(present: [key: 1], now: now)
+        #expect(ledger.arrivedAt[key] == WorkspaceFileLedger.milliseconds(now))
+        #expect(ledger.presentSince[key] == nil, "the shared timestamp is still not touched")
+    }
+
     @Test func theSettingIsThisMacsOwn() {
         #expect(WorkspaceSourceOffload.After.settingKey == "writing.sources.offloadAfter")
         #expect(
@@ -698,6 +722,32 @@ struct WorkspaceSourceOffloadGatheringTests {
             download could take the file that pass had just brought.
             """
         )
+    }
+
+    /// The listing is not enough once the server has stopped counting the
+    /// source: another device may have removed and reaped it after the
+    /// gather looked.
+    @Test func asourceTheClosingManifestDropsIsNotOffloaded() async throws {
+        let fixture = try Self.makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: fixture.library) }
+        try Self.write("%PDF", to: fixture.context.appendingPathComponent("big.pdf"), modified: Date())
+        let path = try LampWritingWorkspaceLayout.contextPath(
+            folder: fixture.workspace.lastPathComponent, relativePath: "big.pdf"
+        )
+        var records = LampSyncFileRecords()
+        records.recordUpload(path, in: "webdav:example", digest: "d", revision: "\"r1\"")
+        records.confirmRecorded([path: "\"r1\""], in: "webdav:example")
+        try records.save(toLibraryAt: fixture.library)
+        try await Self.settle(["big.pdf"], in: fixture.workspace)
+
+        let workspaces = await WorkspaceSourceOffload.workspaces(
+            inLibraryAt: fixture.library,
+            writings: [Self.writingID: Date()],
+            observation: ServerObservation(
+                source: "webdav:example", members: [], revisions: [path: "\"r1\""]
+            )
+        )
+        #expect(workspaces.first?.onTheServer.isEmpty == true)
     }
 
     @Test func aWorkspaceWhoseWritingIsGoneIsSkipped() async throws {

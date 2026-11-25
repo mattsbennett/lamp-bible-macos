@@ -380,7 +380,7 @@ final class LibrarySyncController: ObservableObject {
                         await MainActor.run {
                             guard let self else { return false }
                             return !OpenWritingEditors.writingIDs.contains(writingID)
-                                && self.currentSource == observation.source
+                                && self.offloadObservation() == observation
                         }
                     }
                 )

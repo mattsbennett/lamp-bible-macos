@@ -1599,7 +1599,15 @@ struct WorkspaceFileLedger: Codable, Equatable {
         guard let recorded = self.synced else {
             // The first pass records what is there and nothing more: a Mac
             // first syncing after an upgrade must not treat its files as new.
+            // Except for the sweep's grace, which is this Mac's own and costs
+            // nothing to give: everything here counts as arriving now, so a
+            // source attached to a workspace that had never synced is not
+            // offloaded at the next opportunity. The portable `presentSince`
+            // is left alone, as before.
             self.synced = present
+            for key in present.keys where Self.isContextKey(key) && arrivedAt[key] == nil {
+                arrivedAt[key] = time
+            }
             return []
         }
         let synced = Dictionary(recorded.map { (Self.normalized($0.key), $0.value) }, uniquingKeysWith: max)

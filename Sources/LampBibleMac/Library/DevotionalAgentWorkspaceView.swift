@@ -2755,7 +2755,15 @@ struct DevotionalAgentWorkspaceView: View {
                 relativePath: file.relativePath,
                 in: workspaceURL,
                 libraryRootURL: libraryRootURL,
-                observation: observation
+                observation: observation,
+                // Asked again just before the unlink. Waiting for the
+                // workspace and hashing the file take time, and in it sync can
+                // be turned off or moved, or a newer pass can see the source
+                // gone; the look this press began with has to still be the
+                // current one.
+                while: { [syncController] in
+                    await MainActor.run { syncController.offloadObservation() == observation }
+                }
             )
             try await DevotionalAgentWorkspaceStore.refreshSourceInventory(in: workspaceURL)
             contextNote = "“\(file.name)” is on the server. Download it whenever you need it."

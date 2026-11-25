@@ -509,15 +509,18 @@ public enum WorkspaceContextFileStore {
         in workspaceURL: URL,
         libraryRootURL: URL,
         observation: ServerObservation,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        while shouldContinue: (@Sendable () async -> Bool)? = nil
     ) async throws {
         let result = try await offloadSources(
             [relativePath], in: workspaceURL, libraryRootURL: libraryRootURL,
-            observation: observation, fileManager: fileManager
+            observation: observation, fileManager: fileManager, while: shouldContinue
         )
         guard result.offloaded.isEmpty else { return }
         switch result.skipped[relativePath] {
         case .changedSinceUpload: throw OffloadError.changedSinceUpload(relativePath)
+        case .untrustedVolume: throw OffloadError.untrustedVolume(relativePath)
+        case .nowHeld: throw OffloadError.notOnTheServer(relativePath)
         case .notOnTheServer, .notSeenOnTheServer:
             throw OffloadError.notOnTheServer(relativePath)
         default: throw OffloadError.notAsource(relativePath)
@@ -549,6 +552,28 @@ public enum WorkspaceContextFileStore {
             folder: folder, relativePath: relativePath
         ) else { throw OffloadError.notAsource(relativePath) }
 
+        // What is at the path now, before anything is written down. The
+        // reader confirmed removing a source that was not here; if a file is
+        // here now it must be *that* source, fetched back, and not something
+        // attached under the same name while the confirmation was open —
+        // deleting that everywhere would be deleting a file nobody asked
+        // about. Its bytes have to be the bytes this Mac uploaded.
+        let contextDirectory = try? validatedContextDirectory(
+            in: workspaceURL, libraryRootURL: libraryRootURL, fileManager: fileManager
+        )
+        let landed = contextDirectory.flatMap {
+            VerifiedSource.verify(relativePath: relativePath, inContext: $0)
+        }
+        if let landed {
+            let records = LampSyncFileRecords.load(
+                fromLibraryAt: libraryRootURL, fileManager: fileManager
+            )
+            let isTheSource = records.sources.keys.contains {
+                !records.changedSinceUpload(member, in: $0, digest: landed.digest)
+            }
+            guard isTheSource else { throw OffloadError.replacedSinceConfirmed(relativePath) }
+        }
+
         var ledger = WorkspaceFileLedger.load(in: workspaceURL)
         ledger.recordDeletion(of: WorkspaceFileLedger.contextKey(relativePath))
         try ledger.save(in: workspaceURL)
@@ -559,23 +584,11 @@ public enum WorkspaceContextFileStore {
         removed.record(member, at: WorkspaceFileLedger.milliseconds(Date()))
         try removed.save(toLibraryAt: libraryRootURL, fileManager: fileManager)
 
-        // A copy may be here after all — fetched back between the list being
-        // drawn and the button being pressed — and the deletion means the
-        // same thing either way. Only ever a regular file inside this
-        // workspace's context directory: `removeSyncedContextFile` deletes
-        // recursively, so a folder that had taken the path would otherwise
-        // be erased whole, with everything unrelated inside it.
-        guard let contextDirectory = try? validatedContextDirectory(
-            in: workspaceURL, libraryRootURL: libraryRootURL, fileManager: fileManager
-        ) else { return }
-        // Through the same verified unlink as an offload, so this can never
-        // remove a tree: `removeSyncedContextFile` hashes and then removes
-        // recursively, and a folder put at the path during the hash would
-        // have gone with everything in it.
-        guard let verified = VerifiedSource.verify(
-            relativePath: relativePath, inContext: contextDirectory
-        ) else { return }
-        try? unlink(verified, libraryRootURL: libraryRootURL, fileManager: fileManager)
+        // The copy that came back, checked above to be this source, goes
+        // too. Through the verified unlink, so it cannot remove a tree and
+        // refuses anything that is no longer the file that was checked.
+        guard let landed else { return }
+        try? unlink(landed, libraryRootURL: libraryRootURL, fileManager: fileManager)
     }
 
     /// Asks for an offloaded source back.
@@ -613,6 +626,9 @@ public enum WorkspaceContextFileStore {
         case couldNotRemove
         /// Somebody opened the writing while the batch was working.
         case nowHeld
+        /// The library is on a volume whose file identities cannot be trusted
+        /// to notice a change, so nothing there is offloaded.
+        case untrustedVolume
     }
 
     /// Puts sources back on the server.
@@ -671,6 +687,14 @@ public enum WorkspaceContextFileStore {
             guard let verified = VerifiedSource.verify(
                 relativePath: relativePath, inContext: contextDirectory
             ) else { skipped[relativePath] = .notAsource; continue }
+            // The last check before the unlink is of the identity alone, and
+            // `decisions/0007` trusts an identity only on APFS: on exFAT, or a
+            // share that mirrors the write time into the change time, a file
+            // rewritten at the same size with its date put back would pass it.
+            guard verified.read.identityIsTrusted else {
+                skipped[relativePath] = .untrustedVolume
+                continue
+            }
             guard !records.changedSinceUpload(
                 path, in: observation.source, digest: verified.digest
             ) else { skipped[relativePath] = .changedSinceUpload; continue }
@@ -743,7 +767,8 @@ public enum WorkspaceContextFileStore {
         libraryRootURL: URL,
         fileManager: FileManager = .default
     ) throws {
-        guard let now = try? LampFileIdentity(regularFileAt: verified.file),
+        guard verified.isStillInside,
+              let now = try? LampFileIdentity(regularFileAt: verified.file),
               now == verified.read.identity
         else { throw UnlinkRefusal() }
         let result = verified.file.withUnsafeFileSystemRepresentation { path in
@@ -762,6 +787,8 @@ public enum WorkspaceContextFileStore {
         case notOnTheServer(String)
         case notAsource(String)
         case changedSinceUpload(String)
+        case untrustedVolume(String)
+        case replacedSinceConfirmed(String)
 
         public var errorDescription: String? {
             switch self {
@@ -771,6 +798,10 @@ public enum WorkspaceContextFileStore {
                 "“\(name)” is not a file this writing holds as a source."
             case .changedSinceUpload(let name):
                 "“\(name)” has changed since it was synced, so it goes up on the next sync first."
+            case .replacedSinceConfirmed(let name):
+                "A different file named “\(name)” is here now, so nothing was removed. Remove it from its own row if you mean to."
+            case .untrustedVolume(let name):
+                "“\(name)” is on a disk that can't reliably tell whether a file has changed, so Lamp keeps it here rather than risk deleting edits the server doesn't have."
             }
         }
     }
